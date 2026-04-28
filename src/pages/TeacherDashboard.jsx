@@ -133,7 +133,9 @@ export default function TeacherDashboard() {
   const latestScore = studentId => scores[studentId]?.[0]
 
   const getStudentReadings = studentId => {
-    return activeReadings.filter(reading => reading.assignTo?.includes(studentId))
+    return activeReadings.filter(reading =>
+      reading.assignTo?.includes(studentId)
+    )
   }
 
   const getSubmission = (studentId, readingId) => {
@@ -191,13 +193,11 @@ export default function TeacherDashboard() {
   }
 
   const deleteHomework = async reading => {
+    const completedCount = getCompletedCount(reading.id)
 
-  const completedCount = getCompletedCount(reading.id)
-
-  if (completedCount > 0) {
-
-    const forceDelete = window.confirm(
-`"${reading.title}" has ${completedCount} student submission(s).
+    if (completedCount > 0) {
+      const forceDelete = window.confirm(
+        `"${reading.title}" has ${completedCount} student submission(s).
 
 Deleting will permanently remove:
 - Homework
@@ -205,37 +205,28 @@ Deleting will permanently remove:
 - Results/Bands
 
 Continue permanent delete?`
-    )
-
-    if (!forceDelete) return
-
-    const relatedSubs = submissions.filter(
-      sub => sub.readingId === reading.id
-    )
-
-    for (const sub of relatedSubs) {
-      await deleteDoc(
-        doc(db,"readingSubmissions",sub.id)
       )
+
+      if (!forceDelete) return
+
+      const relatedSubs = submissions.filter(
+        sub => sub.readingId === reading.id
+      )
+
+      for (const sub of relatedSubs) {
+        await deleteDoc(doc(db, 'readingSubmissions', sub.id))
+      }
+
+      await deleteDoc(doc(db, 'readings', reading.id))
+      return
     }
 
-    await deleteDoc(
-      doc(db,"readings",reading.id)
-    )
+    const ok = window.confirm(`Delete "${reading.title}" permanently?`)
 
-    return
+    if (!ok) return
+
+    await deleteDoc(doc(db, 'readings', reading.id))
   }
-
-  const ok = window.confirm(
-    `Delete "${reading.title}" permanently?`
-  )
-
-  if (!ok) return
-
-  await deleteDoc(
-    doc(db,"readings",reading.id)
-  )
-}
 
   const duplicateHomework = async reading => {
     const ok = window.confirm(
@@ -288,6 +279,78 @@ Continue permanent delete?`
     const correctAnswer = paragraph.answer?.toString().trim()
 
     return userAnswer === correctAnswer
+  }
+
+  const getStudentAnalytics = studentId => {
+    const studentSubs = submissions.filter(sub => sub.uid === studentId)
+
+    const stats = {
+      matching: { correct: 0, total: 0 },
+      tfng: { correct: 0, total: 0 },
+      fitb: { correct: 0, total: 0 },
+      mcq: { correct: 0, total: 0 }
+    }
+
+    studentSubs.forEach(sub => {
+      const reading = readings.find(r => r.id === sub.readingId)
+      if (!reading) return
+
+      reading.questions?.forEach(question => {
+        if (question.type === 'matching') {
+          question.paragraphs?.forEach(paragraph => {
+            stats.matching.total++
+
+            if (isMatchingCorrect(sub, question, paragraph)) {
+              stats.matching.correct++
+            }
+          })
+
+          return
+        }
+
+        if (!stats[question.type]) return
+
+        stats[question.type].total++
+
+        if (isNormalCorrect(sub, question)) {
+          stats[question.type].correct++
+        }
+      })
+    })
+
+    const percentage = item =>
+      item.total ? Math.round((item.correct / item.total) * 100) : null
+
+    const data = {
+      matching: percentage(stats.matching),
+      tfng: percentage(stats.tfng),
+      fitb: percentage(stats.fitb),
+      mcq: percentage(stats.mcq)
+    }
+
+    const weaknessList = Object.entries(data)
+      .filter(([_, value]) => value !== null)
+      .sort((a, b) => a[1] - b[1])
+
+    return {
+      ...data,
+      weakest: weaknessList[0]?.[0] || null
+    }
+  }
+
+  const getWeakestLabel = type => {
+    if (type === 'matching') return 'Matching Headings'
+    if (type === 'tfng') return 'True / False / Not Given'
+    if (type === 'fitb') return 'Fill in the Blank'
+    if (type === 'mcq') return 'Multiple Choice'
+    return 'No data yet'
+  }
+
+  const getAnalyticsColor = value => {
+    if (value === null || value === undefined) return 'text-gray-400'
+    if (value >= 75) return 'text-green-600'
+    if (value >= 60) return 'text-amber-600'
+    return 'text-red-500'
   }
 
   const handlePrint = student => {
@@ -540,6 +603,7 @@ Continue permanent delete?`
 
           {students.map(student => {
             const studentReadings = getStudentReadings(student.id)
+            const analytics = getStudentAnalytics(student.id)
 
             return (
               <div
@@ -582,8 +646,8 @@ Continue permanent delete?`
                       <p className="text-xs text-gray-400">Reading done</p>
                       <p className="text-sm font-semibold text-gray-700">
                         {
-                          studentReadings.filter(
-                            reading => getSubmission(student.id, reading.id)
+                          studentReadings.filter(reading =>
+                            getSubmission(student.id, reading.id)
                           ).length
                         }
                         /{studentReadings.length}
@@ -694,6 +758,50 @@ Continue permanent delete?`
                               </div>
                             </div>
                           ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {analytics.weakest && (
+                      <div className="mb-8">
+                        <h3 className="text-sm font-semibold text-gray-700 mb-3">
+                          Reading Weakness Analytics
+                        </h3>
+
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                          {[
+                            ['Matching', analytics.matching],
+                            ['TFNG', analytics.tfng],
+                            ['Fill Blank', analytics.fitb],
+                            ['MCQ', analytics.mcq]
+                          ].map(([label, value]) => (
+                            <div
+                              key={label}
+                              className="bg-gray-50 rounded-xl p-4 text-center"
+                            >
+                              <p className="text-xs text-gray-400 mb-1">
+                                {label}
+                              </p>
+
+                              <p
+                                className={`text-xl font-bold ${getAnalyticsColor(
+                                  value
+                                )}`}
+                              >
+                                {value ?? '--'}%
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+
+                        <div className="bg-purple-50 rounded-xl p-4">
+                          <p className="text-xs text-gray-500 mb-1">
+                            Weakest Area
+                          </p>
+
+                          <p className="font-semibold text-purple-700">
+                            {getWeakestLabel(analytics.weakest)}
+                          </p>
                         </div>
                       </div>
                     )}
