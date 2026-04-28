@@ -24,6 +24,7 @@ export default function CreateReading() {
 
   const [title, setTitle] = useState('')
   const [timeLimit, setTimeLimit] = useState(60)
+  const [dueDate, setDueDate] = useState('')
   const [assignTo, setAssignTo] = useState([])
 
   const [passageMode, setPassageMode] = useState('standard')
@@ -35,6 +36,7 @@ export default function CreateReading() {
   const [headings, setHeadings] = useState(['', '', '', '', '', '', ''])
   const [questions, setQuestions] = useState([])
   const [saved, setSaved] = useState(false)
+  const [hasSubmissions, setHasSubmissions] = useState(false)
 
   const navigate = useNavigate()
 
@@ -75,8 +77,11 @@ export default function CreateReading() {
 
       setTitle(data.title || '')
       setTimeLimit(data.timeLimit || 60)
+      setDueDate(data.dueDate || '')
       setAssignTo(data.assignTo || [])
-      setPassageMode(data.passageMode || (data.paragraphs ? 'sections' : 'standard'))
+      setPassageMode(
+        data.passageMode || (data.paragraphs ? 'sections' : 'standard')
+      )
       setFullPassage(data.passage || '')
 
       if (data.paragraphs?.length) {
@@ -88,25 +93,42 @@ export default function CreateReading() {
           }))
         )
       } else if (data.passages) {
-        const converted = Object.entries(data.passages).map(([letter, text], index) => ({
-          id: Date.now() + index,
-          letter,
-          text
-        }))
+        const converted = Object.entries(data.passages).map(
+          ([letter, text], index) => ({
+            id: Date.now() + index,
+            letter,
+            text
+          })
+        )
 
-        setParagraphs(converted.length ? converted : [{ id: Date.now(), letter: 'A', text: '' }])
+        setParagraphs(
+          converted.length
+            ? converted
+            : [{ id: Date.now(), letter: 'A', text: '' }]
+        )
       }
 
       setHeadings(data.headings?.length ? data.headings : ['', '', '', '', '', '', ''])
       setQuestions(data.questions || [])
+
+      const subQuery = query(
+        collection(db, 'readingSubmissions'),
+        where('readingId', '==', id)
+      )
+
+      onSnapshot(subQuery, subSnap => {
+        setHasSubmissions(!subSnap.empty)
+      })
     }
 
     loadReading()
   }, [id, isEditMode, navigate])
 
-  const toggleStudent = id => {
+  const toggleStudent = studentId => {
     setAssignTo(prev =>
-      prev.includes(id) ? prev.filter(s => s !== id) : [...prev, id]
+      prev.includes(studentId)
+        ? prev.filter(s => s !== studentId)
+        : [...prev, studentId]
     )
   }
 
@@ -123,9 +145,9 @@ export default function CreateReading() {
     ])
   }
 
-  const removeParagraph = id => {
+  const removeParagraph = paragraphId => {
     setParagraphs(prev => {
-      const filtered = prev.filter(p => p.id !== id)
+      const filtered = prev.filter(p => p.id !== paragraphId)
 
       return filtered.map((p, index) => ({
         ...p,
@@ -134,9 +156,9 @@ export default function CreateReading() {
     })
   }
 
-  const updateParagraph = (id, value) => {
+  const updateParagraph = (paragraphId, value) => {
     setParagraphs(prev =>
-      prev.map(p => (p.id === id ? { ...p, text: value } : p))
+      prev.map(p => (p.id === paragraphId ? { ...p, text: value } : p))
     )
   }
 
@@ -187,20 +209,20 @@ export default function CreateReading() {
     ])
   }
 
-  const removeQuestion = id => {
-    setQuestions(prev => prev.filter(q => q.id !== id))
+  const removeQuestion = questionId => {
+    setQuestions(prev => prev.filter(q => q.id !== questionId))
   }
 
-  const updateQuestion = (id, field, value) => {
+  const updateQuestion = (questionId, field, value) => {
     setQuestions(prev =>
-      prev.map(q => (q.id === id ? { ...q, [field]: value } : q))
+      prev.map(q => (q.id === questionId ? { ...q, [field]: value } : q))
     )
   }
 
-  const updateOption = (id, index, value) => {
+  const updateOption = (questionId, index, value) => {
     setQuestions(prev =>
       prev.map(q => {
-        if (q.id !== id) return q
+        if (q.id !== questionId) return q
 
         const options = [...q.options]
         options[index] = value
@@ -261,9 +283,18 @@ export default function CreateReading() {
       return
     }
 
+    if (isEditMode && hasSubmissions) {
+      const ok = window.confirm(
+        'This reading already has student submissions. Changing questions, answers or headings may affect previous results. Continue?'
+      )
+
+      if (!ok) return
+    }
+
     const payload = {
       title,
       timeLimit,
+      dueDate,
       assignTo,
       passageMode,
       passage: fullPassage,
@@ -311,13 +342,20 @@ export default function CreateReading() {
 
         <p className="text-gray-400 text-sm mb-8">
           {isEditMode
-            ? 'Update the passage, questions, headings or assignments.'
+            ? 'Update the passage, questions, headings, due date or assignments.'
             : 'Build IELTS-style reading homework with different question types.'}
         </p>
 
         {saved && (
           <div className="bg-green-50 text-green-600 rounded-xl p-4 mb-6 text-sm font-medium">
             ✓ Reading homework saved. Redirecting...
+          </div>
+        )}
+
+        {isEditMode && hasSubmissions && (
+          <div className="bg-amber-50 text-amber-700 rounded-xl p-4 mb-6 text-sm font-medium">
+            ⚠ This reading already has student submissions. Changing questions,
+            answers or headings may affect previous student results.
           </div>
         )}
 
@@ -339,7 +377,7 @@ export default function CreateReading() {
             />
           </div>
 
-          <div>
+          <div className="mb-4">
             <label className="text-xs text-gray-400 mb-1 block">
               Time limit / minutes
             </label>
@@ -353,6 +391,19 @@ export default function CreateReading() {
               className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400"
             />
           </div>
+
+          <div>
+            <label className="text-xs text-gray-400 mb-1 block">
+              Due date / optional
+            </label>
+
+            <input
+              type="date"
+              value={dueDate}
+              onChange={e => setDueDate(e.target.value)}
+              className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400"
+            />
+          </div>
         </div>
 
         <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-5">
@@ -361,9 +412,7 @@ export default function CreateReading() {
           </h2>
 
           {students.length === 0 ? (
-            <p className="text-sm text-gray-400">
-              No students found.
-            </p>
+            <p className="text-sm text-gray-400">No students found.</p>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
               {students.map(student => (
