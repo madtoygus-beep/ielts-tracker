@@ -191,23 +191,51 @@ export default function TeacherDashboard() {
   }
 
   const deleteHomework = async reading => {
-    const completedCount = getCompletedCount(reading.id)
 
-    if (completedCount > 0) {
-      alert(
-        'This homework has student submissions. Please archive it instead of deleting, so student results stay safe.'
-      )
-      return
-    }
+  const completedCount = getCompletedCount(reading.id)
 
-    const ok = window.confirm(
-      `Delete "${reading.title}" permanently? This cannot be undone.`
+  if (completedCount > 0) {
+
+    const forceDelete = window.confirm(
+`"${reading.title}" has ${completedCount} student submission(s).
+
+Deleting will permanently remove:
+- Homework
+- Student answers
+- Results/Bands
+
+Continue permanent delete?`
     )
 
-    if (!ok) return
+    if (!forceDelete) return
 
-    await deleteDoc(doc(db, 'readings', reading.id))
+    const relatedSubs = submissions.filter(
+      sub => sub.readingId === reading.id
+    )
+
+    for (const sub of relatedSubs) {
+      await deleteDoc(
+        doc(db,"readingSubmissions",sub.id)
+      )
+    }
+
+    await deleteDoc(
+      doc(db,"readings",reading.id)
+    )
+
+    return
   }
+
+  const ok = window.confirm(
+    `Delete "${reading.title}" permanently?`
+  )
+
+  if (!ok) return
+
+  await deleteDoc(
+    doc(db,"readings",reading.id)
+  )
+}
 
   const duplicateHomework = async reading => {
     const ok = window.confirm(
