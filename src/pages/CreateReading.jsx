@@ -1,12 +1,24 @@
 import { useState, useEffect } from 'react'
 import { auth, db } from '../firebase'
-import { collection, addDoc, query, where, onSnapshot } from 'firebase/firestore'
+import {
+  collection,
+  addDoc,
+  query,
+  where,
+  onSnapshot,
+  doc,
+  getDoc,
+  updateDoc
+} from 'firebase/firestore'
 import { onAuthStateChanged } from 'firebase/auth'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
 export default function CreateReading() {
+  const { id } = useParams()
+  const isEditMode = Boolean(id)
+
   const [user, setUser] = useState(null)
   const [students, setStudents] = useState([])
 
@@ -46,6 +58,51 @@ export default function CreateReading() {
       setStudents(snap.docs.map(d => ({ id: d.id, ...d.data() })))
     })
   }, [])
+
+  useEffect(() => {
+    const loadReading = async () => {
+      if (!isEditMode) return
+
+      const snap = await getDoc(doc(db, 'readings', id))
+
+      if (!snap.exists()) {
+        alert('Reading homework not found.')
+        navigate('/teacher')
+        return
+      }
+
+      const data = snap.data()
+
+      setTitle(data.title || '')
+      setTimeLimit(data.timeLimit || 60)
+      setAssignTo(data.assignTo || [])
+      setPassageMode(data.passageMode || (data.paragraphs ? 'sections' : 'standard'))
+      setFullPassage(data.passage || '')
+
+      if (data.paragraphs?.length) {
+        setParagraphs(
+          data.paragraphs.map((p, index) => ({
+            id: p.id || Date.now() + index,
+            letter: p.letter || letters[index],
+            text: p.text || ''
+          }))
+        )
+      } else if (data.passages) {
+        const converted = Object.entries(data.passages).map(([letter, text], index) => ({
+          id: Date.now() + index,
+          letter,
+          text
+        }))
+
+        setParagraphs(converted.length ? converted : [{ id: Date.now(), letter: 'A', text: '' }])
+      }
+
+      setHeadings(data.headings?.length ? data.headings : ['', '', '', '', '', '', ''])
+      setQuestions(data.questions || [])
+    }
+
+    loadReading()
+  }, [id, isEditMode, navigate])
 
   const toggleStudent = id => {
     setAssignTo(prev =>
@@ -168,7 +225,7 @@ export default function CreateReading() {
     )
   }
 
-  const syncMatchingQuestions = () => {
+  useEffect(() => {
     setQuestions(prev =>
       prev.map(q => {
         if (q.type !== 'matching') return q
@@ -186,15 +243,11 @@ export default function CreateReading() {
         }
       })
     )
-  }
-
-  useEffect(() => {
-    syncMatchingQuestions()
   }, [paragraphs])
 
   const handleSave = async () => {
-    if (!title || assignTo.length === 0 || questions.length === 0) {
-      alert('Please add title, students and questions.')
+    if (!title || questions.length === 0) {
+      alert('Please add title and questions.')
       return
     }
 
@@ -203,15 +256,12 @@ export default function CreateReading() {
       return
     }
 
-    if (
-      passageMode === 'sections' &&
-      paragraphs.some(p => !p.text.trim())
-    ) {
+    if (passageMode === 'sections' && paragraphs.some(p => !p.text.trim())) {
       alert('Please fill all paragraph sections.')
       return
     }
 
-    await addDoc(collection(db, 'readings'), {
+    const payload = {
       title,
       timeLimit,
       assignTo,
@@ -220,15 +270,25 @@ export default function CreateReading() {
       paragraphs,
       headings,
       questions,
-      createdBy: user.uid,
-      createdAt: new Date().toISOString()
-    })
+      updatedAt: new Date().toISOString()
+    }
+
+    if (isEditMode) {
+      await updateDoc(doc(db, 'readings', id), payload)
+    } else {
+      await addDoc(collection(db, 'readings'), {
+        ...payload,
+        createdBy: user.uid,
+        createdAt: new Date().toISOString(),
+        archived: false
+      })
+    }
 
     setSaved(true)
 
     setTimeout(() => {
       navigate('/teacher')
-    }, 1500)
+    }, 1000)
   }
 
   return (
@@ -246,11 +306,13 @@ export default function CreateReading() {
 
       <div className="max-w-4xl mx-auto px-6 py-10">
         <h1 className="text-2xl font-bold text-gray-900 mb-1">
-          Create IELTS Reading
+          {isEditMode ? 'Edit IELTS Reading' : 'Create IELTS Reading'}
         </h1>
 
         <p className="text-gray-400 text-sm mb-8">
-          Build IELTS-style reading homework with different question types
+          {isEditMode
+            ? 'Update the passage, questions, headings or assignments.'
+            : 'Build IELTS-style reading homework with different question types.'}
         </p>
 
         {saved && (
@@ -357,27 +419,17 @@ export default function CreateReading() {
           </div>
 
           {passageMode === 'standard' ? (
-            <div>
-              <p className="text-xs text-gray-400 mb-2">
-                Use this for a normal single-block reading passage.
-              </p>
-
-              <textarea
-                rows={14}
-                value={fullPassage}
-                onChange={e => setFullPassage(e.target.value)}
-                placeholder="Paste the full reading passage here..."
-                className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 resize-none"
-              />
-            </div>
+            <textarea
+              rows={14}
+              value={fullPassage}
+              onChange={e => setFullPassage(e.target.value)}
+              placeholder="Paste the full reading passage here..."
+              className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 resize-none"
+            />
           ) : (
             <div>
-              <p className="text-xs text-gray-400 mb-4">
-                Use this for Matching Headings or paragraph-based IELTS tasks.
-              </p>
-
               <div className="flex flex-col gap-4">
-                {paragraphs.map((paragraph, index) => (
+                {paragraphs.map(paragraph => (
                   <div
                     key={paragraph.id}
                     className="border border-gray-100 rounded-xl p-4"
@@ -424,11 +476,6 @@ export default function CreateReading() {
           <h2 className="font-semibold text-gray-800 mb-4">
             Matching Headings Pool
           </h2>
-
-          <p className="text-xs text-gray-400 mb-4">
-            Add headings here. These will be used only when you create Matching
-            Headings questions.
-          </p>
 
           <div className="flex flex-col gap-2">
             {headings.map((heading, index) => (
@@ -510,17 +557,7 @@ export default function CreateReading() {
                 className="border border-gray-100 rounded-xl p-5"
               >
                 <div className="flex items-center justify-between mb-4">
-                  <span
-                    className={`text-xs font-medium px-3 py-1.5 rounded-full ${
-                      question.type === 'matching'
-                        ? 'bg-indigo-50 text-indigo-600'
-                        : question.type === 'tfng'
-                          ? 'bg-blue-50 text-blue-600'
-                          : question.type === 'fitb'
-                            ? 'bg-amber-50 text-amber-600'
-                            : 'bg-purple-50 text-purple-600'
-                    }`}
-                  >
+                  <span className="text-xs font-medium px-3 py-1.5 rounded-full bg-purple-50 text-purple-600">
                     {question.type === 'matching'
                       ? 'Matching Headings'
                       : question.type === 'tfng'
@@ -542,10 +579,6 @@ export default function CreateReading() {
                   <div>
                     <p className="text-sm font-medium text-gray-800 mb-2">
                       Matching Headings Answer Key
-                    </p>
-
-                    <p className="text-xs text-gray-400 mb-4">
-                      Choose the correct heading for each paragraph.
                     </p>
 
                     <div className="flex flex-col gap-3">
@@ -592,10 +625,6 @@ export default function CreateReading() {
 
                 {question.type === 'tfng' && (
                   <div>
-                    <label className="text-xs text-gray-400 mb-1 block">
-                      Statement {index + 1}
-                    </label>
-
                     <input
                       value={question.question}
                       onChange={e =>
@@ -605,13 +634,9 @@ export default function CreateReading() {
                           e.target.value
                         )
                       }
-                      placeholder="Type the statement..."
+                      placeholder={`Statement ${index + 1}`}
                       className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 mb-3"
                     />
-
-                    <label className="text-xs text-gray-400 mb-2 block">
-                      Correct answer
-                    </label>
 
                     <div className="flex gap-2">
                       {['True', 'False', 'Not Given'].map(option => (
@@ -635,10 +660,6 @@ export default function CreateReading() {
 
                 {question.type === 'fitb' && (
                   <div>
-                    <label className="text-xs text-gray-400 mb-1 block">
-                      Question {index + 1}
-                    </label>
-
                     <input
                       value={question.question}
                       onChange={e =>
@@ -648,13 +669,9 @@ export default function CreateReading() {
                           e.target.value
                         )
                       }
-                      placeholder="e.g. The experiment was conducted in ______."
+                      placeholder="Question..."
                       className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 mb-3"
                     />
-
-                    <label className="text-xs text-gray-400 mb-1 block">
-                      Correct answer
-                    </label>
 
                     <input
                       value={question.answer}
@@ -665,7 +682,7 @@ export default function CreateReading() {
                           e.target.value
                         )
                       }
-                      placeholder="Type the correct answer..."
+                      placeholder="Correct answer"
                       className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400"
                     />
                   </div>
@@ -673,10 +690,6 @@ export default function CreateReading() {
 
                 {question.type === 'mcq' && (
                   <div>
-                    <label className="text-xs text-gray-400 mb-1 block">
-                      Question {index + 1}
-                    </label>
-
                     <input
                       value={question.question}
                       onChange={e =>
@@ -686,13 +699,9 @@ export default function CreateReading() {
                           e.target.value
                         )
                       }
-                      placeholder="Type the question..."
+                      placeholder="Question..."
                       className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 mb-3"
                     />
-
-                    <label className="text-xs text-gray-400 mb-2 block">
-                      Options / select correct one
-                    </label>
 
                     <div className="flex flex-col gap-2">
                       {question.options.map((option, optionIndex) => (
@@ -701,7 +710,7 @@ export default function CreateReading() {
                             onClick={() =>
                               updateQuestion(question.id, 'answer', option)
                             }
-                            className={`w-6 h-6 rounded-full border-2 flex-shrink-0 transition-all ${
+                            className={`w-6 h-6 rounded-full border-2 flex-shrink-0 ${
                               question.answer === option
                                 ? 'bg-purple-600 border-purple-600'
                                 : 'border-gray-300'
@@ -734,7 +743,7 @@ export default function CreateReading() {
           onClick={handleSave}
           className="w-full bg-purple-600 text-white rounded-xl py-4 text-sm font-medium hover:bg-purple-700"
         >
-          Save & Assign Reading
+          {isEditMode ? 'Save Changes' : 'Save & Assign Reading'}
         </button>
       </div>
     </div>

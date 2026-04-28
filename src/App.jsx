@@ -19,6 +19,7 @@ function App() {
         <Route path="/teacher" element={<TeacherDashboard />} />
         <Route path="/admin" element={<AdminDashboard />} />
         <Route path="/create-reading" element={<CreateReading />} />
+        <Route path="/edit-reading/:id" element={<CreateReading />} />
         <Route path="/do-reading/:id" element={<DoReading />} />
       </Routes>
     </BrowserRouter>
