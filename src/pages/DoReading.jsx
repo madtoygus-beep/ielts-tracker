@@ -12,6 +12,8 @@ import {
 import { onAuthStateChanged } from 'firebase/auth'
 import { useNavigate, useParams } from 'react-router-dom'
 
+const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
+
 export default function DoReading() {
   const { id } = useParams()
 
@@ -88,11 +90,52 @@ export default function DoReading() {
     return `${m}:${s}`
   }
 
+  const normalize = value => {
+    return value?.toString().trim().toLowerCase()
+  }
+
+  const sortAnswers = value => {
+    if (!Array.isArray(value)) return []
+    return [...value].map(v => v?.toString().trim()).sort()
+  }
+
+  const tableAnswerKey = (questionId, rowId, cellIndex) => {
+    return `${questionId}_${rowId}_${cellIndex}`
+  }
+
   const handleAnswer = (questionId, value) => {
     setAnswers(prev => ({
       ...prev,
       [questionId]: value
     }))
+  }
+
+  const handleTableAnswer = (questionId, rowId, cellIndex, value) => {
+    const key = tableAnswerKey(questionId, rowId, cellIndex)
+
+    setAnswers(prev => ({
+      ...prev,
+      [key]: value
+    }))
+  }
+
+  const handleMultiAnswer = (questionId, letter) => {
+    setAnswers(prev => {
+      const current = Array.isArray(prev[questionId])
+        ? prev[questionId]
+        : []
+
+      const updated = current.includes(letter)
+        ? current.filter(item => item !== letter)
+        : current.length < 2
+          ? [...current, letter]
+          : current
+
+      return {
+        ...prev,
+        [questionId]: updated
+      }
+    })
   }
 
   const handleMatching = (questionId, letter, value) => {
@@ -105,19 +148,58 @@ export default function DoReading() {
     }))
   }
 
-  const normalize = value => {
-    return value?.toString().trim().toLowerCase()
-  }
-
   const getHeadingText = number => {
     if (!number) return 'No answer'
     const index = Number(number) - 1
     return reading.headings?.[index] || `Heading ${number}`
   }
 
+  const getOptionText = (question, letter) => {
+    if (!letter) return ''
+    const index = letters.indexOf(letter)
+    return question.options?.[index] || ''
+  }
+
+  const getAnswerText = (question, value) => {
+    if (question.type === 'mcq') {
+      if (Array.isArray(value)) {
+        if (value.length === 0) return 'No answer'
+
+        return value
+          .map(letter => `${letter}. ${getOptionText(question, letter)}`)
+          .join(', ')
+      }
+
+      if (!value) return 'No answer'
+      return `${value}. ${getOptionText(question, value)}`
+    }
+
+    if (Array.isArray(value)) {
+      if (value.length === 0) return 'No answer'
+      return value.join(', ')
+    }
+
+    return value || 'No answer'
+  }
+
   const isNormalCorrect = question => {
+    if (question.type === 'mcq' && question.mode === 'multi') {
+      const userAnswer = sortAnswers(answers[question.id]).join('|')
+      const correctAnswer = sortAnswers(question.answers || []).join('|')
+
+      return userAnswer === correctAnswer
+    }
+
     const userAnswer = normalize(answers[question.id])
     const correctAnswer = normalize(question.answer)
+
+    return userAnswer === correctAnswer
+  }
+
+  const isTableCellCorrect = (question, row, cellIndex) => {
+    const key = tableAnswerKey(question.id, row.id, cellIndex)
+    const userAnswer = normalize(answers[key])
+    const correctAnswer = normalize(row.cells[cellIndex].answer)
 
     return userAnswer === correctAnswer
   }
@@ -146,6 +228,22 @@ export default function DoReading() {
         return
       }
 
+      if (question.type === 'table') {
+        question.rows.forEach(row => {
+          row.cells.forEach((cell, cellIndex) => {
+            if (cell.type === 'blank') {
+              total++
+
+              if (isTableCellCorrect(question, row, cellIndex)) {
+                correct++
+              }
+            }
+          })
+        })
+
+        return
+      }
+
       total++
 
       if (isNormalCorrect(question)) {
@@ -153,7 +251,7 @@ export default function DoReading() {
       }
     })
 
-    const percentage = correct / total
+    const percentage = total ? correct / total : 0
 
     let band = 4
 
@@ -295,7 +393,9 @@ export default function DoReading() {
                               ? 'bg-blue-50 text-blue-600'
                               : question.type === 'fitb'
                                 ? 'bg-amber-50 text-amber-600'
-                                : 'bg-purple-50 text-purple-600'
+                                : question.type === 'table'
+                                  ? 'bg-emerald-50 text-emerald-600'
+                                  : 'bg-purple-50 text-purple-600'
                         }`}
                       >
                         {question.type === 'matching'
@@ -304,7 +404,11 @@ export default function DoReading() {
                             ? 'T/F/NG'
                             : question.type === 'fitb'
                               ? 'Fill blank'
-                              : 'MCQ'}
+                              : question.type === 'table'
+                                ? 'Table Completion'
+                                : question.mode === 'multi'
+                                  ? 'MCQ — Choose TWO'
+                                  : 'MCQ'}
                       </span>
                     </div>
 
@@ -375,7 +479,94 @@ export default function DoReading() {
                       </div>
                     )}
 
-                    {question.type !== 'matching' && (
+                    {question.type === 'table' && (
+                      <div>
+                        <p className="text-sm text-gray-700 mb-4">
+                          {question.instruction}
+                        </p>
+
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm border border-gray-100 rounded-xl overflow-hidden">
+                            <thead>
+                              <tr className="bg-gray-100">
+                                {question.columns.map((column, columnIndex) => (
+                                  <th
+                                    key={columnIndex}
+                                    className="p-3 text-left font-semibold text-gray-700 border border-white"
+                                  >
+                                    {column}
+                                  </th>
+                                ))}
+                              </tr>
+                            </thead>
+
+                            <tbody>
+                              {question.rows.map(row => (
+                                <tr key={row.id}>
+                                  {row.cells.map((cell, cellIndex) => {
+                                    if (cell.type !== 'blank') {
+                                      return (
+                                        <td
+                                          key={cellIndex}
+                                          className="p-3 bg-gray-50 border border-white text-gray-700 whitespace-pre-wrap"
+                                        >
+                                          {cell.text}
+                                        </td>
+                                      )
+                                    }
+
+                                    const key = tableAnswerKey(
+                                      question.id,
+                                      row.id,
+                                      cellIndex
+                                    )
+
+                                    const correct = isTableCellCorrect(
+                                      question,
+                                      row,
+                                      cellIndex
+                                    )
+
+                                    return (
+                                      <td
+                                        key={cellIndex}
+                                        className={`p-3 border border-white ${
+                                          correct
+                                            ? 'bg-green-50'
+                                            : 'bg-red-50'
+                                        }`}
+                                      >
+                                        <p className="text-xs text-gray-500 mb-1">
+                                          Your answer:
+                                        </p>
+
+                                        <p className="text-sm text-gray-800 mb-2">
+                                          {answers[key] || 'No answer'}
+                                        </p>
+
+                                        {!correct && (
+                                          <>
+                                            <p className="text-xs text-gray-500 mb-1">
+                                              Correct:
+                                            </p>
+
+                                            <p className="text-sm font-medium text-green-700">
+                                              {cell.answer}
+                                            </p>
+                                          </>
+                                        )}
+                                      </td>
+                                    )
+                                  })}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+
+                    {question.type !== 'matching' && question.type !== 'table' && (
                       <div>
                         <p className="text-sm text-gray-800 mb-4">
                           {question.question}
@@ -409,7 +600,7 @@ export default function DoReading() {
                           </p>
 
                           <p className="text-sm text-gray-800 mb-3">
-                            {answers[question.id] || 'No answer'}
+                            {getAnswerText(question, answers[question.id])}
                           </p>
 
                           {!isNormalCorrect(question) && (
@@ -419,7 +610,13 @@ export default function DoReading() {
                               </p>
 
                               <p className="text-sm font-medium text-green-700">
-                                {question.answer}
+                                {question.type === 'mcq' && question.mode === 'multi'
+                                  ? (question.answers || [])
+                                      .map(letter => `${letter}. ${getOptionText(question, letter)}`)
+                                      .join(', ')
+                                  : question.type === 'mcq'
+                                    ? `${question.answer}. ${getOptionText(question, question.answer)}`
+                                    : question.answer}
                               </p>
                             </>
                           )}
@@ -522,7 +719,9 @@ export default function DoReading() {
                           ? 'bg-blue-50 text-blue-600'
                           : question.type === 'fitb'
                             ? 'bg-amber-50 text-amber-600'
-                            : 'bg-purple-50 text-purple-600'
+                            : question.type === 'table'
+                              ? 'bg-emerald-50 text-emerald-600'
+                              : 'bg-purple-50 text-purple-600'
                     }`}
                   >
                     {question.type === 'matching'
@@ -531,7 +730,11 @@ export default function DoReading() {
                         ? 'T/F/NG'
                         : question.type === 'fitb'
                           ? 'Fill blank'
-                          : 'MCQ'}
+                          : question.type === 'table'
+                            ? 'Table Completion'
+                            : question.mode === 'multi'
+                              ? 'MCQ — Choose TWO'
+                              : 'MCQ'}
                   </span>
                 </div>
 
@@ -606,6 +809,77 @@ export default function DoReading() {
                   </div>
                 )}
 
+                {question.type === 'table' && (
+                  <div>
+                    <p className="text-sm text-gray-700 mb-4">
+                      {question.instruction}
+                    </p>
+
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm border border-gray-100 rounded-xl overflow-hidden">
+                        <thead>
+                          <tr className="bg-gray-100">
+                            {question.columns.map((column, columnIndex) => (
+                              <th
+                                key={columnIndex}
+                                className="p-3 text-left font-semibold text-gray-700 border border-white"
+                              >
+                                {column}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+
+                        <tbody>
+                          {question.rows.map(row => (
+                            <tr key={row.id}>
+                              {row.cells.map((cell, cellIndex) => {
+                                if (cell.type !== 'blank') {
+                                  return (
+                                    <td
+                                      key={cellIndex}
+                                      className="p-3 bg-gray-50 border border-white text-gray-700 whitespace-pre-wrap align-top"
+                                    >
+                                      {cell.text}
+                                    </td>
+                                  )
+                                }
+
+                                const key = tableAnswerKey(
+                                  question.id,
+                                  row.id,
+                                  cellIndex
+                                )
+
+                                return (
+                                  <td
+                                    key={cellIndex}
+                                    className="p-3 bg-gray-50 border border-white align-top"
+                                  >
+                                    <input
+                                      value={answers[key] || ''}
+                                      onChange={e =>
+                                        handleTableAnswer(
+                                          question.id,
+                                          row.id,
+                                          cellIndex,
+                                          e.target.value
+                                        )
+                                      }
+                                      placeholder="Type answer..."
+                                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 bg-white"
+                                    />
+                                  </td>
+                                )
+                              })}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
                 {question.type === 'tfng' && (
                   <div>
                     <p className="text-sm text-gray-800 mb-3">
@@ -655,22 +929,46 @@ export default function DoReading() {
                       {question.question}
                     </p>
 
+                    {question.mode === 'multi' && (
+                      <p className="text-xs text-amber-600 bg-amber-50 rounded-xl p-3 mb-3">
+                        Choose TWO answers. You can select up to 2 options.
+                      </p>
+                    )}
+
                     <div className="flex flex-col gap-2">
-                      {question.options.map((option, optionIndex) => (
-                        <button
-                          key={optionIndex}
-                          onClick={() =>
-                            handleAnswer(question.id, option)
-                          }
-                          className={`text-left px-4 py-3 rounded-xl text-sm border transition-all ${
-                            answers[question.id] === option
-                              ? 'bg-purple-600 text-white border-purple-600'
-                              : 'border-gray-200 text-gray-700 hover:border-purple-300'
-                          }`}
-                        >
-                          {option}
-                        </button>
-                      ))}
+                      {question.options.map((option, optionIndex) => {
+                        const letter = letters[optionIndex]
+
+                        const selectedMulti = Array.isArray(answers[question.id])
+                          ? answers[question.id]
+                          : []
+
+                        const isSelected =
+                          question.mode === 'multi'
+                            ? selectedMulti.includes(letter)
+                            : answers[question.id] === letter
+
+                        return (
+                          <button
+                            key={optionIndex}
+                            onClick={() =>
+                              question.mode === 'multi'
+                                ? handleMultiAnswer(question.id, letter)
+                                : handleAnswer(question.id, letter)
+                            }
+                            className={`text-left px-4 py-3 rounded-xl text-sm border transition-all ${
+                              isSelected
+                                ? 'bg-purple-600 text-white border-purple-600'
+                                : 'border-gray-200 text-gray-700 hover:border-purple-300'
+                            }`}
+                          >
+                            <span className="font-semibold mr-2">
+                              {letter}.
+                            </span>
+                            {option}
+                          </button>
+                        )
+                      })}
                     </div>
                   </div>
                 )}

@@ -17,47 +17,81 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     const adminSession = sessionStorage.getItem('isAdmin')
-    if (!adminSession) { navigate('/login'); return }
+    if (!adminSession) {
+      navigate('/login')
+      return
+    }
 
     const unsub = onSnapshot(collection(db, 'users'), snap => {
       const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
       setUsers(list)
-      list.filter(u => u.role === 'student').forEach(student => {
-        const sq = query(collection(db, 'scores'), where('uid', '==', student.id))
-        onSnapshot(sq, ssnap => {
-          const data = ssnap.docs.map(d => ({ id: d.id, ...d.data() }))
-          data.sort((a, b) => new Date(b.date) - new Date(a.date))
-          setScores(prev => ({ ...prev, [student.id]: data }))
+
+      list
+        .filter(u => u.role === 'student' && (u.status === 'approved' || !u.status))
+        .forEach(student => {
+          const sq = query(collection(db, 'scores'), where('uid', '==', student.id))
+          onSnapshot(sq, ssnap => {
+            const data = ssnap.docs.map(d => ({ id: d.id, ...d.data() }))
+            data.sort((a, b) => new Date(b.date) - new Date(a.date))
+            setScores(prev => ({ ...prev, [student.id]: data }))
+          })
         })
-      })
     })
+
     return unsub
-  }, [])
+  }, [navigate])
+
+  const approveUser = async (userId, roleType) => {
+    await updateDoc(doc(db, 'users', userId), {
+      status: 'approved',
+      role: roleType,
+      approvedAt: new Date().toISOString()
+    })
+  }
+
+  const rejectUser = async (userId) => {
+    if (!window.confirm('Reject this request?')) return
+    await updateDoc(doc(db, 'users', userId), {
+      status: 'rejected',
+      role: null,
+      rejectedAt: new Date().toISOString()
+    })
+  }
 
   const handleDelete = async (id) => {
     if (!window.confirm('Are you sure you want to delete this account?')) return
     await deleteDoc(doc(db, 'users', id))
   }
 
-  const handleDeleteScore = async (scoreId, studentId) => {
+  const handleDeleteScore = async (scoreId) => {
     if (!window.confirm('Delete this score?')) return
     await deleteDoc(doc(db, 'scores', scoreId))
   }
 
   const handleEdit = (u) => {
     setEditUser(u)
-    setEditName(u.name)
-    setEditRole(u.role)
+    setEditName(u.name || '')
+    setEditRole(u.role || 'student')
   }
 
   const handleSaveEdit = async () => {
-    await updateDoc(doc(db, 'users', editUser.id), { name: editName, role: editRole })
+    await updateDoc(doc(db, 'users', editUser.id), {
+      name: editName,
+      role: editRole,
+      status: 'approved'
+    })
     setEditUser(null)
   }
 
   const handleEditScore = (s) => {
     setEditScore(s)
-    setEditScoreForm({ listening: s.listening, reading: s.reading, writing: s.writing, speaking: s.speaking, date: s.date })
+    setEditScoreForm({
+      listening: s.listening,
+      reading: s.reading,
+      writing: s.writing,
+      speaking: s.speaking,
+      date: s.date
+    })
   }
 
   const handleSaveScore = async () => {
@@ -77,8 +111,16 @@ export default function AdminDashboard() {
     u.email?.toLowerCase().includes(search.toLowerCase())
   )
 
-  const students = filtered.filter(u => u.role === 'student')
-  const teachers = filtered.filter(u => u.role === 'teacher')
+  const pendingUsers = filtered.filter(u => u.status === 'pending')
+  const rejectedUsers = filtered.filter(u => u.status === 'rejected')
+
+  const students = filtered.filter(
+    u => u.role === 'student' && (u.status === 'approved' || !u.status)
+  )
+
+  const teachers = filtered.filter(
+    u => u.role === 'teacher' && (u.status === 'approved' || !u.status)
+  )
 
   return (
     <div className="min-h-screen bg-[#faf9f6]">
@@ -94,17 +136,21 @@ export default function AdminDashboard() {
         <h1 className="text-2xl font-bold text-gray-900 mb-1">Admin Panel</h1>
         <p className="text-gray-400 text-sm mb-6">Manage all accounts and scores</p>
 
-        <div className="grid grid-cols-3 gap-4 mb-8">
+        <div className="grid grid-cols-4 gap-4 mb-8">
           <div className="bg-white border border-gray-100 rounded-2xl p-5 text-center">
             <p className="text-3xl font-bold text-gray-900">{users.length}</p>
             <p className="text-sm text-gray-400 mt-1">Total users</p>
           </div>
           <div className="bg-white border border-gray-100 rounded-2xl p-5 text-center">
-            <p className="text-3xl font-bold text-purple-600">{users.filter(u => u.role === 'student').length}</p>
+            <p className="text-3xl font-bold text-orange-500">{pendingUsers.length}</p>
+            <p className="text-sm text-gray-400 mt-1">Pending</p>
+          </div>
+          <div className="bg-white border border-gray-100 rounded-2xl p-5 text-center">
+            <p className="text-3xl font-bold text-purple-600">{students.length}</p>
             <p className="text-sm text-gray-400 mt-1">Students</p>
           </div>
           <div className="bg-white border border-gray-100 rounded-2xl p-5 text-center">
-            <p className="text-3xl font-bold text-green-600">{users.filter(u => u.role === 'teacher').length}</p>
+            <p className="text-3xl font-bold text-green-600">{teachers.length}</p>
             <p className="text-sm text-gray-400 mt-1">Teachers</p>
           </div>
         </div>
@@ -118,6 +164,51 @@ export default function AdminDashboard() {
             onChange={e => setSearch(e.target.value)}
           />
         </div>
+
+        <div className="mb-8">
+          <h2 className="font-semibold text-orange-600 mb-3">Pending Approvals ({pendingUsers.length})</h2>
+          <div className="bg-white border border-gray-100 rounded-2xl overflow-hidden">
+            {pendingUsers.length === 0 ? (
+              <p className="text-gray-400 text-sm text-center py-8">No pending approvals.</p>
+            ) : pendingUsers.map(u => (
+              <div key={u.id} className="flex items-center justify-between px-5 py-4 border-b border-gray-50 last:border-0">
+                <div>
+                  <p className="text-sm font-medium text-gray-800">{u.name}</p>
+                  <p className="text-xs text-gray-400">{u.email}</p>
+                  <p className="text-xs text-orange-500 mt-1">Requested role: {u.requestedRole}</p>
+                </div>
+
+                <div className="flex gap-2">
+                  <button onClick={() => approveUser(u.id, 'student')} className="text-xs bg-purple-100 hover:bg-purple-200 text-purple-700 px-3 py-1.5 rounded-lg">Approve Student</button>
+                  <button onClick={() => approveUser(u.id, 'teacher')} className="text-xs bg-green-100 hover:bg-green-200 text-green-700 px-3 py-1.5 rounded-lg">Approve Teacher</button>
+                  <button onClick={() => rejectUser(u.id)} className="text-xs bg-red-50 hover:bg-red-100 text-red-500 px-3 py-1.5 rounded-lg">Reject</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {rejectedUsers.length > 0 && (
+          <div className="mb-8">
+            <h2 className="font-semibold text-red-500 mb-3">Rejected Users ({rejectedUsers.length})</h2>
+            <div className="bg-white border border-gray-100 rounded-2xl overflow-hidden">
+              {rejectedUsers.map(u => (
+                <div key={u.id} className="flex items-center justify-between px-5 py-4 border-b border-gray-50 last:border-0">
+                  <div>
+                    <p className="text-sm font-medium text-gray-800">{u.name}</p>
+                    <p className="text-xs text-gray-400">{u.email}</p>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button onClick={() => approveUser(u.id, 'student')} className="text-xs bg-purple-100 hover:bg-purple-200 text-purple-700 px-3 py-1.5 rounded-lg">Approve Student</button>
+                    <button onClick={() => approveUser(u.id, 'teacher')} className="text-xs bg-green-100 hover:bg-green-200 text-green-700 px-3 py-1.5 rounded-lg">Approve Teacher</button>
+                    <button onClick={() => handleDelete(u.id)} className="text-xs bg-red-50 hover:bg-red-100 text-red-500 px-3 py-1.5 rounded-lg">Delete</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="mb-8">
           <h2 className="font-semibold text-gray-700 mb-3">Teachers ({teachers.length})</h2>
@@ -151,8 +242,10 @@ export default function AdminDashboard() {
               <div className="bg-white border border-gray-100 rounded-2xl p-8 text-center text-gray-400 text-sm">No students found.</div>
             ) : students.map(u => (
               <div key={u.id} className="bg-white border border-gray-100 rounded-2xl overflow-hidden">
-                <div className="flex items-center justify-between px-5 py-4 cursor-pointer hover:bg-gray-50"
-                  onClick={() => setSelectedStudent(selectedStudent === u.id ? null : u.id)}>
+                <div
+                  className="flex items-center justify-between px-5 py-4 cursor-pointer hover:bg-gray-50"
+                  onClick={() => setSelectedStudent(selectedStudent === u.id ? null : u.id)}
+                >
                   <div className="flex items-center gap-3">
                     <div className="w-9 h-9 rounded-full bg-purple-100 flex items-center justify-center text-purple-600 font-semibold text-sm">
                       {u.name?.charAt(0).toUpperCase()}
@@ -229,11 +322,14 @@ export default function AdminDashboard() {
           <div className="bg-white rounded-2xl p-6 w-full max-w-sm">
             <h2 className="font-semibold text-gray-800 mb-4">Edit score</h2>
             <div className="grid grid-cols-2 gap-3 mb-3">
-              {['listening','reading','writing','speaking'].map(s => (
+              {['listening', 'reading', 'writing', 'speaking'].map(s => (
                 <div key={s}>
                   <label className="text-xs text-gray-400 capitalize mb-1 block">{s}</label>
                   <input
-                    type="number" min="0" max="9" step="0.5"
+                    type="number"
+                    min="0"
+                    max="9"
+                    step="0.5"
                     className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400"
                     value={editScoreForm[s]}
                     onChange={e => setEditScoreForm(p => ({ ...p, [s]: e.target.value }))}
@@ -243,8 +339,12 @@ export default function AdminDashboard() {
             </div>
             <div className="mb-4">
               <label className="text-xs text-gray-400 mb-1 block">Date</label>
-              <input type="date" className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400"
-                value={editScoreForm.date} onChange={e => setEditScoreForm(p => ({ ...p, date: e.target.value }))} />
+              <input
+                type="date"
+                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400"
+                value={editScoreForm.date}
+                onChange={e => setEditScoreForm(p => ({ ...p, date: e.target.value }))}
+              />
             </div>
             <div className="flex gap-2">
               <button onClick={() => setEditScore(null)} className="flex-1 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-500">Cancel</button>

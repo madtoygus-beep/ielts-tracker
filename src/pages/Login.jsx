@@ -11,18 +11,42 @@ export default function Login() {
   const navigate = useNavigate()
 
   const handleLogin = async () => {
-    // Admin hardcoded login
+    setError('')
+
     if (email === 'admin' && password === '852943et') {
-  sessionStorage.setItem('isAdmin', 'true')
-  navigate('/admin')
-  return
-}
+      sessionStorage.setItem('isAdmin', 'true')
+      navigate('/admin')
+      return
+    }
 
     try {
       const result = await signInWithEmailAndPassword(auth, email, password)
       const snap = await getDoc(doc(db, 'users', result.user.uid))
-      const role = snap.data().role
-      navigate(role === 'student' ? '/student' : '/teacher')
+
+      if (!snap.exists()) {
+        setError('User profile not found')
+        return
+      }
+
+      const userData = snap.data()
+
+      if (userData.status === 'pending') {
+        setError('Your account is waiting for admin approval.')
+        return
+      }
+
+      if (userData.status === 'rejected') {
+        setError('Your account request was rejected.')
+        return
+      }
+
+      if (userData.role === 'student') {
+        navigate('/student')
+      } else if (userData.role === 'teacher') {
+        navigate('/teacher')
+      } else {
+        setError('Your account role is not assigned yet.')
+      }
     } catch (err) {
       setError('Wrong email or password')
     }

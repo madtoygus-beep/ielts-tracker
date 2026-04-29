@@ -1,0 +1,531 @@
+import { useEffect, useMemo, useState } from 'react'
+import { auth, db } from '../firebase'
+import {
+  addDoc,
+  collection,
+  doc,
+  getDoc,
+  onSnapshot,
+  query,
+  updateDoc,
+  where
+} from 'firebase/firestore'
+import { onAuthStateChanged } from 'firebase/auth'
+import { useNavigate, useParams } from 'react-router-dom'
+
+export default function CreateWriting() {
+  const { id } = useParams()
+  const isEditMode = Boolean(id)
+  const navigate = useNavigate()
+
+  const [user, setUser] = useState(null)
+  const [students, setStudents] = useState([])
+  const [search, setSearch] = useState('')
+
+  const [title, setTitle] = useState('')
+  const [dueDate, setDueDate] = useState('')
+  const [assignTo, setAssignTo] = useState([])
+
+  const [task1Title, setTask1Title] = useState('Writing Task 1')
+  const [task1Prompt, setTask1Prompt] = useState(
+    'You should spend about 20 minutes on this task. Summarise the information by selecting and reporting the main features, and make comparisons where relevant.'
+  )
+  const [task1Image, setTask1Image] = useState('')
+  const [task1ImageName, setTask1ImageName] = useState('')
+
+  const [task2Title, setTask2Title] = useState('Writing Task 2')
+  const [task2Prompt, setTask2Prompt] = useState(
+    'You should spend about 40 minutes on this task. Write about the following topic. Give reasons for your answer and include any relevant examples from your own knowledge or experience.'
+  )
+
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, currentUser => {
+      if (!currentUser) {
+        navigate('/login')
+        return
+      }
+
+      setUser(currentUser)
+    })
+
+    return unsub
+  }, [navigate])
+
+  useEffect(() => {
+    const q = query(collection(db, 'users'), where('role', '==', 'student'))
+
+    return onSnapshot(q, snap => {
+      const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      list.sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+      setStudents(list)
+    })
+  }, [])
+
+  useEffect(() => {
+    const loadWriting = async () => {
+      if (!isEditMode) return
+
+      const snap = await getDoc(doc(db, 'writingHomeworks', id))
+
+      if (!snap.exists()) {
+        alert('Writing homework not found.')
+        navigate('/teacher')
+        return
+      }
+
+      const data = snap.data()
+
+      setTitle(data.title || '')
+      setDueDate(data.dueDate || '')
+      setAssignTo(data.assignTo || [])
+
+      setTask1Title(data.task1?.title || 'Writing Task 1')
+      setTask1Prompt(data.task1?.prompt || '')
+      setTask1Image(data.task1?.image || '')
+      setTask1ImageName(data.task1?.imageName || '')
+
+      setTask2Title(data.task2?.title || 'Writing Task 2')
+      setTask2Prompt(data.task2?.prompt || '')
+    }
+
+    loadWriting()
+  }, [id, isEditMode, navigate])
+
+  const filteredStudents = useMemo(() => {
+    const term = search.trim().toLowerCase()
+
+    if (!term) return students
+
+    return students.filter(student => {
+      const name = student.name?.toLowerCase() || ''
+      const email = student.email?.toLowerCase() || ''
+
+      return name.includes(term) || email.includes(term)
+    })
+  }, [students, search])
+
+  const selectedStudents = students.filter(student =>
+    assignTo.includes(student.id)
+  )
+
+  const toggleStudent = studentId => {
+    setAssignTo(prev =>
+      prev.includes(studentId)
+        ? prev.filter(id => id !== studentId)
+        : [...prev, studentId]
+    )
+  }
+
+  const selectAllFiltered = () => {
+    const ids = filteredStudents.map(student => student.id)
+
+    setAssignTo(prev => Array.from(new Set([...prev, ...ids])))
+  }
+
+  const clearAssignments = () => {
+    setAssignTo([])
+  }
+
+  const handleImageUpload = event => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    if (!file.type.startsWith('image/')) {
+      alert('Please upload an image file.')
+      return
+    }
+
+    if (file.size > 900 * 1024) {
+      alert('Image is too large. Please upload an image under 900KB for now.')
+      return
+    }
+
+    const reader = new FileReader()
+
+    reader.onload = () => {
+      setTask1Image(reader.result)
+      setTask1ImageName(file.name)
+    }
+
+    reader.readAsDataURL(file)
+  }
+
+  const handleSave = async () => {
+    if (!title.trim()) {
+      alert('Please add a title.')
+      return
+    }
+
+    if (!task1Prompt.trim()) {
+      alert('Please add Task 1 prompt.')
+      return
+    }
+
+    if (!task1Image) {
+      alert('Please upload Task 1 image.')
+      return
+    }
+
+    if (!task2Prompt.trim()) {
+      alert('Please add Task 2 prompt.')
+      return
+    }
+
+    if (assignTo.length === 0) {
+      alert('Please assign at least one student.')
+      return
+    }
+
+    setSaving(true)
+
+    const payload = {
+      title: title.trim(),
+      dueDate,
+      assignTo,
+      timeLimit: 60,
+      task1: {
+        title: task1Title.trim() || 'Writing Task 1',
+        prompt: task1Prompt,
+        image: task1Image,
+        imageName: task1ImageName,
+        minimumWords: 150,
+        suggestedMinutes: 20
+      },
+      task2: {
+        title: task2Title.trim() || 'Writing Task 2',
+        prompt: task2Prompt,
+        minimumWords: 250,
+        suggestedMinutes: 40
+      },
+      updatedAt: new Date().toISOString()
+    }
+
+    try {
+      if (isEditMode) {
+        await updateDoc(doc(db, 'writingHomeworks', id), payload)
+      } else {
+        await addDoc(collection(db, 'writingHomeworks'), {
+          ...payload,
+          createdBy: user.uid,
+          createdAt: new Date().toISOString(),
+          archived: false
+        })
+      }
+
+      setSaved(true)
+
+      setTimeout(() => {
+        navigate('/teacher')
+      }, 1000)
+    } catch (error) {
+      console.error(error)
+      alert('Could not save writing homework.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-[#faf9f6]">
+      <nav className="flex justify-between items-center px-8 py-4 bg-white border-b border-gray-100">
+        <img src="/1.png" alt="Maxima" className="h-10 object-contain" />
+
+        <button
+          onClick={() => navigate('/teacher')}
+          className="text-sm text-gray-400 hover:text-gray-600"
+        >
+          ← Back
+        </button>
+      </nav>
+
+      <div className="max-w-6xl mx-auto px-6 py-10">
+        <h1 className="text-3xl font-bold text-gray-900 mb-2">
+          {isEditMode ? 'Edit Writing Homework' : 'Create Writing Homework'}
+        </h1>
+
+        <p className="text-gray-500 mb-8">
+          IELTS Writing Task 1 + Task 2. Total time: 60 minutes.
+        </p>
+
+        {saved && (
+          <div className="bg-green-50 text-green-600 rounded-xl p-4 mb-6 text-sm font-medium">
+            ✓ Writing homework saved and assigned. Redirecting...
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6">
+          <div className="space-y-6">
+            <div className="bg-white border border-gray-100 rounded-2xl p-6">
+              <h2 className="font-semibold text-gray-800 mb-4">
+                Homework Details
+              </h2>
+
+              <div className="mb-4">
+                <label className="text-xs text-gray-400 mb-1 block">
+                  Title
+                </label>
+
+                <input
+                  value={title}
+                  onChange={e => setTitle(e.target.value)}
+                  placeholder="e.g. Academic Writing Test 01"
+                  className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs text-gray-400 mb-1 block">
+                  Due date / optional
+                </label>
+
+                <input
+                  type="date"
+                  value={dueDate}
+                  onChange={e => setDueDate(e.target.value)}
+                  className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400"
+                />
+              </div>
+            </div>
+
+            <div className="bg-white border border-gray-100 rounded-2xl p-6">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h2 className="font-semibold text-gray-800">
+                    Task 1
+                  </h2>
+
+                  <p className="text-xs text-gray-400 mt-1">
+                    Suggested 20 minutes · Minimum 150 words
+                  </p>
+                </div>
+
+                <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1 rounded-full">
+                  Image based
+                </span>
+              </div>
+
+              <div className="mb-4">
+                <label className="text-xs text-gray-400 mb-1 block">
+                  Task 1 title
+                </label>
+
+                <input
+                  value={task1Title}
+                  onChange={e => setTask1Title(e.target.value)}
+                  className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400"
+                />
+              </div>
+
+              <div className="mb-4">
+                <label className="text-xs text-gray-400 mb-1 block">
+                  Task 1 prompt
+                </label>
+
+                <textarea
+                  rows={5}
+                  value={task1Prompt}
+                  onChange={e => setTask1Prompt(e.target.value)}
+                  className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 resize-none"
+                />
+              </div>
+
+              <div className="mb-4">
+                <label className="text-xs text-gray-400 mb-1 block">
+                  Task 1 image
+                </label>
+
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handleImageUpload}
+                  className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm bg-white"
+                />
+
+                <p className="text-xs text-gray-400 mt-2">
+                  Upload a chart, graph, map, diagram or process image. Max 900KB.
+                </p>
+              </div>
+
+              {task1Image && (
+                <div className="border border-gray-100 rounded-2xl p-4 bg-gray-50">
+                  <div className="flex justify-between mb-3">
+                    <p className="text-xs text-gray-500">
+                      {task1ImageName || 'Task 1 image'}
+                    </p>
+
+                    <button
+                      onClick={() => {
+                        setTask1Image('')
+                        setTask1ImageName('')
+                      }}
+                      className="text-xs text-red-500"
+                    >
+                      Remove
+                    </button>
+                  </div>
+
+                  <img
+                    src={task1Image}
+                    alt="Task 1 preview"
+                    className="w-full max-h-[420px] object-contain bg-white rounded-xl"
+                  />
+                </div>
+              )}
+            </div>
+
+            <div className="bg-white border border-gray-100 rounded-2xl p-6">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h2 className="font-semibold text-gray-800">
+                    Task 2
+                  </h2>
+
+                  <p className="text-xs text-gray-400 mt-1">
+                    Suggested 40 minutes · Minimum 250 words
+                  </p>
+                </div>
+
+                <span className="text-xs bg-indigo-50 text-indigo-600 px-3 py-1 rounded-full">
+                  Essay
+                </span>
+              </div>
+
+              <div className="mb-4">
+                <label className="text-xs text-gray-400 mb-1 block">
+                  Task 2 title
+                </label>
+
+                <input
+                  value={task2Title}
+                  onChange={e => setTask2Title(e.target.value)}
+                  className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs text-gray-400 mb-1 block">
+                  Task 2 question / prompt
+                </label>
+
+                <textarea
+                  rows={7}
+                  value={task2Prompt}
+                  onChange={e => setTask2Prompt(e.target.value)}
+                  placeholder="Some people believe that..."
+                  className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 resize-none"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white border border-gray-100 rounded-2xl p-6 h-fit sticky top-6">
+            <h2 className="font-semibold text-gray-800 mb-2">
+              Assign Students
+            </h2>
+
+            <p className="text-xs text-gray-400 mb-4">
+              Search by name or email. Selected students will receive this writing homework.
+            </p>
+
+            <input
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search students..."
+              className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 mb-3"
+            />
+
+            <div className="flex gap-2 mb-4">
+              <button
+                onClick={selectAllFiltered}
+                className="flex-1 bg-purple-50 text-purple-600 rounded-xl py-2 text-xs font-medium"
+              >
+                Select filtered
+              </button>
+
+              <button
+                onClick={clearAssignments}
+                className="flex-1 bg-gray-100 text-gray-600 rounded-xl py-2 text-xs font-medium"
+              >
+                Clear
+              </button>
+            </div>
+
+            <div className="max-h-[360px] overflow-y-auto flex flex-col gap-2 pr-1">
+              {filteredStudents.length === 0 ? (
+                <p className="text-sm text-gray-400 bg-gray-50 rounded-xl p-4">
+                  No students found.
+                </p>
+              ) : (
+                filteredStudents.map(student => (
+                  <label
+                    key={student.id}
+                    className={`border rounded-xl p-3 cursor-pointer flex items-center gap-3 ${
+                      assignTo.includes(student.id)
+                        ? 'border-purple-300 bg-purple-50'
+                        : 'border-gray-100 bg-gray-50'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={assignTo.includes(student.id)}
+                      onChange={() => toggleStudent(student.id)}
+                      className="accent-purple-600"
+                    />
+
+                    <div>
+                      <p className="text-sm font-medium text-gray-800">
+                        {student.name}
+                      </p>
+
+                      <p className="text-xs text-gray-400">
+                        {student.email}
+                      </p>
+                    </div>
+                  </label>
+                ))
+              )}
+            </div>
+
+            <div className="border-t border-gray-100 mt-5 pt-5">
+              <p className="text-xs text-gray-400 mb-2">
+                Selected students
+              </p>
+
+              {selectedStudents.length === 0 ? (
+                <p className="text-sm text-gray-400">
+                  None selected.
+                </p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {selectedStudents.map(student => (
+                    <span
+                      key={student.id}
+                      className="text-xs bg-purple-50 text-purple-600 px-3 py-1 rounded-full"
+                    >
+                      {student.name}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              className="w-full bg-purple-600 text-white rounded-xl py-4 text-sm font-medium hover:bg-purple-700 mt-6 disabled:opacity-60"
+            >
+              {saving
+                ? 'Saving...'
+                : isEditMode
+                  ? 'Save Changes'
+                  : 'Save & Assign Writing'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}

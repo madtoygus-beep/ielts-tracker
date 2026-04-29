@@ -13,13 +13,26 @@ export default function Signup() {
   const navigate = useNavigate()
 
   const handleSignup = async () => {
+    setError('')
+
+    if (!name.trim() || !email.trim() || !password.trim()) {
+      setError('Please fill in all fields')
+      return
+    }
+
     try {
       const result = await createUserWithEmailAndPassword(auth, email, password)
+
       await setDoc(doc(db, 'users', result.user.uid), {
-        name, email, role,
+        name,
+        email,
+        role: null,
+        requestedRole: role,
+        status: 'pending',
         createdAt: new Date().toISOString()
       })
-      navigate(role === 'student' ? '/student' : '/teacher')
+
+      navigate('/login')
     } catch (err) {
       setError(err.message)
     }
@@ -45,7 +58,9 @@ export default function Signup() {
           <button onClick={handleSignup} className="bg-purple-600 text-white rounded-xl py-3 text-sm font-medium hover:bg-purple-700 mt-1">Create account</button>
         </div>
 
-        <p className="text-center text-sm text-gray-400 mt-4">Already have an account? <span onClick={() => navigate('/login')} className="text-purple-600 cursor-pointer">Login</span></p>
+        <p className="text-center text-sm text-gray-400 mt-4">
+          Already have an account? <span onClick={() => navigate('/login')} className="text-purple-600 cursor-pointer">Login</span>
+        </p>
       </div>
     </div>
   )

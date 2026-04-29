@@ -13,16 +13,50 @@ import {
 import { signOut, onAuthStateChanged, updatePassword } from 'firebase/auth'
 import { useNavigate } from 'react-router-dom'
 
+const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
+
 export default function TeacherDashboard() {
   const [students, setStudents] = useState([])
   const [scores, setScores] = useState({})
+
   const [readings, setReadings] = useState([])
   const [submissions, setSubmissions] = useState([])
 
+  const [writings, setWritings] = useState([])
+  const [writingSubmissions, setWritingSubmissions] = useState([])
+
+  const [listenings, setListenings] = useState([])
+  const [listeningSubmissions, setListeningSubmissions] = useState([])
+  
+  const [readingLibraryFilter, setReadingLibraryFilter] = useState('active')
+  const [writingLibraryFilter, setWritingLibraryFilter] = useState('active')
+  const [listeningLibraryFilter, setListeningLibraryFilter] = useState('active')
+
   const [selected, setSelected] = useState(null)
+  const [selectedStudentSection, setSelectedStudentSection] = useState('scores')
   const [selectedReview, setSelectedReview] = useState(null)
+
   const [selectedHomework, setSelectedHomework] = useState(null)
+  const [selectedHomeworkType, setSelectedHomeworkType] = useState(null)
   const [assignmentDraft, setAssignmentDraft] = useState([])
+
+  const [selectedWritingReview, setSelectedWritingReview] = useState(null)
+  const [writingReviewForm, setWritingReviewForm] = useState({
+    task1Band: '',
+    task2Band: '',
+    task1TA: '',
+    task1CC: '',
+    task1LR: '',
+    task1GRA: '',
+    task2TR: '',
+    task2CC: '',
+    task2LR: '',
+    task2GRA: '',
+    task1Feedback: '',
+    task2Feedback: '',
+    overall: '',
+    generalFeedback: ''
+  })
 
   const [form, setForm] = useState({
     listening: '',
@@ -77,12 +111,32 @@ export default function TeacherDashboard() {
 
       onSnapshot(query(collection(db, 'readings')), snap => {
         const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-        list.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+        list.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
         setReadings(list)
       })
 
       onSnapshot(query(collection(db, 'readingSubmissions')), snap => {
         setSubmissions(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+      })
+
+      onSnapshot(query(collection(db, 'writingHomeworks')), snap => {
+        const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+        list.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+        setWritings(list)
+      })
+
+      onSnapshot(query(collection(db, 'writingSubmissions')), snap => {
+        setWritingSubmissions(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+      })
+
+      onSnapshot(query(collection(db, 'listenings')), snap => {
+        const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+        list.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+        setListenings(list)
+      })
+
+      onSnapshot(query(collection(db, 'listeningSubmissions')), snap => {
+        setListeningSubmissions(snap.docs.map(d => ({ id: d.id, ...d.data() })))
       })
     })
 
@@ -91,6 +145,13 @@ export default function TeacherDashboard() {
 
   const activeReadings = readings.filter(r => !r.archived)
   const archivedReadings = readings.filter(r => r.archived)
+
+  const activeWritings = writings.filter(w => !w.archived)
+  const archivedWritings = writings.filter(w => w.archived)
+
+  const activeListenings = listenings.filter(l => !l.archived)
+  const archivedListenings = listenings.filter(l => l.archived)
+  
 
   const overall = score => {
     const avg =
@@ -138,9 +199,33 @@ export default function TeacherDashboard() {
     )
   }
 
+  const getStudentWritings = studentId => {
+    return activeWritings.filter(writing =>
+      writing.assignTo?.includes(studentId)
+    )
+  }
+
+  const getStudentListenings = studentId => {
+    return activeListenings.filter(listening =>
+      listening.assignTo?.includes(studentId)
+    )
+  }
+
   const getSubmission = (studentId, readingId) => {
     return submissions.find(
       sub => sub.uid === studentId && sub.readingId === readingId
+    )
+  }
+
+  const getWritingSubmission = (studentId, writingId) => {
+    return writingSubmissions.find(
+      sub => sub.uid === studentId && sub.writingId === writingId
+    )
+  }
+
+  const getListeningSubmission = (studentId, listeningId) => {
+    return listeningSubmissions.find(
+      sub => sub.uid === studentId && sub.listeningId === listeningId
     )
   }
 
@@ -148,9 +233,90 @@ export default function TeacherDashboard() {
     return submissions.filter(sub => sub.readingId === readingId).length
   }
 
-  const openAssignmentManager = reading => {
-    setSelectedHomework(reading)
-    setAssignmentDraft(reading.assignTo || [])
+  const getWritingSubmittedCount = writingId => {
+    return writingSubmissions.filter(sub => sub.writingId === writingId).length
+  }
+
+  const getWritingReviewedCount = writingId => {
+    return writingSubmissions.filter(
+      sub => sub.writingId === writingId && sub.reviewed
+    ).length
+  }
+
+  const getListeningCompletedCount = listeningId => {
+    return listeningSubmissions.filter(sub => sub.listeningId === listeningId).length
+  }
+
+  const pendingReviewWritings = activeWritings.filter(writing => {
+    const submitted = getWritingSubmittedCount(writing.id)
+    const reviewed = getWritingReviewedCount(writing.id)
+
+    return submitted > reviewed
+  })
+
+  const pendingWritingReviews = writingSubmissions
+    .filter(submission => !submission.reviewed)
+    .map(submission => {
+      const student = students.find(item => item.id === submission.uid)
+      const writing = writings.find(item => item.id === submission.writingId)
+
+      if (!student || !writing) return null
+
+      return {
+        submission,
+        student,
+        writing
+      }
+    })
+    .filter(Boolean)
+    .sort((a, b) =>
+      new Date(b.submission.submittedAt || 0) -
+      new Date(a.submission.submittedAt || 0)
+    )
+
+  const reviewedWritingCount = writingSubmissions.filter(
+    submission => submission.reviewed
+  ).length
+
+  const submittedWritingCount = writingSubmissions.length
+
+  const formatDateShort = value => {
+    if (!value) return 'No date'
+
+    try {
+      return new Date(value).toLocaleDateString()
+    } catch (error) {
+      return value
+    }
+  }
+
+  const filteredReadings =
+    readingLibraryFilter === 'all'
+      ? readings
+      : readingLibraryFilter === 'archived'
+        ? archivedReadings
+        : activeReadings
+
+  const filteredWritings =
+    writingLibraryFilter === 'all'
+      ? writings
+      : writingLibraryFilter === 'archived'
+        ? archivedWritings
+        : writingLibraryFilter === 'pending'
+          ? pendingReviewWritings
+          : activeWritings
+
+  const filteredListenings =
+    listeningLibraryFilter === 'all'
+      ? listenings
+      : listeningLibraryFilter === 'archived'
+        ? archivedListenings
+        : activeListenings
+
+  const openAssignmentManager = (homework, type) => {
+    setSelectedHomework(homework)
+    setSelectedHomeworkType(type)
+    setAssignmentDraft(homework.assignTo || [])
   }
 
   const toggleAssignment = studentId => {
@@ -162,18 +328,26 @@ export default function TeacherDashboard() {
   }
 
   const saveAssignments = async () => {
-    if (!selectedHomework) return
+    if (!selectedHomework || !selectedHomeworkType) return
 
-    await updateDoc(doc(db, 'readings', selectedHomework.id), {
+    const collectionName =
+      selectedHomeworkType === 'reading'
+        ? 'readings'
+        : selectedHomeworkType === 'listening'
+          ? 'listenings'
+          : 'writingHomeworks'
+
+    await updateDoc(doc(db, collectionName, selectedHomework.id), {
       assignTo: assignmentDraft,
       archived: false
     })
 
     setSelectedHomework(null)
+    setSelectedHomeworkType(null)
     setAssignmentDraft([])
   }
 
-  const archiveHomework = async reading => {
+  const archiveReadingHomework = async reading => {
     const ok = window.confirm(
       `"${reading.title}" will be archived and removed from students' homework list. Existing results will stay saved.`
     )
@@ -186,13 +360,13 @@ export default function TeacherDashboard() {
     })
   }
 
-  const restoreHomework = async reading => {
+  const restoreReadingHomework = async reading => {
     await updateDoc(doc(db, 'readings', reading.id), {
       archived: false
     })
   }
 
-  const deleteHomework = async reading => {
+  const deleteReadingHomework = async reading => {
     const completedCount = getCompletedCount(reading.id)
 
     if (completedCount > 0) {
@@ -222,13 +396,12 @@ Continue permanent delete?`
     }
 
     const ok = window.confirm(`Delete "${reading.title}" permanently?`)
-
     if (!ok) return
 
     await deleteDoc(doc(db, 'readings', reading.id))
   }
 
-  const duplicateHomework = async reading => {
+  const duplicateReadingHomework = async reading => {
     const ok = window.confirm(
       `Duplicate "${reading.title}"? The copy will not be assigned to any student.`
     )
@@ -256,7 +429,223 @@ Continue permanent delete?`
     })
   }
 
-  const normalize = value => value?.toString().trim().toLowerCase()
+  const archiveWritingHomework = async writing => {
+    const ok = window.confirm(
+      `"${writing.title}" will be archived and removed from students' writing homework list. Existing submissions will stay saved.`
+    )
+
+    if (!ok) return
+
+    await updateDoc(doc(db, 'writingHomeworks', writing.id), {
+      archived: true,
+      assignTo: []
+    })
+  }
+
+  const restoreWritingHomework = async writing => {
+    await updateDoc(doc(db, 'writingHomeworks', writing.id), {
+      archived: false
+    })
+  }
+
+  const deleteWritingHomework = async writing => {
+    const submittedCount = getWritingSubmittedCount(writing.id)
+
+    if (submittedCount > 0) {
+      const forceDelete = window.confirm(
+        `"${writing.title}" has ${submittedCount} student submission(s).
+
+Deleting will permanently remove:
+- Writing homework
+- Student Task 1 / Task 2 answers
+- Teacher reviews
+
+Continue permanent delete?`
+      )
+
+      if (!forceDelete) return
+
+      const relatedSubs = writingSubmissions.filter(
+        sub => sub.writingId === writing.id
+      )
+
+      for (const sub of relatedSubs) {
+        await deleteDoc(doc(db, 'writingSubmissions', sub.id))
+      }
+
+      await deleteDoc(doc(db, 'writingHomeworks', writing.id))
+      return
+    }
+
+    const ok = window.confirm(`Delete "${writing.title}" permanently?`)
+    if (!ok) return
+
+    await deleteDoc(doc(db, 'writingHomeworks', writing.id))
+  }
+
+  const duplicateWritingHomework = async writing => {
+    const ok = window.confirm(
+      `Duplicate "${writing.title}"? The copy will not be assigned to any student.`
+    )
+
+    if (!ok) return
+
+    const {
+      id,
+      createdAt,
+      updatedAt,
+      createdBy,
+      assignTo,
+      archived,
+      ...copyData
+    } = writing
+
+    await addDoc(collection(db, 'writingHomeworks'), {
+      ...copyData,
+      title: `${writing.title} Copy`,
+      assignTo: [],
+      archived: false,
+      createdBy: user.uid,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    })
+  }
+
+  const archiveListeningHomework = async listening => {
+    const ok = window.confirm(
+      `"${listening.title}" will be archived and removed from students' listening homework list. Existing results will stay saved.`
+    )
+
+    if (!ok) return
+
+    await updateDoc(doc(db, 'listenings', listening.id), {
+      archived: true,
+      assignTo: []
+    })
+  }
+
+  const restoreListeningHomework = async listening => {
+    await updateDoc(doc(db, 'listenings', listening.id), {
+      archived: false
+    })
+  }
+
+  const deleteListeningHomework = async listening => {
+    const completedCount = getListeningCompletedCount(listening.id)
+
+    if (completedCount > 0) {
+      const forceDelete = window.confirm(
+        `"${listening.title}" has ${completedCount} student submission(s).
+
+Deleting will permanently remove:
+- Listening homework
+- Student answers
+- Results/Bands
+
+Continue permanent delete?`
+      )
+
+      if (!forceDelete) return
+
+      const relatedSubs = listeningSubmissions.filter(
+        sub => sub.listeningId === listening.id
+      )
+
+      for (const sub of relatedSubs) {
+        await deleteDoc(doc(db, 'listeningSubmissions', sub.id))
+      }
+
+      await deleteDoc(doc(db, 'listenings', listening.id))
+      return
+    }
+
+    const ok = window.confirm(`Delete "${listening.title}" permanently?`)
+    if (!ok) return
+
+    await deleteDoc(doc(db, 'listenings', listening.id))
+  }
+
+  const duplicateListeningHomework = async listening => {
+    const ok = window.confirm(
+      `Duplicate "${listening.title}"? The copy will not be assigned to any student.`
+    )
+
+    if (!ok) return
+
+    const {
+      id,
+      createdAt,
+      updatedAt,
+      createdBy,
+      assignTo,
+      archived,
+      ...copyData
+    } = listening
+
+    await addDoc(collection(db, 'listenings'), {
+      ...copyData,
+      title: `${listening.title} Copy`,
+      assignTo: [],
+      archived: false,
+      createdBy: user.uid,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    })
+  }
+
+  const numberWords = {
+    zero: '0', one: '1', two: '2', three: '3', four: '4', five: '5',
+    six: '6', seven: '7', eight: '8', nine: '9', ten: '10', eleven: '11',
+    twelve: '12', thirteen: '13', fourteen: '14', fifteen: '15', sixteen: '16',
+    seventeen: '17', eighteen: '18', nineteen: '19', twenty: '20'
+  }
+
+  const normalize = value => {
+    if (value === undefined || value === null) return ''
+
+    const clean = value
+      .toString()
+      .trim()
+      .toLowerCase()
+      .replace(/[.,!?;:()]/g, '')
+      .replace(/\s+/g, ' ')
+
+    return numberWords[clean] || clean
+  }
+
+  const getWordCount = value => {
+    const clean = normalize(value)
+    if (!clean) return 0
+    return clean.split(' ').filter(Boolean).length
+  }
+
+  const parseAcceptedAnswers = cell => {
+    const main = cell.answer ? [cell.answer] : []
+    const alternatives = cell.acceptedAnswers
+      ? cell.acceptedAnswers.split(',').map(item => item.trim()).filter(Boolean)
+      : []
+
+    return [...main, ...alternatives]
+  }
+
+  const isWithinWordLimit = (value, maxWords) => {
+    if (!maxWords) return true
+    return getWordCount(value) <= Number(maxWords)
+  }
+
+  const sortAnswers = value => {
+    if (!Array.isArray(value)) return []
+    return [...value].map(v => v?.toString().trim()).sort()
+  }
+
+  const tableAnswerKey = (questionId, rowId, cellIndex) => {
+    return `${questionId}_${rowId}_${cellIndex}`
+  }
+
+
+  const mapAnswerKey = (questionId, itemId) => {
+    return `${questionId}_${itemId}`
+  }
 
   const getHeadingText = (reading, number) => {
     if (!number) return 'No answer'
@@ -264,7 +653,41 @@ Continue permanent delete?`
     return reading.headings?.[index] || `Heading ${number}`
   }
 
+  const getOptionText = (question, letter) => {
+    if (!letter) return ''
+    const index = letters.indexOf(letter)
+    return question.options?.[index] || ''
+  }
+
+  const getAnswerText = (question, value) => {
+    if (question.type === 'mcq') {
+      if (Array.isArray(value)) {
+        if (value.length === 0) return 'No answer'
+        return value
+          .map(letter => `${letter}. ${getOptionText(question, letter)}`)
+          .join(', ')
+      }
+
+      if (!value) return 'No answer'
+      return `${value}. ${getOptionText(question, value)}`
+    }
+
+    if (Array.isArray(value)) {
+      if (value.length === 0) return 'No answer'
+      return value.join(', ')
+    }
+
+    return value || 'No answer'
+  }
+
   const isNormalCorrect = (submission, question) => {
+    if (question.type === 'mcq' && question.mode === 'multi') {
+      const userAnswer = sortAnswers(submission.answers?.[question.id]).join('|')
+      const correctAnswer = sortAnswers(question.answers || []).join('|')
+
+      return userAnswer === correctAnswer
+    }
+
     const userAnswer = normalize(submission.answers?.[question.id])
     const correctAnswer = normalize(question.answer)
 
@@ -281,6 +704,26 @@ Continue permanent delete?`
     return userAnswer === correctAnswer
   }
 
+  const isTableCellCorrect = (submission, question, row, cellIndex) => {
+    const key = tableAnswerKey(question.id, row.id, cellIndex)
+    const cell = row.cells[cellIndex]
+    const userAnswer = normalize(submission.answers?.[key])
+    const acceptedAnswers = parseAcceptedAnswers(cell).map(normalize)
+
+    if (!isWithinWordLimit(submission.answers?.[key], cell.maxWords)) return false
+
+    return acceptedAnswers.includes(userAnswer)
+  }
+
+
+  const isMapItemCorrect = (submission, question, item) => {
+    const key = mapAnswerKey(question.id, item.id)
+    const userAnswer = normalize(submission.answers?.[key])
+    const correctAnswer = normalize(item.answer)
+
+    return userAnswer === correctAnswer
+  }
+
   const getStudentAnalytics = studentId => {
     const studentSubs = submissions.filter(sub => sub.uid === studentId)
 
@@ -288,6 +731,9 @@ Continue permanent delete?`
       matching: { correct: 0, total: 0 },
       tfng: { correct: 0, total: 0 },
       fitb: { correct: 0, total: 0 },
+      table: { correct: 0, total: 0 },
+      note: { correct: 0, total: 0 },
+      map: { correct: 0, total: 0 },
       mcq: { correct: 0, total: 0 }
     }
 
@@ -302,6 +748,34 @@ Continue permanent delete?`
 
             if (isMatchingCorrect(sub, question, paragraph)) {
               stats.matching.correct++
+            }
+          })
+
+          return
+        }
+
+        if (question.type === 'table' || question.type === 'note') {
+          question.rows?.forEach(row => {
+            row.cells?.forEach((cell, cellIndex) => {
+              if (cell.type === 'blank') {
+                stats.table.total++
+
+                if (isTableCellCorrect(sub, question, row, cellIndex)) {
+                  stats.table.correct++
+                }
+              }
+            })
+          })
+
+          return
+        }
+
+        if (question.type === 'map') {
+          question.mapItems?.forEach(item => {
+            stats.map.total++
+
+            if (isMapItemCorrect(submission, question, item)) {
+              stats.map.correct++
             }
           })
 
@@ -325,11 +799,14 @@ Continue permanent delete?`
       matching: percentage(stats.matching),
       tfng: percentage(stats.tfng),
       fitb: percentage(stats.fitb),
+      table: percentage(stats.table),
+      note: percentage(stats.note),
+      map: percentage(stats.map),
       mcq: percentage(stats.mcq)
     }
 
     const weaknessList = Object.entries(data)
-      .filter(([_, value]) => value !== null)
+      .filter(([, value]) => value !== null)
       .sort((a, b) => a[1] - b[1])
 
     return {
@@ -342,6 +819,9 @@ Continue permanent delete?`
     if (type === 'matching') return 'Matching Headings'
     if (type === 'tfng') return 'True / False / Not Given'
     if (type === 'fitb') return 'Fill in the Blank'
+    if (type === 'table') return 'Table Completion'
+    if (type === 'note') return 'Note Completion'
+    if (type === 'map') return 'Map Labeling'
     if (type === 'mcq') return 'Multiple Choice'
     return 'No data yet'
   }
@@ -351,6 +831,189 @@ Continue permanent delete?`
     if (value >= 75) return 'text-green-600'
     if (value >= 60) return 'text-amber-600'
     return 'text-red-500'
+  }
+
+
+
+  const getAverageListeningBand = () => {
+    const bands = listeningSubmissions
+      .map(sub => Number(sub.result?.band))
+      .filter(value => !Number.isNaN(value) && value > 0)
+
+    if (bands.length === 0) return null
+
+    const avg = bands.reduce((sum, value) => sum + value, 0) / bands.length
+    return (Math.round(avg * 10) / 10).toFixed(1)
+  }
+
+  const getListeningCompletionStats = () => {
+    const assigned = activeListenings.reduce(
+      (sum, listening) => sum + (listening.assignTo?.length || 0),
+      0
+    )
+
+    const activeListeningIds = activeListenings.map(listening => listening.id)
+
+    const completed = listeningSubmissions.filter(submission =>
+      activeListeningIds.includes(submission.listeningId)
+    ).length
+
+    const rate = assigned ? Math.round((completed / assigned) * 100) : 0
+
+    return {
+      assigned,
+      completed,
+      rate
+    }
+  }
+
+  const getMostMissedListeningQuestions = () => {
+    const stats = {}
+
+    listeningSubmissions.forEach(submission => {
+      const listening = listenings.find(item => item.id === submission.listeningId)
+      if (!listening) return
+
+      listening.questions?.forEach((question, questionIndex) => {
+        const key = `${listening.title} — Q${questionIndex + 1}`
+
+        if (!stats[key]) {
+          stats[key] = {
+            label: key,
+            wrong: 0,
+            total: 0
+          }
+        }
+
+        if (question.type === 'table' || question.type === 'note') {
+          question.rows?.forEach(row => {
+            row.cells?.forEach((cell, cellIndex) => {
+              if (cell.type === 'blank') {
+                stats[key].total++
+
+                if (!isTableCellCorrect(submission, question, row, cellIndex)) {
+                  stats[key].wrong++
+                }
+              }
+            })
+          })
+
+          return
+        }
+
+        if (question.type === 'map') {
+          question.mapItems?.forEach(item => {
+            stats[key].total++
+
+            if (!isMapItemCorrect(submission, question, item)) {
+              stats[key].wrong++
+            }
+          })
+
+          return
+        }
+
+        stats[key].total++
+
+        if (!isNormalCorrect(submission, question)) {
+          stats[key].wrong++
+        }
+      })
+    })
+
+    return Object.values(stats)
+      .filter(item => item.total > 0)
+      .map(item => ({
+        ...item,
+        wrongRate: Math.round((item.wrong / item.total) * 100)
+      }))
+      .sort((a, b) => b.wrongRate - a.wrongRate)
+      .slice(0, 5)
+  }
+
+  const getAtRiskListeningStudents = () => {
+    return students
+      .map(student => {
+        const studentSubs = listeningSubmissions
+          .filter(sub => sub.uid === student.id && sub.result?.band)
+          .sort(
+            (a, b) =>
+              new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0)
+          )
+
+        const latest = studentSubs[0]
+
+        if (!latest) return null
+
+        return {
+          student,
+          latestBand: Number(latest.result.band),
+          submissions: studentSubs.length
+        }
+      })
+      .filter(item => item && item.latestBand < 6)
+      .sort((a, b) => a.latestBand - b.latestBand)
+      .slice(0, 5)
+  }
+
+  const getListeningTypeAnalytics = () => {
+    const stats = {
+      mcq: { correct: 0, total: 0 },
+      fitb: { correct: 0, total: 0 },
+      tfng: { correct: 0, total: 0 },
+      table: { correct: 0, total: 0 },
+      note: { correct: 0, total: 0 }
+    }
+
+    listeningSubmissions.forEach(submission => {
+      const listening = listenings.find(item => item.id === submission.listeningId)
+      if (!listening) return
+
+      listening.questions?.forEach(question => {
+        if (question.type === 'table' || question.type === 'note') {
+          question.rows?.forEach(row => {
+            row.cells?.forEach((cell, cellIndex) => {
+              if (cell.type === 'blank') {
+                stats.table.total++
+
+                if (isTableCellCorrect(submission, question, row, cellIndex)) {
+                  stats.table.correct++
+                }
+              }
+            })
+          })
+
+          return
+        }
+
+        if (!stats[question.type]) return
+
+        stats[question.type].total++
+
+        if (isNormalCorrect(submission, question)) {
+          stats[question.type].correct++
+        }
+      })
+    })
+
+    return Object.entries(stats).map(([key, value]) => ({
+      key,
+      correct: value.correct,
+      total: value.total,
+      percentage: value.total
+        ? Math.round((value.correct / value.total) * 100)
+        : null
+    }))
+  }
+
+  const getListeningTypeLabel = type => {
+    if (type === 'mcq') return 'MCQ'
+    if (type === 'fitb') return 'Fill Blank'
+    if (type === 'tfng') return 'T/F/NG'
+    if (type === 'table') return 'Form/Table'
+    if (type === 'note') return 'Note Completion'
+    if (type === 'map') return 'Map Labeling'
+    return type
   }
 
   const handlePrint = student => {
@@ -429,7 +1092,132 @@ Continue permanent delete?`
     }
   }
 
-  const renderHomeworkCard = (reading, archived = false) => (
+  const openWritingReview = ({ student, writing, submission }) => {
+    setSelectedWritingReview({ student, writing, submission })
+
+    setWritingReviewForm({
+      task1Band: submission.review?.task1Band || '',
+      task2Band: submission.review?.task2Band || '',
+      task1TA: submission.review?.rubric?.task1?.taskAchievement || '',
+      task1CC: submission.review?.rubric?.task1?.coherenceCohesion || '',
+      task1LR: submission.review?.rubric?.task1?.lexicalResource || '',
+      task1GRA: submission.review?.rubric?.task1?.grammarRangeAccuracy || '',
+      task2TR: submission.review?.rubric?.task2?.taskResponse || '',
+      task2CC: submission.review?.rubric?.task2?.coherenceCohesion || '',
+      task2LR: submission.review?.rubric?.task2?.lexicalResource || '',
+      task2GRA: submission.review?.rubric?.task2?.grammarRangeAccuracy || '',
+      task1Feedback: submission.review?.task1Feedback || '',
+      task2Feedback: submission.review?.task2Feedback || '',
+      overall: submission.review?.overall || '',
+      generalFeedback: submission.review?.generalFeedback || ''
+    })
+  }
+
+  const roundToHalf = value => {
+    if (!value && value !== 0) return ''
+
+    return (Math.round(Number(value) * 2) / 2).toFixed(1)
+  }
+
+  const averageBand = values => {
+    const numbers = values
+      .map(value => Number(value))
+      .filter(value => !Number.isNaN(value) && value > 0)
+
+    if (numbers.length === 0) return ''
+
+    const avg = numbers.reduce((sum, value) => sum + value, 0) / numbers.length
+
+    return roundToHalf(avg)
+  }
+
+  const suggestedTask1Band = averageBand([
+    writingReviewForm.task1TA,
+    writingReviewForm.task1CC,
+    writingReviewForm.task1LR,
+    writingReviewForm.task1GRA
+  ])
+
+  const suggestedTask2Band = averageBand([
+    writingReviewForm.task2TR,
+    writingReviewForm.task2CC,
+    writingReviewForm.task2LR,
+    writingReviewForm.task2GRA
+  ])
+
+  const suggestedOverallBand = averageBand([
+    writingReviewForm.task1Band || suggestedTask1Band,
+    writingReviewForm.task2Band || suggestedTask2Band
+  ])
+
+  const useSuggestedBands = () => {
+    setWritingReviewForm(prev => ({
+      ...prev,
+      task1Band: prev.task1Band || suggestedTask1Band,
+      task2Band: prev.task2Band || suggestedTask2Band,
+      overall: suggestedOverallBand || prev.overall
+    }))
+  }
+
+  const saveWritingReview = async () => {
+    if (!selectedWritingReview) return
+
+    if (!writingReviewForm.overall) {
+      alert('Please enter overall writing band.')
+      return
+    }
+
+    await updateDoc(
+      doc(db, 'writingSubmissions', selectedWritingReview.submission.id),
+      {
+        reviewed: true,
+        reviewedAt: new Date().toISOString(),
+        reviewedBy: user.uid,
+        review: {
+          task1Band: writingReviewForm.task1Band,
+          task2Band: writingReviewForm.task2Band,
+          rubric: {
+            task1: {
+              taskAchievement: writingReviewForm.task1TA,
+              coherenceCohesion: writingReviewForm.task1CC,
+              lexicalResource: writingReviewForm.task1LR,
+              grammarRangeAccuracy: writingReviewForm.task1GRA
+            },
+            task2: {
+              taskResponse: writingReviewForm.task2TR,
+              coherenceCohesion: writingReviewForm.task2CC,
+              lexicalResource: writingReviewForm.task2LR,
+              grammarRangeAccuracy: writingReviewForm.task2GRA
+            }
+          },
+          task1Feedback: writingReviewForm.task1Feedback,
+          task2Feedback: writingReviewForm.task2Feedback,
+          overall: writingReviewForm.overall,
+          generalFeedback: writingReviewForm.generalFeedback
+        }
+      }
+    )
+
+    setSelectedWritingReview(null)
+    setWritingReviewForm({
+      task1Band: '',
+      task2Band: '',
+      task1TA: '',
+      task1CC: '',
+      task1LR: '',
+      task1GRA: '',
+      task2TR: '',
+      task2CC: '',
+      task2LR: '',
+      task2GRA: '',
+      task1Feedback: '',
+      task2Feedback: '',
+      overall: '',
+      generalFeedback: ''
+    })
+  }
+
+  const renderReadingHomeworkCard = (reading, archived = false) => (
     <div
       key={reading.id}
       className={`border rounded-xl p-4 flex items-center justify-between gap-4 ${
@@ -439,9 +1227,7 @@ Continue permanent delete?`
       }`}
     >
       <div>
-        <p className="text-sm font-medium text-gray-800">
-          {reading.title}
-        </p>
+        <p className="text-sm font-medium text-gray-800">{reading.title}</p>
 
         <p className="text-xs text-gray-400 mt-0.5">
           Assigned to {reading.assignTo?.length || 0} students · Completed by{' '}
@@ -466,14 +1252,14 @@ Continue permanent delete?`
             </button>
 
             <button
-              onClick={() => duplicateHomework(reading)}
+              onClick={() => duplicateReadingHomework(reading)}
               className="text-xs bg-gray-100 text-gray-600 px-3 py-2 rounded-xl hover:bg-gray-200"
             >
               Duplicate
             </button>
 
             <button
-              onClick={() => openAssignmentManager(reading)}
+              onClick={() => openAssignmentManager(reading, 'reading')}
               className="text-xs bg-purple-600 text-white px-3 py-2 rounded-xl hover:bg-purple-700"
             >
               Manage
@@ -483,14 +1269,14 @@ Continue permanent delete?`
 
         {archived ? (
           <button
-            onClick={() => restoreHomework(reading)}
+            onClick={() => restoreReadingHomework(reading)}
             className="text-xs bg-green-50 text-green-600 px-3 py-2 rounded-xl hover:bg-green-100"
           >
             Restore
           </button>
         ) : (
           <button
-            onClick={() => archiveHomework(reading)}
+            onClick={() => archiveReadingHomework(reading)}
             className="text-xs bg-amber-50 text-amber-600 px-3 py-2 rounded-xl hover:bg-amber-100"
           >
             Archive
@@ -498,7 +1284,7 @@ Continue permanent delete?`
         )}
 
         <button
-          onClick={() => deleteHomework(reading)}
+          onClick={() => deleteReadingHomework(reading)}
           className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
         >
           Delete
@@ -506,6 +1292,177 @@ Continue permanent delete?`
       </div>
     </div>
   )
+
+  const renderWritingHomeworkCard = (writing, archived = false) => {
+    const submitted = getWritingSubmittedCount(writing.id)
+    const reviewed = getWritingReviewedCount(writing.id)
+
+    return (
+      <div
+        key={writing.id}
+        className={`border rounded-xl p-4 flex items-center justify-between gap-4 ${
+          archived
+            ? 'border-gray-100 bg-gray-50 opacity-80'
+            : 'border-gray-100 bg-gray-50'
+        }`}
+      >
+        <div>
+          <p className="text-sm font-medium text-gray-800">{writing.title}</p>
+
+          <p className="text-xs text-gray-400 mt-0.5">
+            Assigned to {writing.assignTo?.length || 0} students · Submitted by{' '}
+            {submitted} students · Reviewed {reviewed}/{submitted} ·{' '}
+            {writing.timeLimit || 60} min
+          </p>
+
+          {submitted > reviewed && (
+            <p className="text-xs text-amber-600 mt-1 font-medium">
+              {submitted - reviewed} pending teacher review
+            </p>
+          )}
+
+          {archived && (
+            <p className="text-xs text-amber-600 mt-1 font-medium">
+              Archived — hidden from students
+            </p>
+          )}
+        </div>
+
+        <div className="flex gap-2 flex-wrap justify-end">
+          {!archived && (
+            <>
+              <button
+                onClick={() => navigate(`/edit-writing/${writing.id}`)}
+                className="text-xs bg-blue-50 text-blue-600 px-3 py-2 rounded-xl hover:bg-blue-100"
+              >
+                Edit
+              </button>
+
+              <button
+                onClick={() => duplicateWritingHomework(writing)}
+                className="text-xs bg-gray-100 text-gray-600 px-3 py-2 rounded-xl hover:bg-gray-200"
+              >
+                Duplicate
+              </button>
+
+              <button
+                onClick={() => openAssignmentManager(writing, 'writing')}
+                className="text-xs bg-purple-600 text-white px-3 py-2 rounded-xl hover:bg-purple-700"
+              >
+                Manage
+              </button>
+            </>
+          )}
+
+          {archived ? (
+            <button
+              onClick={() => restoreWritingHomework(writing)}
+              className="text-xs bg-green-50 text-green-600 px-3 py-2 rounded-xl hover:bg-green-100"
+            >
+              Restore
+            </button>
+          ) : (
+            <button
+              onClick={() => archiveWritingHomework(writing)}
+              className="text-xs bg-amber-50 text-amber-600 px-3 py-2 rounded-xl hover:bg-amber-100"
+            >
+              Archive
+            </button>
+          )}
+
+          <button
+            onClick={() => deleteWritingHomework(writing)}
+            className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
+          >
+            Delete
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  const renderListeningHomeworkCard = (listening, archived = false) => (
+    <div
+      key={listening.id}
+      className={`border rounded-xl p-4 flex items-center justify-between gap-4 ${
+        archived
+          ? 'border-gray-100 bg-gray-50 opacity-80'
+          : 'border-gray-100 bg-gray-50'
+      }`}
+    >
+      <div>
+        <p className="text-sm font-medium text-gray-800">{listening.title}</p>
+
+        <p className="text-xs text-gray-400 mt-0.5">
+          Assigned to {listening.assignTo?.length || 0} students · Completed by{' '}
+          {getListeningCompletedCount(listening.id)} students · {listening.timeLimit || 30} min
+        </p>
+
+        {archived && (
+          <p className="text-xs text-amber-600 mt-1 font-medium">
+            Archived — hidden from students
+          </p>
+        )}
+      </div>
+
+      <div className="flex gap-2 flex-wrap justify-end">
+        {!archived && (
+          <>
+            <button
+              onClick={() => navigate(`/edit-listening/${listening.id}`)}
+              className="text-xs bg-blue-50 text-blue-600 px-3 py-2 rounded-xl hover:bg-blue-100"
+            >
+              Edit
+            </button>
+
+            <button
+              onClick={() => duplicateListeningHomework(listening)}
+              className="text-xs bg-gray-100 text-gray-600 px-3 py-2 rounded-xl hover:bg-gray-200"
+            >
+              Duplicate
+            </button>
+
+            <button
+              onClick={() => openAssignmentManager(listening, 'listening')}
+              className="text-xs bg-purple-600 text-white px-3 py-2 rounded-xl hover:bg-purple-700"
+            >
+              Manage
+            </button>
+          </>
+        )}
+
+        {archived ? (
+          <button
+            onClick={() => restoreListeningHomework(listening)}
+            className="text-xs bg-green-50 text-green-600 px-3 py-2 rounded-xl hover:bg-green-100"
+          >
+            Restore
+          </button>
+        ) : (
+          <button
+            onClick={() => archiveListeningHomework(listening)}
+            className="text-xs bg-amber-50 text-amber-600 px-3 py-2 rounded-xl hover:bg-amber-100"
+          >
+            Archive
+          </button>
+        )}
+
+        <button
+          onClick={() => deleteListeningHomework(listening)}
+          className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
+        >
+          Delete
+        </button>
+      </div>
+    </div>
+  )
+
+
+  const averageListeningBand = getAverageListeningBand()
+  const listeningCompletionStats = getListeningCompletionStats()
+  const mostMissedListeningQuestions = getMostMissedListeningQuestions()
+  const atRiskListeningStudents = getAtRiskListeningStudents()
+  const listeningTypeAnalytics = getListeningTypeAnalytics()
 
   return (
     <div className="min-h-screen bg-[#faf9f6]">
@@ -540,23 +1497,331 @@ Continue permanent delete?`
         </h1>
 
         <p className="text-gray-400 text-sm mb-6">
-          Manage students, scores and reusable reading homework
+          Manage students, scores and reusable homework
         </p>
 
-        <div className="flex gap-3 mb-8">
+        <div className="flex items-center gap-4 mb-8">
           <button
             onClick={() => navigate('/create-reading')}
             className="bg-purple-600 text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-purple-700"
           >
             📖 Create Reading Homework
           </button>
+
+          <button
+            onClick={() => navigate('/create-writing')}
+            className="bg-purple-600 text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-purple-700"
+          >
+            ✍️ Create Writing Homework
+          </button>
+
+          <button
+            onClick={() => navigate('/create-listening')}
+            className="bg-purple-600 text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-purple-700"
+          >
+            🎧 Create Listening Homework
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+          <div className="bg-gray-900 text-white rounded-2xl p-5">
+            <p className="text-xs text-gray-400 mb-1">
+              Pending Essays
+            </p>
+
+            <p className="text-3xl font-bold">
+              {pendingWritingReviews.length}
+            </p>
+
+            <p className="text-xs text-gray-400 mt-2">
+              Need teacher grading
+            </p>
+          </div>
+
+          <div className="bg-white border border-gray-100 rounded-2xl p-5">
+            <p className="text-xs text-gray-400 mb-1">
+              Reviewed Writing
+            </p>
+
+            <p className="text-3xl font-bold text-green-600">
+              {reviewedWritingCount}
+            </p>
+
+            <p className="text-xs text-gray-400 mt-2">
+              Total reviewed submissions
+            </p>
+          </div>
+
+          <div className="bg-white border border-gray-100 rounded-2xl p-5">
+            <p className="text-xs text-gray-400 mb-1">
+              Total Writing Submissions
+            </p>
+
+            <p className="text-3xl font-bold text-purple-600">
+              {submittedWritingCount}
+            </p>
+
+            <p className="text-xs text-gray-400 mt-2">
+              Submitted Task 1 + Task 2 sets
+            </p>
+          </div>
+        </div>
+
+        
+        <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
+          <div className="flex items-start justify-between gap-4 mb-5">
+            <div>
+              <h2 className="font-semibold text-gray-800">
+                🎧 Listening Analytics
+              </h2>
+
+              <p className="text-xs text-gray-400 mt-1">
+                Class performance, completion rate, difficult questions and at-risk students.
+              </p>
+            </div>
+
+            <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1.5 rounded-full">
+              {listeningSubmissions.length} submissions
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+            <div className="bg-gray-900 text-white rounded-2xl p-5">
+              <p className="text-xs text-gray-400 mb-1">
+                Average Listening Band
+              </p>
+
+              <p className="text-3xl font-bold">
+                {averageListeningBand || '--'}
+              </p>
+
+              <p className="text-xs text-gray-400 mt-2">
+                Based on submitted listening homework
+              </p>
+            </div>
+
+            <div className="bg-purple-50 rounded-2xl p-5">
+              <p className="text-xs text-gray-500 mb-1">
+                Completion Rate
+              </p>
+
+              <p className="text-3xl font-bold text-purple-600">
+                {listeningCompletionStats.rate}%
+              </p>
+
+              <p className="text-xs text-gray-500 mt-2">
+                {listeningCompletionStats.completed}/{listeningCompletionStats.assigned} assignments completed
+              </p>
+            </div>
+
+            <div className="bg-red-50 rounded-2xl p-5">
+              <p className="text-xs text-gray-500 mb-1">
+                Most Missed Question
+              </p>
+
+              <p className="text-xl font-bold text-red-600 truncate">
+                {mostMissedListeningQuestions[0]?.label || '--'}
+              </p>
+
+              <p className="text-xs text-gray-500 mt-2">
+                {mostMissedListeningQuestions[0]
+                  ? `${mostMissedListeningQuestions[0].wrongRate}% wrong`
+                  : 'No question data yet'}
+              </p>
+            </div>
+
+            <div className="bg-amber-50 rounded-2xl p-5">
+              <p className="text-xs text-gray-500 mb-1">
+                At-Risk Students
+              </p>
+
+              <p className="text-3xl font-bold text-amber-600">
+                {atRiskListeningStudents.length}
+              </p>
+
+              <p className="text-xs text-gray-500 mt-2">
+                Latest listening band below 6.0
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <div className="lg:col-span-1 bg-gray-50 rounded-2xl p-5">
+              <h3 className="text-sm font-semibold text-gray-700 mb-3">
+                Accuracy by Question Type
+              </h3>
+
+              <div className="flex flex-col gap-3">
+                {listeningTypeAnalytics.map(item => (
+                  <div key={item.key}>
+                    <div className="flex justify-between mb-1">
+                      <p className="text-xs text-gray-500">
+                        {getListeningTypeLabel(item.key)}
+                      </p>
+
+                      <p className={`text-xs font-semibold ${getAnalyticsColor(item.percentage)}`}>
+                        {item.percentage === null ? '--' : `${item.percentage}%`}
+                      </p>
+                    </div>
+
+                    <div className="w-full bg-white rounded-full h-2 overflow-hidden">
+                      <div
+                        className="bg-purple-600 h-2 rounded-full"
+                        style={{ width: `${item.percentage || 0}%` }}
+                      />
+                    </div>
+
+                    <p className="text-[10px] text-gray-400 mt-1">
+                      {item.correct}/{item.total} correct
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="lg:col-span-1 bg-gray-50 rounded-2xl p-5">
+              <h3 className="text-sm font-semibold text-gray-700 mb-3">
+                Most Missed Questions
+              </h3>
+
+              {mostMissedListeningQuestions.length === 0 ? (
+                <p className="text-sm text-gray-400">
+                  No listening submissions yet.
+                </p>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  {mostMissedListeningQuestions.map(item => (
+                    <div
+                      key={item.label}
+                      className="bg-white rounded-xl p-3 flex items-center justify-between gap-3"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-xs font-medium text-gray-700 truncate">
+                          {item.label}
+                        </p>
+
+                        <p className="text-[10px] text-gray-400">
+                          {item.wrong}/{item.total} wrong
+                        </p>
+                      </div>
+
+                      <span className="text-xs bg-red-50 text-red-600 px-2 py-1 rounded-full font-semibold">
+                        {item.wrongRate}%
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="lg:col-span-1 bg-gray-50 rounded-2xl p-5">
+              <h3 className="text-sm font-semibold text-gray-700 mb-3">
+                At-Risk Students
+              </h3>
+
+              {atRiskListeningStudents.length === 0 ? (
+                <p className="text-sm text-gray-400">
+                  No at-risk listening students yet.
+                </p>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  {atRiskListeningStudents.map(item => (
+                    <div
+                      key={item.student.id}
+                      className="bg-white rounded-xl p-3 flex items-center justify-between gap-3"
+                    >
+                      <div>
+                        <p className="text-xs font-medium text-gray-700">
+                          {item.student.name}
+                        </p>
+
+                        <p className="text-[10px] text-gray-400">
+                          {item.submissions} listening submission(s)
+                        </p>
+                      </div>
+
+                      <span className="text-xs bg-amber-50 text-amber-600 px-2 py-1 rounded-full font-semibold">
+                        Band {item.latestBand.toFixed(1)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+<div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
+          <div className="flex items-center justify-between gap-4 mb-4">
+            <div>
+              <h2 className="font-semibold text-gray-800">
+                Pending Writing Reviews
+              </h2>
+
+              <p className="text-xs text-gray-400 mt-1">
+                Essays submitted by students but not graded yet. Click Grade Now to open the review screen directly.
+              </p>
+            </div>
+
+            <span className={`text-xs px-3 py-1.5 rounded-full ${
+              pendingWritingReviews.length > 0
+                ? 'bg-amber-50 text-amber-600'
+                : 'bg-green-50 text-green-600'
+            }`}>
+              {pendingWritingReviews.length > 0
+                ? `${pendingWritingReviews.length} pending`
+                : 'All caught up'}
+            </span>
+          </div>
+
+          {pendingWritingReviews.length === 0 ? (
+            <div className="bg-green-50 text-green-700 rounded-xl p-4 text-sm">
+              ✅ No pending writing reviews right now.
+            </div>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {pendingWritingReviews.slice(0, 6).map(item => (
+                <div
+                  key={item.submission.id}
+                  className="border border-amber-100 bg-amber-50/40 rounded-xl p-4 flex items-center justify-between gap-4"
+                >
+                  <div>
+                    <p className="text-sm font-medium text-gray-800">
+                      {item.student.name}
+                    </p>
+
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      {item.writing.title} · Submitted {formatDateShort(item.submission.submittedAt)}
+                    </p>
+
+                    <p className="text-xs text-gray-400 mt-1">
+                      Task 1: {item.submission.task1WordCount || 0} words · Task 2: {item.submission.task2WordCount || 0} words
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={() => openWritingReview(item)}
+                    className="text-xs bg-purple-600 text-white px-4 py-2 rounded-xl hover:bg-purple-700"
+                  >
+                    Grade Now
+                  </button>
+                </div>
+              ))}
+
+              {pendingWritingReviews.length > 6 && (
+                <p className="text-xs text-gray-400 text-center pt-2">
+                  Showing latest 6 pending reviews. Use the Pending Review filter in Writing Homework Library for the full list.
+                </p>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
           <div className="flex items-center justify-between mb-4">
             <div>
               <h2 className="font-semibold text-gray-800">
-                Homework Library
+                Reading Homework Library
               </h2>
 
               <p className="text-xs text-gray-400 mt-1">
@@ -564,32 +1829,130 @@ Continue permanent delete?`
               </p>
             </div>
 
-            <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1.5 rounded-full">
-              {activeReadings.length} active
-            </span>
+            <div className="flex items-center gap-2 flex-wrap justify-end">
+              {[
+                ['active', `Active (${activeReadings.length})`],
+                ['archived', `Archived (${archivedReadings.length})`],
+                ['all', `All (${readings.length})`]
+              ].map(([key, label]) => (
+                <button
+                  key={key}
+                  onClick={() => setReadingLibraryFilter(key)}
+                  className={`text-xs px-3 py-1.5 rounded-full ${
+                    readingLibraryFilter === key
+                      ? 'bg-purple-600 text-white'
+                      : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
 
-          {activeReadings.length === 0 ? (
+          {filteredReadings.length === 0 ? (
             <p className="text-sm text-gray-400 bg-gray-50 rounded-xl p-4">
-              No active reading homework.
+              No reading homework found for this filter.
             </p>
           ) : (
             <div className="flex flex-col gap-3">
-              {activeReadings.map(reading => renderHomeworkCard(reading))}
+              {filteredReadings.map(reading =>
+                renderReadingHomeworkCard(reading, reading.archived)
+              )}
             </div>
           )}
+        </div>
 
-          {archivedReadings.length > 0 && (
-            <div className="mt-6">
-              <h3 className="text-sm font-semibold text-gray-700 mb-3">
-                Archived Homework
-              </h3>
 
-              <div className="flex flex-col gap-3">
-                {archivedReadings.map(reading =>
-                  renderHomeworkCard(reading, true)
-                )}
-              </div>
+        <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="font-semibold text-gray-800">
+                Listening Homework Library
+              </h2>
+
+              <p className="text-xs text-gray-400 mt-1">
+                Reuse, duplicate, assign, unassign, archive or delete listening homework.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap justify-end">
+              {[
+                ['active', `Active (${activeListenings.length})`],
+                ['archived', `Archived (${archivedListenings.length})`],
+                ['all', `All (${listenings.length})`]
+              ].map(([key, label]) => (
+                <button
+                  key={key}
+                  onClick={() => setListeningLibraryFilter(key)}
+                  className={`text-xs px-3 py-1.5 rounded-full ${
+                    listeningLibraryFilter === key
+                      ? 'bg-purple-600 text-white'
+                      : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {filteredListenings.length === 0 ? (
+            <p className="text-sm text-gray-400 bg-gray-50 rounded-xl p-4">
+              No listening homework found for this filter.
+            </p>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {filteredListenings.map(listening =>
+                renderListeningHomeworkCard(listening, listening.archived)
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="font-semibold text-gray-800">
+                Writing Homework Library
+              </h2>
+
+              <p className="text-xs text-gray-400 mt-1">
+                Review Task 1 and Task 2 submissions, manage assignments and archive writing homework.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap justify-end">
+              {[
+                ['active', `Active (${activeWritings.length})`],
+                ['pending', `Pending Review (${pendingReviewWritings.length})`],
+                ['archived', `Archived (${archivedWritings.length})`],
+                ['all', `All (${writings.length})`]
+              ].map(([key, label]) => (
+                <button
+                  key={key}
+                  onClick={() => setWritingLibraryFilter(key)}
+                  className={`text-xs px-3 py-1.5 rounded-full ${
+                    writingLibraryFilter === key
+                      ? 'bg-purple-600 text-white'
+                      : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {filteredWritings.length === 0 ? (
+            <p className="text-sm text-gray-400 bg-gray-50 rounded-xl p-4">
+              No writing homework found for this filter.
+            </p>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {filteredWritings.map(writing =>
+                renderWritingHomeworkCard(writing, writing.archived)
+              )}
             </div>
           )}
         </div>
@@ -603,7 +1966,21 @@ Continue permanent delete?`
 
           {students.map(student => {
             const studentReadings = getStudentReadings(student.id)
+            const studentWritings = getStudentWritings(student.id)
+            const studentListenings = getStudentListenings(student.id)
             const analytics = getStudentAnalytics(student.id)
+
+            const completedReadingCount = studentReadings.filter(reading =>
+              getSubmission(student.id, reading.id)
+            ).length
+
+            const completedWritingCount = studentWritings.filter(writing =>
+              getWritingSubmission(student.id, writing.id)
+            ).length
+
+            const completedListeningCount = studentListenings.filter(listening =>
+              getListeningSubmission(student.id, listening.id)
+            ).length
 
             return (
               <div
@@ -612,9 +1989,11 @@ Continue permanent delete?`
               >
                 <div
                   className="flex items-center justify-between p-5 cursor-pointer hover:bg-gray-50"
-                  onClick={() =>
-                    setSelected(selected?.id === student.id ? null : student)
-                  }
+                  onClick={() => {
+                    const isOpen = selected?.id === student.id
+                    setSelected(isOpen ? null : student)
+                    setSelectedStudentSection('scores')
+                  }}
                 >
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-full bg-purple-100 flex items-center justify-center text-purple-600 font-semibold text-sm">
@@ -645,12 +2024,21 @@ Continue permanent delete?`
                     <div className="text-right">
                       <p className="text-xs text-gray-400">Reading done</p>
                       <p className="text-sm font-semibold text-gray-700">
-                        {
-                          studentReadings.filter(reading =>
-                            getSubmission(student.id, reading.id)
-                          ).length
-                        }
-                        /{studentReadings.length}
+                        {completedReadingCount}/{studentReadings.length}
+                      </p>
+                    </div>
+
+                    <div className="text-right">
+                      <p className="text-xs text-gray-400">Listening done</p>
+                      <p className="text-sm font-semibold text-gray-700">
+                        {completedListeningCount}/{studentListenings.length}
+                      </p>
+                    </div>
+
+                    <div className="text-right">
+                      <p className="text-xs text-gray-400">Writing done</p>
+                      <p className="text-sm font-semibold text-gray-700">
+                        {completedWritingCount}/{studentWritings.length}
                       </p>
                     </div>
 
@@ -662,6 +2050,29 @@ Continue permanent delete?`
 
                 {selected?.id === student.id && (
                   <div className="border-t border-gray-100 p-5">
+                    <div className="flex flex-wrap gap-2 mb-6">
+                      {[
+                        ['scores', '📈 Scores'],
+                        ['homework', '📚 Homework'],
+                        ['reviews', '✍ Writing Reviews']
+                      ].map(([key, label]) => (
+                        <button
+                          key={key}
+                          type="button"
+                          onClick={() => setSelectedStudentSection(key)}
+                          className={`text-xs px-4 py-2 rounded-xl font-medium ${
+                            selectedStudentSection === key
+                              ? 'bg-purple-600 text-white'
+                              : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {selectedStudentSection === 'scores' && (
+                      <>
                     <div className="mb-8">
                       <h3 className="text-sm font-semibold text-gray-700 mb-3">
                         Log a new score for {student.name}
@@ -762,17 +2173,24 @@ Continue permanent delete?`
                       </div>
                     )}
 
+                      </>
+                    )}
+
+                    {selectedStudentSection === 'homework' && (
+                      <>
                     {analytics.weakest && (
                       <div className="mb-8">
                         <h3 className="text-sm font-semibold text-gray-700 mb-3">
                           Reading Weakness Analytics
                         </h3>
 
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
                           {[
                             ['Matching', analytics.matching],
                             ['TFNG', analytics.tfng],
                             ['Fill Blank', analytics.fitb],
+                            ['Table Completion', analytics.table],
+                            ['Note Completion', analytics.note],
                             ['MCQ', analytics.mcq]
                           ].map(([label, value]) => (
                             <div
@@ -806,7 +2224,7 @@ Continue permanent delete?`
                       </div>
                     )}
 
-                    <div>
+                    <div className="mb-8">
                       <h3 className="text-sm font-semibold text-gray-700 mb-3">
                         Reading homework results
                       </h3>
@@ -888,6 +2306,112 @@ Continue permanent delete?`
                         </div>
                       )}
                     </div>
+
+                      </>
+                    )}
+
+                    {selectedStudentSection === 'reviews' && (
+                      <>
+                    <div>
+                      <h3 className="text-sm font-semibold text-gray-700 mb-3">
+                        Writing homework results
+                      </h3>
+
+                      {studentWritings.length === 0 ? (
+                        <p className="text-sm text-gray-400 bg-gray-50 rounded-xl p-4">
+                          No active writing homework assigned to this student.
+                        </p>
+                      ) : (
+                        <div className="flex flex-col gap-3">
+                          {studentWritings.map(writing => {
+                            const submission = getWritingSubmission(
+                              student.id,
+                              writing.id
+                            )
+
+                            return (
+                              <div
+                                key={writing.id}
+                                className="border border-gray-100 rounded-xl p-4 bg-gray-50"
+                              >
+                                <div className="flex items-center justify-between gap-3">
+                                  <div>
+                                    <p className="text-sm font-medium text-gray-800">
+                                      {writing.title}
+                                    </p>
+
+                                    <p className="text-xs text-gray-400">
+                                      Task 1 + Task 2 · {writing.timeLimit || 60} min
+                                    </p>
+
+                                    {submission && (
+                                      <p
+                                        className={`text-xs mt-1 font-medium ${
+                                          submission.reviewed
+                                            ? 'text-green-600'
+                                            : 'text-amber-600'
+                                        }`}
+                                      >
+                                        {submission.reviewed
+                                          ? `Reviewed — Band ${submission.review?.overall}`
+                                          : 'Submitted — Waiting for review'}
+                                      </p>
+                                    )}
+                                  </div>
+
+                                  {submission ? (
+                                    <div className="flex items-center gap-3">
+                                      <div className="text-right">
+                                        <p className="text-xs text-gray-400">
+                                          Task 1
+                                        </p>
+
+                                        <p className="text-sm font-semibold text-gray-700">
+                                          {submission.task1WordCount || 0} words
+                                        </p>
+                                      </div>
+
+                                      <div className="text-right">
+                                        <p className="text-xs text-gray-400">
+                                          Task 2
+                                        </p>
+
+                                        <p className="text-sm font-semibold text-gray-700">
+                                          {submission.task2WordCount || 0} words
+                                        </p>
+                                      </div>
+
+                                      <button
+                                        onClick={() =>
+                                          openWritingReview({
+                                            student,
+                                            writing,
+                                            submission
+                                          })
+                                        }
+                                        className={`text-xs px-3 py-2 rounded-xl text-white ${
+                                          submission.reviewed
+                                            ? 'bg-green-600 hover:bg-green-700'
+                                            : 'bg-purple-600 hover:bg-purple-700'
+                                        }`}
+                                      >
+                                        {submission.reviewed ? 'Edit Review' : 'Grade'}
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <span className="text-xs bg-amber-50 text-amber-600 px-3 py-1.5 rounded-full">
+                                      Not done
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+                      </>
+                    )}
                   </div>
                 )}
               </div>
@@ -913,6 +2437,7 @@ Continue permanent delete?`
               <button
                 onClick={() => {
                   setSelectedHomework(null)
+                  setSelectedHomeworkType(null)
                   setAssignmentDraft([])
                 }}
                 className="text-sm text-gray-400 hover:text-gray-600"
@@ -923,7 +2448,12 @@ Continue permanent delete?`
 
             <div className="flex flex-col gap-3 mb-6">
               {students.map(student => {
-                const completed = getSubmission(student.id, selectedHomework.id)
+                const completed =
+                  selectedHomeworkType === 'reading'
+                    ? getSubmission(student.id, selectedHomework.id)
+                    : selectedHomeworkType === 'listening'
+                      ? getListeningSubmission(student.id, selectedHomework.id)
+                      : getWritingSubmission(student.id, selectedHomework.id)
 
                 return (
                   <label
@@ -1055,7 +2585,13 @@ Continue permanent delete?`
                               ? 'T/F/NG'
                               : question.type === 'fitb'
                                 ? 'Fill blank'
-                                : 'MCQ'}
+                                : question.type === 'map'
+                                    ? 'Map Labeling'
+                                    : (question.type === 'table' || question.type === 'note')
+                                      ? question.type === 'note' ? 'Note Completion' : 'Table Completion'
+                                      : question.mode === 'multi'
+                                    ? 'MCQ — Choose TWO'
+                                    : 'MCQ'}
                         </span>
                       </div>
 
@@ -1132,6 +2668,94 @@ Continue permanent delete?`
                             )
                           })}
                         </div>
+                      ) : question.type === 'table' ? (
+                        <div>
+                          <p className="text-sm text-gray-700 mb-4">
+                            {question.instruction}
+                          </p>
+
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-sm border border-gray-100 rounded-xl overflow-hidden">
+                              <thead>
+                                <tr className="bg-gray-100">
+                                  {question.columns.map((column, columnIndex) => (
+                                    <th
+                                      key={columnIndex}
+                                      className="p-3 text-left font-semibold text-gray-700 border border-white"
+                                    >
+                                      {column}
+                                    </th>
+                                  ))}
+                                </tr>
+                              </thead>
+
+                              <tbody>
+                                {question.rows.map(row => (
+                                  <tr key={row.id}>
+                                    {row.cells.map((cell, cellIndex) => {
+                                      if (cell.type !== 'blank') {
+                                        return (
+                                          <td
+                                            key={cellIndex}
+                                            className="p-3 bg-gray-50 border border-white text-gray-700 whitespace-pre-wrap"
+                                          >
+                                            {cell.text}
+                                          </td>
+                                        )
+                                      }
+
+                                      const key = tableAnswerKey(
+                                        question.id,
+                                        row.id,
+                                        cellIndex
+                                      )
+
+                                      const correct = isTableCellCorrect(
+                                        selectedReview.submission,
+                                        question,
+                                        row,
+                                        cellIndex
+                                      )
+
+                                      return (
+                                        <td
+                                          key={cellIndex}
+                                          className={`p-3 border border-white ${
+                                            correct
+                                              ? 'bg-green-50'
+                                              : 'bg-red-50'
+                                          }`}
+                                        >
+                                          <p className="text-xs text-gray-500 mb-1">
+                                            Student:
+                                          </p>
+
+                                          <p className="text-sm text-gray-800 mb-2">
+                                            {selectedReview.submission.answers?.[
+                                              key
+                                            ] || 'No answer'}
+                                          </p>
+
+                                          {!correct && (
+                                            <>
+                                              <p className="text-xs text-gray-500 mb-1">
+                                                Correct:
+                                              </p>
+
+                                              <p className="text-sm font-medium text-green-700">
+                                                {[cell.answer, cell.acceptedAnswers].filter(Boolean).join(', ')}
+                                              </p>
+                                            </>
+                                          )}
+                                        </td>
+                                      )
+                                    })}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
                       ) : (
                         <div>
                           <p className="text-sm text-gray-800 mb-3">
@@ -1173,9 +2797,12 @@ Continue permanent delete?`
                             </div>
 
                             <p className="text-sm text-gray-800 mb-2">
-                              {selectedReview.submission.answers?.[
-                                question.id
-                              ] || 'No answer'}
+                              {getAnswerText(
+                                question,
+                                selectedReview.submission.answers?.[
+                                  question.id
+                                ]
+                              )}
                             </p>
 
                             {!isNormalCorrect(
@@ -1188,7 +2815,23 @@ Continue permanent delete?`
                                 </p>
 
                                 <p className="text-sm font-medium text-green-700">
-                                  {question.answer}
+                                  {question.type === 'mcq' &&
+                                  question.mode === 'multi'
+                                    ? (question.answers || [])
+                                        .map(
+                                          letter =>
+                                            `${letter}. ${getOptionText(
+                                              question,
+                                              letter
+                                            )}`
+                                        )
+                                        .join(', ')
+                                    : question.type === 'mcq'
+                                      ? `${question.answer}. ${getOptionText(
+                                          question,
+                                          question.answer
+                                        )}`
+                                      : question.answer}
                                 </p>
                               </>
                             )}
@@ -1198,6 +2841,362 @@ Continue permanent delete?`
                     </div>
                   ))}
                 </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {selectedWritingReview && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center px-4">
+          <div className="bg-white rounded-2xl w-full max-w-6xl max-h-[90vh] overflow-y-auto p-6">
+            <div className="flex items-start justify-between mb-6">
+              <div>
+                <h2 className="text-xl font-bold text-gray-900">
+                  Writing Review
+                </h2>
+
+                <p className="text-sm text-gray-400">
+                  {selectedWritingReview.student.name} —{' '}
+                  {selectedWritingReview.writing.title}
+                </p>
+              </div>
+
+              <button
+                onClick={() => setSelectedWritingReview(null)}
+                className="text-sm text-gray-400 hover:text-gray-600"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div className="space-y-6">
+                <div className="border border-gray-100 rounded-2xl p-5">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="font-semibold text-gray-800">
+                      Task 1 Answer
+                    </h3>
+
+                    <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1 rounded-full">
+                      {selectedWritingReview.submission.task1WordCount || 0} words
+                    </span>
+                  </div>
+
+                  <p className="text-xs text-gray-400 mb-3">
+                    Prompt:
+                  </p>
+
+                  <p className="text-sm text-gray-700 leading-7 whitespace-pre-wrap mb-4 bg-gray-50 rounded-xl p-4">
+                    {selectedWritingReview.writing.task1?.prompt}
+                  </p>
+
+                  {selectedWritingReview.writing.task1?.image && (
+                    <img
+                      src={selectedWritingReview.writing.task1.image}
+                      alt="Task 1"
+                      className="w-full max-h-[320px] object-contain bg-gray-50 rounded-xl border border-gray-100 mb-4"
+                    />
+                  )}
+
+                  <p className="text-sm text-gray-800 leading-7 whitespace-pre-wrap">
+                    {selectedWritingReview.submission.task1Answer}
+                  </p>
+                </div>
+
+                <div className="border border-gray-100 rounded-2xl p-5">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="font-semibold text-gray-800">
+                      Task 2 Answer
+                    </h3>
+
+                    <span className="text-xs bg-indigo-50 text-indigo-600 px-3 py-1 rounded-full">
+                      {selectedWritingReview.submission.task2WordCount || 0} words
+                    </span>
+                  </div>
+
+                  <p className="text-xs text-gray-400 mb-3">
+                    Prompt:
+                  </p>
+
+                  <p className="text-sm text-gray-700 leading-7 whitespace-pre-wrap mb-4 bg-gray-50 rounded-xl p-4">
+                    {selectedWritingReview.writing.task2?.prompt}
+                  </p>
+
+                  <p className="text-sm text-gray-800 leading-7 whitespace-pre-wrap">
+                    {selectedWritingReview.submission.task2Answer}
+                  </p>
+                </div>
+              </div>
+
+              <div className="border border-gray-100 rounded-2xl p-5 h-fit sticky top-5">
+                <h3 className="font-semibold text-gray-800 mb-2">
+                  Teacher Evaluation
+                </h3>
+
+                <p className="text-xs text-gray-400 mb-5">
+                  Use IELTS Writing criteria. Suggested bands are calculated from the rubric, but you can still edit the final band manually.
+                </p>
+
+                <div className="bg-purple-50 rounded-2xl p-4 mb-5">
+                  <div className="flex items-center justify-between gap-3 mb-3">
+                    <div>
+                      <p className="text-xs text-gray-500">
+                        Suggested Overall
+                      </p>
+
+                      <p className="text-2xl font-bold text-purple-700">
+                        {suggestedOverallBand || '--'}
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={useSuggestedBands}
+                      className="text-xs bg-purple-600 text-white px-4 py-2 rounded-xl hover:bg-purple-700"
+                    >
+                      Use Suggested Bands
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="bg-white rounded-xl p-3">
+                      <p className="text-xs text-gray-400 mb-1">
+                        Suggested Task 1
+                      </p>
+
+                      <p className="text-lg font-bold text-purple-600">
+                        {suggestedTask1Band || '--'}
+                      </p>
+                    </div>
+
+                    <div className="bg-white rounded-xl p-3">
+                      <p className="text-xs text-gray-400 mb-1">
+                        Suggested Task 2
+                      </p>
+
+                      <p className="text-lg font-bold text-indigo-600">
+                        {suggestedTask2Band || '--'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="border border-gray-100 rounded-2xl p-4 mb-5">
+                  <div className="flex items-center justify-between mb-3">
+                    <h4 className="font-semibold text-gray-800">
+                      Task 1 Rubric
+                    </h4>
+
+                    <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1 rounded-full">
+                      Academic Task 1
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    {[
+                      ['task1TA', 'Task Achievement'],
+                      ['task1CC', 'Coherence & Cohesion'],
+                      ['task1LR', 'Lexical Resource'],
+                      ['task1GRA', 'Grammar Range & Accuracy']
+                    ].map(([key, label]) => (
+                      <div key={key}>
+                        <label className="text-xs text-gray-400 block mb-1">
+                          {label}
+                        </label>
+
+                        <input
+                          type="number"
+                          min="0"
+                          max="9"
+                          step="0.5"
+                          value={writingReviewForm[key]}
+                          onChange={e =>
+                            setWritingReviewForm(prev => ({
+                              ...prev,
+                              [key]: e.target.value
+                            }))
+                          }
+                          className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="border border-gray-100 rounded-2xl p-4 mb-5">
+                  <div className="flex items-center justify-between mb-3">
+                    <h4 className="font-semibold text-gray-800">
+                      Task 2 Rubric
+                    </h4>
+
+                    <span className="text-xs bg-indigo-50 text-indigo-600 px-3 py-1 rounded-full">
+                      Essay
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    {[
+                      ['task2TR', 'Task Response'],
+                      ['task2CC', 'Coherence & Cohesion'],
+                      ['task2LR', 'Lexical Resource'],
+                      ['task2GRA', 'Grammar Range & Accuracy']
+                    ].map(([key, label]) => (
+                      <div key={key}>
+                        <label className="text-xs text-gray-400 block mb-1">
+                          {label}
+                        </label>
+
+                        <input
+                          type="number"
+                          min="0"
+                          max="9"
+                          step="0.5"
+                          value={writingReviewForm[key]}
+                          onChange={e =>
+                            setWritingReviewForm(prev => ({
+                              ...prev,
+                              [key]: e.target.value
+                            }))
+                          }
+                          className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-3 mb-5">
+                  <div>
+                    <label className="text-xs text-gray-400 block mb-1">
+                      Task 1 Band
+                    </label>
+
+                    <input
+                      type="number"
+                      min="0"
+                      max="9"
+                      step="0.5"
+                      value={writingReviewForm.task1Band}
+                      onChange={e =>
+                        setWritingReviewForm(prev => ({
+                          ...prev,
+                          task1Band: e.target.value
+                        }))
+                      }
+                      placeholder={suggestedTask1Band || ''}
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs text-gray-400 block mb-1">
+                      Task 2 Band
+                    </label>
+
+                    <input
+                      type="number"
+                      min="0"
+                      max="9"
+                      step="0.5"
+                      value={writingReviewForm.task2Band}
+                      onChange={e =>
+                        setWritingReviewForm(prev => ({
+                          ...prev,
+                          task2Band: e.target.value
+                        }))
+                      }
+                      placeholder={suggestedTask2Band || ''}
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs text-gray-400 block mb-1">
+                      Overall
+                    </label>
+
+                    <input
+                      type="number"
+                      min="0"
+                      max="9"
+                      step="0.5"
+                      value={writingReviewForm.overall}
+                      onChange={e =>
+                        setWritingReviewForm(prev => ({
+                          ...prev,
+                          overall: e.target.value
+                        }))
+                      }
+                      placeholder={suggestedOverallBand || ''}
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400"
+                    />
+                  </div>
+                </div>
+
+                <div className="mb-4">
+                  <label className="text-xs text-gray-400 block mb-1">
+                    Task 1 Feedback
+                  </label>
+
+                  <textarea
+                    rows={4}
+                    value={writingReviewForm.task1Feedback}
+                    onChange={e =>
+                      setWritingReviewForm(prev => ({
+                        ...prev,
+                        task1Feedback: e.target.value
+                      }))
+                    }
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 resize-none"
+                    placeholder="Comment on Task 1..."
+                  />
+                </div>
+
+                <div className="mb-4">
+                  <label className="text-xs text-gray-400 block mb-1">
+                    Task 2 Feedback
+                  </label>
+
+                  <textarea
+                    rows={4}
+                    value={writingReviewForm.task2Feedback}
+                    onChange={e =>
+                      setWritingReviewForm(prev => ({
+                        ...prev,
+                        task2Feedback: e.target.value
+                      }))
+                    }
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 resize-none"
+                    placeholder="Comment on Task 2..."
+                  />
+                </div>
+
+                <div className="mb-5">
+                  <label className="text-xs text-gray-400 block mb-1">
+                    General Feedback
+                  </label>
+
+                  <textarea
+                    rows={4}
+                    value={writingReviewForm.generalFeedback}
+                    onChange={e =>
+                      setWritingReviewForm(prev => ({
+                        ...prev,
+                        generalFeedback: e.target.value
+                      }))
+                    }
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 resize-none"
+                    placeholder="Overall writing feedback..."
+                  />
+                </div>
+
+                <button
+                  onClick={saveWritingReview}
+                  className="w-full bg-purple-600 text-white rounded-xl py-3 text-sm font-medium hover:bg-purple-700"
+                >
+                  Save Writing Review
+                </button>
               </div>
             </div>
           </div>

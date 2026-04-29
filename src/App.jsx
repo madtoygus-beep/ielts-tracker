@@ -1,26 +1,47 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
+
 import Landing from './pages/Landing'
 import Login from './pages/Login'
 import Signup from './pages/Signup'
+
 import StudentDashboard from './pages/StudentDashboard'
 import TeacherDashboard from './pages/TeacherDashboard'
 import AdminDashboard from './pages/AdminDashboard'
+
 import CreateReading from './pages/CreateReading'
 import DoReading from './pages/DoReading'
+
+import CreateWriting from './pages/CreateWriting'
+import DoWriting from './pages/DoWriting'
+
+import CreateListening from './pages/CreateListening'
+import DoListening from './pages/DoListening'
 
 function App() {
   return (
     <BrowserRouter>
       <Routes>
+
         <Route path="/" element={<Landing />} />
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<Signup />} />
+
         <Route path="/student" element={<StudentDashboard />} />
         <Route path="/teacher" element={<TeacherDashboard />} />
         <Route path="/admin" element={<AdminDashboard />} />
+
         <Route path="/create-reading" element={<CreateReading />} />
         <Route path="/edit-reading/:id" element={<CreateReading />} />
         <Route path="/do-reading/:id" element={<DoReading />} />
+
+        <Route path="/create-writing" element={<CreateWriting />} />
+        <Route path="/edit-writing/:id" element={<CreateWriting />} />
+        <Route path="/do-writing/:id" element={<DoWriting />} />
+
+        <Route path="/create-listening" element={<CreateListening />} />
+        <Route path="/edit-listening/:id" element={<CreateListening />} />
+        <Route path="/do-listening/:id" element={<DoListening />} />
+
       </Routes>
     </BrowserRouter>
   )

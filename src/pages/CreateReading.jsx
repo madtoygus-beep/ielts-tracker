@@ -40,6 +40,22 @@ export default function CreateReading() {
 
   const navigate = useNavigate()
 
+  const removeUndefined = value => {
+    if (Array.isArray(value)) {
+      return value.map(removeUndefined)
+    }
+
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(
+        Object.entries(value)
+          .filter(([, v]) => v !== undefined)
+          .map(([k, v]) => [k, removeUndefined(v)])
+      )
+    }
+
+    return value
+  }
+
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, currentUser => {
       if (!currentUser) {
@@ -92,24 +108,72 @@ export default function CreateReading() {
             text: p.text || ''
           }))
         )
-      } else if (data.passages) {
-        const converted = Object.entries(data.passages).map(
-          ([letter, text], index) => ({
-            id: Date.now() + index,
-            letter,
-            text
-          })
-        )
-
-        setParagraphs(
-          converted.length
-            ? converted
-            : [{ id: Date.now(), letter: 'A', text: '' }]
-        )
+      } else {
+        setParagraphs([{ id: Date.now(), letter: 'A', text: '' }])
       }
 
-      setHeadings(data.headings?.length ? data.headings : ['', '', '', '', '', '', ''])
-      setQuestions(data.questions || [])
+      setHeadings(
+        data.headings?.length ? data.headings : ['', '', '', '', '', '', '']
+      )
+
+      const loadedQuestions = (data.questions || []).map(question => {
+        if (question.type === 'mcq') {
+          return {
+            id: question.id || Date.now(),
+            type: 'mcq',
+            mode: question.mode || 'single',
+            question: question.question || '',
+            options: question.options?.length
+              ? question.options
+              : ['', '', '', ''],
+            answer: question.answer || '',
+            answers: question.answers || []
+          }
+        }
+
+        if (question.type === 'table') {
+          return {
+            id: question.id || Date.now(),
+            type: 'table',
+            instruction:
+              question.instruction ||
+              'Complete the table below. Choose NO MORE THAN THREE WORDS from the passage for each answer.',
+            columns: question.columns?.length
+              ? question.columns
+              : ['Column 1', 'Column 2', 'Column 3'],
+            rows: question.rows?.length
+              ? question.rows
+              : [
+                  {
+                    id: Date.now(),
+                    cells: [
+                      { type: 'text', text: '' },
+                      { type: 'text', text: '' },
+                      { type: 'blank', answer: '' }
+                    ]
+                  }
+                ]
+          }
+        }
+
+        if (question.type === 'matching') {
+          return {
+            id: question.id || Date.now(),
+            type: 'matching',
+            paragraphs: question.paragraphs || []
+          }
+        }
+
+        return {
+          id: question.id || Date.now(),
+          type: question.type,
+          question: question.question || '',
+          answer: question.answer || '',
+          options: question.options || []
+        }
+      })
+
+      setQuestions(loadedQuestions)
 
       const subQuery = query(
         collection(db, 'readingSubmissions'),
@@ -197,13 +261,55 @@ export default function CreateReading() {
       return
     }
 
+    if (type === 'table') {
+      setQuestions(prev => [
+        ...prev,
+        {
+          id: Date.now(),
+          type: 'table',
+          instruction:
+            'Complete the table below. Choose NO MORE THAN THREE WORDS from the passage for each answer.',
+          columns: ['Original Theorist', 'Theory', 'Principle'],
+          rows: [
+            {
+              id: Date.now(),
+              cells: [
+                { type: 'text', text: '' },
+                { type: 'text', text: '' },
+                { type: 'blank', answer: '' }
+              ]
+            }
+          ]
+        }
+      ])
+
+      return
+    }
+
+    if (type === 'mcq') {
+      setQuestions(prev => [
+        ...prev,
+        {
+          id: Date.now(),
+          type: 'mcq',
+          mode: 'single',
+          question: '',
+          options: ['', '', '', ''],
+          answer: '',
+          answers: []
+        }
+      ])
+
+      return
+    }
+
     setQuestions(prev => [
       ...prev,
       {
         id: Date.now(),
         type,
         question: '',
-        options: type === 'mcq' ? ['', '', '', ''] : [],
+        options: [],
         answer: ''
       }
     ])
@@ -219,6 +325,21 @@ export default function CreateReading() {
     )
   }
 
+  const updateMcqMode = (questionId, mode) => {
+    setQuestions(prev =>
+      prev.map(q => {
+        if (q.id !== questionId) return q
+
+        return {
+          ...q,
+          mode,
+          answer: mode === 'single' ? q.answer || '' : '',
+          answers: mode === 'multi' ? q.answers || [] : []
+        }
+      })
+    )
+  }
+
   const updateOption = (questionId, index, value) => {
     setQuestions(prev =>
       prev.map(q => {
@@ -227,7 +348,65 @@ export default function CreateReading() {
         const options = [...q.options]
         options[index] = value
 
-        return { ...q, options }
+        return {
+          ...q,
+          options
+        }
+      })
+    )
+  }
+
+  const addOption = questionId => {
+    setQuestions(prev =>
+      prev.map(q => {
+        if (q.id !== questionId) return q
+
+        return {
+          ...q,
+          options: [...q.options, '']
+        }
+      })
+    )
+  }
+
+  const removeOption = (questionId, optionIndex) => {
+    setQuestions(prev =>
+      prev.map(q => {
+        if (q.id !== questionId) return q
+        if (q.options.length <= 2) return q
+
+        const removedLetter = letters[optionIndex]
+        const options = q.options.filter((_, index) => index !== optionIndex)
+
+        return {
+          ...q,
+          options,
+          answer: q.answer === removedLetter ? '' : q.answer || '',
+          answers: (q.answers || []).filter(answer => answer !== removedLetter)
+        }
+      })
+    )
+  }
+
+  const toggleMultiAnswer = (questionId, optionIndex) => {
+    const letter = letters[optionIndex]
+
+    setQuestions(prev =>
+      prev.map(q => {
+        if (q.id !== questionId) return q
+
+        const current = q.answers || []
+
+        const updated = current.includes(letter)
+          ? current.filter(item => item !== letter)
+          : current.length < 2
+            ? [...current, letter]
+            : current
+
+        return {
+          ...q,
+          answers: updated
+        }
       })
     )
   }
@@ -242,6 +421,141 @@ export default function CreateReading() {
           paragraphs: q.paragraphs.map(p =>
             p.letter === letter ? { ...p, answer: value } : p
           )
+        }
+      })
+    )
+  }
+
+  const updateTableColumn = (questionId, columnIndex, value) => {
+    setQuestions(prev =>
+      prev.map(q => {
+        if (q.id !== questionId) return q
+
+        const columns = [...q.columns]
+        columns[columnIndex] = value
+
+        return {
+          ...q,
+          columns
+        }
+      })
+    )
+  }
+
+  const addTableColumn = questionId => {
+    setQuestions(prev =>
+      prev.map(q => {
+        if (q.id !== questionId) return q
+
+        return {
+          ...q,
+          columns: [...q.columns, `Column ${q.columns.length + 1}`],
+          rows: q.rows.map(row => ({
+            ...row,
+            cells: [...row.cells, { type: 'text', text: '' }]
+          }))
+        }
+      })
+    )
+  }
+
+  const removeTableColumn = (questionId, columnIndex) => {
+    setQuestions(prev =>
+      prev.map(q => {
+        if (q.id !== questionId) return q
+        if (q.columns.length <= 2) return q
+
+        return {
+          ...q,
+          columns: q.columns.filter((_, index) => index !== columnIndex),
+          rows: q.rows.map(row => ({
+            ...row,
+            cells: row.cells.filter((_, index) => index !== columnIndex)
+          }))
+        }
+      })
+    )
+  }
+
+  const addTableRow = questionId => {
+    setQuestions(prev =>
+      prev.map(q => {
+        if (q.id !== questionId) return q
+
+        return {
+          ...q,
+          rows: [
+            ...q.rows,
+            {
+              id: Date.now(),
+              cells: q.columns.map(() => ({
+                type: 'text',
+                text: ''
+              }))
+            }
+          ]
+        }
+      })
+    )
+  }
+
+  const removeTableRow = (questionId, rowId) => {
+    setQuestions(prev =>
+      prev.map(q => {
+        if (q.id !== questionId) return q
+        if (q.rows.length <= 1) return q
+
+        return {
+          ...q,
+          rows: q.rows.filter(row => row.id !== rowId)
+        }
+      })
+    )
+  }
+
+  const updateTableCell = (questionId, rowId, cellIndex, field, value) => {
+    setQuestions(prev =>
+      prev.map(q => {
+        if (q.id !== questionId) return q
+
+        return {
+          ...q,
+          rows: q.rows.map(row => {
+            if (row.id !== rowId) return row
+
+            return {
+              ...row,
+              cells: row.cells.map((cell, index) =>
+                index === cellIndex ? { ...cell, [field]: value } : cell
+              )
+            }
+          })
+        }
+      })
+    )
+  }
+
+  const toggleTableCellType = (questionId, rowId, cellIndex) => {
+    setQuestions(prev =>
+      prev.map(q => {
+        if (q.id !== questionId) return q
+
+        return {
+          ...q,
+          rows: q.rows.map(row => {
+            if (row.id !== rowId) return row
+
+            return {
+              ...row,
+              cells: row.cells.map((cell, index) => {
+                if (index !== cellIndex) return cell
+
+                return cell.type === 'blank'
+                  ? { type: 'text', text: cell.answer || '' }
+                  : { type: 'blank', answer: cell.text || '' }
+              })
+            }
+          })
         }
       })
     )
@@ -267,6 +581,84 @@ export default function CreateReading() {
     )
   }, [paragraphs])
 
+  const validateQuestions = () => {
+    for (const question of questions) {
+      if (question.type === 'mcq') {
+        const filledOptions = question.options.filter(option => option.trim())
+
+        if (!question.question.trim()) {
+          alert('Please fill all MCQ questions.')
+          return false
+        }
+
+        if (filledOptions.length < 2) {
+          alert('MCQ questions need at least 2 options.')
+          return false
+        }
+
+        if ((question.mode || 'single') === 'multi') {
+          if ((question.answers || []).length !== 2) {
+            alert('Choose TWO Answers questions must have exactly 2 correct answers.')
+            return false
+          }
+        } else if (!question.answer) {
+          alert('Single Answer MCQ questions must have 1 correct answer.')
+          return false
+        }
+      }
+
+      if (question.type === 'fitb') {
+        if (!question.question.trim() || !question.answer.trim()) {
+          alert('Please fill all Fill Blank questions and answers.')
+          return false
+        }
+      }
+
+      if (question.type === 'tfng') {
+        if (!question.question.trim() || !question.answer) {
+          alert('Please fill all T/F/NG statements and answers.')
+          return false
+        }
+      }
+
+      if (question.type === 'matching') {
+        const missing = question.paragraphs.some(p => !p.answer)
+
+        if (missing) {
+          alert('Please select correct headings for all matching paragraphs.')
+          return false
+        }
+      }
+
+      if (question.type === 'table') {
+        if (!question.instruction?.trim()) {
+          alert('Please add table instructions.')
+          return false
+        }
+
+        const hasBlank = question.rows.some(row =>
+          row.cells.some(cell => cell.type === 'blank')
+        )
+
+        if (!hasBlank) {
+          alert('Table Completion needs at least one blank answer cell.')
+          return false
+        }
+
+        const missingAnswer = question.rows.some(row =>
+          row.cells.some(cell => cell.type === 'blank' && !cell.answer?.trim())
+        )
+
+        if (missingAnswer) {
+          alert('Please fill all correct answers in Table Completion.')
+          return false
+        }
+      }
+    }
+
+    return true
+  }
+
   const handleSave = async () => {
     if (!title || questions.length === 0) {
       alert('Please add title and questions.')
@@ -283,6 +675,8 @@ export default function CreateReading() {
       return
     }
 
+    if (!validateQuestions()) return
+
     if (isEditMode && hasSubmissions) {
       const ok = window.confirm(
         'This reading already has student submissions. Changing questions, answers or headings may affect previous results. Continue?'
@@ -291,7 +685,65 @@ export default function CreateReading() {
       if (!ok) return
     }
 
-    const payload = {
+    const cleanedQuestions = questions.map(question => {
+      if (question.type === 'mcq') {
+        const filledOptions = question.options.filter(option => option.trim())
+
+        return {
+          id: question.id,
+          type: 'mcq',
+          mode: question.mode || 'single',
+          question: question.question || '',
+          options: filledOptions,
+          answer:
+            (question.mode || 'single') === 'single'
+              ? question.answer || ''
+              : '',
+          answers:
+            (question.mode || 'single') === 'multi'
+              ? question.answers || []
+              : []
+        }
+      }
+
+      if (question.type === 'table') {
+        return {
+          id: question.id,
+          type: 'table',
+          instruction: question.instruction || '',
+          columns: question.columns.map(column => column.trim() || 'Column'),
+          rows: question.rows.map(row => ({
+            id: row.id,
+            cells: row.cells.map(cell =>
+              cell.type === 'blank'
+                ? { type: 'blank', answer: cell.answer || '' }
+                : { type: 'text', text: cell.text || '' }
+            )
+          }))
+        }
+      }
+
+      if (question.type === 'matching') {
+        return {
+          id: question.id,
+          type: 'matching',
+          paragraphs: question.paragraphs.map(p => ({
+            letter: p.letter || '',
+            answer: p.answer || ''
+          }))
+        }
+      }
+
+      return {
+        id: question.id,
+        type: question.type,
+        question: question.question || '',
+        options: question.options || [],
+        answer: question.answer || ''
+      }
+    })
+
+    const payload = removeUndefined({
       title,
       timeLimit,
       dueDate,
@@ -300,19 +752,22 @@ export default function CreateReading() {
       passage: fullPassage,
       paragraphs,
       headings,
-      questions,
+      questions: cleanedQuestions,
       updatedAt: new Date().toISOString()
-    }
+    })
 
     if (isEditMode) {
       await updateDoc(doc(db, 'readings', id), payload)
     } else {
-      await addDoc(collection(db, 'readings'), {
-        ...payload,
-        createdBy: user.uid,
-        createdAt: new Date().toISOString(),
-        archived: false
-      })
+      await addDoc(
+        collection(db, 'readings'),
+        removeUndefined({
+          ...payload,
+          createdBy: user.uid,
+          createdAt: new Date().toISOString(),
+          archived: false
+        })
+      )
     }
 
     setSaved(true)
@@ -335,7 +790,7 @@ export default function CreateReading() {
         </button>
       </nav>
 
-      <div className="max-w-4xl mx-auto px-6 py-10">
+      <div className="max-w-5xl mx-auto px-6 py-10">
         <h1 className="text-2xl font-bold text-gray-900 mb-1">
           {isEditMode ? 'Edit IELTS Reading' : 'Create IELTS Reading'}
         </h1>
@@ -590,6 +1045,13 @@ export default function CreateReading() {
               >
                 + MCQ
               </button>
+
+              <button
+                onClick={() => addQuestion('table')}
+                className="text-xs bg-emerald-50 text-emerald-600 px-3 py-2 rounded-lg hover:bg-emerald-100"
+              >
+                + Table Completion
+              </button>
             </div>
           </div>
 
@@ -613,7 +1075,11 @@ export default function CreateReading() {
                         ? 'True / False / Not Given'
                         : question.type === 'fitb'
                           ? 'Fill in the Blank'
-                          : 'Multiple Choice'}
+                          : question.type === 'table'
+                            ? 'Table Completion'
+                            : question.mode === 'multi'
+                              ? 'Multiple Choice — Choose TWO'
+                              : 'Multiple Choice'}
                   </span>
 
                   <button
@@ -737,6 +1203,170 @@ export default function CreateReading() {
                   </div>
                 )}
 
+                {question.type === 'table' && (
+                  <div>
+                    <label className="text-xs text-gray-400 mb-1 block">
+                      Instruction
+                    </label>
+
+                    <textarea
+                      rows={2}
+                      value={question.instruction}
+                      onChange={e =>
+                        updateQuestion(
+                          question.id,
+                          'instruction',
+                          e.target.value
+                        )
+                      }
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 mb-4 resize-none"
+                    />
+
+                    <div className="overflow-x-auto border border-gray-100 rounded-xl">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="bg-gray-100">
+                            {question.columns.map((column, columnIndex) => (
+                              <th
+                                key={columnIndex}
+                                className="p-3 border border-white min-w-[180px]"
+                              >
+                                <div className="flex gap-2 items-center">
+                                  <input
+                                    value={column}
+                                    onChange={e =>
+                                      updateTableColumn(
+                                        question.id,
+                                        columnIndex,
+                                        e.target.value
+                                      )
+                                    }
+                                    className="w-full bg-white border border-gray-200 rounded-lg px-2 py-1 text-xs outline-none"
+                                  />
+
+                                  {question.columns.length > 2 && (
+                                    <button
+                                      onClick={() =>
+                                        removeTableColumn(
+                                          question.id,
+                                          columnIndex
+                                        )
+                                      }
+                                      className="text-red-400 text-xs"
+                                    >
+                                      ×
+                                    </button>
+                                  )}
+                                </div>
+                              </th>
+                            ))}
+
+                            <th className="p-3 border border-white w-20">
+                              Row
+                            </th>
+                          </tr>
+                        </thead>
+
+                        <tbody>
+                          {question.rows.map(row => (
+                            <tr key={row.id}>
+                              {row.cells.map((cell, cellIndex) => (
+                                <td
+                                  key={cellIndex}
+                                  className="p-3 border border-white bg-gray-50 align-top"
+                                >
+                                  <div className="flex gap-2 mb-2">
+                                    <button
+                                      onClick={() =>
+                                        toggleTableCellType(
+                                          question.id,
+                                          row.id,
+                                          cellIndex
+                                        )
+                                      }
+                                      className={`text-xs px-2 py-1 rounded-lg ${
+                                        cell.type === 'blank'
+                                          ? 'bg-purple-600 text-white'
+                                          : 'bg-gray-200 text-gray-600'
+                                      }`}
+                                    >
+                                      {cell.type === 'blank'
+                                        ? 'Blank'
+                                        : 'Text'}
+                                    </button>
+                                  </div>
+
+                                  {cell.type === 'blank' ? (
+                                    <input
+                                      value={cell.answer || ''}
+                                      onChange={e =>
+                                        updateTableCell(
+                                          question.id,
+                                          row.id,
+                                          cellIndex,
+                                          'answer',
+                                          e.target.value
+                                        )
+                                      }
+                                      placeholder="Correct answer"
+                                      className="w-full border border-purple-200 bg-white rounded-lg px-2 py-2 text-xs outline-none"
+                                    />
+                                  ) : (
+                                    <textarea
+                                      rows={3}
+                                      value={cell.text || ''}
+                                      onChange={e =>
+                                        updateTableCell(
+                                          question.id,
+                                          row.id,
+                                          cellIndex,
+                                          'text',
+                                          e.target.value
+                                        )
+                                      }
+                                      placeholder="Cell text"
+                                      className="w-full border border-gray-200 bg-white rounded-lg px-2 py-2 text-xs outline-none resize-none"
+                                    />
+                                  )}
+                                </td>
+                              ))}
+
+                              <td className="p-3 border border-white bg-gray-50">
+                                {question.rows.length > 1 && (
+                                  <button
+                                    onClick={() =>
+                                      removeTableRow(question.id, row.id)
+                                    }
+                                    className="text-xs text-red-500"
+                                  >
+                                    Remove
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <div className="flex gap-2 mt-4">
+                      <button
+                        onClick={() => addTableRow(question.id)}
+                        className="text-sm bg-emerald-50 text-emerald-600 px-4 py-2 rounded-xl hover:bg-emerald-100"
+                      >
+                        + Add Row
+                      </button>
+
+                      <button
+                        onClick={() => addTableColumn(question.id)}
+                        className="text-sm bg-gray-100 text-gray-600 px-4 py-2 rounded-xl hover:bg-gray-200"
+                      >
+                        + Add Column
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 {question.type === 'mcq' && (
                   <div>
                     <input
@@ -752,19 +1382,74 @@ export default function CreateReading() {
                       className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 mb-3"
                     />
 
+                    <div className="flex gap-2 mb-4">
+                      <button
+                        onClick={() => updateMcqMode(question.id, 'single')}
+                        className={`flex-1 py-2 rounded-xl text-xs font-medium border transition-all ${
+                          (question.mode || 'single') === 'single'
+                            ? 'bg-purple-600 text-white border-purple-600'
+                            : 'border-gray-200 text-gray-500'
+                        }`}
+                      >
+                        Single Answer
+                      </button>
+
+                      <button
+                        onClick={() => updateMcqMode(question.id, 'multi')}
+                        className={`flex-1 py-2 rounded-xl text-xs font-medium border transition-all ${
+                          question.mode === 'multi'
+                            ? 'bg-purple-600 text-white border-purple-600'
+                            : 'border-gray-200 text-gray-500'
+                        }`}
+                      >
+                        Choose TWO Answers
+                      </button>
+                    </div>
+
+                    {question.mode === 'multi' && (
+                      <p className="text-xs text-amber-600 bg-amber-50 rounded-xl p-3 mb-3">
+                        Select exactly two correct options. Students will also choose two.
+                      </p>
+                    )}
+
                     <div className="flex flex-col gap-2">
                       {question.options.map((option, optionIndex) => (
                         <div key={optionIndex} className="flex items-center gap-2">
-                          <button
-                            onClick={() =>
-                              updateQuestion(question.id, 'answer', option)
-                            }
-                            className={`w-6 h-6 rounded-full border-2 flex-shrink-0 ${
-                              question.answer === option
-                                ? 'bg-purple-600 border-purple-600'
-                                : 'border-gray-300'
-                            }`}
-                          />
+                          {question.mode === 'multi' ? (
+                            <button
+                              onClick={() =>
+                                option.trim() &&
+                                toggleMultiAnswer(question.id, optionIndex)
+                              }
+                              className={`w-6 h-6 rounded-md border-2 flex-shrink-0 ${
+                                (question.answers || []).includes(
+                                  letters[optionIndex]
+                                )
+                                  ? 'bg-purple-600 border-purple-600'
+                                  : 'border-gray-300'
+                              }`}
+                            >
+                              {(question.answers || []).includes(
+                                letters[optionIndex]
+                              ) && <span className="text-white text-xs">✓</span>}
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() =>
+                                option.trim() &&
+                                updateQuestion(
+                                  question.id,
+                                  'answer',
+                                  letters[optionIndex]
+                                )
+                              }
+                              className={`w-6 h-6 rounded-full border-2 flex-shrink-0 ${
+                                question.answer === letters[optionIndex]
+                                  ? 'bg-purple-600 border-purple-600'
+                                  : 'border-gray-300'
+                              }`}
+                            />
+                          )}
 
                           <input
                             value={option}
@@ -775,12 +1460,30 @@ export default function CreateReading() {
                                 e.target.value
                               )
                             }
-                            placeholder={`Option ${optionIndex + 1}`}
+                            placeholder={`Option ${letters[optionIndex]}`}
                             className="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400"
                           />
+
+                          {question.options.length > 2 && (
+                            <button
+                              onClick={() =>
+                                removeOption(question.id, optionIndex)
+                              }
+                              className="text-xs text-red-400 hover:text-red-600 px-2"
+                            >
+                              Remove
+                            </button>
+                          )}
                         </div>
                       ))}
                     </div>
+
+                    <button
+                      onClick={() => addOption(question.id)}
+                      className="mt-3 text-sm bg-gray-100 text-gray-600 px-4 py-2 rounded-xl hover:bg-gray-200"
+                    >
+                      + Add Option
+                    </button>
                   </div>
                 )}
               </div>
