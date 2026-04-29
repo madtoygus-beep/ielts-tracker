@@ -103,6 +103,50 @@ export default function DoReading() {
     return `${questionId}_${rowId}_${cellIndex}`
   }
 
+  const getQuestionItemCount = question => {
+    if (question.type === 'matching') {
+      return question.paragraphs?.length || 0
+    }
+
+    if (question.type === 'table' || question.type === 'summary') {
+      let count = 0
+
+      question.rows?.forEach(row => {
+        row.cells?.forEach(cell => {
+          if (cell.type === 'blank') count++
+        })
+      })
+
+      return count || 1
+    }
+
+    return 1
+  }
+
+  const getQuestionStartNumber = index => {
+    return reading.questions
+      .slice(0, index)
+      .reduce((sum, question) => sum + getQuestionItemCount(question), 0) + 1
+  }
+
+  const getQuestionRangeLabel = (question, index) => {
+    const start = getQuestionStartNumber(index)
+    const count = getQuestionItemCount(question)
+    const end = start + count - 1
+
+    return count > 1 ? `Q${start}-${end}` : `Q${start}`
+  }
+
+  const getQuestionTypeLabel = question => {
+    if (question.type === 'matching') return 'Matching Headings'
+    if (question.type === 'tfng') return 'T/F/NG'
+    if (question.type === 'fitb') return 'Fill blank'
+    if (question.type === 'table') return 'Table Completion'
+    if (question.type === 'summary') return 'Summary Completion'
+    if (question.mode === 'multi') return 'MCQ — Choose TWO'
+    return 'MCQ'
+  }
+
   const handleAnswer = (questionId, value) => {
     setAnswers(prev => ({
       ...prev,
@@ -228,7 +272,7 @@ export default function DoReading() {
         return
       }
 
-      if (question.type === 'table') {
+      if (question.type === 'table' || question.type === 'summary') {
         question.rows.forEach(row => {
           row.cells.forEach((cell, cellIndex) => {
             if (cell.type === 'blank') {
@@ -382,7 +426,7 @@ export default function DoReading() {
                   >
                     <div className="flex items-center gap-2 mb-4">
                       <span className="text-xs font-medium text-gray-400">
-                        Q{index + 1}
+                        {getQuestionRangeLabel(question, index)}
                       </span>
 
                       <span
@@ -393,22 +437,12 @@ export default function DoReading() {
                               ? 'bg-blue-50 text-blue-600'
                               : question.type === 'fitb'
                                 ? 'bg-amber-50 text-amber-600'
-                                : question.type === 'table'
+                                : (question.type === 'table' || question.type === 'summary')
                                   ? 'bg-emerald-50 text-emerald-600'
                                   : 'bg-purple-50 text-purple-600'
                         }`}
                       >
-                        {question.type === 'matching'
-                          ? 'Matching Headings'
-                          : question.type === 'tfng'
-                            ? 'T/F/NG'
-                            : question.type === 'fitb'
-                              ? 'Fill blank'
-                              : question.type === 'table'
-                                ? 'Table Completion'
-                                : question.mode === 'multi'
-                                  ? 'MCQ — Choose TWO'
-                                  : 'MCQ'}
+{getQuestionTypeLabel(question)}
                       </span>
                     </div>
 
@@ -479,7 +513,7 @@ export default function DoReading() {
                       </div>
                     )}
 
-                    {question.type === 'table' && (
+                    {(question.type === 'table' || question.type === 'summary') && (
                       <div>
                         <p className="text-sm text-gray-700 mb-4">
                           {question.instruction}
@@ -566,7 +600,7 @@ export default function DoReading() {
                       </div>
                     )}
 
-                    {question.type !== 'matching' && question.type !== 'table' && (
+                    {question.type !== 'matching' && question.type !== 'table' && question.type !== 'summary' && (
                       <div>
                         <p className="text-sm text-gray-800 mb-4">
                           {question.question}
@@ -708,7 +742,7 @@ export default function DoReading() {
               >
                 <div className="flex items-center gap-2 mb-4">
                   <span className="text-xs font-medium text-gray-400">
-                    Q{index + 1}
+                    {getQuestionRangeLabel(question, index)}
                   </span>
 
                   <span
@@ -719,22 +753,12 @@ export default function DoReading() {
                           ? 'bg-blue-50 text-blue-600'
                           : question.type === 'fitb'
                             ? 'bg-amber-50 text-amber-600'
-                            : question.type === 'table'
+                            : (question.type === 'table' || question.type === 'summary')
                               ? 'bg-emerald-50 text-emerald-600'
                               : 'bg-purple-50 text-purple-600'
                     }`}
                   >
-                    {question.type === 'matching'
-                      ? 'Matching Headings'
-                      : question.type === 'tfng'
-                        ? 'T/F/NG'
-                        : question.type === 'fitb'
-                          ? 'Fill blank'
-                          : question.type === 'table'
-                            ? 'Table Completion'
-                            : question.mode === 'multi'
-                              ? 'MCQ — Choose TWO'
-                              : 'MCQ'}
+{getQuestionTypeLabel(question)}
                   </span>
                 </div>
 
@@ -809,7 +833,7 @@ export default function DoReading() {
                   </div>
                 )}
 
-                {question.type === 'table' && (
+                {(question.type === 'table' || question.type === 'summary') && (
                   <div>
                     <p className="text-sm text-gray-700 mb-4">
                       {question.instruction}

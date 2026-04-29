@@ -642,11 +642,6 @@ Continue permanent delete?`
     return `${questionId}_${rowId}_${cellIndex}`
   }
 
-
-  const mapAnswerKey = (questionId, itemId) => {
-    return `${questionId}_${itemId}`
-  }
-
   const getHeadingText = (reading, number) => {
     if (!number) return 'No answer'
     const index = Number(number) - 1
@@ -715,15 +710,6 @@ Continue permanent delete?`
     return acceptedAnswers.includes(userAnswer)
   }
 
-
-  const isMapItemCorrect = (submission, question, item) => {
-    const key = mapAnswerKey(question.id, item.id)
-    const userAnswer = normalize(submission.answers?.[key])
-    const correctAnswer = normalize(item.answer)
-
-    return userAnswer === correctAnswer
-  }
-
   const getStudentAnalytics = studentId => {
     const studentSubs = submissions.filter(sub => sub.uid === studentId)
 
@@ -732,8 +718,8 @@ Continue permanent delete?`
       tfng: { correct: 0, total: 0 },
       fitb: { correct: 0, total: 0 },
       table: { correct: 0, total: 0 },
+      summary: { correct: 0, total: 0 },
       note: { correct: 0, total: 0 },
-      map: { correct: 0, total: 0 },
       mcq: { correct: 0, total: 0 }
     }
 
@@ -754,7 +740,7 @@ Continue permanent delete?`
           return
         }
 
-        if (question.type === 'table' || question.type === 'note') {
+        if (question.type === 'table' || question.type === 'summary' || question.type === 'note') {
           question.rows?.forEach(row => {
             row.cells?.forEach((cell, cellIndex) => {
               if (cell.type === 'blank') {
@@ -765,18 +751,6 @@ Continue permanent delete?`
                 }
               }
             })
-          })
-
-          return
-        }
-
-        if (question.type === 'map') {
-          question.mapItems?.forEach(item => {
-            stats.map.total++
-
-            if (isMapItemCorrect(submission, question, item)) {
-              stats.map.correct++
-            }
           })
 
           return
@@ -800,8 +774,8 @@ Continue permanent delete?`
       tfng: percentage(stats.tfng),
       fitb: percentage(stats.fitb),
       table: percentage(stats.table),
+      summary: percentage(stats.summary),
       note: percentage(stats.note),
-      map: percentage(stats.map),
       mcq: percentage(stats.mcq)
     }
 
@@ -820,8 +794,8 @@ Continue permanent delete?`
     if (type === 'tfng') return 'True / False / Not Given'
     if (type === 'fitb') return 'Fill in the Blank'
     if (type === 'table') return 'Table Completion'
+    if (type === 'summary') return 'Summary Completion'
     if (type === 'note') return 'Note Completion'
-    if (type === 'map') return 'Map Labeling'
     if (type === 'mcq') return 'Multiple Choice'
     return 'No data yet'
   }
@@ -885,7 +859,7 @@ Continue permanent delete?`
           }
         }
 
-        if (question.type === 'table' || question.type === 'note') {
+        if (question.type === 'table' || question.type === 'summary' || question.type === 'note') {
           question.rows?.forEach(row => {
             row.cells?.forEach((cell, cellIndex) => {
               if (cell.type === 'blank') {
@@ -896,18 +870,6 @@ Continue permanent delete?`
                 }
               }
             })
-          })
-
-          return
-        }
-
-        if (question.type === 'map') {
-          question.mapItems?.forEach(item => {
-            stats[key].total++
-
-            if (!isMapItemCorrect(submission, question, item)) {
-              stats[key].wrong++
-            }
           })
 
           return
@@ -970,7 +932,7 @@ Continue permanent delete?`
       if (!listening) return
 
       listening.questions?.forEach(question => {
-        if (question.type === 'table' || question.type === 'note') {
+        if (question.type === 'table' || question.type === 'summary' || question.type === 'note') {
           question.rows?.forEach(row => {
             row.cells?.forEach((cell, cellIndex) => {
               if (cell.type === 'blank') {
@@ -1012,7 +974,6 @@ Continue permanent delete?`
     if (type === 'tfng') return 'T/F/NG'
     if (type === 'table') return 'Form/Table'
     if (type === 'note') return 'Note Completion'
-    if (type === 'map') return 'Map Labeling'
     return type
   }
 
@@ -2585,11 +2546,9 @@ Continue permanent delete?`
                               ? 'T/F/NG'
                               : question.type === 'fitb'
                                 ? 'Fill blank'
-                                : question.type === 'map'
-                                    ? 'Map Labeling'
-                                    : (question.type === 'table' || question.type === 'note')
-                                      ? question.type === 'note' ? 'Note Completion' : 'Table Completion'
-                                      : question.mode === 'multi'
+                                : (question.type === 'table' || question.type === 'summary' || question.type === 'note')
+                                  ? question.type === 'note' ? 'Note Completion' : 'Table Completion'
+                                  : question.mode === 'multi'
                                     ? 'MCQ — Choose TWO'
                                     : 'MCQ'}
                         </span>
@@ -2668,7 +2627,7 @@ Continue permanent delete?`
                             )
                           })}
                         </div>
-                      ) : question.type === 'table' ? (
+                      ) : question.type === 'table' || question.type === 'summary' ? (
                         <div>
                           <p className="text-sm text-gray-700 mb-4">
                             {question.instruction}

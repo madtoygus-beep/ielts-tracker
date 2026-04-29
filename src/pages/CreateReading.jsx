@@ -40,6 +40,51 @@ export default function CreateReading() {
 
   const navigate = useNavigate()
 
+  const getQuestionItemCount = question => {
+    if (question.type === 'matching') {
+      return question.paragraphs?.length || 0
+    }
+
+    if (question.type === 'table' || question.type === 'summary') {
+      let count = 0
+
+      question.rows?.forEach(row => {
+        row.cells?.forEach(cell => {
+          if (cell.type === 'blank') count++
+        })
+      })
+
+      return count || 1
+    }
+
+    return 1
+  }
+
+  const getQuestionStartNumber = index => {
+    return questions
+      .slice(0, index)
+      .reduce((sum, question) => sum + getQuestionItemCount(question), 0) + 1
+  }
+
+  const getQuestionRangeLabel = (question, index) => {
+    const start = getQuestionStartNumber(index)
+    const count = getQuestionItemCount(question)
+    const end = start + count - 1
+
+    return count > 1 ? `Questions ${start}-${end}` : `Question ${start}`
+  }
+
+  const getQuestionTypeLabel = question => {
+    if (question.type === 'matching') return 'Matching Headings'
+    if (question.type === 'tfng') return 'True / False / Not Given'
+    if (question.type === 'fitb') return 'Fill in the Blank'
+    if (question.type === 'table') return 'Table Completion'
+    if (question.type === 'summary') return 'Summary Completion'
+    if (question.mode === 'multi') return 'Multiple Choice — Choose TWO'
+    return 'Multiple Choice'
+  }
+
+
   const removeUndefined = value => {
     if (Array.isArray(value)) {
       return value.map(removeUndefined)
@@ -131,26 +176,36 @@ export default function CreateReading() {
           }
         }
 
-        if (question.type === 'table') {
+        if (question.type === 'table' || question.type === 'summary') {
           return {
             id: question.id || Date.now(),
-            type: 'table',
+            type: question.type,
             instruction:
               question.instruction ||
-              'Complete the table below. Choose NO MORE THAN THREE WORDS from the passage for each answer.',
+              (question.type === 'summary'
+                ? 'Complete the summary below. Choose NO MORE THAN THREE WORDS from the passage for each answer.'
+                : 'Complete the table below. Choose NO MORE THAN THREE WORDS from the passage for each answer.'),
             columns: question.columns?.length
               ? question.columns
-              : ['Column 1', 'Column 2', 'Column 3'],
+              : question.type === 'summary'
+                ? ['Summary', 'Answer']
+                : ['Column 1', 'Column 2', 'Column 3'],
             rows: question.rows?.length
               ? question.rows
               : [
                   {
                     id: Date.now(),
-                    cells: [
-                      { type: 'text', text: '' },
-                      { type: 'text', text: '' },
-                      { type: 'blank', answer: '' }
-                    ]
+                    cells:
+                      question.type === 'summary'
+                        ? [
+                            { type: 'text', text: '' },
+                            { type: 'blank', answer: '' }
+                          ]
+                        : [
+                            { type: 'text', text: '' },
+                            { type: 'text', text: '' },
+                            { type: 'blank', answer: '' }
+                          ]
                   }
                 ]
           }
@@ -275,6 +330,30 @@ export default function CreateReading() {
               id: Date.now(),
               cells: [
                 { type: 'text', text: '' },
+                { type: 'text', text: '' },
+                { type: 'blank', answer: '' }
+              ]
+            }
+          ]
+        }
+      ])
+
+      return
+    }
+
+    if (type === 'summary') {
+      setQuestions(prev => [
+        ...prev,
+        {
+          id: Date.now(),
+          type: 'summary',
+          instruction:
+            'Complete the summary below. Choose NO MORE THAN THREE WORDS from the passage for each answer.',
+          columns: ['Summary', 'Answer'],
+          rows: [
+            {
+              id: Date.now(),
+              cells: [
                 { type: 'text', text: '' },
                 { type: 'blank', answer: '' }
               ]
@@ -630,7 +709,7 @@ export default function CreateReading() {
         }
       }
 
-      if (question.type === 'table') {
+      if (question.type === 'table' || question.type === 'summary') {
         if (!question.instruction?.trim()) {
           alert('Please add table instructions.')
           return false
@@ -641,7 +720,7 @@ export default function CreateReading() {
         )
 
         if (!hasBlank) {
-          alert('Table Completion needs at least one blank answer cell.')
+          alert('Table / Summary Completion needs at least one blank answer cell.')
           return false
         }
 
@@ -650,7 +729,7 @@ export default function CreateReading() {
         )
 
         if (missingAnswer) {
-          alert('Please fill all correct answers in Table Completion.')
+          alert('Please fill all correct answers in Table / Summary Completion.')
           return false
         }
       }
@@ -706,10 +785,10 @@ export default function CreateReading() {
         }
       }
 
-      if (question.type === 'table') {
+      if (question.type === 'table' || question.type === 'summary') {
         return {
           id: question.id,
-          type: 'table',
+          type: question.type,
           instruction: question.instruction || '',
           columns: question.columns.map(column => column.trim() || 'Column'),
           rows: question.rows.map(row => ({
@@ -1052,6 +1131,13 @@ export default function CreateReading() {
               >
                 + Table Completion
               </button>
+
+              <button
+                onClick={() => addQuestion('summary')}
+                className="text-xs bg-rose-50 text-rose-600 px-3 py-2 rounded-lg hover:bg-rose-100"
+              >
+                + Summary Completion
+              </button>
             </div>
           </div>
 
@@ -1069,17 +1155,7 @@ export default function CreateReading() {
               >
                 <div className="flex items-center justify-between mb-4">
                   <span className="text-xs font-medium px-3 py-1.5 rounded-full bg-purple-50 text-purple-600">
-                    {question.type === 'matching'
-                      ? 'Matching Headings'
-                      : question.type === 'tfng'
-                        ? 'True / False / Not Given'
-                        : question.type === 'fitb'
-                          ? 'Fill in the Blank'
-                          : question.type === 'table'
-                            ? 'Table Completion'
-                            : question.mode === 'multi'
-                              ? 'Multiple Choice — Choose TWO'
-                              : 'Multiple Choice'}
+{getQuestionTypeLabel(question)}
                   </span>
 
                   <button
@@ -1203,7 +1279,7 @@ export default function CreateReading() {
                   </div>
                 )}
 
-                {question.type === 'table' && (
+                {(question.type === 'table' || question.type === 'summary') && (
                   <div>
                     <label className="text-xs text-gray-400 mb-1 block">
                       Instruction
@@ -1218,6 +1294,11 @@ export default function CreateReading() {
                           'instruction',
                           e.target.value
                         )
+                      }
+                      placeholder={
+                        question.type === 'summary'
+                          ? 'Complete the summary below. Choose NO MORE THAN THREE WORDS from the passage for each answer.'
+                          : 'Complete the table below. Choose NO MORE THAN THREE WORDS from the passage for each answer.'
                       }
                       className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 mb-4 resize-none"
                     />
