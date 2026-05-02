@@ -188,7 +188,11 @@ function ReadingHomeworkSection({ user }) {
     )
 
     const unsub = onSnapshot(q, snap => {
-      setSubmissions(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+      const data = snap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .filter(item => item.archived !== true)
+
+      setSubmissions(data)
     })
 
     return unsub
@@ -338,7 +342,11 @@ function ListeningHomeworkSection({ user }) {
     )
 
     const unsub = onSnapshot(q, snap => {
-      setSubmissions(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+      const data = snap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .filter(item => item.archived !== true)
+
+      setSubmissions(data)
     })
 
     return unsub
@@ -488,7 +496,11 @@ function MockTestSection({ user }) {
     )
 
     const unsub = onSnapshot(q, snap => {
-      setSubmissions(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+      const data = snap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .filter(item => item.archived !== true)
+
+      setSubmissions(data)
     })
 
     return unsub
@@ -627,7 +639,10 @@ function WritingProgressAnalytics({ user }) {
     )
 
     const unsub = onSnapshot(q, snap => {
-      const data = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      const data = snap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .filter(item => item.archived !== true)
+
       setSubmissions(data)
     })
 
@@ -972,7 +987,11 @@ function WritingHomeworkSection({ user }) {
     )
 
     const unsub = onSnapshot(q, snap => {
-      setSubmissions(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+      const data = snap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .filter(item => item.archived !== true)
+
+      setSubmissions(data)
     })
 
     return unsub
@@ -1316,7 +1335,9 @@ export default function StudentDashboard() {
         )
 
         unsubScores = onSnapshot(q, snap => {
-          const data = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+          const data = snap.docs
+            .map(d => ({ id: d.id, ...d.data() }))
+            .filter(item => item.archived !== true)
 
           data.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0))
 

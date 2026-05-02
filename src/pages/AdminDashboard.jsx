@@ -1,15 +1,17 @@
 import { useState, useEffect } from 'react'
-import { db } from '../firebase'
+import { auth, db } from '../firebase'
 import {
   collection,
   onSnapshot,
   doc,
   updateDoc,
   deleteDoc,
+  getDoc,
   getDocs,
   query,
   where
 } from 'firebase/firestore'
+import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { useNavigate } from 'react-router-dom'
 
 export default function AdminDashboard() {
@@ -25,51 +27,112 @@ export default function AdminDashboard() {
   const navigate = useNavigate()
 
   useEffect(() => {
-    const adminSession = sessionStorage.getItem('isAdmin')
+    let unsubUsers = null
+    let unsubScores = null
+    let active = true
 
-    if (!adminSession) {
-      navigate('/login')
-      return
-    }
+    const unsubAuth = onAuthStateChanged(auth, async currentUser => {
+      if (unsubUsers) {
+        unsubUsers()
+        unsubUsers = null
+      }
 
-    const unsubUsers = onSnapshot(collection(db, 'users'), snap => {
-      const list = snap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
-        .filter(u => !u.deleted && u.status !== 'deleted')
+      if (unsubScores) {
+        unsubScores()
+        unsubScores = null
+      }
 
-      setUsers(list)
-    })
+      if (!currentUser) {
+        sessionStorage.removeItem('isAdmin')
+        navigate('/login')
+        return
+      }
 
-    const unsubScores = onSnapshot(collection(db, 'scores'), snap => {
-      const groupedScores = {}
+      try {
+        const adminSnap = await getDoc(doc(db, 'users', currentUser.uid))
 
-      snap.docs.forEach(scoreDoc => {
-        const score = {
-          id: scoreDoc.id,
-          ...scoreDoc.data()
+        if (!active) return
+
+        if (!adminSnap.exists()) {
+          sessionStorage.removeItem('isAdmin')
+          await signOut(auth)
+          navigate('/login')
+          return
         }
 
-        if (!score.uid) return
+        const adminData = adminSnap.data()
 
-        if (!groupedScores[score.uid]) {
-          groupedScores[score.uid] = []
+        if (
+          adminData.deleted ||
+          adminData.status === 'deleted' ||
+          adminData.status === 'pending' ||
+          adminData.status === 'rejected' ||
+          adminData.role !== 'admin'
+        ) {
+          sessionStorage.removeItem('isAdmin')
+          await signOut(auth)
+          navigate('/login')
+          return
         }
 
-        groupedScores[score.uid].push(score)
-      })
+        sessionStorage.setItem('isAdmin', 'true')
 
-      Object.keys(groupedScores).forEach(studentId => {
-        groupedScores[studentId].sort(
-          (a, b) => new Date(b.date || 0) - new Date(a.date || 0)
-        )
-      })
+        unsubUsers = onSnapshot(collection(db, 'users'), snap => {
+          const list = snap.docs
+            .map(d => ({ id: d.id, ...d.data() }))
+            .filter(u => !u.deleted && u.status !== 'deleted')
 
-      setScores(groupedScores)
+          setUsers(list)
+        })
+
+        unsubScores = onSnapshot(collection(db, 'scores'), snap => {
+          const groupedScores = {}
+
+          snap.docs.forEach(scoreDoc => {
+            const score = {
+              id: scoreDoc.id,
+              ...scoreDoc.data()
+            }
+
+            if (!score.uid || score.archived === true) return
+
+            if (!groupedScores[score.uid]) {
+              groupedScores[score.uid] = []
+            }
+
+            groupedScores[score.uid].push(score)
+          })
+
+          Object.keys(groupedScores).forEach(studentId => {
+            groupedScores[studentId].sort(
+              (a, b) => new Date(b.date || 0) - new Date(a.date || 0)
+            )
+          })
+
+          setScores(groupedScores)
+        })
+      } catch (error) {
+        console.error(error)
+
+        if (active) {
+          sessionStorage.removeItem('isAdmin')
+          await signOut(auth)
+          navigate('/login')
+        }
+      }
     })
 
     return () => {
-      unsubUsers()
-      unsubScores()
+      active = false
+      unsubAuth()
+
+      if (unsubUsers) {
+        unsubUsers()
+      }
+
+      if (unsubScores) {
+        unsubScores()
+      }
     }
   }, [navigate])
 
@@ -106,9 +169,9 @@ export default function AdminDashboard() {
     await deleteDoc(doc(db, 'scores', scoreId))
   }
 
-  const deleteDocumentsByUid = async (collectionName, uid) => {
+  const updateResultDocumentsByStudent = async (collectionName, uid, data) => {
     const possibleFields = ['uid', 'userId', 'studentId']
-    let totalDeleted = 0
+    const updatedDocumentIds = new Set()
 
     for (const field of possibleFields) {
       const q = query(
@@ -119,23 +182,116 @@ export default function AdminDashboard() {
       const snap = await getDocs(q)
 
       for (const item of snap.docs) {
-        await deleteDoc(doc(db, collectionName, item.id))
-        totalDeleted++
+        if (updatedDocumentIds.has(item.id)) continue
+
+        await updateDoc(doc(db, collectionName, item.id), {
+          ...data,
+          updatedAt: new Date().toISOString()
+        })
+
+        updatedDocumentIds.add(item.id)
       }
     }
 
-    return totalDeleted
+    return updatedDocumentIds.size
+  }
+
+  const deleteResultDocumentsByStudent = async (collectionName, uid) => {
+    const possibleFields = ['uid', 'userId', 'studentId']
+    const deletedDocumentIds = new Set()
+
+    for (const field of possibleFields) {
+      const q = query(
+        collection(db, collectionName),
+        where(field, '==', uid)
+      )
+
+      const snap = await getDocs(q)
+
+      for (const item of snap.docs) {
+        if (deletedDocumentIds.has(item.id)) continue
+
+        await deleteDoc(doc(db, collectionName, item.id))
+        deletedDocumentIds.add(item.id)
+      }
+    }
+
+    return deletedDocumentIds.size
   }
 
   const handleResetStudentResults = async (student) => {
     const ok = window.confirm(
-      `Reset all results for ${student.name || student.email}?\n\nThis will permanently delete:\n- Manual scores\n- Reading submissions\n- Listening submissions\n- Writing submissions and reviews\n- Mock test submissions\n\nThe student account will NOT be deleted.`
+      `Hide all results for ${student.name || student.email}?\n\nThis will NOT permanently delete data.\nIt will hide scores, homework submissions, writing reviews, and mock submissions.\n\nYou can restore them later.`
     )
 
     if (!ok) return
 
     try {
-      const collectionsToClear = [
+      const collectionsToArchive = [
+        'scores',
+        'readingSubmissions',
+        'listeningSubmissions',
+        'writingSubmissions',
+        'mockSubmissions'
+      ]
+
+      let archivedCount = 0
+
+      for (const collectionName of collectionsToArchive) {
+        archivedCount += await updateResultDocumentsByStudent(collectionName, student.id, {
+          archived: true,
+          archivedAt: new Date().toISOString()
+        })
+      }
+
+      alert(`${student.name || student.email}'s results were hidden. Archived ${archivedCount} record(s).`)
+    } catch (error) {
+      console.error(error)
+      alert('Could not hide student results.')
+    }
+  }
+
+  const handleRestoreStudentResults = async (student) => {
+    const ok = window.confirm(
+      `Restore hidden results for ${student.name || student.email}?`
+    )
+
+    if (!ok) return
+
+    try {
+      const collectionsToRestore = [
+        'scores',
+        'readingSubmissions',
+        'listeningSubmissions',
+        'writingSubmissions',
+        'mockSubmissions'
+      ]
+
+      let restoredCount = 0
+
+      for (const collectionName of collectionsToRestore) {
+        restoredCount += await updateResultDocumentsByStudent(collectionName, student.id, {
+          archived: false,
+          restoredAt: new Date().toISOString()
+        })
+      }
+
+      alert(`${student.name || student.email}'s results were restored. Restored ${restoredCount} record(s).`)
+    } catch (error) {
+      console.error(error)
+      alert('Could not restore student results.')
+    }
+  }
+
+  const handleHardDeleteStudentResults = async (student) => {
+    const ok = window.confirm(
+      `PERMANENTLY DELETE all results for ${student.name || student.email}?\n\nThis cannot be undone.`
+    )
+
+    if (!ok) return
+
+    try {
+      const collectionsToDelete = [
         'scores',
         'readingSubmissions',
         'listeningSubmissions',
@@ -145,14 +301,14 @@ export default function AdminDashboard() {
 
       let deletedCount = 0
 
-      for (const collectionName of collectionsToClear) {
-        deletedCount += await deleteDocumentsByUid(collectionName, student.id)
+      for (const collectionName of collectionsToDelete) {
+        deletedCount += await deleteResultDocumentsByStudent(collectionName, student.id)
       }
 
-      alert(`${student.name || student.email}'s results were reset. Deleted ${deletedCount} record(s).`)
+      alert(`${student.name || student.email}'s results were permanently deleted. Deleted ${deletedCount} record(s).`)
     } catch (error) {
       console.error(error)
-      alert('Could not reset student results.')
+      alert('Could not permanently delete student results.')
     }
   }
 
@@ -190,8 +346,9 @@ export default function AdminDashboard() {
     setEditScore(null)
   }
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     sessionStorage.removeItem('isAdmin')
+    await signOut(auth)
     navigate('/')
   }
 
@@ -346,8 +503,10 @@ export default function AdminDashboard() {
                   </div>
                   <div className="flex gap-2 items-center">
                     <button onClick={e => { e.stopPropagation(); handleEdit(u) }} className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-1.5 rounded-lg">Edit</button>
-                    <button onClick={e => { e.stopPropagation(); handleResetStudentResults(u) }} className="text-xs bg-amber-50 hover:bg-amber-100 text-amber-600 px-3 py-1.5 rounded-lg">Reset Results</button>
-                    <button onClick={e => { e.stopPropagation(); handleDelete(u.id) }} className="text-xs bg-red-50 hover:bg-red-100 text-red-500 px-3 py-1.5 rounded-lg">Delete</button>
+                    <button onClick={e => { e.stopPropagation(); handleResetStudentResults(u) }} className="text-xs bg-amber-50 hover:bg-amber-100 text-amber-600 px-3 py-1.5 rounded-lg">Hide Results</button>
+                    <button onClick={e => { e.stopPropagation(); handleRestoreStudentResults(u) }} className="text-xs bg-green-50 hover:bg-green-100 text-green-600 px-3 py-1.5 rounded-lg">Restore</button>
+                    <button onClick={e => { e.stopPropagation(); handleHardDeleteStudentResults(u) }} className="text-xs bg-red-50 hover:bg-red-100 text-red-600 px-3 py-1.5 rounded-lg">Delete Results</button>
+                    <button onClick={e => { e.stopPropagation(); handleDelete(u.id) }} className="text-xs bg-red-100 hover:bg-red-200 text-red-700 px-3 py-1.5 rounded-lg">Delete User</button>
                     <div className="text-gray-300">{selectedStudent === u.id ? '▲' : '▼'}</div>
                   </div>
                 </div>
@@ -356,7 +515,7 @@ export default function AdminDashboard() {
                   <div className="border-t border-gray-100 px-5 py-4">
                     <h3 className="text-sm font-semibold text-gray-700 mb-3">Score history</h3>
                     {!scores[u.id] || scores[u.id].length === 0 ? (
-                      <p className="text-xs text-gray-400">No scores yet.</p>
+                      <p className="text-xs text-gray-400">No visible scores yet. Hidden results can be restored with the Restore button.</p>
                     ) : (
                       <div className="flex flex-col gap-2">
                         {scores[u.id].map(s => (
