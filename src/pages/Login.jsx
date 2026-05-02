@@ -38,12 +38,6 @@ export default function Login() {
     setError('')
     setMessage('')
 
-    if (cleanEmail === 'admin' && password === '852943et') {
-      sessionStorage.setItem('isAdmin', 'true')
-      navigate('/admin')
-      return
-    }
-
     if (!cleanEmail || !password.trim()) {
       setError('Please enter email and password.')
       return
@@ -87,13 +81,10 @@ export default function Login() {
       }
 
       if (userData.role === 'admin') {
-        sessionStorage.setItem('isAdmin', 'true')
         navigate('/admin')
       } else if (userData.role === 'student') {
-        sessionStorage.removeItem('isAdmin')
         navigate('/student')
       } else if (userData.role === 'teacher') {
-        sessionStorage.removeItem('isAdmin')
         navigate('/teacher')
       } else {
         setError('Your account role is not assigned yet.')

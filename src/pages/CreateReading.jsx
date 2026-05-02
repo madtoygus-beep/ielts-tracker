@@ -30,7 +30,7 @@ export default function CreateReading() {
   const [passageMode, setPassageMode] = useState('standard')
   const [fullPassage, setFullPassage] = useState('')
   const [paragraphs, setParagraphs] = useState([
-    { id: Date.now(), letter: 'A', text: '' }
+    { id: crypto.randomUUID(), letter: 'A', text: '' }
   ])
 
   const [headings, setHeadings] = useState(['', '', '', '', '', '', ''])
@@ -151,13 +151,13 @@ export default function CreateReading() {
       if (data.paragraphs?.length) {
         setParagraphs(
           data.paragraphs.map((p, index) => ({
-            id: p.id || Date.now() + index,
+            id: p.id || crypto.randomUUID(),
             letter: p.letter || letters[index],
             text: p.text || ''
           }))
         )
       } else {
-        setParagraphs([{ id: Date.now(), letter: 'A', text: '' }])
+        setParagraphs([{ id: crypto.randomUUID(), letter: 'A', text: '' }])
       }
 
       setHeadings(
@@ -167,7 +167,7 @@ export default function CreateReading() {
       const loadedQuestions = (data.questions || []).map(question => {
         if (question.type === 'mcq') {
           return {
-            id: question.id || Date.now(),
+            id: question.id || crypto.randomUUID(),
             type: 'mcq',
             mode: question.mode || 'single',
             question: question.question || '',
@@ -181,7 +181,7 @@ export default function CreateReading() {
 
         if (question.type === 'table' || question.type === 'summary') {
           return {
-            id: question.id || Date.now(),
+            id: question.id || crypto.randomUUID(),
             type: question.type,
             instruction:
               question.instruction ||
@@ -194,10 +194,13 @@ export default function CreateReading() {
                 ? ['Summary', 'Answer']
                 : ['Column 1', 'Column 2', 'Column 3'],
             rows: question.rows?.length
-              ? question.rows
+              ? question.rows.map(row => ({
+                  id: row.id || crypto.randomUUID(),
+                  cells: row.cells || []
+                }))
               : [
                   {
-                    id: Date.now(),
+                    id: crypto.randomUUID(),
                     cells:
                       question.type === 'summary'
                         ? [
@@ -216,14 +219,14 @@ export default function CreateReading() {
 
         if (question.type === 'matching') {
           return {
-            id: question.id || Date.now(),
+            id: question.id || crypto.randomUUID(),
             type: 'matching',
             paragraphs: question.paragraphs || []
           }
         }
 
         return {
-          id: question.id || Date.now(),
+          id: question.id || crypto.randomUUID(),
           type: question.type,
           question: question.question || '',
           answer: question.answer || '',
@@ -264,7 +267,7 @@ export default function CreateReading() {
     setParagraphs(prev => [
       ...prev,
       {
-        id: Date.now(),
+        id: crypto.randomUUID(),
         letter: letters[prev.length],
         text: ''
       }
@@ -311,7 +314,7 @@ export default function CreateReading() {
       setQuestions(prev => [
         ...prev,
         {
-          id: Date.now(),
+          id: crypto.randomUUID(),
           type: 'matching',
           paragraphs: paragraphs.map(p => ({
             letter: p.letter,
@@ -327,14 +330,14 @@ export default function CreateReading() {
       setQuestions(prev => [
         ...prev,
         {
-          id: Date.now(),
+          id: crypto.randomUUID(),
           type: 'table',
           instruction:
             'Complete the table below. Choose NO MORE THAN THREE WORDS from the passage for each answer.',
           columns: ['Original Theorist', 'Theory', 'Principle'],
           rows: [
             {
-              id: Date.now(),
+              id: crypto.randomUUID(),
               cells: [
                 { type: 'text', text: '' },
                 { type: 'text', text: '' },
@@ -352,14 +355,14 @@ export default function CreateReading() {
       setQuestions(prev => [
         ...prev,
         {
-          id: Date.now(),
+          id: crypto.randomUUID(),
           type: 'summary',
           instruction:
             'Complete the summary below. Choose NO MORE THAN THREE WORDS from the passage for each answer.',
           columns: ['Summary', 'Answer'],
           rows: [
             {
-              id: Date.now(),
+              id: crypto.randomUUID(),
               cells: [
                 { type: 'text', text: '' },
                 { type: 'blank', answer: '' }
@@ -376,7 +379,7 @@ export default function CreateReading() {
       setQuestions(prev => [
         ...prev,
         {
-          id: Date.now(),
+          id: crypto.randomUUID(),
           type: 'mcq',
           mode: 'single',
           question: '',
@@ -392,7 +395,7 @@ export default function CreateReading() {
     setQuestions(prev => [
       ...prev,
       {
-        id: Date.now(),
+        id: crypto.randomUUID(),
         type,
         question: '',
         options: [],
@@ -573,7 +576,7 @@ export default function CreateReading() {
           rows: [
             ...q.rows,
             {
-              id: Date.now(),
+              id: crypto.randomUUID(),
               cells: q.columns.map(() => ({
                 type: 'text',
                 text: ''

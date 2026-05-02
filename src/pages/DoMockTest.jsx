@@ -1980,7 +1980,6 @@ export default function DoMockTest() {
   }
 
   const renderReview = () => {
-    const previewResult = getMockResult()
     const t1Words = countWords(writingAnswers.task1)
     const t2Words = countWords(writingAnswers.task2)
 
@@ -1992,27 +1991,27 @@ export default function DoMockTest() {
           </h2>
 
           <p className="text-gray-500 text-sm mb-6">
-            Check your estimated auto-scored sections before final submission.
+            Your answers are ready to submit. Scores and correct/incorrect counts will only be shown after final submission.
           </p>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="bg-purple-50 rounded-2xl p-5">
               <p className="text-xs text-gray-500 mb-1">Listening</p>
-              <p className="text-3xl font-bold text-purple-600">
-                {previewResult.listening.band}
+              <p className="text-xl font-bold text-purple-600">
+                Completed
               </p>
               <p className="text-xs text-gray-500 mt-1">
-                {previewResult.listening.correct}/{previewResult.listening.total}
+                Result hidden until submission
               </p>
             </div>
 
             <div className="bg-blue-50 rounded-2xl p-5">
               <p className="text-xs text-gray-500 mb-1">Reading</p>
-              <p className="text-3xl font-bold text-blue-600">
-                {previewResult.reading.band}
+              <p className="text-xl font-bold text-blue-600">
+                Completed
               </p>
               <p className="text-xs text-gray-500 mt-1">
-                {previewResult.reading.correct}/{previewResult.reading.total}
+                Result hidden until submission
               </p>
             </div>
 
@@ -2024,6 +2023,16 @@ export default function DoMockTest() {
               </p>
             </div>
           </div>
+        </div>
+
+        <div className="bg-amber-50 border border-amber-100 rounded-2xl p-5">
+          <h3 className="font-semibold text-amber-700 mb-2">
+            Important
+          </h3>
+
+          <p className="text-sm text-amber-700 leading-6">
+            Once you submit, you cannot edit this mock test again. Listening and Reading scores will be calculated after submission. Writing will wait for teacher review.
+          </p>
         </div>
 
         <div className="bg-white border border-gray-100 rounded-2xl p-5">

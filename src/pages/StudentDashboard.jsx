@@ -4,6 +4,10 @@ import { collection, query, where, onSnapshot, doc, getDoc } from 'firebase/fire
 import { signOut, onAuthStateChanged, updatePassword } from 'firebase/auth'
 import { useNavigate } from 'react-router-dom'
 
+const isHiddenForCurrentUser = (item, uid) =>
+  Array.isArray(item.hiddenFor) && item.hiddenFor.includes(uid)
+
+
 function getBandColor(value) {
   const band = Number(value)
   if (band >= 7) return 'text-green-600'
@@ -165,7 +169,11 @@ function ReadingHomeworkSection({ user }) {
     const unsub = onSnapshot(q, snap => {
       const all = snap.docs
         .map(d => ({ id: d.id, ...d.data() }))
-        .filter(r => !r.archived && r.assignTo?.includes(user.uid))
+        .filter(r =>
+          !r.archived &&
+          r.assignTo?.includes(user.uid) &&
+          !isHiddenForCurrentUser(r, user.uid)
+        )
 
       all.sort((a, b) => {
         if (!a.dueDate) return 1
@@ -319,7 +327,11 @@ function ListeningHomeworkSection({ user }) {
     const unsub = onSnapshot(q, snap => {
       const all = snap.docs
         .map(d => ({ id: d.id, ...d.data() }))
-        .filter(l => !l.archived && l.assignTo?.includes(user.uid))
+        .filter(l =>
+          !l.archived &&
+          l.assignTo?.includes(user.uid) &&
+          !isHiddenForCurrentUser(l, user.uid)
+        )
 
       all.sort((a, b) => {
         if (!a.dueDate) return 1
@@ -473,7 +485,11 @@ function MockTestSection({ user }) {
     const unsub = onSnapshot(q, snap => {
       const list = snap.docs
         .map(d => ({ id: d.id, ...d.data() }))
-        .filter(m => !m.archived && m.assignTo?.includes(user.uid))
+        .filter(m =>
+          !m.archived &&
+          m.assignTo?.includes(user.uid) &&
+          !isHiddenForCurrentUser(m, user.uid)
+        )
 
       list.sort((a, b) => {
         if (!a.dueDate) return 1
@@ -658,10 +674,14 @@ function WritingProgressAnalytics({ user }) {
       const map = {}
 
       snap.docs.forEach(d => {
-        map[d.id] = {
+        const item = {
           id: d.id,
           ...d.data()
         }
+
+        if (isHiddenForCurrentUser(item, user.uid)) return
+
+        map[d.id] = item
       })
 
       setWritingMap(map)
@@ -964,7 +984,11 @@ function WritingHomeworkSection({ user }) {
     const unsub = onSnapshot(q, snap => {
       const all = snap.docs
         .map(d => ({ id: d.id, ...d.data() }))
-        .filter(w => !w.archived && w.assignTo?.includes(user.uid))
+        .filter(w =>
+          !w.archived &&
+          w.assignTo?.includes(user.uid) &&
+          !isHiddenForCurrentUser(w, user.uid)
+        )
 
       all.sort((a, b) => {
         if (!a.dueDate) return 1

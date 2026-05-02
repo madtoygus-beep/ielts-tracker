@@ -1,15 +1,19 @@
 import { useState, useEffect } from 'react'
-import { db } from '../firebase'
+import { auth, db } from '../firebase'
 import {
   collection,
   onSnapshot,
   doc,
+  getDoc,
   updateDoc,
   deleteDoc,
   getDocs,
   query,
-  where
+  where,
+  arrayUnion,
+  arrayRemove
 } from 'firebase/firestore'
+import { signOut, onAuthStateChanged } from 'firebase/auth'
 import { useNavigate } from 'react-router-dom'
 
 export default function AdminDashboard() {
@@ -22,54 +26,106 @@ export default function AdminDashboard() {
   const [editScore, setEditScore] = useState(null)
   const [editScoreForm, setEditScoreForm] = useState({})
   const [selectedStudent, setSelectedStudent] = useState(null)
+  const [authChecking, setAuthChecking] = useState(true)
   const navigate = useNavigate()
 
   useEffect(() => {
-    const adminSession = sessionStorage.getItem('isAdmin')
+    let unsubUsers = null
+    let unsubScores = null
+    let active = true
 
-    if (!adminSession) {
-      navigate('/login')
-      return
+    const cleanup = () => {
+      if (unsubUsers) {
+        unsubUsers()
+        unsubUsers = null
+      }
+      if (unsubScores) {
+        unsubScores()
+        unsubScores = null
+      }
     }
 
-    const unsubUsers = onSnapshot(collection(db, 'users'), snap => {
-      const list = snap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
-        .filter(u => !u.deleted && u.status !== 'deleted')
+    const unsubAuth = onAuthStateChanged(auth, async currentUser => {
+      cleanup()
 
-      setUsers(list)
-    })
+      if (!currentUser) {
+        navigate('/login')
+        return
+      }
 
-    const unsubScores = onSnapshot(collection(db, 'scores'), snap => {
-      const groupedScores = {}
+      try {
+        const userSnap = await getDoc(doc(db, 'users', currentUser.uid))
 
-      snap.docs.forEach(scoreDoc => {
-        const score = {
-          id: scoreDoc.id,
-          ...scoreDoc.data()
+        if (!active) return
+
+        if (!userSnap.exists()) {
+          await signOut(auth)
+          navigate('/login')
+          return
         }
 
-        if (!score.uid || score.archived === true) return
+        const profile = userSnap.data()
 
-        if (!groupedScores[score.uid]) {
-          groupedScores[score.uid] = []
+        if (
+          profile.deleted ||
+          profile.status !== 'approved' ||
+          profile.role !== 'admin'
+        ) {
+          await signOut(auth)
+          navigate('/login')
+          return
         }
 
-        groupedScores[score.uid].push(score)
-      })
+        setAuthChecking(false)
 
-      Object.keys(groupedScores).forEach(studentId => {
-        groupedScores[studentId].sort(
-          (a, b) => new Date(b.date || 0) - new Date(a.date || 0)
-        )
-      })
+        unsubUsers = onSnapshot(collection(db, 'users'), snap => {
+          const list = snap.docs
+            .map(d => ({ id: d.id, ...d.data() }))
+            .filter(u => !u.deleted && u.status !== 'deleted')
 
-      setScores(groupedScores)
+          setUsers(list)
+        })
+
+        unsubScores = onSnapshot(collection(db, 'scores'), snap => {
+          const groupedScores = {}
+
+          snap.docs.forEach(scoreDoc => {
+            const score = {
+              id: scoreDoc.id,
+              ...scoreDoc.data()
+            }
+
+            if (!score.uid || score.archived === true) return
+
+            if (!groupedScores[score.uid]) {
+              groupedScores[score.uid] = []
+            }
+
+            groupedScores[score.uid].push(score)
+          })
+
+          Object.keys(groupedScores).forEach(studentId => {
+            groupedScores[studentId].sort(
+              (a, b) => new Date(b.date || 0) - new Date(a.date || 0)
+            )
+          })
+
+          setScores(groupedScores)
+        })
+      } catch (error) {
+        console.error(error)
+
+        if (active) {
+          await signOut(auth)
+          navigate('/login')
+        }
+      }
     })
 
     return () => {
-      unsubUsers()
-      unsubScores()
+      active = false
+      unsubAuth()
+      cleanup()
     }
   }, [navigate])
 
@@ -106,7 +162,7 @@ export default function AdminDashboard() {
     await deleteDoc(doc(db, 'scores', scoreId))
   }
 
-  const updateResultDocumentsByStudent = async (collectionName, uid, data) => {
+  const updateResultDocumentsByStudent = async (collectionName, uid, data, shouldInclude = () => true) => {
     const possibleFields = ['uid', 'userId', 'studentId']
     const updatedDocumentIds = new Set()
 
@@ -121,6 +177,13 @@ export default function AdminDashboard() {
       for (const item of snap.docs) {
         if (updatedDocumentIds.has(item.id)) continue
 
+        const itemData = {
+          id: item.id,
+          ...item.data()
+        }
+
+        if (!shouldInclude(itemData)) continue
+
         await updateDoc(doc(db, collectionName, item.id), {
           ...data,
           updatedAt: new Date().toISOString()
@@ -133,7 +196,7 @@ export default function AdminDashboard() {
     return updatedDocumentIds.size
   }
 
-  const deleteResultDocumentsByStudent = async (collectionName, uid) => {
+  const deleteResultDocumentsByStudent = async (collectionName, uid, shouldInclude = () => true) => {
     const possibleFields = ['uid', 'userId', 'studentId']
     const deletedDocumentIds = new Set()
 
@@ -148,6 +211,13 @@ export default function AdminDashboard() {
       for (const item of snap.docs) {
         if (deletedDocumentIds.has(item.id)) continue
 
+        const itemData = {
+          id: item.id,
+          ...item.data()
+        }
+
+        if (!shouldInclude(itemData)) continue
+
         await deleteDoc(doc(db, collectionName, item.id))
         deletedDocumentIds.add(item.id)
       }
@@ -156,96 +226,208 @@ export default function AdminDashboard() {
     return deletedDocumentIds.size
   }
 
-  const handleResetStudentResults = async (student) => {
+  const isMockScore = item =>
+    item.source === 'mock_test' ||
+    item.source === 'mock' ||
+    Boolean(item.mockTestId) ||
+    Boolean(item.mockId)
+
+  const updateHomeworkAssignmentsVisibility = async (uid, hidden) => {
+    const assignmentCollections = [
+      'readings',
+      'listenings',
+      'writingHomeworks'
+    ]
+
+    let updatedCount = 0
+
+    for (const collectionName of assignmentCollections) {
+      const q = query(
+        collection(db, collectionName),
+        where('assignTo', 'array-contains', uid)
+      )
+
+      const snap = await getDocs(q)
+
+      for (const item of snap.docs) {
+        await updateDoc(doc(db, collectionName, item.id), {
+          hiddenFor: hidden ? arrayUnion(uid) : arrayRemove(uid),
+          updatedAt: new Date().toISOString()
+        })
+
+        updatedCount++
+      }
+    }
+
+    return updatedCount
+  }
+
+  const updateMockAssignmentsVisibility = async (uid, hidden) => {
+    const q = query(
+      collection(db, 'mockTests'),
+      where('assignTo', 'array-contains', uid)
+    )
+
+    const snap = await getDocs(q)
+
+    for (const item of snap.docs) {
+      await updateDoc(doc(db, 'mockTests', item.id), {
+        hiddenFor: hidden ? arrayUnion(uid) : arrayRemove(uid),
+        updatedAt: new Date().toISOString()
+      })
+    }
+
+    return snap.docs.length
+  }
+
+  const hideStudentRecords = async (student, type) => {
+    const isMock = type === 'mock'
+    const label = isMock ? 'mock test results' : 'homework results'
+
     const ok = window.confirm(
-      `Hide all results for ${student.name || student.email}?\n\nThis will NOT permanently delete data.\nIt will hide scores, homework submissions, writing reviews, and mock submissions.\n\nYou can restore them later.`
+      `Hide ${label} for ${student.name || student.email}?\n\nThis will NOT permanently delete data.\nYou can restore it later.`
     )
 
     if (!ok) return
 
     try {
-      const collectionsToArchive = [
-        'scores',
-        'readingSubmissions',
-        'listeningSubmissions',
-        'writingSubmissions',
-        'mockSubmissions'
-      ]
-
       let archivedCount = 0
 
-      for (const collectionName of collectionsToArchive) {
-        archivedCount += await updateResultDocumentsByStudent(collectionName, student.id, {
-          archived: true,
-          archivedAt: new Date().toISOString()
-        })
+      if (isMock) {
+        archivedCount += await updateResultDocumentsByStudent(
+          'mockSubmissions',
+          student.id,
+          {
+            archived: true,
+            archivedAt: new Date().toISOString()
+          }
+        )
+
+        archivedCount += await updateResultDocumentsByStudent(
+          'scores',
+          student.id,
+          {
+            archived: true,
+            archivedAt: new Date().toISOString()
+          },
+          isMockScore
+        )
+
+        archivedCount += await updateMockAssignmentsVisibility(student.id, true)
+      } else {
+        const homeworkCollections = [
+          'readingSubmissions',
+          'listeningSubmissions',
+          'writingSubmissions'
+        ]
+
+        for (const collectionName of homeworkCollections) {
+          archivedCount += await updateResultDocumentsByStudent(collectionName, student.id, {
+            archived: true,
+            archivedAt: new Date().toISOString()
+          })
+        }
+
+        archivedCount += await updateHomeworkAssignmentsVisibility(student.id, true)
       }
 
-      alert(`${student.name || student.email}'s results were hidden. Archived ${archivedCount} record(s).`)
+      alert(`${student.name || student.email}'s ${label} were hidden. Updated ${archivedCount} record(s).`)
     } catch (error) {
       console.error(error)
-      alert('Could not hide student results.')
+      alert(`Could not hide ${label}.`)
     }
   }
 
-  const handleRestoreStudentResults = async (student) => {
+  const restoreStudentRecords = async (student, type) => {
+    const isMock = type === 'mock'
+    const label = isMock ? 'mock test results' : 'homework results'
+
     const ok = window.confirm(
-      `Restore hidden results for ${student.name || student.email}?`
+      `Restore hidden ${label} for ${student.name || student.email}?`
     )
 
     if (!ok) return
 
     try {
-      const collectionsToRestore = [
-        'scores',
-        'readingSubmissions',
-        'listeningSubmissions',
-        'writingSubmissions',
-        'mockSubmissions'
-      ]
-
       let restoredCount = 0
 
-      for (const collectionName of collectionsToRestore) {
-        restoredCount += await updateResultDocumentsByStudent(collectionName, student.id, {
-          archived: false,
-          restoredAt: new Date().toISOString()
-        })
+      if (isMock) {
+        restoredCount += await updateResultDocumentsByStudent(
+          'mockSubmissions',
+          student.id,
+          {
+            archived: false,
+            restoredAt: new Date().toISOString()
+          }
+        )
+
+        restoredCount += await updateResultDocumentsByStudent(
+          'scores',
+          student.id,
+          {
+            archived: false,
+            restoredAt: new Date().toISOString()
+          },
+          isMockScore
+        )
+
+        restoredCount += await updateMockAssignmentsVisibility(student.id, false)
+      } else {
+        const homeworkCollections = [
+          'readingSubmissions',
+          'listeningSubmissions',
+          'writingSubmissions'
+        ]
+
+        for (const collectionName of homeworkCollections) {
+          restoredCount += await updateResultDocumentsByStudent(collectionName, student.id, {
+            archived: false,
+            restoredAt: new Date().toISOString()
+          })
+        }
+
+        restoredCount += await updateHomeworkAssignmentsVisibility(student.id, false)
       }
 
-      alert(`${student.name || student.email}'s results were restored. Restored ${restoredCount} record(s).`)
+      alert(`${student.name || student.email}'s ${label} were restored. Restored/updated ${restoredCount} record(s).`)
     } catch (error) {
       console.error(error)
-      alert('Could not restore student results.')
+      alert(`Could not restore ${label}.`)
     }
   }
 
-  const handleHardDeleteStudentResults = async (student) => {
+  const hardDeleteStudentRecords = async (student, type) => {
+    const isMock = type === 'mock'
+    const label = isMock ? 'mock test results' : 'homework results'
+
     const ok = window.confirm(
-      `PERMANENTLY DELETE all results for ${student.name || student.email}?\n\nThis cannot be undone.`
+      `PERMANENTLY DELETE ${label} for ${student.name || student.email}?\n\nThis cannot be undone.`
     )
 
     if (!ok) return
 
     try {
-      const collectionsToDelete = [
-        'scores',
-        'readingSubmissions',
-        'listeningSubmissions',
-        'writingSubmissions',
-        'mockSubmissions'
-      ]
-
       let deletedCount = 0
 
-      for (const collectionName of collectionsToDelete) {
-        deletedCount += await deleteResultDocumentsByStudent(collectionName, student.id)
+      if (isMock) {
+        deletedCount += await deleteResultDocumentsByStudent('mockSubmissions', student.id)
+        deletedCount += await deleteResultDocumentsByStudent('scores', student.id, isMockScore)
+      } else {
+        const homeworkCollections = [
+          'readingSubmissions',
+          'listeningSubmissions',
+          'writingSubmissions'
+        ]
+
+        for (const collectionName of homeworkCollections) {
+          deletedCount += await deleteResultDocumentsByStudent(collectionName, student.id)
+        }
       }
 
-      alert(`${student.name || student.email}'s results were permanently deleted. Deleted ${deletedCount} record(s).`)
+      alert(`${student.name || student.email}'s ${label} were permanently deleted. Deleted ${deletedCount} record(s).`)
     } catch (error) {
       console.error(error)
-      alert('Could not permanently delete student results.')
+      alert(`Could not permanently delete ${label}.`)
     }
   }
 
@@ -283,8 +465,8 @@ export default function AdminDashboard() {
     setEditScore(null)
   }
 
-  const handleLogout = () => {
-    sessionStorage.removeItem('isAdmin')
+  const handleLogout = async () => {
+    await signOut(auth)
     navigate('/')
   }
 
@@ -303,6 +485,14 @@ export default function AdminDashboard() {
   const teachers = filtered.filter(
     u => u.role === 'teacher' && (u.status === 'approved' || !u.status)
   )
+
+  if (authChecking) {
+    return (
+      <div className="min-h-screen bg-[#faf9f6] flex items-center justify-center">
+        <p className="text-gray-400">Checking permissions...</p>
+      </div>
+    )
+  }
 
   return (
     <div className="min-h-screen bg-[#faf9f6]">
@@ -437,11 +627,17 @@ export default function AdminDashboard() {
                       <p className="text-xs text-gray-400">{u.email}</p>
                     </div>
                   </div>
-                  <div className="flex gap-2 items-center">
+                  <div className="flex gap-2 items-center flex-wrap justify-end">
                     <button onClick={e => { e.stopPropagation(); handleEdit(u) }} className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-1.5 rounded-lg">Edit</button>
-                    <button onClick={e => { e.stopPropagation(); handleResetStudentResults(u) }} className="text-xs bg-amber-50 hover:bg-amber-100 text-amber-600 px-3 py-1.5 rounded-lg">Hide Results</button>
-                    <button onClick={e => { e.stopPropagation(); handleRestoreStudentResults(u) }} className="text-xs bg-green-50 hover:bg-green-100 text-green-600 px-3 py-1.5 rounded-lg">Restore</button>
-                    <button onClick={e => { e.stopPropagation(); handleHardDeleteStudentResults(u) }} className="text-xs bg-red-50 hover:bg-red-100 text-red-600 px-3 py-1.5 rounded-lg">Delete Results</button>
+
+                    <button onClick={e => { e.stopPropagation(); hideStudentRecords(u, 'mock') }} className="text-xs bg-purple-50 hover:bg-purple-100 text-purple-600 px-3 py-1.5 rounded-lg">Hide Mock</button>
+                    <button onClick={e => { e.stopPropagation(); restoreStudentRecords(u, 'mock') }} className="text-xs bg-green-50 hover:bg-green-100 text-green-600 px-3 py-1.5 rounded-lg">Restore Mock</button>
+                    <button onClick={e => { e.stopPropagation(); hardDeleteStudentRecords(u, 'mock') }} className="text-xs bg-red-50 hover:bg-red-100 text-red-600 px-3 py-1.5 rounded-lg">Delete Mock</button>
+
+                    <button onClick={e => { e.stopPropagation(); hideStudentRecords(u, 'homework') }} className="text-xs bg-amber-50 hover:bg-amber-100 text-amber-600 px-3 py-1.5 rounded-lg">Hide Homework</button>
+                    <button onClick={e => { e.stopPropagation(); restoreStudentRecords(u, 'homework') }} className="text-xs bg-emerald-50 hover:bg-emerald-100 text-emerald-600 px-3 py-1.5 rounded-lg">Restore Homework</button>
+                    <button onClick={e => { e.stopPropagation(); hardDeleteStudentRecords(u, 'homework') }} className="text-xs bg-rose-50 hover:bg-rose-100 text-rose-600 px-3 py-1.5 rounded-lg">Delete Homework</button>
+
                     <button onClick={e => { e.stopPropagation(); handleDelete(u.id) }} className="text-xs bg-red-100 hover:bg-red-200 text-red-700 px-3 py-1.5 rounded-lg">Delete User</button>
                     <div className="text-gray-300">{selectedStudent === u.id ? '▲' : '▼'}</div>
                   </div>
