@@ -320,27 +320,41 @@ export default function DoMockTest() {
           setFinalResult(submission.result || null)
         }
 
-        const readingIds =
-          mockData.readingIds || (mockData.readingId ? [mockData.readingId] : [])
+        const readingIds = Array.isArray(mockData.readingIds)
+          ? mockData.readingIds.filter(Boolean)
+          : mockData.readingId
+            ? [mockData.readingId]
+            : []
 
-        const [listeningSnap, writingSnapPrimary, writingSnapFallback] =
-          await Promise.all([
-            getDoc(doc(db, 'listenings', mockData.listeningId)),
-            getDoc(doc(db, 'writings', mockData.writingId)),
-            getDoc(doc(db, 'writingHomeworks', mockData.writingId))
-          ])
+        if (!mockData.listeningId) {
+          throw new Error('Mock test is missing listeningId.')
+        }
+
+        if (readingIds.length === 0) {
+          throw new Error('Mock test is missing readingIds.')
+        }
+
+        if (!mockData.writingId) {
+          throw new Error('Mock test is missing writingId.')
+        }
+
+        const [listeningSnap, writingSnap] = await Promise.all([
+          getDoc(doc(db, 'listenings', mockData.listeningId)),
+          getDoc(doc(db, 'writingHomeworks', mockData.writingId))
+        ])
 
         if (!isActive) return
 
-        if (listeningSnap.exists()) {
-          setListening({ id: listeningSnap.id, ...listeningSnap.data() })
+        if (!listeningSnap.exists()) {
+          throw new Error('Listening test was not found.')
         }
 
-        if (writingSnapPrimary.exists()) {
-          setWriting({ id: writingSnapPrimary.id, ...writingSnapPrimary.data() })
-        } else if (writingSnapFallback.exists()) {
-          setWriting({ id: writingSnapFallback.id, ...writingSnapFallback.data() })
+        if (!writingSnap.exists()) {
+          throw new Error('Writing test was not found.')
         }
+
+        setListening({ id: listeningSnap.id, ...listeningSnap.data() })
+        setWriting({ id: writingSnap.id, ...writingSnap.data() })
 
         const readingDocs = await Promise.all(
           readingIds.map(readingId => getDoc(doc(db, 'readings', readingId)))
@@ -348,17 +362,21 @@ export default function DoMockTest() {
 
         if (!isActive) return
 
-        setReadings(
-          readingDocs
-            .filter(snap => snap.exists())
-            .map(snap => ({ id: snap.id, ...snap.data() }))
-        )
+        const loadedReadings = readingDocs
+          .filter(snap => snap.exists())
+          .map(snap => ({ id: snap.id, ...snap.data() }))
+
+        if (loadedReadings.length === 0) {
+          throw new Error('No reading tests were found for this mock.')
+        }
+
+        setReadings(loadedReadings)
 
         setLoading(false)
       } catch (error) {
         console.error(error)
         if (isActive) {
-          alert('Could not load mock test.')
+          alert(error?.message || 'Could not load mock test.')
           navigate('/student')
         }
       }
@@ -1038,7 +1056,7 @@ export default function DoMockTest() {
         mockTestId: mock.id,
         title: mock.title,
         listeningId: mock.listeningId,
-        readingIds: mock.readingIds || [],
+        readingIds: Array.isArray(mock.readingIds) ? mock.readingIds : mock.readingId ? [mock.readingId] : [],
         writingId: mock.writingId,
         listeningAnswers,
         readingAnswers,
