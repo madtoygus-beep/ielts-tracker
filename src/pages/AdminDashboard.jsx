@@ -1,17 +1,15 @@
 import { useState, useEffect } from 'react'
-import { auth, db } from '../firebase'
+import { db } from '../firebase'
 import {
   collection,
   onSnapshot,
   doc,
   updateDoc,
   deleteDoc,
-  getDoc,
   getDocs,
   query,
   where
 } from 'firebase/firestore'
-import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { useNavigate } from 'react-router-dom'
 
 export default function AdminDashboard() {
@@ -27,112 +25,51 @@ export default function AdminDashboard() {
   const navigate = useNavigate()
 
   useEffect(() => {
-    let unsubUsers = null
-    let unsubScores = null
-    let active = true
+    const adminSession = sessionStorage.getItem('isAdmin')
 
-    const unsubAuth = onAuthStateChanged(auth, async currentUser => {
-      if (unsubUsers) {
-        unsubUsers()
-        unsubUsers = null
-      }
+    if (!adminSession) {
+      navigate('/login')
+      return
+    }
 
-      if (unsubScores) {
-        unsubScores()
-        unsubScores = null
-      }
+    const unsubUsers = onSnapshot(collection(db, 'users'), snap => {
+      const list = snap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .filter(u => !u.deleted && u.status !== 'deleted')
 
-      if (!currentUser) {
-        sessionStorage.removeItem('isAdmin')
-        navigate('/login')
-        return
-      }
+      setUsers(list)
+    })
 
-      try {
-        const adminSnap = await getDoc(doc(db, 'users', currentUser.uid))
+    const unsubScores = onSnapshot(collection(db, 'scores'), snap => {
+      const groupedScores = {}
 
-        if (!active) return
-
-        if (!adminSnap.exists()) {
-          sessionStorage.removeItem('isAdmin')
-          await signOut(auth)
-          navigate('/login')
-          return
+      snap.docs.forEach(scoreDoc => {
+        const score = {
+          id: scoreDoc.id,
+          ...scoreDoc.data()
         }
 
-        const adminData = adminSnap.data()
+        if (!score.uid || score.archived === true) return
 
-        if (
-          adminData.deleted ||
-          adminData.status === 'deleted' ||
-          adminData.status === 'pending' ||
-          adminData.status === 'rejected' ||
-          adminData.role !== 'admin'
-        ) {
-          sessionStorage.removeItem('isAdmin')
-          await signOut(auth)
-          navigate('/login')
-          return
+        if (!groupedScores[score.uid]) {
+          groupedScores[score.uid] = []
         }
 
-        sessionStorage.setItem('isAdmin', 'true')
+        groupedScores[score.uid].push(score)
+      })
 
-        unsubUsers = onSnapshot(collection(db, 'users'), snap => {
-          const list = snap.docs
-            .map(d => ({ id: d.id, ...d.data() }))
-            .filter(u => !u.deleted && u.status !== 'deleted')
+      Object.keys(groupedScores).forEach(studentId => {
+        groupedScores[studentId].sort(
+          (a, b) => new Date(b.date || 0) - new Date(a.date || 0)
+        )
+      })
 
-          setUsers(list)
-        })
-
-        unsubScores = onSnapshot(collection(db, 'scores'), snap => {
-          const groupedScores = {}
-
-          snap.docs.forEach(scoreDoc => {
-            const score = {
-              id: scoreDoc.id,
-              ...scoreDoc.data()
-            }
-
-            if (!score.uid || score.archived === true) return
-
-            if (!groupedScores[score.uid]) {
-              groupedScores[score.uid] = []
-            }
-
-            groupedScores[score.uid].push(score)
-          })
-
-          Object.keys(groupedScores).forEach(studentId => {
-            groupedScores[studentId].sort(
-              (a, b) => new Date(b.date || 0) - new Date(a.date || 0)
-            )
-          })
-
-          setScores(groupedScores)
-        })
-      } catch (error) {
-        console.error(error)
-
-        if (active) {
-          sessionStorage.removeItem('isAdmin')
-          await signOut(auth)
-          navigate('/login')
-        }
-      }
+      setScores(groupedScores)
     })
 
     return () => {
-      active = false
-      unsubAuth()
-
-      if (unsubUsers) {
-        unsubUsers()
-      }
-
-      if (unsubScores) {
-        unsubScores()
-      }
+      unsubUsers()
+      unsubScores()
     }
   }, [navigate])
 
@@ -346,9 +283,8 @@ export default function AdminDashboard() {
     setEditScore(null)
   }
 
-  const handleLogout = async () => {
+  const handleLogout = () => {
     sessionStorage.removeItem('isAdmin')
-    await signOut(auth)
     navigate('/')
   }
 
