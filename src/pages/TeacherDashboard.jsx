@@ -74,7 +74,26 @@ export default function TeacherDashboard() {
   const navigate = useNavigate()
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, currentUser => {
+    const liveUnsubscribers = []
+
+    const clearLiveUnsubscribers = () => {
+      while (liveUnsubscribers.length > 0) {
+        const unsubscribe = liveUnsubscribers.pop()
+
+        if (typeof unsubscribe === 'function') {
+          unsubscribe()
+        }
+      }
+    }
+
+    const trackSnapshot = unsubscribe => {
+      liveUnsubscribers.push(unsubscribe)
+      return unsubscribe
+    }
+
+    const unsubAuth = onAuthStateChanged(auth, currentUser => {
+      clearLiveUnsubscribers()
+
       if (!currentUser) {
         navigate('/login')
         return
@@ -87,60 +106,91 @@ export default function TeacherDashboard() {
         where('role', '==', 'student')
       )
 
-      onSnapshot(studentsQuery, snap => {
-        const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-        setStudents(list)
-
-        list.forEach(student => {
-          const scoreQuery = query(
-            collection(db, 'scores'),
-            where('uid', '==', student.id)
-          )
-
-          onSnapshot(scoreQuery, ssnap => {
-            const data = ssnap.docs.map(d => ({ id: d.id, ...d.data() }))
-            data.sort((a, b) => new Date(b.date) - new Date(a.date))
-
-            setScores(prev => ({
-              ...prev,
-              [student.id]: data
-            }))
-          })
+      trackSnapshot(
+        onSnapshot(studentsQuery, snap => {
+          const list = snap.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .filter(u => !u.deleted && u.status === 'approved')
+          setStudents(list)
         })
-      })
+      )
 
-      onSnapshot(query(collection(db, 'readings')), snap => {
-        const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-        list.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
-        setReadings(list)
-      })
+      trackSnapshot(
+        onSnapshot(collection(db, 'scores'), snap => {
+          const groupedScores = {}
 
-      onSnapshot(query(collection(db, 'readingSubmissions')), snap => {
-        setSubmissions(snap.docs.map(d => ({ id: d.id, ...d.data() })))
-      })
+          snap.docs.forEach(scoreDoc => {
+            const score = {
+              id: scoreDoc.id,
+              ...scoreDoc.data()
+            }
 
-      onSnapshot(query(collection(db, 'writingHomeworks')), snap => {
-        const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-        list.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
-        setWritings(list)
-      })
+            if (!score.uid) return
 
-      onSnapshot(query(collection(db, 'writingSubmissions')), snap => {
-        setWritingSubmissions(snap.docs.map(d => ({ id: d.id, ...d.data() })))
-      })
+            if (!groupedScores[score.uid]) {
+              groupedScores[score.uid] = []
+            }
 
-      onSnapshot(query(collection(db, 'listenings')), snap => {
-        const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-        list.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
-        setListenings(list)
-      })
+            groupedScores[score.uid].push(score)
+          })
 
-      onSnapshot(query(collection(db, 'listeningSubmissions')), snap => {
-        setListeningSubmissions(snap.docs.map(d => ({ id: d.id, ...d.data() })))
-      })
+          Object.keys(groupedScores).forEach(studentId => {
+            groupedScores[studentId].sort(
+              (a, b) => new Date(b.date || 0) - new Date(a.date || 0)
+            )
+          })
+
+          setScores(groupedScores)
+        })
+      )
+
+      trackSnapshot(
+        onSnapshot(query(collection(db, 'readings')), snap => {
+          const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+          list.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+          setReadings(list)
+        })
+      )
+
+      trackSnapshot(
+        onSnapshot(query(collection(db, 'readingSubmissions')), snap => {
+          setSubmissions(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+        })
+      )
+
+      trackSnapshot(
+        onSnapshot(query(collection(db, 'writingHomeworks')), snap => {
+          const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+          list.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+          setWritings(list)
+        })
+      )
+
+      trackSnapshot(
+        onSnapshot(query(collection(db, 'writingSubmissions')), snap => {
+          setWritingSubmissions(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+        })
+      )
+
+      trackSnapshot(
+        onSnapshot(query(collection(db, 'listenings')), snap => {
+          const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+          list.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+          setListenings(list)
+        })
+      )
+
+      trackSnapshot(
+        onSnapshot(query(collection(db, 'listeningSubmissions')), snap => {
+          setListeningSubmissions(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+        })
+      )
     })
 
-    return unsub
+    return () => {
+      unsubAuth()
+      clearLiveUnsubscribers()
+    }
   }, [navigate])
 
   const activeReadings = readings.filter(r => !r.archived)

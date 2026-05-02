@@ -36,6 +36,7 @@ export default function DoWriting() {
   const timerRef = useRef(null)
   const autosaveTimeoutRef = useRef(null)
   const draftStatusTimeoutRef = useRef(null)
+  const submittingRef = useRef(false)
 
   const [user, setUser] = useState(null)
   const [writing, setWriting] = useState(null)
@@ -44,6 +45,7 @@ export default function DoWriting() {
   const [task2Answer, setTask2Answer] = useState('')
   const [timeLeft, setTimeLeft] = useState(60 * 60)
   const [submitted, setSubmitted] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
   const [alreadyDone, setAlreadyDone] = useState(false)
   const [loading, setLoading] = useState(true)
   const [imageZoomOpen, setImageZoomOpen] = useState(false)
@@ -299,7 +301,7 @@ export default function DoWriting() {
   }
 
   const handleSubmit = async (autoSubmit = false) => {
-    if (submitted) return
+    if (submittingRef.current || submitted) return
 
     if (!autoSubmit) {
       if (!task1Answer.trim()) {
@@ -321,28 +323,38 @@ export default function DoWriting() {
       if (!ok) return
     }
 
+    submittingRef.current = true
+    setSubmitting(true)
+
     clearInterval(timerRef.current)
 
     if (autosaveTimeoutRef.current) {
       clearTimeout(autosaveTimeoutRef.current)
     }
 
-    await addDoc(collection(db, 'writingSubmissions'), {
-      uid: user.uid,
-      writingId: id,
-      task1Answer,
-      task2Answer,
-      task1WordCount: countWords(task1Answer),
-      task2WordCount: countWords(task2Answer),
-      submittedAt: new Date().toISOString(),
-      finishedLate: timeLeft <= 0,
-      autoSubmitted: autoSubmit,
-      reviewed: false,
-      review: null
-    })
+    try {
+      await addDoc(collection(db, 'writingSubmissions'), {
+        uid: user.uid,
+        writingId: id,
+        task1Answer,
+        task2Answer,
+        task1WordCount: countWords(task1Answer),
+        task2WordCount: countWords(task2Answer),
+        submittedAt: new Date().toISOString(),
+        finishedLate: timeLeft <= 0,
+        autoSubmitted: autoSubmit,
+        reviewed: false,
+        review: null
+      })
 
-    clearDraft()
-    setSubmitted(true)
+      clearDraft()
+      setSubmitted(true)
+    } catch (error) {
+      console.error(error)
+      alert('Could not submit your writing. Please try again.')
+      submittingRef.current = false
+      setSubmitting(false)
+    }
   }
 
   if (loading || !writing) {
@@ -630,9 +642,10 @@ export default function DoWriting() {
 
                 <button
                   onClick={() => handleSubmit(false)}
-                  className="w-full bg-purple-600 text-white rounded-xl py-4 text-sm font-medium hover:bg-purple-700"
+                  disabled={submitting}
+                  className="w-full bg-purple-600 text-white rounded-xl py-4 text-sm font-medium hover:bg-purple-700 disabled:opacity-60"
                 >
-                  Submit Writing
+                  {submitting ? 'Submitting...' : 'Submit Writing'}
                 </button>
               </div>
             </div>

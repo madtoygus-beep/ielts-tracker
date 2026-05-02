@@ -14,7 +14,6 @@ import { useNavigate, useParams } from 'react-router-dom'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
-// Section süreleri (saniye)
 const LISTENING_DURATION = 30 * 60
 const READING_DURATION = 60 * 60
 const WRITING_DURATION = 60 * 60
@@ -95,11 +94,13 @@ function getReadingQuestionCount(question) {
 
   if (question.type === 'table' || question.type === 'summary') {
     let count = 0
+
     question.rows?.forEach(row => {
       row.cells?.forEach(cell => {
         if (cell.type === 'blank') count++
       })
     })
+
     return count || 1
   }
 
@@ -107,9 +108,10 @@ function getReadingQuestionCount(question) {
 }
 
 function getQuestionRangeLabel(questions, question, index) {
-  const start = questions
-    .slice(0, index)
-    .reduce((sum, item) => sum + getReadingQuestionCount(item), 0) + 1
+  const start =
+    questions
+      .slice(0, index)
+      .reduce((sum, item) => sum + getReadingQuestionCount(item), 0) + 1
 
   const count = getReadingQuestionCount(question)
   const end = start + count - 1
@@ -120,18 +122,12 @@ function getQuestionRangeLabel(questions, question, index) {
 function extractPromptText(value) {
   if (!value) return null
   if (typeof value === 'string') return value
+
   if (typeof value === 'object') {
     return value.prompt || value.title || value.text || value.question || null
   }
+
   return null
-}
-
-function getWritingTask1Prompt(writing) {
-  return extractPromptText(getWritingTask1Source(writing)) || 'Writing Task 1 prompt is missing.'
-}
-
-function getWritingTask2Prompt(writing) {
-  return extractPromptText(getWritingTask2Source(writing)) || 'Writing Task 2 prompt is missing.'
 }
 
 function extractPromptImage(value) {
@@ -171,6 +167,14 @@ function getWritingTask2Source(writing) {
   )
 }
 
+function getWritingTask1Prompt(writing) {
+  return extractPromptText(getWritingTask1Source(writing)) || 'Writing Task 1 prompt is missing.'
+}
+
+function getWritingTask2Prompt(writing) {
+  return extractPromptText(getWritingTask2Source(writing)) || 'Writing Task 2 prompt is missing.'
+}
+
 function getWritingTask1Image(writing) {
   return (
     extractPromptImage(getWritingTask1Source(writing)) ||
@@ -196,6 +200,15 @@ function formatTime(seconds) {
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
 }
 
+function getSavedMockState(storageKey) {
+  try {
+    const saved = localStorage.getItem(storageKey)
+    return saved ? JSON.parse(saved) : null
+  } catch {
+    return null
+  }
+}
+
 export default function DoMockTest() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -216,7 +229,6 @@ export default function DoMockTest() {
     task2: ''
   })
 
-  // Timer states
   const [listeningTimeLeft, setListeningTimeLeft] = useState(LISTENING_DURATION)
   const [readingTimeLeft, setReadingTimeLeft] = useState(READING_DURATION)
   const [writingTimeLeft, setWritingTimeLeft] = useState(WRITING_DURATION)
@@ -233,84 +245,229 @@ export default function DoMockTest() {
   const [submitting, setSubmitting] = useState(false)
 
   const submittingRef = useRef(false)
+  const restoredRef = useRef(false)
+  const loadingRef = useRef(true)
+  const audioRef = useRef(null)
+  const audioLastTimeRef = useRef(0)
+  const listeningTickRef = useRef(null)
+  const readingTickRef = useRef(null)
+  const writingTickRef = useRef(null)
+  const tabSwitchCountRef = useRef(0)
+
+  const [audioStarted, setAudioStarted] = useState(false)
+  const [audioLocked, setAudioLocked] = useState(false)
+  const [audioWarning, setAudioWarning] = useState('')
+  const [tabWarning, setTabWarning] = useState('')
+
+  const storageKey = useMemo(() => {
+    return user?.uid && id ? `mock_progress_${id}_${user.uid}` : null
+  }, [id, user?.uid])
 
   useEffect(() => {
+    loadingRef.current = loading
+  }, [loading])
+
+  useEffect(() => {
+    let isActive = true
+
     const unsub = onAuthStateChanged(auth, async currentUser => {
       if (!currentUser) {
         navigate('/login')
         return
       }
 
-      setUser(currentUser)
+      try {
+        if (!isActive) return
 
-      const mockSnap = await getDoc(doc(db, 'mockTests', id))
+        setUser(currentUser)
 
-      if (!mockSnap.exists()) {
-        alert('Mock test not found.')
-        navigate('/student')
-        return
+        const mockSnap = await getDoc(doc(db, 'mockTests', id))
+
+        if (!isActive) return
+
+        if (!mockSnap.exists()) {
+          alert('Mock test not found.')
+          navigate('/student')
+          return
+        }
+
+        const mockData = {
+          id: mockSnap.id,
+          ...mockSnap.data()
+        }
+
+        if (!mockData.assignTo?.includes(currentUser.uid)) {
+          alert('This mock test is not assigned to you.')
+          navigate('/student')
+          return
+        }
+
+        setMock(mockData)
+
+        const existingQuery = query(
+          collection(db, 'mockSubmissions'),
+          where('uid', '==', currentUser.uid),
+          where('mockTestId', '==', id)
+        )
+
+        const existingSnap = await getDocs(existingQuery)
+
+        if (!isActive) return
+
+        if (!existingSnap.empty) {
+          setAlreadySubmitted(true)
+          const submission = existingSnap.docs[0].data()
+          setFinalResult(submission.result || null)
+        }
+
+        const readingIds =
+          mockData.readingIds || (mockData.readingId ? [mockData.readingId] : [])
+
+        const [listeningSnap, writingSnapPrimary, writingSnapFallback] =
+          await Promise.all([
+            getDoc(doc(db, 'listenings', mockData.listeningId)),
+            getDoc(doc(db, 'writings', mockData.writingId)),
+            getDoc(doc(db, 'writingHomeworks', mockData.writingId))
+          ])
+
+        if (!isActive) return
+
+        if (listeningSnap.exists()) {
+          setListening({ id: listeningSnap.id, ...listeningSnap.data() })
+        }
+
+        if (writingSnapPrimary.exists()) {
+          setWriting({ id: writingSnapPrimary.id, ...writingSnapPrimary.data() })
+        } else if (writingSnapFallback.exists()) {
+          setWriting({ id: writingSnapFallback.id, ...writingSnapFallback.data() })
+        }
+
+        const readingDocs = await Promise.all(
+          readingIds.map(readingId => getDoc(doc(db, 'readings', readingId)))
+        )
+
+        if (!isActive) return
+
+        setReadings(
+          readingDocs
+            .filter(snap => snap.exists())
+            .map(snap => ({ id: snap.id, ...snap.data() }))
+        )
+
+        setLoading(false)
+      } catch (error) {
+        console.error(error)
+        if (isActive) {
+          alert('Could not load mock test.')
+          navigate('/student')
+        }
       }
-
-      const mockData = {
-        id: mockSnap.id,
-        ...mockSnap.data()
-      }
-
-      if (!mockData.assignTo?.includes(currentUser.uid)) {
-        alert('This mock test is not assigned to you.')
-        navigate('/student')
-        return
-      }
-
-      setMock(mockData)
-
-      const existingQuery = query(
-        collection(db, 'mockSubmissions'),
-        where('uid', '==', currentUser.uid),
-        where('mockTestId', '==', id)
-      )
-
-      const existingSnap = await getDocs(existingQuery)
-
-      if (!existingSnap.empty) {
-        setAlreadySubmitted(true)
-        const submission = existingSnap.docs[0].data()
-        setFinalResult(submission.result || null)
-      }
-
-      const readingIds = mockData.readingIds || (mockData.readingId ? [mockData.readingId] : [])
-
-      const [listeningSnap, writingSnapPrimary, writingSnapFallback] = await Promise.all([
-        getDoc(doc(db, 'listenings', mockData.listeningId)),
-        getDoc(doc(db, 'writings', mockData.writingId)),
-        getDoc(doc(db, 'writingHomeworks', mockData.writingId))
-      ])
-
-      if (listeningSnap.exists()) {
-        setListening({ id: listeningSnap.id, ...listeningSnap.data() })
-      }
-
-      if (writingSnapPrimary.exists()) {
-        setWriting({ id: writingSnapPrimary.id, ...writingSnapPrimary.data() })
-      } else if (writingSnapFallback.exists()) {
-        setWriting({ id: writingSnapFallback.id, ...writingSnapFallback.data() })
-      }
-
-      const readingDocs = await Promise.all(
-        readingIds.map(readingId => getDoc(doc(db, 'readings', readingId)))
-      )
-
-      setReadings(
-        readingDocs
-          .filter(snap => snap.exists())
-          .map(snap => ({ id: snap.id, ...snap.data() }))
-      )
-
-      setLoading(false)
     })
 
-    return unsub
+    return () => {
+      isActive = false
+      unsub()
+    }
   }, [id, navigate])
+
+  useEffect(() => {
+    if (!storageKey || restoredRef.current || loading) return
+    if (alreadySubmitted || finalResult) return
+
+    const saved = getSavedMockState(storageKey)
+
+    if (!saved) {
+      restoredRef.current = true
+      return
+    }
+
+    setSectionIndex(saved.sectionIndex ?? 0)
+    setListeningAnswers(saved.listeningAnswers || {})
+    setReadingAnswers(saved.readingAnswers || {})
+    setWritingAnswers(saved.writingAnswers || { task1: '', task2: '' })
+
+    setListeningTimeLeft(saved.listeningTimeLeft ?? LISTENING_DURATION)
+    setReadingTimeLeft(saved.readingTimeLeft ?? READING_DURATION)
+    setWritingTimeLeft(saved.writingTimeLeft ?? WRITING_DURATION)
+
+    setListeningStarted(Boolean(saved.listeningStarted))
+    setReadingStarted(Boolean(saved.readingStarted))
+    setWritingStarted(Boolean(saved.writingStarted))
+
+    setListeningLocked(Boolean(saved.listeningLocked))
+    setReadingLocked(Boolean(saved.readingLocked))
+    setWritingLocked(Boolean(saved.writingLocked))
+
+    setAudioStarted(Boolean(saved.audioStarted))
+    setAudioLocked(Boolean(saved.audioLocked))
+
+    restoredRef.current = true
+  }, [storageKey, loading, alreadySubmitted, finalResult])
+
+  useEffect(() => {
+    if (!storageKey || loading || alreadySubmitted || finalResult) return
+
+    const timeout = setTimeout(() => {
+      const data = {
+        sectionIndex,
+        listeningAnswers,
+        readingAnswers,
+        writingAnswers,
+        listeningTimeLeft,
+        readingTimeLeft,
+        writingTimeLeft,
+        listeningStarted,
+        readingStarted,
+        writingStarted,
+        listeningLocked,
+        readingLocked,
+        writingLocked,
+        audioStarted,
+        audioLocked,
+        updatedAt: new Date().toISOString()
+      }
+
+      localStorage.setItem(storageKey, JSON.stringify(data))
+    }, 300)
+
+    return () => clearTimeout(timeout)
+  }, [
+    storageKey,
+    loading,
+    alreadySubmitted,
+    finalResult,
+    sectionIndex,
+    listeningAnswers,
+    readingAnswers,
+    writingAnswers,
+    listeningTimeLeft,
+    readingTimeLeft,
+    writingTimeLeft,
+    listeningStarted,
+    readingStarted,
+    writingStarted,
+    listeningLocked,
+    readingLocked,
+    writingLocked,
+    audioStarted,
+    audioLocked
+  ])
+
+  useEffect(() => {
+    if (alreadySubmitted || finalResult) return
+
+    const handleBeforeUnload = event => {
+      if (loadingRef.current) return
+      event.preventDefault()
+      event.returnValue = ''
+    }
+
+    window.addEventListener('beforeunload', handleBeforeUnload)
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload)
+    }
+  }, [alreadySubmitted, finalResult])
 
   const sections = useMemo(() => {
     return [
@@ -330,70 +487,110 @@ export default function DoMockTest() {
 
   const activeSection = sections[sectionIndex] || sections[0]
 
-  // Timer: Listening
   useEffect(() => {
     if (!listeningStarted || listeningLocked) return
+
     if (listeningTimeLeft <= 0) {
       setListeningLocked(true)
+      setAudioLocked(true)
       return
     }
 
+    listeningTickRef.current = Date.now()
+
     const interval = setInterval(() => {
       setListeningTimeLeft(prev => {
-        if (prev <= 1) {
+        const now = Date.now()
+        const elapsed = Math.max(
+          1,
+          Math.floor((now - (listeningTickRef.current || now)) / 1000)
+        )
+
+        listeningTickRef.current = now
+
+        const next = Math.max(prev - elapsed, 0)
+
+        if (next <= 0) {
           setListeningLocked(true)
+          setAudioLocked(true)
           return 0
         }
-        return prev - 1
+
+        return next
       })
     }, 1000)
 
     return () => clearInterval(interval)
   }, [listeningStarted, listeningLocked, listeningTimeLeft])
 
-  // Timer: Reading
   useEffect(() => {
     if (!readingStarted || readingLocked) return
+
     if (readingTimeLeft <= 0) {
       setReadingLocked(true)
       return
     }
 
+    readingTickRef.current = Date.now()
+
     const interval = setInterval(() => {
       setReadingTimeLeft(prev => {
-        if (prev <= 1) {
+        const now = Date.now()
+        const elapsed = Math.max(
+          1,
+          Math.floor((now - (readingTickRef.current || now)) / 1000)
+        )
+
+        readingTickRef.current = now
+
+        const next = Math.max(prev - elapsed, 0)
+
+        if (next <= 0) {
           setReadingLocked(true)
           return 0
         }
-        return prev - 1
+
+        return next
       })
     }, 1000)
 
     return () => clearInterval(interval)
   }, [readingStarted, readingLocked, readingTimeLeft])
 
-  // Timer: Writing
   useEffect(() => {
     if (!writingStarted || writingLocked) return
+
     if (writingTimeLeft <= 0) {
       setWritingLocked(true)
       return
     }
 
+    writingTickRef.current = Date.now()
+
     const interval = setInterval(() => {
       setWritingTimeLeft(prev => {
-        if (prev <= 1) {
+        const now = Date.now()
+        const elapsed = Math.max(
+          1,
+          Math.floor((now - (writingTickRef.current || now)) / 1000)
+        )
+
+        writingTickRef.current = now
+
+        const next = Math.max(prev - elapsed, 0)
+
+        if (next <= 0) {
           setWritingLocked(true)
           return 0
         }
-        return prev - 1
+
+        return next
       })
     }, 1000)
 
     return () => clearInterval(interval)
   }, [writingStarted, writingLocked, writingTimeLeft])
 
-  // Section değişince timer başlat
   useEffect(() => {
     if (activeSection.key === 'listening' && !listeningStarted && !listeningLocked) {
       setListeningStarted(true)
@@ -410,10 +607,19 @@ export default function DoMockTest() {
     ) {
       setWritingStarted(true)
     }
-  }, [activeSection.key, listeningStarted, readingStarted, writingStarted, listeningLocked, readingLocked, writingLocked])
+  }, [
+    activeSection.key,
+    listeningStarted,
+    readingStarted,
+    writingStarted,
+    listeningLocked,
+    readingLocked,
+    writingLocked
+  ])
 
   const handleListeningAnswer = (questionId, value) => {
     if (listeningLocked) return
+
     setListeningAnswers(prev => ({
       ...prev,
       [questionId]: value
@@ -422,6 +628,7 @@ export default function DoMockTest() {
 
   const handleListeningMultiAnswer = (questionId, letter) => {
     if (listeningLocked) return
+
     setListeningAnswers(prev => {
       const current = Array.isArray(prev[questionId]) ? prev[questionId] : []
       const updated = current.includes(letter)
@@ -439,6 +646,7 @@ export default function DoMockTest() {
 
   const handleListeningTableAnswer = (questionId, rowId, cellIndex, value) => {
     if (listeningLocked) return
+
     setListeningAnswers(prev => ({
       ...prev,
       [tableAnswerKey(questionId, rowId, cellIndex)]: value
@@ -447,6 +655,7 @@ export default function DoMockTest() {
 
   const handleListeningMapAnswer = (questionId, itemId, value) => {
     if (listeningLocked) return
+
     setListeningAnswers(prev => ({
       ...prev,
       [mapAnswerKey(questionId, itemId)]: value
@@ -455,6 +664,7 @@ export default function DoMockTest() {
 
   const handleReadingAnswer = (readingId, questionId, value) => {
     if (readingLocked) return
+
     setReadingAnswers(prev => ({
       ...prev,
       [readingId]: {
@@ -466,6 +676,7 @@ export default function DoMockTest() {
 
   const handleReadingMultiAnswer = (readingId, questionId, letter) => {
     if (readingLocked) return
+
     setReadingAnswers(prev => {
       const readingSet = prev[readingId] || {}
       const current = Array.isArray(readingSet[questionId]) ? readingSet[questionId] : []
@@ -487,6 +698,7 @@ export default function DoMockTest() {
 
   const handleReadingMatching = (readingId, questionId, paragraphLetter, value) => {
     if (readingLocked) return
+
     setReadingAnswers(prev => {
       const readingSet = prev[readingId] || {}
       const currentQuestion = readingSet[questionId] || {}
@@ -506,6 +718,7 @@ export default function DoMockTest() {
 
   const handleReadingTableAnswer = (readingId, questionId, rowId, cellIndex, value) => {
     if (readingLocked) return
+
     const key = tableAnswerKey(questionId, rowId, cellIndex)
 
     setReadingAnswers(prev => ({
@@ -552,10 +765,21 @@ export default function DoMockTest() {
             if (cell.type === 'blank') {
               total++
               const userAnswer = listeningAnswers[tableAnswerKey(question.id, row.id, cellIndex)]
-              if (isBlankCorrect(userAnswer, cell.answer, cell.acceptedAnswers, cell.maxWords)) correct++
+
+              if (
+                isBlankCorrect(
+                  userAnswer,
+                  cell.answer,
+                  cell.acceptedAnswers,
+                  cell.maxWords
+                )
+              ) {
+                correct++
+              }
             }
           })
         })
+
         return
       }
 
@@ -563,13 +787,20 @@ export default function DoMockTest() {
         question.mapItems?.forEach(item => {
           total++
           const userAnswer = listeningAnswers[mapAnswerKey(question.id, item.id)]
-          if (normalize(userAnswer) === normalize(item.answer)) correct++
+
+          if (normalize(userAnswer) === normalize(item.answer)) {
+            correct++
+          }
         })
+
         return
       }
 
       total++
-      if (isListeningNormalCorrect(question)) correct++
+
+      if (isListeningNormalCorrect(question)) {
+        correct++
+      }
     })
 
     return {
@@ -592,26 +823,45 @@ export default function DoMockTest() {
         question.paragraphs?.forEach(paragraph => {
           total++
           const userAnswer = readingAnswers[reading.id]?.[question.id]?.[paragraph.letter]
-          if (userAnswer?.toString() === paragraph.answer?.toString()) correct++
+
+          if (userAnswer?.toString() === paragraph.answer?.toString()) {
+            correct++
+          }
         })
+
         return
       }
 
-      if (question.type === 'table' || question.type === 'summary') {
+      if (question.type === 'table' || question.type === 'summary' || question.type === 'note') {
         question.rows?.forEach(row => {
           row.cells?.forEach((cell, cellIndex) => {
             if (cell.type === 'blank') {
               total++
-              const userAnswer = readingAnswers[reading.id]?.[tableAnswerKey(question.id, row.id, cellIndex)]
-              if (normalize(userAnswer) === normalize(cell.answer)) correct++
+              const userAnswer =
+                readingAnswers[reading.id]?.[tableAnswerKey(question.id, row.id, cellIndex)]
+
+              if (
+                isBlankCorrect(
+                  userAnswer,
+                  cell.answer,
+                  cell.acceptedAnswers,
+                  cell.maxWords
+                )
+              ) {
+                correct++
+              }
             }
           })
         })
+
         return
       }
 
       total++
-      if (isReadingNormalCorrect(reading.id, question)) correct++
+
+      if (isReadingNormalCorrect(reading.id, question)) {
+        correct++
+      }
     })
 
     return {
@@ -623,24 +873,36 @@ export default function DoMockTest() {
 
   const getMockResult = () => {
     const listeningResult = scoreListening()
+
     const readingResults = readings.map(reading => ({
       readingId: reading.id,
       title: reading.title,
       ...scoreReading(reading)
     }))
 
-    const totalReadingCorrect = readingResults.reduce((sum, item) => sum + item.correct, 0)
-    const totalReadingQuestions = readingResults.reduce((sum, item) => sum + item.total, 0)
+    const totalReadingCorrect = readingResults.reduce(
+      (sum, item) => sum + item.correct,
+      0
+    )
 
-    const readingBand = getBandFromPercentage(totalReadingCorrect, totalReadingQuestions)
+    const totalReadingQuestions = readingResults.reduce(
+      (sum, item) => sum + item.total,
+      0
+    )
 
-    const availableBands = [
-      listeningResult.band,
-      readingBand
-    ].filter(Boolean)
+    const readingBand = getBandFromPercentage(
+      totalReadingCorrect,
+      totalReadingQuestions
+    )
+
+    const availableBands = [listeningResult.band, readingBand].filter(Boolean)
 
     const overallEstimate = availableBands.length
-      ? Math.round((availableBands.reduce((sum, band) => sum + band, 0) / availableBands.length) * 2) / 2
+      ? Math.round(
+          (availableBands.reduce((sum, band) => sum + band, 0) /
+            availableBands.length) *
+            2
+        ) / 2
       : null
 
     return {
@@ -660,15 +922,83 @@ export default function DoMockTest() {
     }
   }
 
+  const handleAudioPlay = () => {
+    if (listeningLocked || audioLocked) {
+      audioRef.current?.pause()
+      return
+    }
+
+    setAudioStarted(true)
+    setAudioWarning('')
+  }
+
+  const handleAudioPause = () => {
+    if (!audioStarted || listeningLocked || audioLocked) return
+
+    setAudioWarning('Audio cannot be paused during the listening section.')
+
+    setTimeout(() => {
+      if (!audioRef.current || listeningLocked || audioLocked) return
+      audioRef.current.play().catch(() => {})
+    }, 100)
+  }
+
+  const handleAudioSeeking = () => {
+    if (!audioRef.current) return
+
+    const currentTime = audioRef.current.currentTime
+
+    if (currentTime > audioLastTimeRef.current + 1.5) {
+      audioRef.current.currentTime = audioLastTimeRef.current
+      setAudioWarning('Audio seeking is not allowed during the listening section.')
+      return
+    }
+
+    if (audioStarted && currentTime < audioLastTimeRef.current - 1.5) {
+      audioRef.current.currentTime = audioLastTimeRef.current
+      setAudioWarning('Audio replay is not allowed during the listening section.')
+    }
+  }
+
+  const handleAudioTimeUpdate = () => {
+    if (!audioRef.current) return
+
+    if (audioRef.current.currentTime > audioLastTimeRef.current) {
+      audioLastTimeRef.current = audioRef.current.currentTime
+    }
+  }
+
+  const handleAudioEnded = () => {
+    setAudioLocked(true)
+    setAudioWarning('Listening audio finished. You cannot replay it.')
+  }
+
   const handleSubmitMock = async ({ auto = false } = {}) => {
     if (submittingRef.current) return
+
     if (alreadySubmitted) {
       if (!auto) alert('You already submitted this mock test.')
       return
     }
 
+    if (!user || !mock) return
+
     if (!auto) {
-      const ok = window.confirm('Submit the full mock test? You cannot edit it after submission.')
+      const task1Words = countWords(writingAnswers.task1)
+      const task2Words = countWords(writingAnswers.task2)
+
+      if (task1Words < 50 || task2Words < 100) {
+        const continueAnyway = window.confirm(
+          `Your writing answers look very short.\n\nTask 1: ${task1Words} words\nTask 2: ${task2Words} words\n\nSubmit anyway?`
+        )
+
+        if (!continueAnyway) return
+      }
+
+      const ok = window.confirm(
+        'Submit the full mock test? You cannot edit it after submission.'
+      )
+
       if (!ok) return
     }
 
@@ -676,6 +1006,31 @@ export default function DoMockTest() {
     setSubmitting(true)
 
     try {
+      const existingQuery = query(
+        collection(db, 'mockSubmissions'),
+        where('uid', '==', user.uid),
+        where('mockTestId', '==', mock.id)
+      )
+
+      const existingSnap = await getDocs(existingQuery)
+
+      if (!existingSnap.empty) {
+        setAlreadySubmitted(true)
+
+        const existingSubmission = existingSnap.docs[0].data()
+        setFinalResult(existingSubmission.result || null)
+
+        if (storageKey) {
+          localStorage.removeItem(storageKey)
+        }
+
+        if (!auto) {
+          alert('You already submitted this mock test.')
+        }
+
+        return
+      }
+
       const result = getMockResult()
 
       await addDoc(collection(db, 'mockSubmissions'), {
@@ -707,6 +1062,10 @@ export default function DoMockTest() {
         createdAt: new Date().toISOString()
       })
 
+      if (storageKey) {
+        localStorage.removeItem(storageKey)
+      }
+
       setFinalResult(result)
       setAlreadySubmitted(true)
       setSectionIndex(sections.length - 1)
@@ -719,6 +1078,53 @@ export default function DoMockTest() {
     }
   }
 
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (loadingRef.current || alreadySubmitted || finalResult) return
+
+      if (document.hidden) {
+        tabSwitchCountRef.current += 1
+        return
+      }
+
+      if (tabSwitchCountRef.current === 1) {
+        setTabWarning('Warning: Do not leave the mock test tab. If you leave again, the test will be submitted automatically.')
+        alert('Warning: Do not leave the mock test tab. If you leave again, the test will be submitted automatically.')
+      }
+
+      if (tabSwitchCountRef.current >= 2) {
+        setTabWarning('You left the mock test tab more than once. Your test is being submitted automatically.')
+        alert('You left the mock test tab more than once. Your test will be submitted automatically.')
+        handleSubmitMock({ auto: true })
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibility)
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility)
+    }
+  }, [alreadySubmitted, finalResult, handleSubmitMock])
+
+  useEffect(() => {
+    if (loading || alreadySubmitted || finalResult) return
+    if (!listeningStarted && !readingStarted && !writingStarted) return
+
+    if (listeningLocked && readingLocked && writingLocked) {
+      handleSubmitMock({ auto: true })
+    }
+  }, [
+    loading,
+    alreadySubmitted,
+    finalResult,
+    listeningStarted,
+    readingStarted,
+    writingStarted,
+    listeningLocked,
+    readingLocked,
+    writingLocked
+  ])
+
   const nextSection = () => {
     setSectionIndex(prev => Math.min(prev + 1, sections.length - 1))
     window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -729,69 +1135,6 @@ export default function DoMockTest() {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-[#faf9f6] flex items-center justify-center">
-        <p className="text-gray-400">Loading mock test...</p>
-      </div>
-    )
-  }
-
-  if (finalResult) {
-    return (
-      <div className="min-h-screen bg-[#faf9f6]">
-        <nav className="flex justify-between items-center px-8 py-4 bg-white border-b border-gray-100">
-          <img src="/1.png" alt="Maxima" className="h-10 object-contain" />
-
-          <button
-            onClick={() => navigate('/student')}
-            className="text-sm text-gray-400 hover:text-gray-600"
-          >
-            ← Back to Dashboard
-          </button>
-        </nav>
-
-        <div className="max-w-4xl mx-auto px-6 py-10">
-          <div className="bg-white border border-gray-100 rounded-2xl p-8 text-center mb-6">
-            <p className="text-sm text-gray-400 mb-2">Mock Test Submitted</p>
-            <h1 className="text-3xl font-bold text-gray-900 mb-4">{mock.title}</h1>
-            <p className="text-5xl font-bold text-purple-600 mb-2">
-              {finalResult.overallEstimate || '-'}
-            </p>
-            <p className="text-sm text-gray-500">
-              Overall estimate without Writing review
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="bg-white border border-gray-100 rounded-2xl p-5">
-              <p className="text-xs text-gray-400 mb-1">Listening</p>
-              <p className="text-3xl font-bold text-purple-600">{finalResult.listening.band}</p>
-              <p className="text-xs text-gray-400 mt-1">
-                {finalResult.listening.correct}/{finalResult.listening.total}
-              </p>
-            </div>
-
-            <div className="bg-white border border-gray-100 rounded-2xl p-5">
-              <p className="text-xs text-gray-400 mb-1">Reading</p>
-              <p className="text-3xl font-bold text-blue-600">{finalResult.reading.band}</p>
-              <p className="text-xs text-gray-400 mt-1">
-                {finalResult.reading.correct}/{finalResult.reading.total}
-              </p>
-            </div>
-
-            <div className="bg-white border border-gray-100 rounded-2xl p-5">
-              <p className="text-xs text-gray-400 mb-1">Writing</p>
-              <p className="text-xl font-bold text-amber-600">Pending</p>
-              <p className="text-xs text-gray-400 mt-1">Teacher review required</p>
-            </div>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  // Aktif timer ve etiket
   const getActiveTimerInfo = () => {
     if (activeSection.key === 'listening') {
       return {
@@ -829,36 +1172,43 @@ export default function DoMockTest() {
     if (!timerInfo) return null
 
     return (
-      <div className={`border rounded-2xl p-5 mb-6 ${
-        timerInfo.locked
-          ? 'bg-red-50 border-red-100'
-          : timerInfo.time < 300
-            ? 'bg-amber-50 border-amber-100'
-            : 'bg-purple-50 border-purple-100'
-      }`}>
+      <div
+        className={`border rounded-2xl p-5 mb-6 ${
+          timerInfo.locked
+            ? 'bg-red-50 border-red-100'
+            : timerInfo.time < 300
+              ? 'bg-amber-50 border-amber-100'
+              : 'bg-purple-50 border-purple-100'
+        }`}
+      >
         <div className="flex items-center justify-between gap-4">
           <div>
             <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">
               Active Section Timer
             </p>
-            <p className={`text-lg font-bold ${
+
+            <p
+              className={`text-lg font-bold ${
+                timerInfo.locked
+                  ? 'text-red-600'
+                  : timerInfo.time < 300
+                    ? 'text-amber-600'
+                    : 'text-purple-700'
+              }`}
+            >
+              {timerInfo.label}
+            </p>
+          </div>
+
+          <div
+            className={`font-mono text-4xl font-bold ${
               timerInfo.locked
                 ? 'text-red-600'
                 : timerInfo.time < 300
                   ? 'text-amber-600'
                   : 'text-purple-700'
-            }`}>
-              {timerInfo.label}
-            </p>
-          </div>
-
-          <div className={`font-mono text-4xl font-bold ${
-            timerInfo.locked
-              ? 'text-red-600'
-              : timerInfo.time < 300
-                ? 'text-amber-600'
-                : 'text-purple-700'
-          }`}>
+            }`}
+          >
             {timerInfo.locked ? 'TIME UP' : formatTime(timerInfo.time)}
           </div>
         </div>
@@ -873,6 +1223,7 @@ export default function DoMockTest() {
   const renderListening = () => (
     <div className="space-y-6">
       {renderSectionTimerCard()}
+
       {listeningLocked && (
         <div className="bg-red-50 border border-red-100 text-red-600 rounded-2xl p-4 text-sm font-medium">
           ⏰ Listening time is up. Your answers are saved. Move to the next section.
@@ -880,35 +1231,70 @@ export default function DoMockTest() {
       )}
 
       <div className="bg-white border border-gray-100 rounded-2xl p-6 sticky top-[120px] z-10">
-        <h2 className="text-xl font-bold text-gray-900 mb-2">{listening?.title}</h2>
+        <h2 className="text-xl font-bold text-gray-900 mb-2">
+          {listening?.title}
+        </h2>
+
         {listening?.instructions && (
-          <p className="text-sm text-gray-500 mb-4 whitespace-pre-wrap">{listening.instructions}</p>
+          <p className="text-sm text-gray-500 mb-4 whitespace-pre-wrap">
+            {listening.instructions}
+          </p>
         )}
-        <audio controls src={listening?.audioUrl} className="w-full" />
+
+        {audioWarning && (
+          <div className="bg-amber-50 border border-amber-100 text-amber-700 rounded-xl p-3 mb-4 text-xs font-medium">
+            {audioWarning}
+          </div>
+        )}
+
+        <audio
+          ref={audioRef}
+          controls
+          controlsList="nodownload noplaybackrate"
+          disablePictureInPicture
+          src={listening?.audioUrl}
+          className="w-full"
+          onPlay={handleAudioPlay}
+          onPause={handleAudioPause}
+          onSeeking={handleAudioSeeking}
+          onTimeUpdate={handleAudioTimeUpdate}
+          onEnded={handleAudioEnded}
+        />
       </div>
 
       <fieldset disabled={listeningLocked} className={listeningLocked ? 'opacity-60' : ''}>
         {listening?.questions?.map((question, index) => (
-          <div key={question.id} className="bg-white border border-gray-100 rounded-2xl p-6 mb-6">
-            <p className="text-xs text-purple-600 font-semibold mb-2">Listening Q{index + 1}</p>
+          <div
+            key={question.id}
+            className="bg-white border border-gray-100 rounded-2xl p-6 mb-6"
+          >
+            <p className="text-xs text-purple-600 font-semibold mb-2">
+              Listening Q{index + 1}
+            </p>
 
             {question.type === 'mcq' && (
               <div>
-                <p className="text-sm text-gray-800 mb-3">{question.question}</p>
+                <p className="text-sm text-gray-800 mb-3">
+                  {question.question}
+                </p>
+
                 {question.mode === 'multi' && (
                   <p className="text-xs text-amber-600 bg-amber-50 rounded-xl p-3 mb-3">
                     Choose TWO answers.
                   </p>
                 )}
+
                 <div className="flex flex-col gap-2">
                   {question.options?.map((option, optionIndex) => {
                     const letter = letters[optionIndex]
                     const selectedMulti = Array.isArray(listeningAnswers[question.id])
                       ? listeningAnswers[question.id]
                       : []
-                    const selected = question.mode === 'multi'
-                      ? selectedMulti.includes(letter)
-                      : listeningAnswers[question.id] === letter
+
+                    const selected =
+                      question.mode === 'multi'
+                        ? selectedMulti.includes(letter)
+                        : listeningAnswers[question.id] === letter
 
                     return (
                       <button
@@ -936,7 +1322,10 @@ export default function DoMockTest() {
 
             {question.type === 'tfng' && (
               <div>
-                <p className="text-sm text-gray-800 mb-3">{question.question}</p>
+                <p className="text-sm text-gray-800 mb-3">
+                  {question.question}
+                </p>
+
                 <div className="flex gap-2">
                   {['True', 'False', 'Not Given'].map(option => (
                     <button
@@ -958,7 +1347,10 @@ export default function DoMockTest() {
 
             {question.type === 'fitb' && (
               <div>
-                <p className="text-sm text-gray-800 mb-3">{question.question}</p>
+                <p className="text-sm text-gray-800 mb-3">
+                  {question.question}
+                </p>
+
                 <input
                   value={listeningAnswers[question.id] || ''}
                   onChange={e => handleListeningAnswer(question.id, e.target.value)}
@@ -970,25 +1362,35 @@ export default function DoMockTest() {
 
             {(question.type === 'table' || question.type === 'note') && (
               <div>
-                <p className="text-sm text-gray-700 mb-4">{question.instruction}</p>
+                <p className="text-sm text-gray-700 mb-4">
+                  {question.instruction}
+                </p>
+
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm border border-gray-100 rounded-xl overflow-hidden">
                     <thead>
                       <tr className="bg-gray-100">
                         {question.columns?.map((column, columnIndex) => (
-                          <th key={columnIndex} className="p-3 text-left font-semibold text-gray-700 border border-white">
+                          <th
+                            key={columnIndex}
+                            className="p-3 text-left font-semibold text-gray-700 border border-white"
+                          >
                             {column}
                           </th>
                         ))}
                       </tr>
                     </thead>
+
                     <tbody>
                       {question.rows?.map(row => (
                         <tr key={row.id}>
                           {row.cells?.map((cell, cellIndex) => {
                             if (cell.type !== 'blank') {
                               return (
-                                <td key={cellIndex} className="p-3 bg-gray-50 border border-white text-gray-700 whitespace-pre-wrap">
+                                <td
+                                  key={cellIndex}
+                                  className="p-3 bg-gray-50 border border-white text-gray-700 whitespace-pre-wrap"
+                                >
                                   {cell.text}
                                 </td>
                               )
@@ -997,10 +1399,20 @@ export default function DoMockTest() {
                             const key = tableAnswerKey(question.id, row.id, cellIndex)
 
                             return (
-                              <td key={cellIndex} className="p-3 bg-gray-50 border border-white">
+                              <td
+                                key={cellIndex}
+                                className="p-3 bg-gray-50 border border-white"
+                              >
                                 <input
                                   value={listeningAnswers[key] || ''}
-                                  onChange={e => handleListeningTableAnswer(question.id, row.id, cellIndex, e.target.value)}
+                                  onChange={e =>
+                                    handleListeningTableAnswer(
+                                      question.id,
+                                      row.id,
+                                      cellIndex,
+                                      e.target.value
+                                    )
+                                  }
                                   placeholder="Type answer..."
                                   className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 bg-white"
                                 />
@@ -1017,7 +1429,10 @@ export default function DoMockTest() {
 
             {question.type === 'map' && (
               <div>
-                <p className="text-sm text-gray-700 mb-4">{question.instruction}</p>
+                <p className="text-sm text-gray-700 mb-4">
+                  {question.instruction}
+                </p>
+
                 {question.mapImage && (
                   <img
                     src={question.mapImage}
@@ -1027,11 +1442,15 @@ export default function DoMockTest() {
                 )}
 
                 <div className="bg-gray-50 rounded-xl p-4 mb-4">
-                  <p className="text-xs font-semibold text-gray-400 mb-2">Map letters</p>
+                  <p className="text-xs font-semibold text-gray-400 mb-2">
+                    Map letters
+                  </p>
+
                   <div className="grid grid-cols-2 gap-2">
                     {question.mapLocations?.map(location => (
                       <p key={location.id} className="text-xs text-gray-600">
-                        <span className="font-bold">{location.label}</span> {location.text}
+                        <span className="font-bold">{location.label}</span>{' '}
+                        {location.text}
                       </p>
                     ))}
                   </div>
@@ -1039,14 +1458,25 @@ export default function DoMockTest() {
 
                 <div className="flex flex-col gap-3">
                   {question.mapItems?.map(item => (
-                    <div key={item.id} className="grid grid-cols-[1fr_130px] gap-3 items-center">
+                    <div
+                      key={item.id}
+                      className="grid grid-cols-[1fr_130px] gap-3 items-center"
+                    >
                       <p className="text-sm text-gray-800">{item.prompt}</p>
+
                       <select
                         value={listeningAnswers[mapAnswerKey(question.id, item.id)] || ''}
-                        onChange={e => handleListeningMapAnswer(question.id, item.id, e.target.value)}
+                        onChange={e =>
+                          handleListeningMapAnswer(
+                            question.id,
+                            item.id,
+                            e.target.value
+                          )
+                        }
                         className="border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 bg-white"
                       >
                         <option value="">Choose</option>
+
                         {question.mapLocations?.map(location => (
                           <option key={location.id} value={location.label}>
                             {location.label}
@@ -1067,6 +1497,7 @@ export default function DoMockTest() {
   const renderReading = reading => (
     <div className="space-y-6">
       {renderSectionTimerCard()}
+
       {readingLocked && (
         <div className="bg-red-50 border border-red-100 text-red-600 rounded-2xl p-4 text-sm font-medium">
           ⏰ Reading time is up. Your answers are saved. Move to the next section.
@@ -1076,50 +1507,94 @@ export default function DoMockTest() {
       <fieldset disabled={readingLocked} className={readingLocked ? 'opacity-60' : ''}>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="bg-white border border-gray-100 rounded-2xl p-6 h-fit sticky top-[120px]">
-            <h2 className="text-xl font-bold text-gray-900 mb-5">{reading.title}</h2>
+            <h2 className="text-xl font-bold text-gray-900 mb-5">
+              {reading.title}
+            </h2>
+
             {reading.passageMode === 'sections' ? (
               <div className="space-y-6">
                 {reading.paragraphs?.map(paragraph => (
                   <div key={paragraph.id}>
-                    <h3 className="font-semibold text-gray-900 mb-2">Paragraph {paragraph.letter}</h3>
-                    <p className="text-sm text-gray-700 leading-7 whitespace-pre-wrap">{paragraph.text}</p>
+                    <h3 className="font-semibold text-gray-900 mb-2">
+                      Paragraph {paragraph.letter}
+                    </h3>
+
+                    <p className="text-sm text-gray-700 leading-7 whitespace-pre-wrap">
+                      {paragraph.text}
+                    </p>
                   </div>
                 ))}
               </div>
             ) : (
-              <div className="text-sm text-gray-700 leading-7 whitespace-pre-wrap">{reading.passage}</div>
+              <div className="text-sm text-gray-700 leading-7 whitespace-pre-wrap">
+                {reading.passage}
+              </div>
             )}
           </div>
 
           <div className="space-y-5">
             {reading.questions?.map((question, index) => (
-              <div key={question.id} className="bg-white border border-gray-100 rounded-2xl p-6">
+              <div
+                key={question.id}
+                className="bg-white border border-gray-100 rounded-2xl p-6"
+              >
                 <p className="text-xs text-blue-600 font-semibold mb-2">
                   {getQuestionRangeLabel(reading.questions, question, index)}
                 </p>
 
                 {question.type === 'matching' && (
                   <div>
-                    <p className="font-medium text-sm text-gray-800 mb-4">Choose the correct heading for each paragraph.</p>
+                    <p className="font-medium text-sm text-gray-800 mb-4">
+                      Choose the correct heading for each paragraph.
+                    </p>
+
                     <div className="bg-gray-50 border border-gray-100 rounded-xl p-4 mb-5">
                       {reading.headings?.filter(Boolean).map((heading, headingIndex) => (
-                        <p key={headingIndex} className="text-sm text-gray-700 mb-1">
-                          <span className="font-semibold">{headingIndex + 1}.</span> {heading}
+                        <p
+                          key={headingIndex}
+                          className="text-sm text-gray-700 mb-1"
+                        >
+                          <span className="font-semibold">
+                            {headingIndex + 1}.
+                          </span>{' '}
+                          {heading}
                         </p>
                       ))}
                     </div>
+
                     <div className="flex flex-col gap-3">
                       {question.paragraphs?.map(paragraph => (
-                        <div key={paragraph.letter} className="grid grid-cols-[110px_1fr] gap-3 items-center">
-                          <label className="text-sm font-medium text-gray-700">Paragraph {paragraph.letter}</label>
+                        <div
+                          key={paragraph.letter}
+                          className="grid grid-cols-[110px_1fr] gap-3 items-center"
+                        >
+                          <label className="text-sm font-medium text-gray-700">
+                            Paragraph {paragraph.letter}
+                          </label>
+
                           <select
-                            value={readingAnswers[reading.id]?.[question.id]?.[paragraph.letter] || ''}
-                            onChange={e => handleReadingMatching(reading.id, question.id, paragraph.letter, e.target.value)}
+                            value={
+                              readingAnswers[reading.id]?.[question.id]?.[
+                                paragraph.letter
+                              ] || ''
+                            }
+                            onChange={e =>
+                              handleReadingMatching(
+                                reading.id,
+                                question.id,
+                                paragraph.letter,
+                                e.target.value
+                              )
+                            }
                             className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 bg-white"
                           >
                             <option value="">Select heading</option>
+
                             {reading.headings?.filter(Boolean).map((heading, headingIndex) => (
-                              <option key={headingIndex} value={String(headingIndex + 1)}>
+                              <option
+                                key={headingIndex}
+                                value={String(headingIndex + 1)}
+                              >
                                 {headingIndex + 1}. {heading}
                               </option>
                             ))}
@@ -1130,39 +1605,66 @@ export default function DoMockTest() {
                   </div>
                 )}
 
-                {(question.type === 'table' || question.type === 'summary') && (
+                {(question.type === 'table' ||
+                  question.type === 'summary' ||
+                  question.type === 'note') && (
                   <div>
-                    <p className="text-sm text-gray-700 mb-4">{question.instruction}</p>
+                    <p className="text-sm text-gray-700 mb-4">
+                      {question.instruction}
+                    </p>
+
                     <div className="overflow-x-auto">
                       <table className="w-full text-sm border border-gray-100 rounded-xl overflow-hidden">
                         <thead>
                           <tr className="bg-gray-100">
                             {question.columns?.map((column, columnIndex) => (
-                              <th key={columnIndex} className="p-3 text-left font-semibold text-gray-700 border border-white">
+                              <th
+                                key={columnIndex}
+                                className="p-3 text-left font-semibold text-gray-700 border border-white"
+                              >
                                 {column}
                               </th>
                             ))}
                           </tr>
                         </thead>
+
                         <tbody>
                           {question.rows?.map(row => (
                             <tr key={row.id}>
                               {row.cells?.map((cell, cellIndex) => {
                                 if (cell.type !== 'blank') {
                                   return (
-                                    <td key={cellIndex} className="p-3 bg-gray-50 border border-white text-gray-700 whitespace-pre-wrap">
+                                    <td
+                                      key={cellIndex}
+                                      className="p-3 bg-gray-50 border border-white text-gray-700 whitespace-pre-wrap"
+                                    >
                                       {cell.text}
                                     </td>
                                   )
                                 }
 
-                                const key = tableAnswerKey(question.id, row.id, cellIndex)
+                                const key = tableAnswerKey(
+                                  question.id,
+                                  row.id,
+                                  cellIndex
+                                )
 
                                 return (
-                                  <td key={cellIndex} className="p-3 bg-gray-50 border border-white">
+                                  <td
+                                    key={cellIndex}
+                                    className="p-3 bg-gray-50 border border-white"
+                                  >
                                     <input
                                       value={readingAnswers[reading.id]?.[key] || ''}
-                                      onChange={e => handleReadingTableAnswer(reading.id, question.id, row.id, cellIndex, e.target.value)}
+                                      onChange={e =>
+                                        handleReadingTableAnswer(
+                                          reading.id,
+                                          question.id,
+                                          row.id,
+                                          cellIndex,
+                                          e.target.value
+                                        )
+                                      }
                                       placeholder="Type answer..."
                                       className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 bg-white"
                                     />
@@ -1179,13 +1681,18 @@ export default function DoMockTest() {
 
                 {question.type === 'tfng' && (
                   <div>
-                    <p className="text-sm text-gray-800 mb-3">{question.question}</p>
+                    <p className="text-sm text-gray-800 mb-3">
+                      {question.question}
+                    </p>
+
                     <div className="flex gap-2">
                       {['True', 'False', 'Not Given'].map(option => (
                         <button
                           key={option}
                           type="button"
-                          onClick={() => handleReadingAnswer(reading.id, question.id, option)}
+                          onClick={() =>
+                            handleReadingAnswer(reading.id, question.id, option)
+                          }
                           className={`flex-1 py-2 rounded-xl text-xs font-medium border ${
                             readingAnswers[reading.id]?.[question.id] === option
                               ? 'bg-purple-600 text-white border-purple-600'
@@ -1201,10 +1708,15 @@ export default function DoMockTest() {
 
                 {question.type === 'fitb' && (
                   <div>
-                    <p className="text-sm text-gray-800 mb-3">{question.question}</p>
+                    <p className="text-sm text-gray-800 mb-3">
+                      {question.question}
+                    </p>
+
                     <input
                       value={readingAnswers[reading.id]?.[question.id] || ''}
-                      onChange={e => handleReadingAnswer(reading.id, question.id, e.target.value)}
+                      onChange={e =>
+                        handleReadingAnswer(reading.id, question.id, e.target.value)
+                      }
                       placeholder="Type your answer..."
                       className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400"
                     />
@@ -1213,21 +1725,29 @@ export default function DoMockTest() {
 
                 {question.type === 'mcq' && (
                   <div>
-                    <p className="text-sm text-gray-800 mb-3">{question.question}</p>
+                    <p className="text-sm text-gray-800 mb-3">
+                      {question.question}
+                    </p>
+
                     {question.mode === 'multi' && (
                       <p className="text-xs text-amber-600 bg-amber-50 rounded-xl p-3 mb-3">
                         Choose TWO answers.
                       </p>
                     )}
+
                     <div className="flex flex-col gap-2">
                       {question.options?.map((option, optionIndex) => {
                         const letter = letters[optionIndex]
-                        const selectedMulti = Array.isArray(readingAnswers[reading.id]?.[question.id])
+                        const selectedMulti = Array.isArray(
+                          readingAnswers[reading.id]?.[question.id]
+                        )
                           ? readingAnswers[reading.id][question.id]
                           : []
-                        const selected = question.mode === 'multi'
-                          ? selectedMulti.includes(letter)
-                          : readingAnswers[reading.id]?.[question.id] === letter
+
+                        const selected =
+                          question.mode === 'multi'
+                            ? selectedMulti.includes(letter)
+                            : readingAnswers[reading.id]?.[question.id] === letter
 
                         return (
                           <button
@@ -1235,8 +1755,16 @@ export default function DoMockTest() {
                             type="button"
                             onClick={() =>
                               question.mode === 'multi'
-                                ? handleReadingMultiAnswer(reading.id, question.id, letter)
-                                : handleReadingAnswer(reading.id, question.id, letter)
+                                ? handleReadingMultiAnswer(
+                                    reading.id,
+                                    question.id,
+                                    letter
+                                  )
+                                : handleReadingAnswer(
+                                    reading.id,
+                                    question.id,
+                                    letter
+                                  )
                             }
                             className={`text-left px-4 py-3 rounded-xl text-sm border ${
                               selected
@@ -1244,7 +1772,9 @@ export default function DoMockTest() {
                                 : 'border-gray-200 text-gray-700'
                             }`}
                           >
-                            <span className="font-semibold mr-2">{letter}.</span>
+                            <span className="font-semibold mr-2">
+                              {letter}.
+                            </span>
                             {option}
                           </button>
                         )
@@ -1284,11 +1814,15 @@ export default function DoMockTest() {
 
         <div className="bg-white border border-gray-100 rounded-2xl p-6">
           <div className="flex items-center justify-between mb-2">
-            <h2 className="text-xl font-bold text-gray-900">Writing Task 1</h2>
+            <h2 className="text-xl font-bold text-gray-900">
+              Writing Task 1
+            </h2>
+
             <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1 rounded-full">
               ~20 min · Min 150 words
             </span>
           </div>
+
           <p className="text-sm text-gray-500">
             Task 1 and Task 2 share a 60-minute timer. You can move between them freely.
           </p>
@@ -1296,7 +1830,10 @@ export default function DoMockTest() {
 
         <fieldset disabled={writingLocked} className={writingLocked ? 'opacity-60' : ''}>
           <div className="bg-white border border-gray-100 rounded-2xl p-6">
-            <h3 className="font-semibold text-gray-800 mb-3">Task 1 Prompt</h3>
+            <h3 className="font-semibold text-gray-800 mb-3">
+              Task 1 Prompt
+            </h3>
+
             <p className="text-sm text-gray-600 whitespace-pre-wrap bg-gray-50 rounded-xl p-4 mb-4">
               {getWritingTask1Prompt(writing)}
             </p>
@@ -1312,17 +1849,24 @@ export default function DoMockTest() {
             <textarea
               rows={14}
               value={writingAnswers.task1}
-              onChange={e => setWritingAnswers(prev => ({ ...prev, task1: e.target.value }))}
+              onChange={e =>
+                setWritingAnswers(prev => ({
+                  ...prev,
+                  task1: e.target.value
+                }))
+              }
               placeholder="Write your Task 1 answer here..."
               className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 resize-none"
             />
+
             <div className="flex justify-between mt-2">
-              <p className="text-xs text-gray-400">
-                {wordCount} words
-              </p>
-              <p className={`text-xs font-medium ${
-                wordCount >= 150 ? 'text-green-600' : 'text-amber-600'
-              }`}>
+              <p className="text-xs text-gray-400">{wordCount} words</p>
+
+              <p
+                className={`text-xs font-medium ${
+                  wordCount >= 150 ? 'text-green-600' : 'text-amber-600'
+                }`}
+              >
                 Minimum 150 words
               </p>
             </div>
@@ -1355,11 +1899,15 @@ export default function DoMockTest() {
 
         <div className="bg-white border border-gray-100 rounded-2xl p-6">
           <div className="flex items-center justify-between mb-2">
-            <h2 className="text-xl font-bold text-gray-900">Writing Task 2</h2>
+            <h2 className="text-xl font-bold text-gray-900">
+              Writing Task 2
+            </h2>
+
             <span className="text-xs bg-indigo-50 text-indigo-600 px-3 py-1 rounded-full">
               ~40 min · Min 250 words
             </span>
           </div>
+
           <p className="text-sm text-gray-500">
             Task 2 carries more weight than Task 1 in the final writing band.
           </p>
@@ -1367,7 +1915,10 @@ export default function DoMockTest() {
 
         <fieldset disabled={writingLocked} className={writingLocked ? 'opacity-60' : ''}>
           <div className="bg-white border border-gray-100 rounded-2xl p-6">
-            <h3 className="font-semibold text-gray-800 mb-3">Task 2 Prompt</h3>
+            <h3 className="font-semibold text-gray-800 mb-3">
+              Task 2 Prompt
+            </h3>
+
             <p className="text-sm text-gray-600 whitespace-pre-wrap bg-gray-50 rounded-xl p-4 mb-4">
               {getWritingTask2Prompt(writing)}
             </p>
@@ -1383,17 +1934,24 @@ export default function DoMockTest() {
             <textarea
               rows={18}
               value={writingAnswers.task2}
-              onChange={e => setWritingAnswers(prev => ({ ...prev, task2: e.target.value }))}
+              onChange={e =>
+                setWritingAnswers(prev => ({
+                  ...prev,
+                  task2: e.target.value
+                }))
+              }
               placeholder="Write your Task 2 answer here..."
               className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 resize-none"
             />
+
             <div className="flex justify-between mt-2">
-              <p className="text-xs text-gray-400">
-                {wordCount} words
-              </p>
-              <p className={`text-xs font-medium ${
-                wordCount >= 250 ? 'text-green-600' : 'text-amber-600'
-              }`}>
+              <p className="text-xs text-gray-400">{wordCount} words</p>
+
+              <p
+                className={`text-xs font-medium ${
+                  wordCount >= 250 ? 'text-green-600' : 'text-amber-600'
+                }`}
+              >
                 Minimum 250 words
               </p>
             </div>
@@ -1411,7 +1969,10 @@ export default function DoMockTest() {
     return (
       <div className="space-y-6">
         <div className="bg-white border border-gray-100 rounded-2xl p-8 text-center">
-          <h2 className="text-2xl font-bold text-gray-900 mb-2">Review & Submit</h2>
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">
+            Review & Submit
+          </h2>
+
           <p className="text-gray-500 text-sm mb-6">
             Check your estimated auto-scored sections before final submission.
           </p>
@@ -1419,7 +1980,9 @@ export default function DoMockTest() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="bg-purple-50 rounded-2xl p-5">
               <p className="text-xs text-gray-500 mb-1">Listening</p>
-              <p className="text-3xl font-bold text-purple-600">{previewResult.listening.band}</p>
+              <p className="text-3xl font-bold text-purple-600">
+                {previewResult.listening.band}
+              </p>
               <p className="text-xs text-gray-500 mt-1">
                 {previewResult.listening.correct}/{previewResult.listening.total}
               </p>
@@ -1427,7 +1990,9 @@ export default function DoMockTest() {
 
             <div className="bg-blue-50 rounded-2xl p-5">
               <p className="text-xs text-gray-500 mb-1">Reading</p>
-              <p className="text-3xl font-bold text-blue-600">{previewResult.reading.band}</p>
+              <p className="text-3xl font-bold text-blue-600">
+                {previewResult.reading.band}
+              </p>
               <p className="text-xs text-gray-500 mt-1">
                 {previewResult.reading.correct}/{previewResult.reading.total}
               </p>
@@ -1444,27 +2009,35 @@ export default function DoMockTest() {
         </div>
 
         <div className="bg-white border border-gray-100 rounded-2xl p-5">
-          <h3 className="font-semibold text-gray-800 mb-3">Writing Word Count</h3>
+          <h3 className="font-semibold text-gray-800 mb-3">
+            Writing Word Count
+          </h3>
+
           <div className="grid grid-cols-2 gap-4">
             <div className="bg-gray-50 rounded-xl p-4">
               <p className="text-xs text-gray-500 mb-1">Task 1</p>
               <p className="text-xl font-bold text-gray-800">
                 {t1Words} words
               </p>
-              <p className={`text-xs mt-1 ${
-                t1Words >= 150 ? 'text-green-600' : 'text-amber-600'
-              }`}>
+              <p
+                className={`text-xs mt-1 ${
+                  t1Words >= 150 ? 'text-green-600' : 'text-amber-600'
+                }`}
+              >
                 {t1Words >= 150 ? '✓ Above minimum' : 'Below 150 words'}
               </p>
             </div>
+
             <div className="bg-gray-50 rounded-xl p-4">
               <p className="text-xs text-gray-500 mb-1">Task 2</p>
               <p className="text-xl font-bold text-gray-800">
                 {t2Words} words
               </p>
-              <p className={`text-xs mt-1 ${
-                t2Words >= 250 ? 'text-green-600' : 'text-amber-600'
-              }`}>
+              <p
+                className={`text-xs mt-1 ${
+                  t2Words >= 250 ? 'text-green-600' : 'text-amber-600'
+                }`}
+              >
                 {t2Words >= 250 ? '✓ Above minimum' : 'Below 250 words'}
               </p>
             </div>
@@ -1482,6 +2055,81 @@ export default function DoMockTest() {
     )
   }
 
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-[#faf9f6] flex items-center justify-center">
+        <p className="text-gray-400">Loading mock test...</p>
+      </div>
+    )
+  }
+
+  if (finalResult) {
+    return (
+      <div className="min-h-screen bg-[#faf9f6]">
+        <nav className="flex justify-between items-center px-8 py-4 bg-white border-b border-gray-100">
+          <img src="/1.png" alt="Maxima" className="h-10 object-contain" />
+
+          <button
+            onClick={() => navigate('/student')}
+            className="text-sm text-gray-400 hover:text-gray-600"
+          >
+            ← Back to Dashboard
+          </button>
+        </nav>
+
+        <div className="max-w-4xl mx-auto px-6 py-10">
+          <div className="bg-white border border-gray-100 rounded-2xl p-8 text-center mb-6">
+            <p className="text-sm text-gray-400 mb-2">
+              Mock Test Submitted
+            </p>
+
+            <h1 className="text-3xl font-bold text-gray-900 mb-4">
+              {mock?.title}
+            </h1>
+
+            <p className="text-5xl font-bold text-purple-600 mb-2">
+              {finalResult.overallEstimate || '-'}
+            </p>
+
+            <p className="text-sm text-gray-500">
+              Overall estimate without Writing review
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="bg-white border border-gray-100 rounded-2xl p-5">
+              <p className="text-xs text-gray-400 mb-1">Listening</p>
+              <p className="text-3xl font-bold text-purple-600">
+                {finalResult.listening.band}
+              </p>
+              <p className="text-xs text-gray-400 mt-1">
+                {finalResult.listening.correct}/{finalResult.listening.total}
+              </p>
+            </div>
+
+            <div className="bg-white border border-gray-100 rounded-2xl p-5">
+              <p className="text-xs text-gray-400 mb-1">Reading</p>
+              <p className="text-3xl font-bold text-blue-600">
+                {finalResult.reading.band}
+              </p>
+              <p className="text-xs text-gray-400 mt-1">
+                {finalResult.reading.correct}/{finalResult.reading.total}
+              </p>
+            </div>
+
+            <div className="bg-white border border-gray-100 rounded-2xl p-5">
+              <p className="text-xs text-gray-400 mb-1">Writing</p>
+              <p className="text-xl font-bold text-amber-600">Pending</p>
+              <p className="text-xs text-gray-400 mt-1">
+                Teacher review required
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="min-h-screen bg-[#faf9f6]">
       <nav className="flex justify-between items-center px-8 py-4 bg-white border-b border-gray-100 sticky top-0 z-30">
@@ -1493,14 +2141,19 @@ export default function DoMockTest() {
           </span>
 
           {timerInfo && timerInfo.started && (
-            <div className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold ${
-              timerInfo.locked
-                ? 'bg-red-50 text-red-600'
-                : timerInfo.time < 300
-                  ? 'bg-amber-50 text-amber-600'
-                  : 'bg-purple-50 text-purple-600'
-            }`}>
-              <span className="text-xs font-medium">{timerInfo.label}</span>
+            <div
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold ${
+                timerInfo.locked
+                  ? 'bg-red-50 text-red-600'
+                  : timerInfo.time < 300
+                    ? 'bg-amber-50 text-amber-600'
+                    : 'bg-purple-50 text-purple-600'
+              }`}
+            >
+              <span className="text-xs font-medium">
+                {timerInfo.label}
+              </span>
+
               <span className="font-mono">
                 {timerInfo.locked ? 'TIME UP' : formatTime(timerInfo.time)}
               </span>
@@ -1537,6 +2190,12 @@ export default function DoMockTest() {
           </div>
         </div>
 
+        {tabWarning && (
+          <div className="bg-red-50 border border-red-100 text-red-600 rounded-2xl p-4 mb-6 text-sm font-medium">
+            {tabWarning}
+          </div>
+        )}
+
         {activeSection.key === 'intro' && (
           <div className="bg-white border border-gray-100 rounded-2xl p-10 text-center max-w-3xl mx-auto">
             <h1 className="text-3xl font-bold text-gray-900 mb-3">
@@ -1552,10 +2211,12 @@ export default function DoMockTest() {
                 <p className="text-xs text-gray-500 mb-1">Listening</p>
                 <p className="text-2xl font-bold text-purple-600">30 min</p>
               </div>
+
               <div className="bg-blue-50 rounded-xl p-4">
                 <p className="text-xs text-gray-500 mb-1">Reading</p>
                 <p className="text-2xl font-bold text-blue-600">60 min</p>
               </div>
+
               <div className="bg-amber-50 rounded-xl p-4">
                 <p className="text-xs text-gray-500 mb-1">Writing</p>
                 <p className="text-2xl font-bold text-amber-600">60 min</p>
@@ -1563,7 +2224,7 @@ export default function DoMockTest() {
             </div>
 
             <p className="text-xs text-gray-400 mb-6">
-              ⚠ When a section's timer runs out, that section is locked and cannot be edited.
+              ⚠ When a section&apos;s timer runs out, that section is locked and cannot be edited.
             </p>
 
             <button
@@ -1577,7 +2238,8 @@ export default function DoMockTest() {
 
         {activeSection.key === 'listening' && renderListening()}
 
-        {activeSection.key?.startsWith('reading-') && renderReading(activeSection.reading)}
+        {activeSection.key?.startsWith('reading-') &&
+          renderReading(activeSection.reading)}
 
         {activeSection.key === 'writing-task1' && renderWritingTask1()}
 

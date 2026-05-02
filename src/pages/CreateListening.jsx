@@ -553,17 +553,18 @@ export default function CreateListening() {
       if (question.type === 'table' || question.type === 'note') {
         let blankCount = 0
 
-        question.rows?.forEach(row => {
-          row.cells?.forEach(cell => {
+        for (const row of question.rows || []) {
+          for (const cell of row.cells || []) {
             if (cell.type === 'blank') {
               blankCount++
+
               if (!cell.answer?.trim()) {
                 alert('Every table blank needs a correct answer.')
                 return false
               }
             }
-          })
-        })
+          }
+        }
 
         if (blankCount === 0) {
           alert('Table / form completion needs at least one blank answer cell.')

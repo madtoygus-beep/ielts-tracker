@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { auth, db } from '../firebase'
-import { collection, query, where, onSnapshot } from 'firebase/firestore'
+import { collection, query, where, onSnapshot, doc, getDoc } from 'firebase/firestore'
 import { signOut, onAuthStateChanged, updatePassword } from 'firebase/auth'
 import { useNavigate } from 'react-router-dom'
 
@@ -454,6 +454,7 @@ function ListeningHomeworkSection({ user }) {
 
 function MockTestSection({ user }) {
   const [mocks, setMocks] = useState([])
+  const [submissions, setSubmissions] = useState([])
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -466,13 +467,38 @@ function MockTestSection({ user }) {
         .map(d => ({ id: d.id, ...d.data() }))
         .filter(m => !m.archived && m.assignTo?.includes(user.uid))
 
-      list.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+      list.sort((a, b) => {
+        if (!a.dueDate) return 1
+        if (!b.dueDate) return -1
+        return new Date(a.dueDate) - new Date(b.dueDate)
+      })
 
       setMocks(list)
     })
 
     return unsub
   }, [user])
+
+  useEffect(() => {
+    if (!user) return
+
+    const q = query(
+      collection(db, 'mockSubmissions'),
+      where('uid', '==', user.uid)
+    )
+
+    const unsub = onSnapshot(q, snap => {
+      setSubmissions(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+    })
+
+    return unsub
+  }, [user])
+
+  const getSubmission = mockId =>
+    submissions.find(submission => submission.mockTestId === mockId)
+
+  const todoMocks = mocks.filter(mock => !getSubmission(mock.id))
+  const completedMocks = mocks.filter(mock => getSubmission(mock.id))
 
   if (mocks.length === 0) return null
 
@@ -482,47 +508,107 @@ function MockTestSection({ user }) {
         🧠 Full Mock Tests
       </h2>
 
-      <div className="flex flex-col gap-3">
-        {mocks.map(mock => (
-          <div
-            key={mock.id}
-            className="bg-white border border-purple-100 rounded-2xl p-5 flex items-center justify-between shadow-sm"
-          >
-            <div>
-              <p className="text-sm font-medium text-gray-800">
-                {mock.title}
-              </p>
+      {todoMocks.length > 0 && (
+        <div className="mb-6">
+          <p className="text-xs font-semibold text-red-500 uppercase tracking-wider mb-3">
+            To Do
+          </p>
 
-              <p className="text-xs text-gray-400 mt-0.5">
-                Listening + Reading Passage 1, 2, 3 + Writing
-              </p>
+          <div className="flex flex-col gap-3">
+            {todoMocks.map(mock => {
+              const badge = dueLabel(mock)
 
-              <div className="flex gap-2 mt-2 flex-wrap">
-                <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1 rounded-full">
-                  Full IELTS Mock
-                </span>
+              return (
+                <div
+                  key={mock.id}
+                  className="bg-white border border-purple-100 rounded-2xl p-5 flex items-center justify-between shadow-sm"
+                >
+                  <div>
+                    <p className="text-sm font-medium text-gray-800">
+                      {mock.title}
+                    </p>
 
-                {mock.dueDate ? (
-                  <span className={`text-xs px-3 py-1 rounded-full ${dueLabel(mock).style}`}>
-                    {dueLabel(mock).text}
-                  </span>
-                ) : (
-                  <span className="text-xs bg-gray-100 text-gray-500 px-3 py-1 rounded-full">
-                    No deadline
-                  </span>
-                )}
-              </div>
-            </div>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      Listening + Reading Passage 1, 2, 3 + Writing
+                    </p>
 
-            <button
-              onClick={() => navigate(`/do-mock/${mock.id}`)}
-              className="bg-purple-600 text-white px-4 py-2 rounded-xl text-xs font-medium hover:bg-purple-700"
-            >
-              Start →
-            </button>
+                    <div className="flex gap-2 mt-2 flex-wrap">
+                      <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1 rounded-full">
+                        Full IELTS Mock
+                      </span>
+
+                      <span className={`text-xs px-3 py-1 rounded-full ${badge.style}`}>
+                        {badge.text}
+                      </span>
+
+                      <span className="text-xs bg-red-50 text-red-500 px-3 py-1 rounded-full">
+                        Not completed
+                      </span>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => navigate(`/do-mock/${mock.id}`)}
+                    className="bg-purple-600 text-white px-4 py-2 rounded-xl text-xs font-medium hover:bg-purple-700"
+                  >
+                    Start →
+                  </button>
+                </div>
+              )
+            })}
           </div>
-        ))}
-      </div>
+        </div>
+      )}
+
+      {completedMocks.length > 0 && (
+        <div>
+          <p className="text-xs font-semibold text-green-600 uppercase tracking-wider mb-3">
+            Completed
+          </p>
+
+          <div className="flex flex-col gap-3">
+            {completedMocks.map(mock => {
+              const submission = getSubmission(mock.id)
+              const result = submission?.result
+
+              return (
+                <div
+                  key={mock.id}
+                  className="bg-white border border-gray-100 rounded-2xl p-5 flex items-center justify-between gap-4"
+                >
+                  <div>
+                    <p className="text-sm font-medium text-gray-800">
+                      {mock.title}
+                    </p>
+
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      Submitted {submission?.submittedAt ? new Date(submission.submittedAt).toLocaleDateString() : ''}
+                    </p>
+
+                    <div className="flex gap-2 mt-2 flex-wrap">
+                      <span className="text-xs bg-green-50 text-green-600 px-3 py-1 rounded-full">
+                        Completed
+                      </span>
+
+                      <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1 rounded-full">
+                        Overall {result?.overallEstimate || '-'}
+                      </span>
+
+                      <span className="text-xs bg-amber-50 text-amber-600 px-3 py-1 rounded-full">
+                        Writing pending review
+                      </span>
+                    </div>
+                  </div>
+
+                  <span className="text-xs bg-green-50 text-green-600 px-3 py-1.5 rounded-full">
+                    Done
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -1183,35 +1269,82 @@ export default function StudentDashboard() {
   const targetBand = 7.0
 
   useEffect(() => {
-    const unsubAuth = onAuthStateChanged(auth, currentUser => {
+    let unsubScores = null
+    let active = true
+
+    const unsubAuth = onAuthStateChanged(auth, async currentUser => {
+      if (unsubScores) {
+        unsubScores()
+        unsubScores = null
+      }
+
       if (!currentUser) {
         navigate('/login')
         return
       }
 
-      setUser(currentUser)
+      try {
+        const profileSnap = await getDoc(doc(db, 'users', currentUser.uid))
 
-      const q = query(
-        collection(db, 'scores'),
-        where('uid', '==', currentUser.uid)
-      )
+        if (!active) return
 
-      const unsubSnap = onSnapshot(q, snap => {
-        const data = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+        if (!profileSnap.exists()) {
+          await signOut(auth)
+          navigate('/login')
+          return
+        }
 
-        data.sort((a, b) => new Date(b.date) - new Date(a.date))
+        const profile = profileSnap.data()
 
-        setScores(data)
-      })
+        if (
+          profile.deleted ||
+          profile.status === 'deleted' ||
+          profile.status === 'pending' ||
+          profile.status === 'rejected' ||
+          profile.role !== 'student'
+        ) {
+          await signOut(auth)
+          navigate('/login')
+          return
+        }
 
-      return unsubSnap
+        setUser(currentUser)
+
+        const q = query(
+          collection(db, 'scores'),
+          where('uid', '==', currentUser.uid)
+        )
+
+        unsubScores = onSnapshot(q, snap => {
+          const data = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+
+          data.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0))
+
+          setScores(data)
+        })
+      } catch (error) {
+        console.error(error)
+
+        if (active) {
+          await signOut(auth)
+          navigate('/login')
+        }
+      }
     })
 
-    return unsubAuth
+    return () => {
+      active = false
+      unsubAuth()
+
+      if (unsubScores) {
+        unsubScores()
+      }
+    }
   }, [navigate])
 
-  const latest = scores[0]
-  const previous = scores[1]
+  const manualScores = scores.filter(score => score.source !== 'mock_test')
+  const latest = manualScores[0]
+  const previous = manualScores[1]
 
   const currentBand = latest ? Number(latest.overall) : 0
 
@@ -1283,7 +1416,7 @@ export default function StudentDashboard() {
           Your IELTS results and homework
         </p>
 
-        {scores.length === 0 ? (
+        {manualScores.length === 0 ? (
           <div className="bg-white border border-gray-100 rounded-2xl p-12 text-center mb-8">
             <div className="text-4xl mb-4">
               📋
@@ -1400,11 +1533,11 @@ export default function StudentDashboard() {
               </h2>
 
               <div className="flex flex-col gap-0">
-                {scores.map((score, i) => (
+                {manualScores.map((score, i) => (
                   <div
                     key={score.id}
                     className={`py-4 ${
-                      i !== scores.length - 1
+                      i !== manualScores.length - 1
                         ? 'border-b border-gray-50'
                         : ''
                     }`}

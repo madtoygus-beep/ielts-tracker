@@ -36,6 +36,7 @@ export default function CreateReading() {
   const [headings, setHeadings] = useState(['', '', '', '', '', '', ''])
   const [questions, setQuestions] = useState([])
   const [saved, setSaved] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [hasSubmissions, setHasSubmissions] = useState(false)
 
   const navigate = useNavigate()
@@ -123,6 +124,8 @@ export default function CreateReading() {
   }, [])
 
   useEffect(() => {
+    let unsubSubmissions = null
+
     const loadReading = async () => {
       if (!isEditMode) return
 
@@ -235,12 +238,16 @@ export default function CreateReading() {
         where('readingId', '==', id)
       )
 
-      onSnapshot(subQuery, subSnap => {
+      unsubSubmissions = onSnapshot(subQuery, subSnap => {
         setHasSubmissions(!subSnap.empty)
       })
     }
 
     loadReading()
+
+    return () => {
+      if (unsubSubmissions) unsubSubmissions()
+    }
   }, [id, isEditMode, navigate])
 
   const toggleStudent = studentId => {
@@ -701,11 +708,11 @@ export default function CreateReading() {
       }
 
       if (question.type === 'matching') {
-        const missing = question.paragraphs.some(p => !p.answer)
-
-        if (missing) {
-          alert('Please select correct headings for all matching paragraphs.')
-          return false
+        for (const paragraph of question.paragraphs) {
+          if (!paragraph.answer) {
+            alert('Please select correct headings for all matching paragraphs.')
+            return false
+          }
         }
       }
 
@@ -715,21 +722,23 @@ export default function CreateReading() {
           return false
         }
 
-        const hasBlank = question.rows.some(row =>
-          row.cells.some(cell => cell.type === 'blank')
-        )
+        let blankCount = 0
 
-        if (!hasBlank) {
-          alert('Table / Summary Completion needs at least one blank answer cell.')
-          return false
+        for (const row of question.rows) {
+          for (const cell of row.cells) {
+            if (cell.type === 'blank') {
+              blankCount++
+
+              if (!cell.answer?.trim()) {
+                alert('Every blank cell needs a correct answer.')
+                return false
+              }
+            }
+          }
         }
 
-        const missingAnswer = question.rows.some(row =>
-          row.cells.some(cell => cell.type === 'blank' && !cell.answer?.trim())
-        )
-
-        if (missingAnswer) {
-          alert('Please fill all correct answers in Table / Summary Completion.')
+        if (blankCount === 0) {
+          alert('Table / Summary Completion needs at least one blank answer cell.')
           return false
         }
       }
@@ -739,8 +748,15 @@ export default function CreateReading() {
   }
 
   const handleSave = async () => {
-    if (!title || questions.length === 0) {
-      alert('Please add title and questions.')
+    if (saving) return
+
+    if (!title.trim()) {
+      alert('Please add a title.')
+      return
+    }
+
+    if (questions.length === 0) {
+      alert('Please add at least one question.')
       return
     }
 
@@ -763,6 +779,8 @@ export default function CreateReading() {
 
       if (!ok) return
     }
+
+    setSaving(true)
 
     const cleanedQuestions = questions.map(question => {
       if (question.type === 'mcq') {
@@ -835,25 +853,31 @@ export default function CreateReading() {
       updatedAt: new Date().toISOString()
     })
 
-    if (isEditMode) {
-      await updateDoc(doc(db, 'readings', id), payload)
-    } else {
-      await addDoc(
-        collection(db, 'readings'),
-        removeUndefined({
-          ...payload,
-          createdBy: user.uid,
-          createdAt: new Date().toISOString(),
-          archived: false
-        })
-      )
+    try {
+      if (isEditMode) {
+        await updateDoc(doc(db, 'readings', id), payload)
+      } else {
+        await addDoc(
+          collection(db, 'readings'),
+          removeUndefined({
+            ...payload,
+            createdBy: user.uid,
+            createdAt: new Date().toISOString(),
+            archived: false
+          })
+        )
+      }
+
+      setSaved(true)
+
+      setTimeout(() => {
+        navigate('/teacher')
+      }, 1000)
+    } catch (error) {
+      console.error(error)
+      alert('Could not save reading homework.')
+      setSaving(false)
     }
-
-    setSaved(true)
-
-    setTimeout(() => {
-      navigate('/teacher')
-    }, 1000)
   }
 
   return (
@@ -1574,9 +1598,14 @@ export default function CreateReading() {
 
         <button
           onClick={handleSave}
-          className="w-full bg-purple-600 text-white rounded-xl py-4 text-sm font-medium hover:bg-purple-700"
+          disabled={saving}
+          className="w-full bg-purple-600 text-white rounded-xl py-4 text-sm font-medium hover:bg-purple-700 disabled:opacity-60"
         >
-          {isEditMode ? 'Save Changes' : 'Save & Assign Reading'}
+          {saving
+            ? 'Saving...'
+            : isEditMode
+              ? 'Save Changes'
+              : 'Save & Assign Reading'}
         </button>
       </div>
     </div>

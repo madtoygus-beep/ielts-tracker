@@ -3,6 +3,8 @@ import { auth, db } from '../firebase'
 import {
   addDoc,
   collection,
+  doc,
+  getDoc,
   onSnapshot,
   query,
   where
@@ -14,6 +16,8 @@ export default function CreateMockTest() {
   const navigate = useNavigate()
 
   const [user, setUser] = useState(null)
+  const [checkingUser, setCheckingUser] = useState(true)
+
   const [title, setTitle] = useState('')
   const [dueDate, setDueDate] = useState('')
 
@@ -32,19 +36,60 @@ export default function CreateMockTest() {
   const [saved, setSaved] = useState(false)
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, currentUser => {
+    let active = true
+
+    const unsub = onAuthStateChanged(auth, async currentUser => {
       if (!currentUser) {
         navigate('/login')
         return
       }
 
-      setUser(currentUser)
+      try {
+        const userSnap = await getDoc(doc(db, 'users', currentUser.uid))
+
+        if (!active) return
+
+        if (!userSnap.exists()) {
+          alert('User profile not found.')
+          navigate('/login')
+          return
+        }
+
+        const profile = userSnap.data()
+
+        if (profile.role !== 'teacher' && profile.role !== 'admin') {
+          alert('You are not allowed to create mock tests.')
+          navigate('/student')
+          return
+        }
+
+        if (profile.status && profile.status !== 'approved') {
+          alert('Your account is not approved yet.')
+          navigate('/login')
+          return
+        }
+
+        setUser(currentUser)
+        setCheckingUser(false)
+      } catch (error) {
+        console.error(error)
+
+        if (active) {
+          alert('Could not verify your account.')
+          navigate('/login')
+        }
+      }
     })
 
-    return unsub
+    return () => {
+      active = false
+      unsub()
+    }
   }, [navigate])
 
   useEffect(() => {
+    if (!user) return
+
     const unsubReadings = onSnapshot(collection(db, 'readings'), snap => {
       const list = snap.docs
         .map(d => ({ id: d.id, ...d.data() }))
@@ -72,9 +117,12 @@ export default function CreateMockTest() {
       setWritings(list)
     })
 
-    const q = query(collection(db, 'users'), where('role', '==', 'student'))
+    const studentsQuery = query(
+      collection(db, 'users'),
+      where('role', '==', 'student')
+    )
 
-    const unsubStudents = onSnapshot(q, snap => {
+    const unsubStudents = onSnapshot(studentsQuery, snap => {
       const list = snap.docs
         .map(d => ({ id: d.id, ...d.data() }))
         .filter(student => student.status === 'approved' || !student.status)
@@ -89,7 +137,7 @@ export default function CreateMockTest() {
       unsubWritings()
       unsubStudents()
     }
-  }, [])
+  }, [user])
 
   const filteredStudents = useMemo(() => {
     const term = search.trim().toLowerCase()
@@ -104,7 +152,22 @@ export default function CreateMockTest() {
     })
   }, [students, search])
 
-  const selectedStudents = students.filter(student => assignTo.includes(student.id))
+  const selectedStudents = useMemo(() => {
+    return students.filter(student => assignTo.includes(student.id))
+  }, [students, assignTo])
+
+  const selectedReadingIds = readingIds.filter(Boolean)
+  const hasDuplicateReadings =
+    selectedReadingIds.length !== new Set(selectedReadingIds).size
+
+  const canCreate =
+    title.trim() &&
+    listeningId &&
+    selectedReadingIds.length === 3 &&
+    !hasDuplicateReadings &&
+    writingId &&
+    assignTo.length > 0 &&
+    !saving
 
   const updateReadingId = (index, value) => {
     setReadingIds(prev => {
@@ -132,7 +195,12 @@ export default function CreateMockTest() {
   }
 
   const handleSave = async () => {
-    if (!title.trim()) {
+    if (saving) return
+
+    const cleanTitle = title.trim()
+    const cleanReadingIds = readingIds.filter(Boolean)
+
+    if (!cleanTitle) {
       alert('Please add a mock test title.')
       return
     }
@@ -141,8 +209,6 @@ export default function CreateMockTest() {
       alert('Please select a listening test.')
       return
     }
-
-    const cleanReadingIds = readingIds.filter(Boolean)
 
     if (cleanReadingIds.length !== 3) {
       alert('Please select Reading Passage 1, 2 and 3.')
@@ -164,11 +230,17 @@ export default function CreateMockTest() {
       return
     }
 
+    if (!user) {
+      alert('User session expired. Please log in again.')
+      navigate('/login')
+      return
+    }
+
     setSaving(true)
 
     try {
       await addDoc(collection(db, 'mockTests'), {
-        title: title.trim(),
+        title: cleanTitle,
         dueDate,
         listeningId,
         readingIds: cleanReadingIds,
@@ -192,6 +264,14 @@ export default function CreateMockTest() {
     } finally {
       setSaving(false)
     }
+  }
+
+  if (checkingUser) {
+    return (
+      <div className="min-h-screen bg-[#faf9f6] flex items-center justify-center">
+        <p className="text-gray-400">Checking permissions...</p>
+      </div>
+    )
   }
 
   return (
@@ -219,6 +299,12 @@ export default function CreateMockTest() {
         {saved && (
           <div className="bg-green-50 text-green-600 rounded-xl p-4 mb-6 text-sm font-medium">
             ✓ Mock test created. Redirecting...
+          </div>
+        )}
+
+        {(listenings.length === 0 || readings.length < 3 || writings.length === 0) && (
+          <div className="bg-amber-50 border border-amber-100 text-amber-700 rounded-2xl p-5 mb-6 text-sm">
+            You need at least 1 listening test, 3 reading tests and 1 writing test before creating a full mock.
           </div>
         )}
 
@@ -290,9 +376,16 @@ export default function CreateMockTest() {
                     <select
                       value={readingIds[index]}
                       onChange={e => updateReadingId(index, e.target.value)}
-                      className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white"
+                      className={`w-full border rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white ${
+                        hasDuplicateReadings && readingIds[index]
+                          ? 'border-red-300'
+                          : 'border-gray-200'
+                      }`}
                     >
-                      <option value="">Select reading passage {index + 1}</option>
+                      <option value="">
+                        Select reading passage {index + 1}
+                      </option>
+
                       {readings.map(item => (
                         <option key={item.id} value={item.id}>
                           {item.title}
@@ -301,6 +394,12 @@ export default function CreateMockTest() {
                     </select>
                   </div>
                 ))}
+
+                {hasDuplicateReadings && (
+                  <p className="text-xs text-red-500">
+                    Please choose three different reading passages.
+                  </p>
+                )}
 
                 <div>
                   <label className="text-xs text-gray-400 mb-1 block">
@@ -356,6 +455,7 @@ export default function CreateMockTest() {
 
             <div className="flex gap-2 mb-4">
               <button
+                type="button"
                 onClick={selectAllFiltered}
                 className="flex-1 bg-purple-50 text-purple-600 rounded-xl py-2 text-xs font-medium"
               >
@@ -363,6 +463,7 @@ export default function CreateMockTest() {
               </button>
 
               <button
+                type="button"
                 onClick={clearAssignments}
                 className="flex-1 bg-gray-100 text-gray-600 rounded-xl py-2 text-xs font-medium"
               >
@@ -394,7 +495,7 @@ export default function CreateMockTest() {
 
                     <div>
                       <p className="text-sm font-medium text-gray-800">
-                        {student.name}
+                        {student.name || 'Unnamed Student'}
                       </p>
 
                       <p className="text-xs text-gray-400">
@@ -422,7 +523,7 @@ export default function CreateMockTest() {
                       key={student.id}
                       className="text-xs bg-purple-50 text-purple-600 px-3 py-1 rounded-full"
                     >
-                      {student.name}
+                      {student.name || student.email}
                     </span>
                   ))}
                 </div>
@@ -431,8 +532,8 @@ export default function CreateMockTest() {
 
             <button
               onClick={handleSave}
-              disabled={saving}
-              className="w-full bg-purple-600 text-white rounded-xl py-4 text-sm font-medium hover:bg-purple-700 mt-6 disabled:opacity-60"
+              disabled={!canCreate}
+              className="w-full bg-purple-600 text-white rounded-xl py-4 text-sm font-medium hover:bg-purple-700 mt-6 disabled:opacity-60 disabled:cursor-not-allowed"
             >
               {saving ? 'Creating...' : 'Create Full IELTS Mock Test'}
             </button>

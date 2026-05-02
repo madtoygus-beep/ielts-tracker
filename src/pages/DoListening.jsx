@@ -22,10 +22,12 @@ export default function DoListening() {
   const [answers, setAnswers] = useState({})
   const [timeLeft, setTimeLeft] = useState(null)
   const [submitted, setSubmitted] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
   const [result, setResult] = useState(null)
   const [alreadyDone, setAlreadyDone] = useState(false)
 
   const timerRef = useRef(null)
+  const submittingRef = useRef(false)
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -73,12 +75,12 @@ export default function DoListening() {
     if (timeLeft === null || submitted) return
 
     if (timeLeft <= 0) {
-      handleSubmit()
+      handleSubmit(true)
       return
     }
 
     timerRef.current = setInterval(() => {
-      setTimeLeft(prev => prev - 1)
+      setTimeLeft(prev => Math.max(prev - 1, 0))
     }, 1000)
 
     return () => clearInterval(timerRef.current)
@@ -223,14 +225,18 @@ export default function DoListening() {
 
   const isNormalCorrect = question => {
     if (question.type === 'mcq' && question.mode === 'multi') {
-      const userAnswer = sortAnswers(answers[question.id]).join('|')
-      const correctAnswer = sortAnswers(question.answers || []).join('|')
+      const userAnswer = sortAnswers(answers[question.id])
+      const correctAnswer = sortAnswers(question.answers || [])
 
-      return userAnswer === correctAnswer
+      if (userAnswer.length === 0 || correctAnswer.length === 0) return false
+
+      return userAnswer.join('|') === correctAnswer.join('|')
     }
 
     const userAnswer = normalize(answers[question.id])
     const correctAnswer = normalize(question.answer)
+
+    if (!userAnswer || !correctAnswer) return false
 
     return userAnswer === correctAnswer
   }
@@ -241,6 +247,8 @@ export default function DoListening() {
     const userAnswer = normalize(answers[key])
     const acceptedAnswers = parseAcceptedAnswers(cell).map(normalize)
 
+    if (!userAnswer) return false
+    if (acceptedAnswers.length === 0) return false
     if (!isWithinWordLimit(answers[key], cell.maxWords)) return false
 
     return acceptedAnswers.includes(userAnswer)
@@ -251,6 +259,8 @@ export default function DoListening() {
     const key = mapAnswerKey(question.id, item.id)
     const userAnswer = normalize(answers[key])
     const correctAnswer = normalize(item.answer)
+
+    if (!userAnswer || !correctAnswer) return false
 
     return userAnswer === correctAnswer
   }
@@ -317,24 +327,40 @@ export default function DoListening() {
     }
   }
 
-  const handleSubmit = async () => {
-    if (submitted || alreadyDone || !listening || !user) return
+  const handleSubmit = async (autoSubmit = false) => {
+    if (submittingRef.current || submitted || alreadyDone || !listening || !user) return
+
+    if (!autoSubmit) {
+      const ok = window.confirm('Submit your answers? You cannot retake this homework after submitting.')
+      if (!ok) return
+    }
+
+    submittingRef.current = true
+    setSubmitting(true)
 
     clearInterval(timerRef.current)
 
     const res = calculateScore()
 
-    setResult(res)
-    setSubmitted(true)
+    try {
+      await addDoc(collection(db, 'listeningSubmissions'), {
+        uid: user.uid,
+        listeningId: id,
+        answers,
+        result: res,
+        submittedAt: new Date().toISOString(),
+        finishedLate: timeLeft <= 0,
+        autoSubmitted: autoSubmit
+      })
 
-    await addDoc(collection(db, 'listeningSubmissions'), {
-      uid: user.uid,
-      listeningId: id,
-      answers,
-      result: res,
-      submittedAt: new Date().toISOString(),
-      finishedLate: timeLeft <= 0
-    })
+      setResult(res)
+      setSubmitted(true)
+    } catch (error) {
+      console.error(error)
+      alert('Could not submit your answers. Please try again.')
+      submittingRef.current = false
+      setSubmitting(false)
+    }
   }
 
   if (!listening) {
@@ -971,10 +997,11 @@ export default function DoListening() {
           </div>
 
           <button
-            onClick={handleSubmit}
-            className="w-full bg-purple-600 text-white rounded-xl py-4 text-sm font-medium hover:bg-purple-700 mt-8"
+            onClick={() => handleSubmit(false)}
+            disabled={submitting}
+            className="w-full bg-purple-600 text-white rounded-xl py-4 text-sm font-medium hover:bg-purple-700 mt-8 disabled:opacity-60"
           >
-            Submit answers
+            {submitting ? 'Submitting...' : 'Submit answers'}
           </button>
         </div>
       </div>

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { db } from '../firebase'
-import { collection, onSnapshot, doc, updateDoc, deleteDoc, query, where } from 'firebase/firestore'
+import { collection, onSnapshot, doc, updateDoc, deleteDoc } from 'firebase/firestore'
 import { useNavigate } from 'react-router-dom'
 
 export default function AdminDashboard() {
@@ -17,34 +17,58 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     const adminSession = sessionStorage.getItem('isAdmin')
+
     if (!adminSession) {
       navigate('/login')
       return
     }
 
-    const unsub = onSnapshot(collection(db, 'users'), snap => {
-      const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-      setUsers(list)
+    const unsubUsers = onSnapshot(collection(db, 'users'), snap => {
+      const list = snap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .filter(u => !u.deleted && u.status !== 'deleted')
 
-      list
-        .filter(u => u.role === 'student' && (u.status === 'approved' || !u.status))
-        .forEach(student => {
-          const sq = query(collection(db, 'scores'), where('uid', '==', student.id))
-          onSnapshot(sq, ssnap => {
-            const data = ssnap.docs.map(d => ({ id: d.id, ...d.data() }))
-            data.sort((a, b) => new Date(b.date) - new Date(a.date))
-            setScores(prev => ({ ...prev, [student.id]: data }))
-          })
-        })
+      setUsers(list)
     })
 
-    return unsub
+    const unsubScores = onSnapshot(collection(db, 'scores'), snap => {
+      const groupedScores = {}
+
+      snap.docs.forEach(scoreDoc => {
+        const score = {
+          id: scoreDoc.id,
+          ...scoreDoc.data()
+        }
+
+        if (!score.uid) return
+
+        if (!groupedScores[score.uid]) {
+          groupedScores[score.uid] = []
+        }
+
+        groupedScores[score.uid].push(score)
+      })
+
+      Object.keys(groupedScores).forEach(studentId => {
+        groupedScores[studentId].sort(
+          (a, b) => new Date(b.date || 0) - new Date(a.date || 0)
+        )
+      })
+
+      setScores(groupedScores)
+    })
+
+    return () => {
+      unsubUsers()
+      unsubScores()
+    }
   }, [navigate])
 
   const approveUser = async (userId, roleType) => {
     await updateDoc(doc(db, 'users', userId), {
       status: 'approved',
       role: roleType,
+      deleted: false,
       approvedAt: new Date().toISOString()
     })
   }
@@ -59,8 +83,13 @@ export default function AdminDashboard() {
   }
 
   const handleDelete = async (id) => {
-    if (!window.confirm('Are you sure you want to delete this account?')) return
-    await deleteDoc(doc(db, 'users', id))
+    if (!window.confirm('Are you sure you want to remove this account from the panel?')) return
+
+    await updateDoc(doc(db, 'users', id), {
+      deleted: true,
+      status: 'deleted',
+      deletedAt: new Date().toISOString()
+    })
   }
 
   const handleDeleteScore = async (scoreId) => {
@@ -78,7 +107,8 @@ export default function AdminDashboard() {
     await updateDoc(doc(db, 'users', editUser.id), {
       name: editName,
       role: editRole,
-      status: 'approved'
+      status: 'approved',
+      deleted: false
     })
     setEditUser(null)
   }
