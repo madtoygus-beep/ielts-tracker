@@ -451,6 +451,83 @@ function ListeningHomeworkSection({ user }) {
   )
 }
 
+
+function MockTestSection({ user }) {
+  const [mocks, setMocks] = useState([])
+  const navigate = useNavigate()
+
+  useEffect(() => {
+    if (!user) return
+
+    const q = query(collection(db, 'mockTests'))
+
+    const unsub = onSnapshot(q, snap => {
+      const list = snap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .filter(m => !m.archived && m.assignTo?.includes(user.uid))
+
+      list.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+
+      setMocks(list)
+    })
+
+    return unsub
+  }, [user])
+
+  if (mocks.length === 0) return null
+
+  return (
+    <div className="mt-8 mb-8">
+      <h2 className="font-semibold text-gray-800 mb-4">
+        🧠 Full Mock Tests
+      </h2>
+
+      <div className="flex flex-col gap-3">
+        {mocks.map(mock => (
+          <div
+            key={mock.id}
+            className="bg-white border border-purple-100 rounded-2xl p-5 flex items-center justify-between shadow-sm"
+          >
+            <div>
+              <p className="text-sm font-medium text-gray-800">
+                {mock.title}
+              </p>
+
+              <p className="text-xs text-gray-400 mt-0.5">
+                Listening + Reading Passage 1, 2, 3 + Writing
+              </p>
+
+              <div className="flex gap-2 mt-2 flex-wrap">
+                <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1 rounded-full">
+                  Full IELTS Mock
+                </span>
+
+                {mock.dueDate ? (
+                  <span className={`text-xs px-3 py-1 rounded-full ${dueLabel(mock).style}`}>
+                    {dueLabel(mock).text}
+                  </span>
+                ) : (
+                  <span className="text-xs bg-gray-100 text-gray-500 px-3 py-1 rounded-full">
+                    No deadline
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <button
+              onClick={() => navigate(`/do-mock/${mock.id}`)}
+              className="bg-purple-600 text-white px-4 py-2 rounded-xl text-xs font-medium hover:bg-purple-700"
+            >
+              Start →
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+
 function WritingProgressAnalytics({ user }) {
   const [submissions, setSubmissions] = useState([])
   const [writingMap, setWritingMap] = useState({})
@@ -1366,6 +1443,8 @@ export default function StudentDashboard() {
         )}
 
         <WritingProgressAnalytics user={user} />
+
+        <MockTestSection user={user} />
 
         <ListeningHomeworkSection user={user} />
 

@@ -17,6 +17,9 @@ import DoWriting from './pages/DoWriting'
 import CreateListening from './pages/CreateListening'
 import DoListening from './pages/DoListening'
 
+import CreateMockTest from './pages/CreateMockTest'
+import DoMockTest from './pages/DoMockTest'
+
 function App() {
   return (
     <BrowserRouter>
@@ -41,6 +44,9 @@ function App() {
         <Route path="/create-listening" element={<CreateListening />} />
         <Route path="/edit-listening/:id" element={<CreateListening />} />
         <Route path="/do-listening/:id" element={<DoListening />} />
+
+        <Route path="/create-mock" element={<CreateMockTest />} />
+        <Route path="/do-mock/:id" element={<DoMockTest />} />
 
       </Routes>
     </BrowserRouter>
