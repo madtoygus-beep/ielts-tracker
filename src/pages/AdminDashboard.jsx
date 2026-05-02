@@ -107,18 +107,24 @@ export default function AdminDashboard() {
   }
 
   const deleteDocumentsByUid = async (collectionName, uid) => {
-    const q = query(
-      collection(db, collectionName),
-      where('uid', '==', uid)
-    )
+    const possibleFields = ['uid', 'userId', 'studentId']
+    let totalDeleted = 0
 
-    const snap = await getDocs(q)
+    for (const field of possibleFields) {
+      const q = query(
+        collection(db, collectionName),
+        where(field, '==', uid)
+      )
 
-    for (const item of snap.docs) {
-      await deleteDoc(doc(db, collectionName, item.id))
+      const snap = await getDocs(q)
+
+      for (const item of snap.docs) {
+        await deleteDoc(doc(db, collectionName, item.id))
+        totalDeleted++
+      }
     }
 
-    return snap.docs.length
+    return totalDeleted
   }
 
   const handleResetStudentResults = async (student) => {
