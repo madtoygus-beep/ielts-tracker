@@ -1,6 +1,15 @@
 import { useState, useEffect } from 'react'
 import { db } from '../firebase'
-import { collection, onSnapshot, doc, updateDoc, deleteDoc } from 'firebase/firestore'
+import {
+  collection,
+  onSnapshot,
+  doc,
+  updateDoc,
+  deleteDoc,
+  getDocs,
+  query,
+  where
+} from 'firebase/firestore'
 import { useNavigate } from 'react-router-dom'
 
 export default function AdminDashboard() {
@@ -95,6 +104,50 @@ export default function AdminDashboard() {
   const handleDeleteScore = async (scoreId) => {
     if (!window.confirm('Delete this score?')) return
     await deleteDoc(doc(db, 'scores', scoreId))
+  }
+
+  const deleteDocumentsByUid = async (collectionName, uid) => {
+    const q = query(
+      collection(db, collectionName),
+      where('uid', '==', uid)
+    )
+
+    const snap = await getDocs(q)
+
+    for (const item of snap.docs) {
+      await deleteDoc(doc(db, collectionName, item.id))
+    }
+
+    return snap.docs.length
+  }
+
+  const handleResetStudentResults = async (student) => {
+    const ok = window.confirm(
+      `Reset all results for ${student.name || student.email}?\n\nThis will permanently delete:\n- Manual scores\n- Reading submissions\n- Listening submissions\n- Writing submissions and reviews\n- Mock test submissions\n\nThe student account will NOT be deleted.`
+    )
+
+    if (!ok) return
+
+    try {
+      const collectionsToClear = [
+        'scores',
+        'readingSubmissions',
+        'listeningSubmissions',
+        'writingSubmissions',
+        'mockSubmissions'
+      ]
+
+      let deletedCount = 0
+
+      for (const collectionName of collectionsToClear) {
+        deletedCount += await deleteDocumentsByUid(collectionName, student.id)
+      }
+
+      alert(`${student.name || student.email}'s results were reset. Deleted ${deletedCount} record(s).`)
+    } catch (error) {
+      console.error(error)
+      alert('Could not reset student results.')
+    }
   }
 
   const handleEdit = (u) => {
@@ -287,6 +340,7 @@ export default function AdminDashboard() {
                   </div>
                   <div className="flex gap-2 items-center">
                     <button onClick={e => { e.stopPropagation(); handleEdit(u) }} className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-1.5 rounded-lg">Edit</button>
+                    <button onClick={e => { e.stopPropagation(); handleResetStudentResults(u) }} className="text-xs bg-amber-50 hover:bg-amber-100 text-amber-600 px-3 py-1.5 rounded-lg">Reset Results</button>
                     <button onClick={e => { e.stopPropagation(); handleDelete(u.id) }} className="text-xs bg-red-50 hover:bg-red-100 text-red-500 px-3 py-1.5 rounded-lg">Delete</button>
                     <div className="text-gray-300">{selectedStudent === u.id ? '▲' : '▼'}</div>
                   </div>
