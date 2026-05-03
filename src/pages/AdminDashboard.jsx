@@ -23,6 +23,7 @@ export default function AdminDashboard() {
   const [editUser, setEditUser] = useState(null)
   const [editName, setEditName] = useState('')
   const [editRole, setEditRole] = useState('')
+  const [editTargetBand, setEditTargetBand] = useState('')
   const [editScore, setEditScore] = useState(null)
   const [editScoreForm, setEditScoreForm] = useState({})
   const [selectedStudent, setSelectedStudent] = useState(null)
@@ -435,16 +436,39 @@ export default function AdminDashboard() {
     setEditUser(u)
     setEditName(u.name || '')
     setEditRole(u.role || 'student')
+    setEditTargetBand(
+      u.targetBand !== undefined && u.targetBand !== null
+        ? String(u.targetBand)
+        : ''
+    )
   }
 
   const handleSaveEdit = async () => {
+    const cleanTargetBand = editTargetBand === ''
+      ? null
+      : Number(editTargetBand)
+
+    if (
+      editTargetBand !== '' &&
+      (
+        Number.isNaN(cleanTargetBand) ||
+        cleanTargetBand < 0 ||
+        cleanTargetBand > 9
+      )
+    ) {
+      alert('Target Band must be between 0 and 9.')
+      return
+    }
+
     await updateDoc(doc(db, 'users', editUser.id), {
       name: editName,
       role: editRole,
+      targetBand: cleanTargetBand,
       status: 'approved',
       deleted: false
     })
     setEditUser(null)
+    setEditTargetBand('')
   }
 
   const handleEditScore = (s) => {
@@ -547,6 +571,11 @@ export default function AdminDashboard() {
                 <div>
                   <p className="text-sm font-medium text-gray-800">{u.name}</p>
                   <p className="text-xs text-gray-400">{u.email}</p>
+                  {u.role === 'student' && (
+                    <p className="text-xs text-blue-500 mt-0.5">
+                      Target Band: {u.targetBand !== undefined && u.targetBand !== null ? Number(u.targetBand).toFixed(1) : 'Not set'}
+                    </p>
+                  )}
                   <p className="text-xs text-orange-500 mt-1">Requested role: {u.requestedRole}</p>
                 </div>
 
@@ -569,6 +598,11 @@ export default function AdminDashboard() {
                   <div>
                     <p className="text-sm font-medium text-gray-800">{u.name}</p>
                     <p className="text-xs text-gray-400">{u.email}</p>
+                  {u.role === 'student' && (
+                    <p className="text-xs text-blue-500 mt-0.5">
+                      Target Band: {u.targetBand !== undefined && u.targetBand !== null ? Number(u.targetBand).toFixed(1) : 'Not set'}
+                    </p>
+                  )}
                   </div>
 
                   <div className="flex gap-2">
@@ -596,6 +630,11 @@ export default function AdminDashboard() {
                   <div>
                     <p className="text-sm font-medium text-gray-800">{u.name}</p>
                     <p className="text-xs text-gray-400">{u.email}</p>
+                  {u.role === 'student' && (
+                    <p className="text-xs text-blue-500 mt-0.5">
+                      Target Band: {u.targetBand !== undefined && u.targetBand !== null ? Number(u.targetBand).toFixed(1) : 'Not set'}
+                    </p>
+                  )}
                   </div>
                 </div>
                 <div className="flex gap-2">
@@ -625,6 +664,11 @@ export default function AdminDashboard() {
                     <div>
                       <p className="text-sm font-medium text-gray-800">{u.name}</p>
                       <p className="text-xs text-gray-400">{u.email}</p>
+                  {u.role === 'student' && (
+                    <p className="text-xs text-blue-500 mt-0.5">
+                      Target Band: {u.targetBand !== undefined && u.targetBand !== null ? Number(u.targetBand).toFixed(1) : 'Not set'}
+                    </p>
+                  )}
                     </div>
                   </div>
                   <div className="flex gap-2 items-center flex-wrap justify-end">
@@ -688,6 +732,23 @@ export default function AdminDashboard() {
                   <button onClick={() => setEditRole('student')} className={`flex-1 py-2 rounded-full text-sm font-medium border transition-all ${editRole === 'student' ? 'bg-purple-600 text-white border-purple-600' : 'border-gray-200 text-gray-500'}`}>Student</button>
                   <button onClick={() => setEditRole('teacher')} className={`flex-1 py-2 rounded-full text-sm font-medium border transition-all ${editRole === 'teacher' ? 'bg-purple-600 text-white border-purple-600' : 'border-gray-200 text-gray-500'}`}>Teacher</button>
                 </div>
+              </div>
+
+              <div>
+                <label className="text-xs text-gray-400 mb-1 block">Target Band</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="9"
+                  step="0.5"
+                  placeholder="Example: 6.5"
+                  className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-purple-400"
+                  value={editTargetBand}
+                  onChange={e => setEditTargetBand(e.target.value)}
+                />
+                <p className="text-[11px] text-gray-400 mt-1">
+                  Leave empty if no target band is set.
+                </p>
               </div>
             </div>
             <div className="flex gap-2">

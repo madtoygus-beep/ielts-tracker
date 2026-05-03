@@ -107,6 +107,245 @@ function dueLabel(homework) {
   }
 }
 
+
+const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
+
+const numberWords = {
+  zero: '0', one: '1', two: '2', three: '3', four: '4', five: '5',
+  six: '6', seven: '7', eight: '8', nine: '9', ten: '10', eleven: '11',
+  twelve: '12', thirteen: '13', fourteen: '14', fifteen: '15', sixteen: '16',
+  seventeen: '17', eighteen: '18', nineteen: '19', twenty: '20'
+}
+
+function normalizeAnswer(value) {
+  if (value === undefined || value === null) return ''
+
+  const clean = value
+    .toString()
+    .trim()
+    .toLowerCase()
+    .replace(/[.,!?;:()]/g, '')
+    .replace(/\s+/g, ' ')
+
+  return numberWords[clean] || clean
+}
+
+function sortAnswers(value) {
+  if (!Array.isArray(value)) return []
+  return [...value].map(v => v?.toString().trim()).sort()
+}
+
+function tableAnswerKey(questionId, rowId, cellIndex) {
+  return `${questionId}_${rowId}_${cellIndex}`
+}
+
+function parseAcceptedAnswers(cell) {
+  const main = cell.answer ? [cell.answer] : []
+  const alternatives = cell.acceptedAnswers
+    ? cell.acceptedAnswers.split(',').map(item => item.trim()).filter(Boolean)
+    : []
+
+  return [...main, ...alternatives]
+}
+
+function getWordCount(value) {
+  const clean = normalizeAnswer(value)
+  if (!clean) return 0
+  return clean.split(' ').filter(Boolean).length
+}
+
+function isWithinWordLimit(value, maxWords) {
+  if (!maxWords) return true
+  return getWordCount(value) <= Number(maxWords)
+}
+
+function isNormalCorrect(submission, question) {
+  if (question.type === 'mcq' && question.mode === 'multi') {
+    const userAnswer = sortAnswers(submission.answers?.[question.id]).join('|')
+    const correctAnswer = sortAnswers(question.answers || []).join('|')
+
+    return userAnswer === correctAnswer
+  }
+
+  const userAnswer = normalizeAnswer(submission.answers?.[question.id])
+  const correctAnswer = normalizeAnswer(question.answer)
+
+  return userAnswer === correctAnswer
+}
+
+function isMatchingCorrect(submission, question, paragraph) {
+  const userAnswer = submission.answers?.[question.id]?.[paragraph.letter]
+    ?.toString()
+    .trim()
+
+  const correctAnswer = paragraph.answer?.toString().trim()
+
+  return userAnswer === correctAnswer
+}
+
+function isTableCellCorrect(submission, question, row, cellIndex) {
+  const key = tableAnswerKey(question.id, row.id, cellIndex)
+  const cell = row.cells[cellIndex]
+  const userAnswer = normalizeAnswer(submission.answers?.[key])
+  const acceptedAnswers = parseAcceptedAnswers(cell).map(normalizeAnswer)
+
+  if (!isWithinWordLimit(submission.answers?.[key], cell.maxWords)) return false
+
+  return acceptedAnswers.includes(userAnswer)
+}
+
+function estimateHomeworkBand(correct, total) {
+  if (!total) return null
+
+  const percentage = (correct / total) * 100
+
+  if (percentage >= 90) return 9
+  if (percentage >= 85) return 8.5
+  if (percentage >= 80) return 8
+  if (percentage >= 75) return 7.5
+  if (percentage >= 70) return 7
+  if (percentage >= 65) return 6.5
+  if (percentage >= 60) return 6
+  if (percentage >= 50) return 5.5
+  if (percentage >= 40) return 5
+  if (percentage >= 30) return 4.5
+  if (percentage >= 20) return 4
+  return 3.5
+}
+
+function getQuestionTypeLabel(type) {
+  if (type === 'matching') return 'Matching Headings'
+  if (type === 'mcq') return 'MCQ'
+  if (type === 'fitb') return 'Fill Blank'
+  if (type === 'tfng') return 'T/F/NG'
+  if (type === 'table') return 'Table Completion'
+  if (type === 'summary') return 'Summary Completion'
+  if (type === 'note') return 'Note Completion'
+  return type
+}
+
+function getAnalyticsColor(value) {
+  if (value === null || value === undefined) return 'text-gray-400'
+  if (value >= 75) return 'text-green-600'
+  if (value >= 60) return 'text-amber-600'
+  return 'text-red-500'
+}
+
+function getAnalyticsBg(value) {
+  if (value === null || value === undefined) return 'bg-gray-100'
+  if (value >= 75) return 'bg-green-600'
+  if (value >= 60) return 'bg-amber-500'
+  return 'bg-red-500'
+}
+
+function calculateSkillAnalytics(homeworks, submissions, idField, typeKeys) {
+  const stats = {}
+
+  typeKeys.forEach(key => {
+    stats[key] = {
+      correct: 0,
+      total: 0
+    }
+  })
+
+  let totalCorrect = 0
+  let totalQuestions = 0
+
+  submissions.forEach(submission => {
+    const homework = homeworks.find(item => item.id === submission[idField])
+    if (!homework) return
+
+    homework.questions?.forEach(question => {
+      if (question.type === 'matching') {
+        question.paragraphs?.forEach(paragraph => {
+          if (!stats.matching) {
+            stats.matching = { correct: 0, total: 0 }
+          }
+
+          stats.matching.total++
+          totalQuestions++
+
+          if (isMatchingCorrect(submission, question, paragraph)) {
+            stats.matching.correct++
+            totalCorrect++
+          }
+        })
+
+        return
+      }
+
+      if (question.type === 'table' || question.type === 'summary' || question.type === 'note') {
+        const key = question.type === 'summary'
+          ? 'summary'
+          : question.type === 'note'
+            ? 'note'
+            : 'table'
+
+        if (!stats[key]) {
+          stats[key] = { correct: 0, total: 0 }
+        }
+
+        question.rows?.forEach(row => {
+          row.cells?.forEach((cell, cellIndex) => {
+            if (cell.type === 'blank') {
+              stats[key].total++
+              totalQuestions++
+
+              if (isTableCellCorrect(submission, question, row, cellIndex)) {
+                stats[key].correct++
+                totalCorrect++
+              }
+            }
+          })
+        })
+
+        return
+      }
+
+      if (!stats[question.type]) {
+        stats[question.type] = { correct: 0, total: 0 }
+      }
+
+      stats[question.type].total++
+      totalQuestions++
+
+      if (isNormalCorrect(submission, question)) {
+        stats[question.type].correct++
+        totalCorrect++
+      }
+    })
+  })
+
+  const typeAnalytics = Object.entries(stats).map(([key, value]) => ({
+    key,
+    correct: value.correct,
+    total: value.total,
+    percentage: value.total
+      ? Math.round((value.correct / value.total) * 100)
+      : null
+  }))
+
+  const attemptedTypes = typeAnalytics.filter(item => item.total > 0)
+
+  const weakest = attemptedTypes.length
+    ? [...attemptedTypes].sort((a, b) => a.percentage - b.percentage)[0]
+    : null
+
+  const averageAccuracy = totalQuestions
+    ? Math.round((totalCorrect / totalQuestions) * 100)
+    : null
+
+  return {
+    totalCorrect,
+    totalQuestions,
+    averageAccuracy,
+    estimatedBand: estimateHomeworkBand(totalCorrect, totalQuestions),
+    typeAnalytics,
+    weakest
+  }
+}
+
+
 function getReviewDate(submission) {
   return (
     submission.reviewedAt ||
@@ -155,6 +394,266 @@ function getCriterionFullLabel(key) {
   if (key === 'grammarRangeAccuracy') return 'Grammar Range & Accuracy'
   return key
 }
+
+
+function StudentSkillAnalytics({ user }) {
+  const [readings, setReadings] = useState([])
+  const [readingSubmissions, setReadingSubmissions] = useState([])
+  const [listenings, setListenings] = useState([])
+  const [listeningSubmissions, setListeningSubmissions] = useState([])
+
+  useEffect(() => {
+    if (!user) return
+
+    const q = query(collection(db, 'readings'))
+
+    const unsub = onSnapshot(q, snap => {
+      const data = snap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .filter(item =>
+          !item.archived &&
+          item.assignTo?.includes(user.uid) &&
+          !isHiddenForCurrentUser(item, user.uid)
+        )
+
+      setReadings(data)
+    })
+
+    return unsub
+  }, [user])
+
+  useEffect(() => {
+    if (!user) return
+
+    const q = query(
+      collection(db, 'readingSubmissions'),
+      where('uid', '==', user.uid)
+    )
+
+    const unsub = onSnapshot(q, snap => {
+      const data = snap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .filter(item => item.archived !== true)
+
+      setReadingSubmissions(data)
+    })
+
+    return unsub
+  }, [user])
+
+  useEffect(() => {
+    if (!user) return
+
+    const q = query(collection(db, 'listenings'))
+
+    const unsub = onSnapshot(q, snap => {
+      const data = snap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .filter(item =>
+          !item.archived &&
+          item.assignTo?.includes(user.uid) &&
+          !isHiddenForCurrentUser(item, user.uid)
+        )
+
+      setListenings(data)
+    })
+
+    return unsub
+  }, [user])
+
+  useEffect(() => {
+    if (!user) return
+
+    const q = query(
+      collection(db, 'listeningSubmissions'),
+      where('uid', '==', user.uid)
+    )
+
+    const unsub = onSnapshot(q, snap => {
+      const data = snap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .filter(item => item.archived !== true)
+
+      setListeningSubmissions(data)
+    })
+
+    return unsub
+  }, [user])
+
+  const readingAnalytics = calculateSkillAnalytics(
+    readings,
+    readingSubmissions,
+    'readingId',
+    ['matching', 'mcq', 'fitb', 'tfng', 'table', 'summary', 'note']
+  )
+
+  const listeningAnalytics = calculateSkillAnalytics(
+    listenings,
+    listeningSubmissions,
+    'listeningId',
+    ['mcq', 'fitb', 'tfng', 'table', 'summary', 'note']
+  )
+
+  const readingCompletion = {
+    completed: readingSubmissions.filter(sub =>
+      readings.some(reading => reading.id === sub.readingId)
+    ).length,
+    assigned: readings.length
+  }
+
+  const listeningCompletion = {
+    completed: listeningSubmissions.filter(sub =>
+      listenings.some(listening => listening.id === sub.listeningId)
+    ).length,
+    assigned: listenings.length
+  }
+
+  const hasData =
+    readingSubmissions.length > 0 ||
+    listeningSubmissions.length > 0 ||
+    readings.length > 0 ||
+    listenings.length > 0
+
+  const renderSkillCard = (title, icon, analytics, completion, colorClass) => (
+    <div className="bg-white border border-gray-100 rounded-2xl p-6">
+      <div className="flex items-center justify-between gap-4 mb-5">
+        <div>
+          <h2 className="font-semibold text-gray-800">
+            {icon} My {title} Analytics
+          </h2>
+
+          <p className="text-xs text-gray-400 mt-1">
+            Based on your submitted {title.toLowerCase()} homework.
+          </p>
+        </div>
+
+        <span className="text-xs bg-gray-100 text-gray-500 px-3 py-1.5 rounded-full">
+          {completion.completed}/{completion.assigned} completed
+        </span>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-5">
+        <div className="bg-gray-900 text-white rounded-2xl p-5">
+          <p className="text-xs text-gray-400 mb-1">
+            Average Accuracy
+          </p>
+
+          <p className="text-3xl font-bold">
+            {analytics.averageAccuracy === null ? '--' : `${analytics.averageAccuracy}%`}
+          </p>
+
+          <p className="text-xs text-gray-400 mt-2">
+            {analytics.totalCorrect}/{analytics.totalQuestions} correct
+          </p>
+        </div>
+
+        <div className="bg-purple-50 rounded-2xl p-5">
+          <p className="text-xs text-gray-500 mb-1">
+            Estimated Band
+          </p>
+
+          <p className="text-3xl font-bold text-purple-600">
+            {analytics.estimatedBand ? analytics.estimatedBand.toFixed(1) : '--'}
+          </p>
+
+          <p className="text-xs text-gray-500 mt-2">
+            Homework estimate, not full IELTS band
+          </p>
+        </div>
+
+        <div className="bg-amber-50 rounded-2xl p-5">
+          <p className="text-xs text-gray-500 mb-1">
+            Weakest Area
+          </p>
+
+          <p className="text-lg font-bold text-amber-700">
+            {analytics.weakest ? getQuestionTypeLabel(analytics.weakest.key) : '--'}
+          </p>
+
+          <p className="text-xs text-gray-500 mt-2">
+            {analytics.weakest
+              ? `${analytics.weakest.percentage}% accuracy`
+              : 'No question data yet'}
+          </p>
+        </div>
+      </div>
+
+      <div className="bg-gray-50 rounded-2xl p-5">
+        <h3 className="text-sm font-semibold text-gray-700 mb-3">
+          Accuracy by Question Type
+        </h3>
+
+        <div className="flex flex-col gap-3">
+          {analytics.typeAnalytics.map(item => (
+            <div key={item.key}>
+              <div className="flex justify-between mb-1">
+                <p className="text-xs text-gray-500">
+                  {getQuestionTypeLabel(item.key)}
+                </p>
+
+                <p className={`text-xs font-semibold ${getAnalyticsColor(item.percentage)}`}>
+                  {item.percentage === null ? '--' : `${item.percentage}%`}
+                </p>
+              </div>
+
+              <div className="w-full bg-white rounded-full h-2 overflow-hidden">
+                <div
+                  className={`${item.percentage === null ? 'bg-gray-200' : colorClass} h-2 rounded-full`}
+                  style={{ width: `${item.percentage || 0}%` }}
+                />
+              </div>
+
+              <p className="text-[10px] text-gray-400 mt-1">
+                {item.correct}/{item.total} correct
+              </p>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+
+  if (!hasData) {
+    return (
+      <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="font-semibold text-gray-800">
+            📊 My Reading & Listening Analytics
+          </h2>
+
+          <span className="text-xs bg-gray-100 text-gray-500 px-3 py-1.5 rounded-full">
+            No data yet
+          </span>
+        </div>
+
+        <p className="text-sm text-gray-400">
+          Once you complete reading or listening homework, your accuracy, estimated band and weakest question types will appear here.
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="grid grid-cols-1 gap-6 mb-8">
+      {renderSkillCard(
+        'Reading',
+        '📖',
+        readingAnalytics,
+        readingCompletion,
+        'bg-blue-600'
+      )}
+
+      {renderSkillCard(
+        'Listening',
+        '🎧',
+        listeningAnalytics,
+        listeningCompletion,
+        'bg-purple-600'
+      )}
+    </div>
+  )
+}
+
 
 function ReadingHomeworkSection({ user }) {
   const [readings, setReadings] = useState([])
@@ -296,7 +795,7 @@ function ReadingHomeworkSection({ user }) {
                     </p>
 
                     <p className="text-xs text-green-600 mt-1 font-medium">
-                      ✓ Completed — Band {result?.band}
+                      ✓ Completed — Estimated Band {result?.band}
                     </p>
                   </div>
 
@@ -454,7 +953,7 @@ function ListeningHomeworkSection({ user }) {
                     </p>
 
                     <p className="text-xs text-green-600 mt-1 font-medium">
-                      ✓ Completed — Band {result?.band}
+                      ✓ Completed — Estimated Band {result?.band}
                     </p>
                   </div>
 
@@ -467,6 +966,283 @@ function ListeningHomeworkSection({ user }) {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+
+
+function MockAnalysis({ user }) {
+  const [mockSubmissions, setMockSubmissions] = useState([])
+  const [mockMap, setMockMap] = useState({})
+
+  useEffect(() => {
+    if (!user) return
+
+    const q = query(
+      collection(db, 'mockSubmissions'),
+      where('uid', '==', user.uid)
+    )
+
+    const unsub = onSnapshot(q, snap => {
+      const data = snap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .filter(item => item.archived !== true)
+
+      data.sort(
+        (a, b) => new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0)
+      )
+
+      setMockSubmissions(data)
+    })
+
+    return unsub
+  }, [user])
+
+  useEffect(() => {
+    if (!user) return
+
+    const q = query(collection(db, 'mockTests'))
+
+    const unsub = onSnapshot(q, snap => {
+      const map = {}
+
+      snap.docs.forEach(d => {
+        const item = {
+          id: d.id,
+          ...d.data()
+        }
+
+        if (isHiddenForCurrentUser(item, user.uid)) return
+
+        map[d.id] = item
+      })
+
+      setMockMap(map)
+    })
+
+    return unsub
+  }, [user])
+
+  const completed = mockSubmissions.length
+  const latest = mockSubmissions[0]
+  const previous = mockSubmissions[1]
+
+  const getMockOverall = submission => {
+    const result = submission?.result || {}
+
+    return (
+      result.reviewedOverall ||
+      result.finalOverall ||
+      result.overall ||
+      result.overallEstimate ||
+      null
+    )
+  }
+
+  const getWritingBand = submission => {
+    const result = submission?.result || {}
+
+    return (
+      result.writing?.band ||
+      result.writingBand ||
+      submission?.writingReview?.overall ||
+      submission?.review?.writingOverall ||
+      null
+    )
+  }
+
+  const getWritingStatus = submission => {
+    const writingBand = getWritingBand(submission)
+
+    if (writingBand) return `Reviewed · Band ${formatBand(writingBand)}`
+
+    return 'Pending teacher review'
+  }
+
+  const latestOverall = getMockOverall(latest)
+  const previousOverall = getMockOverall(previous)
+
+  const trend = [...mockSubmissions]
+    .reverse()
+    .slice(-6)
+
+  const overallChange = getChangeLabel(latestOverall, previousOverall)
+  const latestMockTitle = latest
+    ? mockMap[latest.mockTestId]?.title || latest.mockTitle || 'Mock Test'
+    : 'No mock completed yet'
+
+  if (completed === 0) {
+    return (
+      <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="font-semibold text-gray-800">
+            🧠 My Mock Analysis
+          </h2>
+
+          <span className="text-xs bg-gray-100 text-gray-500 px-3 py-1.5 rounded-full">
+            No completed mock yet
+          </span>
+        </div>
+
+        <p className="text-sm text-gray-400">
+          Once you complete a full mock test, your mock trend, latest estimate and section performance will appear here.
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
+      <div className="flex items-start justify-between gap-4 mb-5">
+        <div>
+          <h2 className="font-semibold text-gray-800">
+            🧠 My Mock Analysis
+          </h2>
+
+          <p className="text-xs text-gray-400 mt-1">
+            Based on your completed full IELTS mock tests.
+          </p>
+        </div>
+
+        <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1.5 rounded-full">
+          {completed} completed
+        </span>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-5">
+        <div className="bg-gray-900 text-white rounded-2xl p-5">
+          <p className="text-xs text-gray-400 mb-1">
+            Latest Mock Overall
+          </p>
+
+          <p className="text-4xl font-bold">
+            {latestOverall ? formatBand(latestOverall) : '--'}
+          </p>
+
+          <p className="text-xs text-gray-400 mt-2 truncate">
+            {latestMockTitle}
+          </p>
+        </div>
+
+        <div className="bg-purple-50 rounded-2xl p-5">
+          <p className="text-xs text-gray-500 mb-1">
+            Listening
+          </p>
+
+          <p className="text-3xl font-bold text-purple-600">
+            {formatBand(latest?.result?.listening?.band)}
+          </p>
+
+          <p className="text-xs text-gray-500 mt-2">
+            {latest?.result?.listening?.correct ?? '-'}/{latest?.result?.listening?.total ?? '-'} correct
+          </p>
+        </div>
+
+        <div className="bg-blue-50 rounded-2xl p-5">
+          <p className="text-xs text-gray-500 mb-1">
+            Reading
+          </p>
+
+          <p className="text-3xl font-bold text-blue-600">
+            {formatBand(latest?.result?.reading?.band)}
+          </p>
+
+          <p className="text-xs text-gray-500 mt-2">
+            {latest?.result?.reading?.correct ?? '-'}/{latest?.result?.reading?.total ?? '-'} correct
+          </p>
+        </div>
+
+        <div className="bg-amber-50 rounded-2xl p-5">
+          <p className="text-xs text-gray-500 mb-1">
+            Writing
+          </p>
+
+          <p className="text-lg font-bold text-amber-700">
+            {getWritingStatus(latest)}
+          </p>
+
+          <p className={`text-xs mt-2 ${getChangeColor(latestOverall, previousOverall)}`}>
+            {overallChange ? `${overallChange} from previous mock` : 'No previous mock yet'}
+          </p>
+        </div>
+      </div>
+
+      {trend.length > 1 && (
+        <div className="mb-5">
+          <h3 className="text-sm font-semibold text-gray-700 mb-3">
+            Mock Progress Trend
+          </h3>
+
+          <div className="flex items-end gap-2 h-28 bg-gray-50 rounded-2xl p-4 overflow-x-auto">
+            {trend.map((submission, index) => {
+              const overall = Number(getMockOverall(submission)) || 0
+              const height = Math.max(14, Math.min(100, (overall / 9) * 100))
+              const title = mockMap[submission.mockTestId]?.title || `Mock ${index + 1}`
+
+              return (
+                <div
+                  key={submission.id}
+                  className="flex flex-col items-center justify-end min-w-[58px] h-full"
+                  title={title}
+                >
+                  <p className="text-xs font-semibold text-purple-600 mb-1">
+                    {overall ? formatBand(overall) : '--'}
+                  </p>
+
+                  <div
+                    className="w-8 rounded-t-xl bg-purple-600"
+                    style={{ height: `${height}%` }}
+                  />
+
+                  <p className="text-[10px] text-gray-400 mt-1">
+                    M{index + 1}
+                  </p>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      <div>
+        <h3 className="text-sm font-semibold text-gray-700 mb-3">
+          Recent Mock Tests
+        </h3>
+
+        <div className="flex flex-col gap-2">
+          {mockSubmissions.slice(0, 4).map(submission => {
+            const result = submission.result || {}
+            const overall = getMockOverall(submission)
+            const title = mockMap[submission.mockTestId]?.title || submission.mockTitle || 'Mock Test'
+
+            return (
+              <div
+                key={submission.id}
+                className="border border-gray-100 bg-gray-50 rounded-xl p-4 flex items-center justify-between gap-4"
+              >
+                <div>
+                  <p className="text-sm font-medium text-gray-800">
+                    {title}
+                  </p>
+
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    Submitted {submission.submittedAt ? new Date(submission.submittedAt).toLocaleDateString() : 'No date'}
+                  </p>
+
+                  <p className="text-xs text-gray-500 mt-1">
+                    L {formatBand(result.listening?.band)} · R {formatBand(result.reading?.band)} · Writing {getWritingStatus(submission)}
+                  </p>
+                </div>
+
+                <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1.5 rounded-full font-semibold">
+                  Overall {overall ? formatBand(overall) : '--'}
+                </span>
+              </div>
+            )
+          })}
+        </div>
+      </div>
     </div>
   )
 }
@@ -1307,9 +2083,13 @@ export default function StudentDashboard() {
   const [showPasswordModal, setShowPasswordModal] = useState(false)
   const [newPassword, setNewPassword] = useState('')
   const [passwordMsg, setPasswordMsg] = useState('')
+  const [activeTab, setActiveTab] = useState('overview')
+  const [profile, setProfile] = useState(null)
   const navigate = useNavigate()
 
-  const targetBand = 7.0
+  const targetBand = profile?.targetBand !== undefined && profile?.targetBand !== null
+    ? Number(profile.targetBand)
+    : null
 
   useEffect(() => {
     let unsubScores = null
@@ -1352,6 +2132,7 @@ export default function StudentDashboard() {
         }
 
         setUser(currentUser)
+        setProfile(profile)
 
         const q = query(
           collection(db, 'scores'),
@@ -1393,7 +2174,7 @@ export default function StudentDashboard() {
 
   const currentBand = latest ? Number(latest.overall) : 0
 
-  const progress = latest
+  const progress = latest && targetBand
     ? Math.min(Math.round((currentBand / targetBand) * 100), 100)
     : 0
 
@@ -1401,6 +2182,269 @@ export default function StudentDashboard() {
     latest && previous
       ? (Number(latest.overall) - Number(previous.overall)).toFixed(1)
       : null
+
+  const homeworkScores = scores.filter(score => score.source === 'mock_test')
+  const latestMockScore = homeworkScores[0]
+
+  const overviewCards = [
+    {
+      title: 'Latest IELTS Score',
+      value: latest ? latest.overall : '--',
+      note: latest ? latest.date : 'No manual IELTS score yet',
+      style: 'bg-gray-900 text-white',
+      valueStyle: 'text-white'
+    },
+    {
+      title: 'Latest Mock Estimate',
+      value: latestMockScore ? latestMockScore.overall : '--',
+      note: latestMockScore ? latestMockScore.date || 'Mock completed' : 'No mock completed yet',
+      style: 'bg-purple-50 text-gray-900',
+      valueStyle: 'text-purple-600'
+    },
+    {
+      title: 'Target Band',
+      value: targetBand ? targetBand.toFixed(1) : 'Not set',
+      note: targetBand
+        ? latest
+          ? `Progress ${progress}%`
+          : 'Progress starts after first score'
+        : 'Ask admin to set your target',
+      style: 'bg-blue-50 text-gray-900',
+      valueStyle: 'text-blue-600'
+    }
+  ]
+
+  const tabs = [
+    ['overview', 'Overview'],
+    ['homework', 'Homework'],
+    ['mock', 'Mock Tests'],
+    ['analytics', 'Analytics']
+  ]
+
+  const renderOverview = () => (
+    <div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+        {overviewCards.map(card => (
+          <div
+            key={card.title}
+            className={`${card.style} rounded-2xl p-5 border border-gray-100`}
+          >
+            <p className="text-xs opacity-70 mb-1">
+              {card.title}
+            </p>
+
+            <p className={`text-3xl font-bold ${card.valueStyle}`}>
+              {card.value}
+            </p>
+
+            <p className="text-xs opacity-60 mt-2">
+              {card.note}
+            </p>
+          </div>
+        ))}
+      </div>
+
+      {manualScores.length === 0 ? (
+        <div className="bg-white border border-gray-100 rounded-2xl p-12 text-center mb-8">
+          <div className="text-4xl mb-4">
+            📋
+          </div>
+
+          <p className="text-gray-700 font-medium mb-2">
+            No scores yet
+          </p>
+
+          <p className="text-gray-400 text-sm">
+            Your teacher will log your IELTS scores here.
+          </p>
+        </div>
+      ) : (
+        <>
+          {latest && (
+            <>
+              <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-6">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">
+                      Target progress
+                    </p>
+
+                    <p className="text-lg font-semibold text-gray-900">
+                      Target Band {targetBand ? targetBand.toFixed(1) : 'Not set'}
+                    </p>
+                  </div>
+
+                  <div className="text-right">
+                    <p className="text-xs text-gray-400 mb-1">
+                      Current
+                    </p>
+
+                    <p className={`text-2xl font-bold ${getBandColor(currentBand)}`}>
+                      {currentBand.toFixed(1)}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="w-full bg-gray-100 rounded-full h-3 overflow-hidden">
+                  <div
+                    className="bg-purple-600 h-3 rounded-full"
+                    style={{ width: `${progress}%` }}
+                  />
+                </div>
+
+                <div className="flex justify-between mt-2">
+                  <p className="text-xs text-gray-400">
+                    {targetBand ? `Progress ${progress}%` : 'Target not set'}
+                  </p>
+
+                  {overallChange !== null && (
+                    <p
+                      className={`text-xs font-medium ${
+                        Number(overallChange) >= 0
+                          ? 'text-green-600'
+                          : 'text-red-500'
+                      }`}
+                    >
+                      {Number(overallChange) >= 0 ? '+' : ''}
+                      {overallChange}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="bg-gray-900 text-white rounded-2xl p-6 mb-6">
+                <div className="flex justify-between items-start mb-4">
+                  <div>
+                    <p className="text-gray-400 text-xs uppercase tracking-wider mb-1">
+                      Latest test
+                    </p>
+
+                    <p className="text-gray-300 text-sm">
+                      {latest.date}
+                    </p>
+                  </div>
+
+                  <div className="text-right">
+                    <p className="text-gray-400 text-xs mb-1">
+                      Overall
+                    </p>
+
+                    <p className="text-4xl font-bold">
+                      {latest.overall}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-4 gap-3">
+                  {['listening', 'reading', 'writing', 'speaking'].map(skill => (
+                    <div
+                      key={skill}
+                      className="bg-white/10 rounded-xl p-3 text-center"
+                    >
+                      <p className="text-gray-400 text-xs capitalize mb-1">
+                        {skill}
+                      </p>
+
+                      <p className="text-xl font-bold">
+                        {latest[skill]}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
+
+          <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
+            <h2 className="font-semibold text-gray-800 mb-4">
+              Score history
+            </h2>
+
+            <div className="flex flex-col gap-0">
+              {manualScores.map((score, i) => (
+                <div
+                  key={score.id}
+                  className={`py-4 ${
+                    i !== manualScores.length - 1
+                      ? 'border-b border-gray-50'
+                      : ''
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-sm font-medium text-gray-700">
+                      {score.date}
+                    </p>
+
+                    <p className={`text-xl font-bold ${getBandColor(score.overall)}`}>
+                      {score.overall}
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-4 gap-2">
+                    {['listening', 'reading', 'writing', 'speaking'].map(skill => (
+                      <div
+                        key={skill}
+                        className={`rounded-lg p-2 text-center ${getBandBg(score[skill])}`}
+                      >
+                        <p className="text-xs text-gray-400 capitalize mb-0.5">
+                          {skill.slice(0, 3)}
+                        </p>
+
+                        <p className={`text-sm font-semibold ${getBandColor(score[skill])}`}>
+                          {score[skill]}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <button
+          onClick={() => setActiveTab('homework')}
+          className="bg-white border border-gray-100 rounded-2xl p-5 text-left hover:border-purple-200 hover:shadow-sm"
+        >
+          <p className="font-semibold text-gray-800 mb-1">
+            📚 Homework
+          </p>
+
+          <p className="text-sm text-gray-400">
+            View your reading, listening and writing homework.
+          </p>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('mock')}
+          className="bg-white border border-gray-100 rounded-2xl p-5 text-left hover:border-purple-200 hover:shadow-sm"
+        >
+          <p className="font-semibold text-gray-800 mb-1">
+            🧠 Mock Tests
+          </p>
+
+          <p className="text-sm text-gray-400">
+            Start or review your full IELTS mock tests.
+          </p>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('analytics')}
+          className="bg-white border border-gray-100 rounded-2xl p-5 text-left hover:border-purple-200 hover:shadow-sm"
+        >
+          <p className="font-semibold text-gray-800 mb-1">
+            📊 Analytics
+          </p>
+
+          <p className="text-sm text-gray-400">
+            See your reading, listening and writing progress.
+          </p>
+        </button>
+      </div>
+    </div>
+  )
 
   const handleChangePassword = async () => {
     if (newPassword.length < 6) {
@@ -1461,174 +2505,49 @@ export default function StudentDashboard() {
           Your IELTS results and homework
         </p>
 
-        {manualScores.length === 0 ? (
-          <div className="bg-white border border-gray-100 rounded-2xl p-12 text-center mb-8">
-            <div className="text-4xl mb-4">
-              📋
-            </div>
+        <div className="bg-white border border-gray-100 rounded-2xl p-2 mb-8 flex gap-2 overflow-x-auto">
+          {tabs.map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setActiveTab(key)}
+              className={`whitespace-nowrap px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                activeTab === key
+                  ? 'bg-purple-600 text-white'
+                  : 'text-gray-500 hover:bg-gray-100'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
 
-            <p className="text-gray-700 font-medium mb-2">
-              No scores yet
-            </p>
+        {activeTab === 'overview' && renderOverview()}
 
-            <p className="text-gray-400 text-sm">
-              Your teacher will log your IELTS scores here.
-            </p>
-          </div>
-        ) : (
+        {activeTab === 'homework' && (
           <>
-            {latest && (
-              <>
-                <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-6">
-                  <div className="flex items-center justify-between mb-4">
-                    <div>
-                      <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">
-                        Target progress
-                      </p>
+            <ListeningHomeworkSection user={user} />
 
-                      <p className="text-lg font-semibold text-gray-900">
-                        Target Band {targetBand}
-                      </p>
-                    </div>
+            <ReadingHomeworkSection user={user} />
 
-                    <div className="text-right">
-                      <p className="text-xs text-gray-400 mb-1">
-                        Current
-                      </p>
-
-                      <p className={`text-2xl font-bold ${getBandColor(currentBand)}`}>
-                        {currentBand.toFixed(1)}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="w-full bg-gray-100 rounded-full h-3 overflow-hidden">
-                    <div
-                      className="bg-purple-600 h-3 rounded-full"
-                      style={{ width: `${progress}%` }}
-                    />
-                  </div>
-
-                  <div className="flex justify-between mt-2">
-                    <p className="text-xs text-gray-400">
-                      Progress {progress}%
-                    </p>
-
-                    {overallChange !== null && (
-                      <p
-                        className={`text-xs font-medium ${
-                          Number(overallChange) >= 0
-                            ? 'text-green-600'
-                            : 'text-red-500'
-                        }`}
-                      >
-                        {Number(overallChange) >= 0 ? '+' : ''}
-                        {overallChange}
-                      </p>
-                    )}
-                  </div>
-                </div>
-
-                <div className="bg-gray-900 text-white rounded-2xl p-6 mb-6">
-                  <div className="flex justify-between items-start mb-4">
-                    <div>
-                      <p className="text-gray-400 text-xs uppercase tracking-wider mb-1">
-                        Latest test
-                      </p>
-
-                      <p className="text-gray-300 text-sm">
-                        {latest.date}
-                      </p>
-                    </div>
-
-                    <div className="text-right">
-                      <p className="text-gray-400 text-xs mb-1">
-                        Overall
-                      </p>
-
-                      <p className="text-4xl font-bold">
-                        {latest.overall}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-4 gap-3">
-                    {['listening', 'reading', 'writing', 'speaking'].map(skill => (
-                      <div
-                        key={skill}
-                        className="bg-white/10 rounded-xl p-3 text-center"
-                      >
-                        <p className="text-gray-400 text-xs capitalize mb-1">
-                          {skill}
-                        </p>
-
-                        <p className="text-xl font-bold">
-                          {latest[skill]}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </>
-            )}
-
-            <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
-              <h2 className="font-semibold text-gray-800 mb-4">
-                Score history
-              </h2>
-
-              <div className="flex flex-col gap-0">
-                {manualScores.map((score, i) => (
-                  <div
-                    key={score.id}
-                    className={`py-4 ${
-                      i !== manualScores.length - 1
-                        ? 'border-b border-gray-50'
-                        : ''
-                    }`}
-                  >
-                    <div className="flex items-center justify-between mb-2">
-                      <p className="text-sm font-medium text-gray-700">
-                        {score.date}
-                      </p>
-
-                      <p className={`text-xl font-bold ${getBandColor(score.overall)}`}>
-                        {score.overall}
-                      </p>
-                    </div>
-
-                    <div className="grid grid-cols-4 gap-2">
-                      {['listening', 'reading', 'writing', 'speaking'].map(skill => (
-                        <div
-                          key={skill}
-                          className={`rounded-lg p-2 text-center ${getBandBg(score[skill])}`}
-                        >
-                          <p className="text-xs text-gray-400 capitalize mb-0.5">
-                            {skill.slice(0, 3)}
-                          </p>
-
-                          <p className={`text-sm font-semibold ${getBandColor(score[skill])}`}>
-                            {score[skill]}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
+            <WritingHomeworkSection user={user} />
           </>
         )}
 
-        <WritingProgressAnalytics user={user} />
+        {activeTab === 'mock' && (
+          <>
+            <MockAnalysis user={user} />
 
-        <MockTestSection user={user} />
+            <MockTestSection user={user} />
+          </>
+        )}
 
-        <ListeningHomeworkSection user={user} />
+        {activeTab === 'analytics' && (
+          <>
+            <StudentSkillAnalytics user={user} />
 
-        <ReadingHomeworkSection user={user} />
-
-        <WritingHomeworkSection user={user} />
+            <WritingProgressAnalytics user={user} />
+          </>
+        )}
       </div>
 
       {showPasswordModal && (

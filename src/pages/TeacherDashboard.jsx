@@ -27,6 +27,9 @@ export default function TeacherDashboard() {
 
   const [listenings, setListenings] = useState([])
   const [listeningSubmissions, setListeningSubmissions] = useState([])
+
+  const [mockTests, setMockTests] = useState([])
+  const [mockSubmissions, setMockSubmissions] = useState([])
   
   const [readingLibraryFilter, setReadingLibraryFilter] = useState('active')
   const [writingLibraryFilter, setWritingLibraryFilter] = useState('active')
@@ -41,6 +44,7 @@ export default function TeacherDashboard() {
   const [assignmentDraft, setAssignmentDraft] = useState([])
 
   const [selectedWritingReview, setSelectedWritingReview] = useState(null)
+  const [selectedMockWritingReview, setSelectedMockWritingReview] = useState(null)
   const [writingReviewForm, setWritingReviewForm] = useState({
     task1Band: '',
     task2Band: '',
@@ -70,6 +74,7 @@ export default function TeacherDashboard() {
   const [showPasswordModal, setShowPasswordModal] = useState(false)
   const [newPassword, setNewPassword] = useState('')
   const [passwordMsg, setPasswordMsg] = useState('')
+  const [activeTab, setActiveTab] = useState('overview')
 
   const navigate = useNavigate()
 
@@ -183,6 +188,20 @@ export default function TeacherDashboard() {
       trackSnapshot(
         onSnapshot(query(collection(db, 'listeningSubmissions')), snap => {
           setListeningSubmissions(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+        })
+      )
+
+      trackSnapshot(
+        onSnapshot(query(collection(db, 'mockTests')), snap => {
+          const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+          list.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+          setMockTests(list)
+        })
+      )
+
+      trackSnapshot(
+        onSnapshot(query(collection(db, 'mockSubmissions')), snap => {
+          setMockSubmissions(snap.docs.map(d => ({ id: d.id, ...d.data() })))
         })
       )
     })
@@ -324,11 +343,97 @@ export default function TeacherDashboard() {
       new Date(a.submission.submittedAt || 0)
     )
 
-  const reviewedWritingCount = writingSubmissions.filter(
-    submission => submission.reviewed
+  const getMockWritingStatus = submission => {
+    return (
+      submission.result?.writing?.status ||
+      submission.writingReview?.status ||
+      submission.review?.writingStatus ||
+      'pending_review'
+    )
+  }
+
+  const getMockTask1Answer = submission => {
+    return (
+      submission.writingAnswers?.task1 ||
+      submission.writing?.task1 ||
+      submission.task1Answer ||
+      ''
+    )
+  }
+
+  const getMockTask2Answer = submission => {
+    return (
+      submission.writingAnswers?.task2 ||
+      submission.writing?.task2 ||
+      submission.task2Answer ||
+      ''
+    )
+  }
+
+  const getMockTask1WordCount = submission => {
+    return (
+      submission.result?.writing?.task1WordCount ||
+      submission.writing?.task1WordCount ||
+      submission.task1WordCount ||
+      getWordCount(getMockTask1Answer(submission))
+    )
+  }
+
+  const getMockTask2WordCount = submission => {
+    return (
+      submission.result?.writing?.task2WordCount ||
+      submission.writing?.task2WordCount ||
+      submission.task2WordCount ||
+      getWordCount(getMockTask2Answer(submission))
+    )
+  }
+
+  const getMockWritingReview = submission => {
+    return submission.result?.writing?.review || submission.writingReview || null
+  }
+
+  const pendingMockWritingReviews = mockSubmissions
+    .filter(submission => {
+      if (submission.archived) return false
+      if (!getMockTask1Answer(submission) && !getMockTask2Answer(submission)) return false
+
+      return getMockWritingStatus(submission) !== 'reviewed'
+    })
+    .map(submission => {
+      const student = students.find(item => item.id === submission.uid)
+      const mock = mockTests.find(item => item.id === submission.mockTestId)
+
+      if (!student) return null
+
+      return {
+        submission,
+        student,
+        mock
+      }
+    })
+    .filter(Boolean)
+    .sort((a, b) =>
+      new Date(b.submission.submittedAt || 0) -
+      new Date(a.submission.submittedAt || 0)
+    )
+
+  const reviewedMockWritingCount = mockSubmissions.filter(
+    submission => getMockWritingStatus(submission) === 'reviewed'
   ).length
 
-  const submittedWritingCount = writingSubmissions.length
+  const submittedMockWritingCount = mockSubmissions.filter(
+    submission => getMockTask1Answer(submission) || getMockTask2Answer(submission)
+  ).length
+
+  const totalPendingWritingReviews =
+    pendingWritingReviews.length + pendingMockWritingReviews.length
+
+  const reviewedWritingCount =
+    writingSubmissions.filter(submission => submission.reviewed).length +
+    reviewedMockWritingCount
+
+  const submittedWritingCount =
+    writingSubmissions.length + submittedMockWritingCount
 
   const formatDateShort = value => {
     if (!value) return 'No date'
@@ -749,6 +854,24 @@ Continue permanent delete?`
     return userAnswer === correctAnswer
   }
 
+  const isSentenceEndingCorrect = (submission, question, item) => {
+    const userAnswer = submission.answers?.[question.id]?.[item.id]
+      ?.toString()
+      .trim()
+
+    const correctAnswer = item.answer?.toString().trim()
+
+    return userAnswer === correctAnswer
+  }
+
+  const getSentenceEndingText = (question, letter) => {
+    if (!letter) return 'No answer'
+
+    const index = letters.indexOf(letter)
+
+    return question.endings?.[index] || `Ending ${letter}`
+  }
+
   const isTableCellCorrect = (submission, question, row, cellIndex) => {
     const key = tableAnswerKey(question.id, row.id, cellIndex)
     const cell = row.cells[cellIndex]
@@ -765,6 +888,7 @@ Continue permanent delete?`
 
     const stats = {
       matching: { correct: 0, total: 0 },
+      sentenceEndings: { correct: 0, total: 0 },
       tfng: { correct: 0, total: 0 },
       fitb: { correct: 0, total: 0 },
       table: { correct: 0, total: 0 },
@@ -784,6 +908,30 @@ Continue permanent delete?`
 
             if (isMatchingCorrect(sub, question, paragraph)) {
               stats.matching.correct++
+            }
+          })
+
+          return
+        }
+
+        if (question.type === 'sentenceEndings') {
+          question.items?.forEach(item => {
+            stats.sentenceEndings.total++
+
+            if (isSentenceEndingCorrect(sub, question, item)) {
+              stats.sentenceEndings.correct++
+            }
+          })
+
+          return
+        }
+
+        if (question.type === 'sentenceEndings') {
+          question.items?.forEach(item => {
+            stats[key].total++
+
+            if (!isSentenceEndingCorrect(submission, question, item)) {
+              stats[key].wrong++
             }
           })
 
@@ -821,6 +969,7 @@ Continue permanent delete?`
 
     const data = {
       matching: percentage(stats.matching),
+      sentenceEndings: percentage(stats.sentenceEndings),
       tfng: percentage(stats.tfng),
       fitb: percentage(stats.fitb),
       table: percentage(stats.table),
@@ -841,6 +990,7 @@ Continue permanent delete?`
 
   const getWeakestLabel = type => {
     if (type === 'matching') return 'Matching Headings'
+    if (type === 'sentenceEndings') return 'Sentence Endings'
     if (type === 'tfng') return 'True / False / Not Given'
     if (type === 'fitb') return 'Fill in the Blank'
     if (type === 'table') return 'Table Completion'
@@ -857,6 +1007,322 @@ Continue permanent delete?`
     return 'text-red-500'
   }
 
+
+
+
+  const estimateReadingBand = (correct, total) => {
+    if (!total) return null
+
+    const percentage = (correct / total) * 100
+
+    if (percentage >= 90) return 9
+    if (percentage >= 85) return 8.5
+    if (percentage >= 80) return 8
+    if (percentage >= 75) return 7.5
+    if (percentage >= 70) return 7
+    if (percentage >= 65) return 6.5
+    if (percentage >= 60) return 6
+    if (percentage >= 50) return 5.5
+    if (percentage >= 40) return 5
+    if (percentage >= 30) return 4.5
+    if (percentage >= 20) return 4
+    return 3.5
+  }
+
+  const getReadingSubmissionResult = submission => {
+    const reading = readings.find(item => item.id === submission.readingId)
+    if (!reading) return null
+
+    let correct = 0
+    let total = 0
+
+    reading.questions?.forEach(question => {
+      if (question.type === 'matching') {
+        question.paragraphs?.forEach(paragraph => {
+          total++
+
+          if (isMatchingCorrect(submission, question, paragraph)) {
+            correct++
+          }
+        })
+
+        return
+      }
+
+      if (question.type === 'sentenceEndings') {
+        question.items?.forEach(item => {
+          total++
+
+          if (isSentenceEndingCorrect(submission, question, item)) {
+            correct++
+          }
+        })
+
+        return
+      }
+
+      if (question.type === 'table' || question.type === 'summary' || question.type === 'note') {
+        question.rows?.forEach(row => {
+          row.cells?.forEach((cell, cellIndex) => {
+            if (cell.type === 'blank') {
+              total++
+
+              if (isTableCellCorrect(submission, question, row, cellIndex)) {
+                correct++
+              }
+            }
+          })
+        })
+
+        return
+      }
+
+      total++
+
+      if (isNormalCorrect(submission, question)) {
+        correct++
+      }
+    })
+
+    return {
+      correct,
+      total,
+      accuracy: total ? Math.round((correct / total) * 100) : null,
+      estimatedBand: estimateReadingBand(correct, total)
+    }
+  }
+
+  const getAverageReadingEstimatedBand = () => {
+    const bands = submissions
+      .map(submission => {
+        if (submission.result?.band) return Number(submission.result.band)
+        if (submission.result?.estimatedBand) return Number(submission.result.estimatedBand)
+
+        const result = getReadingSubmissionResult(submission)
+        return result?.estimatedBand
+      })
+      .filter(value => !Number.isNaN(value) && value > 0)
+
+    if (bands.length === 0) return null
+
+    const avg = bands.reduce((sum, value) => sum + value, 0) / bands.length
+    return (Math.round(avg * 10) / 10).toFixed(1)
+  }
+
+  const getReadingCompletionStats = () => {
+    const assigned = activeReadings.reduce(
+      (sum, reading) => sum + (reading.assignTo?.length || 0),
+      0
+    )
+
+    const activeReadingIds = activeReadings.map(reading => reading.id)
+
+    const completed = submissions.filter(submission =>
+      activeReadingIds.includes(submission.readingId)
+    ).length
+
+    const rate = assigned ? Math.round((completed / assigned) * 100) : 0
+
+    return {
+      assigned,
+      completed,
+      rate
+    }
+  }
+
+  const getMostMissedReadingQuestions = () => {
+    const stats = {}
+
+    submissions.forEach(submission => {
+      const reading = readings.find(item => item.id === submission.readingId)
+      if (!reading) return
+
+      reading.questions?.forEach((question, questionIndex) => {
+        const key = `${reading.title} — Q${questionIndex + 1}`
+
+        if (!stats[key]) {
+          stats[key] = {
+            label: key,
+            wrong: 0,
+            total: 0
+          }
+        }
+
+        if (question.type === 'matching') {
+          question.paragraphs?.forEach(paragraph => {
+            stats[key].total++
+
+            if (!isMatchingCorrect(submission, question, paragraph)) {
+              stats[key].wrong++
+            }
+          })
+
+          return
+        }
+
+        if (question.type === 'table' || question.type === 'summary' || question.type === 'note') {
+          question.rows?.forEach(row => {
+            row.cells?.forEach((cell, cellIndex) => {
+              if (cell.type === 'blank') {
+                stats[key].total++
+
+                if (!isTableCellCorrect(submission, question, row, cellIndex)) {
+                  stats[key].wrong++
+                }
+              }
+            })
+          })
+
+          return
+        }
+
+        stats[key].total++
+
+        if (!isNormalCorrect(submission, question)) {
+          stats[key].wrong++
+        }
+      })
+    })
+
+    return Object.values(stats)
+      .filter(item => item.total > 0)
+      .map(item => ({
+        ...item,
+        wrongRate: Math.round((item.wrong / item.total) * 100)
+      }))
+      .sort((a, b) => b.wrongRate - a.wrongRate)
+      .slice(0, 5)
+  }
+
+  const getAtRiskReadingStudents = () => {
+    return students
+      .map(student => {
+        const studentSubs = submissions
+          .filter(sub => sub.uid === student.id)
+          .sort(
+            (a, b) =>
+              new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0)
+          )
+
+        const latest = studentSubs[0]
+
+        if (!latest) return null
+
+        const result = latest.result?.band
+          ? {
+              estimatedBand: Number(latest.result.band),
+              accuracy: latest.result.accuracy || null
+            }
+          : getReadingSubmissionResult(latest)
+
+        if (!result?.estimatedBand) return null
+
+        return {
+          student,
+          latestBand: Number(result.estimatedBand),
+          latestAccuracy: result.accuracy,
+          submissions: studentSubs.length
+        }
+      })
+      .filter(item => item && item.latestBand < 6)
+      .sort((a, b) => a.latestBand - b.latestBand)
+      .slice(0, 5)
+  }
+
+  const getReadingTypeAnalytics = () => {
+    const stats = {
+      matching: { correct: 0, total: 0 },
+      sentenceEndings: { correct: 0, total: 0 },
+      mcq: { correct: 0, total: 0 },
+      fitb: { correct: 0, total: 0 },
+      tfng: { correct: 0, total: 0 },
+      table: { correct: 0, total: 0 },
+      summary: { correct: 0, total: 0 },
+      note: { correct: 0, total: 0 }
+    }
+
+    submissions.forEach(submission => {
+      const reading = readings.find(item => item.id === submission.readingId)
+      if (!reading) return
+
+      reading.questions?.forEach(question => {
+        if (question.type === 'matching') {
+          question.paragraphs?.forEach(paragraph => {
+            stats.matching.total++
+
+            if (isMatchingCorrect(submission, question, paragraph)) {
+              stats.matching.correct++
+            }
+          })
+
+          return
+        }
+
+        if (question.type === 'sentenceEndings') {
+          question.items?.forEach(item => {
+            stats.sentenceEndings.total++
+
+            if (isSentenceEndingCorrect(submission, question, item)) {
+              stats.sentenceEndings.correct++
+            }
+          })
+
+          return
+        }
+
+        if (question.type === 'table' || question.type === 'summary' || question.type === 'note') {
+          const key = question.type === 'summary'
+            ? 'summary'
+            : question.type === 'note'
+              ? 'note'
+              : 'table'
+
+          question.rows?.forEach(row => {
+            row.cells?.forEach((cell, cellIndex) => {
+              if (cell.type === 'blank') {
+                stats[key].total++
+
+                if (isTableCellCorrect(submission, question, row, cellIndex)) {
+                  stats[key].correct++
+                }
+              }
+            })
+          })
+
+          return
+        }
+
+        if (!stats[question.type]) return
+
+        stats[question.type].total++
+
+        if (isNormalCorrect(submission, question)) {
+          stats[question.type].correct++
+        }
+      })
+    })
+
+    return Object.entries(stats).map(([key, value]) => ({
+      key,
+      correct: value.correct,
+      total: value.total,
+      percentage: value.total
+        ? Math.round((value.correct / value.total) * 100)
+        : null
+    }))
+  }
+
+  const getReadingTypeLabel = type => {
+    if (type === 'matching') return 'Matching Headings'
+    if (type === 'sentenceEndings') return 'Sentence Endings'
+    if (type === 'mcq') return 'MCQ'
+    if (type === 'fitb') return 'Fill Blank'
+    if (type === 'tfng') return 'T/F/NG'
+    if (type === 'table') return 'Table Completion'
+    if (type === 'summary') return 'Summary Completion'
+    if (type === 'note') return 'Note Completion'
+    return type
+  }
 
 
   const getAverageListeningBand = () => {
@@ -1104,6 +1570,7 @@ Continue permanent delete?`
   }
 
   const openWritingReview = ({ student, writing, submission }) => {
+    setSelectedMockWritingReview(null)
     setSelectedWritingReview({ student, writing, submission })
 
     setWritingReviewForm({
@@ -1121,6 +1588,30 @@ Continue permanent delete?`
       task2Feedback: submission.review?.task2Feedback || '',
       overall: submission.review?.overall || '',
       generalFeedback: submission.review?.generalFeedback || ''
+    })
+  }
+
+  const openMockWritingReview = ({ student, mock, submission }) => {
+    const review = getMockWritingReview(submission) || {}
+
+    setSelectedWritingReview(null)
+    setSelectedMockWritingReview({ student, mock, submission })
+
+    setWritingReviewForm({
+      task1Band: review.task1Band || submission.result?.writing?.task1Band || '',
+      task2Band: review.task2Band || submission.result?.writing?.task2Band || '',
+      task1TA: review.rubric?.task1?.taskAchievement || '',
+      task1CC: review.rubric?.task1?.coherenceCohesion || '',
+      task1LR: review.rubric?.task1?.lexicalResource || '',
+      task1GRA: review.rubric?.task1?.grammarRangeAccuracy || '',
+      task2TR: review.rubric?.task2?.taskResponse || '',
+      task2CC: review.rubric?.task2?.coherenceCohesion || '',
+      task2LR: review.rubric?.task2?.lexicalResource || '',
+      task2GRA: review.rubric?.task2?.grammarRangeAccuracy || '',
+      task1Feedback: review.task1Feedback || '',
+      task2Feedback: review.task2Feedback || '',
+      overall: review.overall || submission.result?.writing?.band || '',
+      generalFeedback: review.generalFeedback || ''
     })
   }
 
@@ -1170,46 +1661,7 @@ Continue permanent delete?`
     }))
   }
 
-  const saveWritingReview = async () => {
-    if (!selectedWritingReview) return
-
-    if (!writingReviewForm.overall) {
-      alert('Please enter overall writing band.')
-      return
-    }
-
-    await updateDoc(
-      doc(db, 'writingSubmissions', selectedWritingReview.submission.id),
-      {
-        reviewed: true,
-        reviewedAt: new Date().toISOString(),
-        reviewedBy: user.uid,
-        review: {
-          task1Band: writingReviewForm.task1Band,
-          task2Band: writingReviewForm.task2Band,
-          rubric: {
-            task1: {
-              taskAchievement: writingReviewForm.task1TA,
-              coherenceCohesion: writingReviewForm.task1CC,
-              lexicalResource: writingReviewForm.task1LR,
-              grammarRangeAccuracy: writingReviewForm.task1GRA
-            },
-            task2: {
-              taskResponse: writingReviewForm.task2TR,
-              coherenceCohesion: writingReviewForm.task2CC,
-              lexicalResource: writingReviewForm.task2LR,
-              grammarRangeAccuracy: writingReviewForm.task2GRA
-            }
-          },
-          task1Feedback: writingReviewForm.task1Feedback,
-          task2Feedback: writingReviewForm.task2Feedback,
-          overall: writingReviewForm.overall,
-          generalFeedback: writingReviewForm.generalFeedback
-        }
-      }
-    )
-
-    setSelectedWritingReview(null)
+  const resetWritingReviewForm = () => {
     setWritingReviewForm({
       task1Band: '',
       task2Band: '',
@@ -1226,6 +1678,109 @@ Continue permanent delete?`
       overall: '',
       generalFeedback: ''
     })
+  }
+
+  const buildWritingReviewPayload = () => ({
+    task1Band: writingReviewForm.task1Band,
+    task2Band: writingReviewForm.task2Band,
+    rubric: {
+      task1: {
+        taskAchievement: writingReviewForm.task1TA,
+        coherenceCohesion: writingReviewForm.task1CC,
+        lexicalResource: writingReviewForm.task1LR,
+        grammarRangeAccuracy: writingReviewForm.task1GRA
+      },
+      task2: {
+        taskResponse: writingReviewForm.task2TR,
+        coherenceCohesion: writingReviewForm.task2CC,
+        lexicalResource: writingReviewForm.task2LR,
+        grammarRangeAccuracy: writingReviewForm.task2GRA
+      }
+    },
+    task1Feedback: writingReviewForm.task1Feedback,
+    task2Feedback: writingReviewForm.task2Feedback,
+    overall: writingReviewForm.overall,
+    generalFeedback: writingReviewForm.generalFeedback
+  })
+
+  const saveWritingReview = async () => {
+    if (!selectedWritingReview) return
+
+    if (!writingReviewForm.overall) {
+      alert('Please enter overall writing band.')
+      return
+    }
+
+    await updateDoc(
+      doc(db, 'writingSubmissions', selectedWritingReview.submission.id),
+      {
+        reviewed: true,
+        reviewedAt: new Date().toISOString(),
+        reviewedBy: user.uid,
+        review: buildWritingReviewPayload()
+      }
+    )
+
+    setSelectedWritingReview(null)
+    resetWritingReviewForm()
+  }
+
+  const saveMockWritingReview = async () => {
+    if (!selectedMockWritingReview) return
+
+    if (!writingReviewForm.overall) {
+      alert('Please enter overall writing band.')
+      return
+    }
+
+    const submission = selectedMockWritingReview.submission
+    const result = submission.result || {}
+    const review = buildWritingReviewPayload()
+
+    const listeningBand = Number(result.listening?.band)
+    const readingBand = Number(result.reading?.band)
+    const writingBand = Number(writingReviewForm.overall)
+
+    const overallInputs = [listeningBand, readingBand, writingBand].filter(
+      value => !Number.isNaN(value) && value > 0
+    )
+
+    const finalOverall =
+      overallInputs.length > 0
+        ? roundToHalf(
+            overallInputs.reduce((sum, value) => sum + value, 0) /
+              overallInputs.length
+          )
+        : writingReviewForm.overall
+
+    await updateDoc(
+      doc(db, 'mockSubmissions', submission.id),
+      {
+        reviewedAt: new Date().toISOString(),
+        reviewedBy: user.uid,
+        writingReview: {
+          status: 'reviewed',
+          ...review
+        },
+        result: {
+          ...result,
+          writing: {
+            ...(result.writing || {}),
+            status: 'reviewed',
+            band: writingReviewForm.overall,
+            task1Band: writingReviewForm.task1Band,
+            task2Band: writingReviewForm.task2Band,
+            review
+          },
+          finalOverall,
+          overallEstimate: finalOverall,
+          overall: finalOverall
+        }
+      }
+    )
+
+    setSelectedMockWritingReview(null)
+    resetWritingReviewForm()
   }
 
   const renderReadingHomeworkCard = (reading, archived = false) => (
@@ -1469,11 +2024,25 @@ Continue permanent delete?`
   )
 
 
+  const averageReadingEstimatedBand = getAverageReadingEstimatedBand()
+  const readingCompletionStats = getReadingCompletionStats()
+  const mostMissedReadingQuestions = getMostMissedReadingQuestions()
+  const atRiskReadingStudents = getAtRiskReadingStudents()
+  const readingTypeAnalytics = getReadingTypeAnalytics()
+
   const averageListeningBand = getAverageListeningBand()
   const listeningCompletionStats = getListeningCompletionStats()
   const mostMissedListeningQuestions = getMostMissedListeningQuestions()
   const atRiskListeningStudents = getAtRiskListeningStudents()
   const listeningTypeAnalytics = getListeningTypeAnalytics()
+
+  const teacherTabs = [
+    ['overview', 'Overview'],
+    ['students', 'Students'],
+    ['library', 'Homework Library'],
+    ['analytics', 'Analytics'],
+    ['reviews', 'Writing Reviews']
+  ]
 
   return (
     <div className="min-h-screen bg-[#faf9f6]">
@@ -1541,6 +2110,24 @@ Continue permanent delete?`
           </button>
         </div>
 
+        <div className="bg-white border border-gray-100 rounded-2xl p-2 mb-8 flex gap-2 overflow-x-auto">
+          {teacherTabs.map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setActiveTab(key)}
+              className={`whitespace-nowrap px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                activeTab === key
+                  ? 'bg-purple-600 text-white'
+                  : 'text-gray-500 hover:bg-gray-100'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+{activeTab === 'overview' && (
+          <>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
           <div className="bg-gray-900 text-white rounded-2xl p-5">
             <p className="text-xs text-gray-400 mb-1">
@@ -1548,7 +2135,7 @@ Continue permanent delete?`
             </p>
 
             <p className="text-3xl font-bold">
-              {pendingWritingReviews.length}
+              {totalPendingWritingReviews}
             </p>
 
             <p className="text-xs text-gray-400 mt-2">
@@ -1586,6 +2173,196 @@ Continue permanent delete?`
         </div>
 
         
+
+          </>
+        )}
+
+        {activeTab === 'analytics' && (
+          <>
+        <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
+          <div className="flex items-start justify-between gap-4 mb-5">
+            <div>
+              <h2 className="font-semibold text-gray-800">
+                📖 Reading Analytics
+              </h2>
+
+              <p className="text-xs text-gray-400 mt-1">
+                Class accuracy, completion rate, difficult questions and at-risk students.
+              </p>
+            </div>
+
+            <span className="text-xs bg-blue-50 text-blue-600 px-3 py-1.5 rounded-full">
+              {submissions.length} submissions
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+            <div className="bg-gray-900 text-white rounded-2xl p-5">
+              <p className="text-xs text-gray-400 mb-1">
+                Average Reading Estimated Band
+              </p>
+
+              <p className="text-3xl font-bold">
+                {averageReadingEstimatedBand || '--'}
+              </p>
+
+              <p className="text-xs text-gray-400 mt-2">
+                Based on submitted reading homework
+              </p>
+            </div>
+
+            <div className="bg-blue-50 rounded-2xl p-5">
+              <p className="text-xs text-gray-500 mb-1">
+                Completion Rate
+              </p>
+
+              <p className="text-3xl font-bold text-blue-600">
+                {readingCompletionStats.rate}%
+              </p>
+
+              <p className="text-xs text-gray-500 mt-2">
+                {readingCompletionStats.completed}/{readingCompletionStats.assigned} assignments completed
+              </p>
+            </div>
+
+            <div className="bg-red-50 rounded-2xl p-5">
+              <p className="text-xs text-gray-500 mb-1">
+                Most Missed Question
+              </p>
+
+              <p className="text-xl font-bold text-red-600 truncate">
+                {mostMissedReadingQuestions[0]?.label || '--'}
+              </p>
+
+              <p className="text-xs text-gray-500 mt-2">
+                {mostMissedReadingQuestions[0]
+                  ? `${mostMissedReadingQuestions[0].wrongRate}% wrong`
+                  : 'No question data yet'}
+              </p>
+            </div>
+
+            <div className="bg-amber-50 rounded-2xl p-5">
+              <p className="text-xs text-gray-500 mb-1">
+                At-Risk Students
+              </p>
+
+              <p className="text-3xl font-bold text-amber-600">
+                {atRiskReadingStudents.length}
+              </p>
+
+              <p className="text-xs text-gray-500 mt-2">
+                Latest reading estimate below 6.0
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <div className="lg:col-span-1 bg-gray-50 rounded-2xl p-5">
+              <h3 className="text-sm font-semibold text-gray-700 mb-3">
+                Accuracy by Question Type
+              </h3>
+
+              <div className="flex flex-col gap-3">
+                {readingTypeAnalytics.map(item => (
+                  <div key={item.key}>
+                    <div className="flex justify-between mb-1">
+                      <p className="text-xs text-gray-500">
+                        {getReadingTypeLabel(item.key)}
+                      </p>
+
+                      <p className={`text-xs font-semibold ${getAnalyticsColor(item.percentage)}`}>
+                        {item.percentage === null ? '--' : `${item.percentage}%`}
+                      </p>
+                    </div>
+
+                    <div className="w-full bg-white rounded-full h-2 overflow-hidden">
+                      <div
+                        className="bg-blue-600 h-2 rounded-full"
+                        style={{ width: `${item.percentage || 0}%` }}
+                      />
+                    </div>
+
+                    <p className="text-[10px] text-gray-400 mt-1">
+                      {item.correct}/{item.total} correct
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="lg:col-span-1 bg-gray-50 rounded-2xl p-5">
+              <h3 className="text-sm font-semibold text-gray-700 mb-3">
+                Most Missed Questions
+              </h3>
+
+              {mostMissedReadingQuestions.length === 0 ? (
+                <p className="text-sm text-gray-400">
+                  No reading submissions yet.
+                </p>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  {mostMissedReadingQuestions.map(item => (
+                    <div
+                      key={item.label}
+                      className="bg-white rounded-xl p-3 flex items-center justify-between gap-3"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-xs font-medium text-gray-700 truncate">
+                          {item.label}
+                        </p>
+
+                        <p className="text-[10px] text-gray-400">
+                          {item.wrong}/{item.total} wrong
+                        </p>
+                      </div>
+
+                      <span className="text-xs bg-red-50 text-red-600 px-2 py-1 rounded-full font-semibold">
+                        {item.wrongRate}%
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="lg:col-span-1 bg-gray-50 rounded-2xl p-5">
+              <h3 className="text-sm font-semibold text-gray-700 mb-3">
+                At-Risk Students
+              </h3>
+
+              {atRiskReadingStudents.length === 0 ? (
+                <p className="text-sm text-gray-400">
+                  No at-risk reading students yet.
+                </p>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  {atRiskReadingStudents.map(item => (
+                    <div
+                      key={item.student.id}
+                      className="bg-white rounded-xl p-3 flex items-center justify-between gap-3"
+                    >
+                      <div>
+                        <p className="text-xs font-medium text-gray-700">
+                          {item.student.name}
+                        </p>
+
+                        <p className="text-[10px] text-gray-400">
+                          {item.submissions} reading submission(s)
+                        </p>
+                      </div>
+
+                      <span className="text-xs bg-amber-50 text-amber-600 px-2 py-1 rounded-full font-semibold">
+                        Est. {item.latestBand.toFixed(1)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+
         <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
           <div className="flex items-start justify-between gap-4 mb-5">
             <div>
@@ -1769,6 +2546,12 @@ Continue permanent delete?`
           </div>
         </div>
 
+
+          </>
+        )}
+
+        {activeTab === 'reviews' && (
+          <>
 <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
           <div className="flex items-center justify-between gap-4 mb-4">
             <div>
@@ -1835,6 +2618,72 @@ Continue permanent delete?`
           )}
         </div>
 
+        <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
+          <div className="flex items-center justify-between gap-4 mb-4">
+            <div>
+              <h2 className="font-semibold text-gray-800">
+                Pending Mock Writing Reviews
+              </h2>
+
+              <p className="text-xs text-gray-400 mt-1">
+                Writing sections submitted inside full mock tests.
+              </p>
+            </div>
+
+            <span className={`text-xs px-3 py-1.5 rounded-full ${
+              pendingMockWritingReviews.length > 0
+                ? 'bg-amber-50 text-amber-600'
+                : 'bg-green-50 text-green-600'
+            }`}>
+              {pendingMockWritingReviews.length > 0
+                ? `${pendingMockWritingReviews.length} pending`
+                : 'All caught up'}
+            </span>
+          </div>
+
+          {pendingMockWritingReviews.length === 0 ? (
+            <div className="bg-green-50 text-green-700 rounded-xl p-4 text-sm">
+              ✅ No pending mock writing reviews right now.
+            </div>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {pendingMockWritingReviews.slice(0, 8).map(item => (
+                <div
+                  key={item.submission.id}
+                  className="border border-purple-100 bg-purple-50/40 rounded-xl p-4 flex items-center justify-between gap-4"
+                >
+                  <div>
+                    <p className="text-sm font-medium text-gray-800">
+                      {item.student.name}
+                    </p>
+
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      {item.mock?.title || item.submission.mockTitle || 'Mock Test'} · Submitted {formatDateShort(item.submission.submittedAt)}
+                    </p>
+
+                    <p className="text-xs text-gray-400 mt-1">
+                      Task 1: {getMockTask1WordCount(item.submission) || 0} words · Task 2: {getMockTask2WordCount(item.submission) || 0} words
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={() => openMockWritingReview(item)}
+                    className="text-xs bg-purple-600 text-white px-4 py-2 rounded-xl hover:bg-purple-700"
+                  >
+                    Grade Mock
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+
+          </>
+        )}
+
+        {activeTab === 'library' && (
+          <>
         <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
           <div className="flex items-center justify-between mb-4">
             <div>
@@ -1975,6 +2824,12 @@ Continue permanent delete?`
           )}
         </div>
 
+
+          </>
+        )}
+
+        {activeTab === 'students' && (
+          <>
         <div className="grid grid-cols-1 gap-4">
           {students.length === 0 && (
             <div className="bg-white border border-gray-100 rounded-2xl p-8 text-center text-gray-400 text-sm">
@@ -2205,6 +3060,7 @@ Continue permanent delete?`
                         <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
                           {[
                             ['Matching', analytics.matching],
+                            ['Sentence Endings', analytics.sentenceEndings],
                             ['TFNG', analytics.tfng],
                             ['Fill Blank', analytics.fitb],
                             ['Table Completion', analytics.table],
@@ -2436,6 +3292,10 @@ Continue permanent delete?`
             )
           })}
         </div>
+
+          </>
+        )}
+
       </div>
 
       {selectedHomework && (
@@ -2599,7 +3459,9 @@ Continue permanent delete?`
                         <span className="text-xs bg-purple-50 text-purple-600 px-2 py-1 rounded-full">
                           {question.type === 'matching'
                             ? 'Matching Headings'
-                            : question.type === 'tfng'
+                            : question.type === 'sentenceEndings'
+                              ? 'Sentence Endings'
+                              : question.type === 'tfng'
                               ? 'T/F/NG'
                               : question.type === 'fitb'
                                 ? 'Fill blank'
@@ -2683,6 +3545,104 @@ Continue permanent delete?`
                               </div>
                             )
                           })}
+                        </div>
+                      ) : question.type === 'sentenceEndings' ? (
+                        <div>
+                          {question.instruction && (
+                            <p className="text-sm text-gray-700 mb-4">
+                              {question.instruction}
+                            </p>
+                          )}
+
+                          <div className="bg-gray-50 border border-gray-100 rounded-xl p-4 mb-4">
+                            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">
+                              Endings
+                            </p>
+
+                            <div className="space-y-1">
+                              {question.endings?.filter(Boolean).map((ending, endingIndex) => (
+                                <p key={endingIndex} className="text-sm text-gray-700">
+                                  <span className="font-semibold">
+                                    {letters[endingIndex]}.
+                                  </span>{' '}
+                                  {ending}
+                                </p>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div className="flex flex-col gap-3">
+                            {question.items?.map(item => {
+                              const correct = isSentenceEndingCorrect(
+                                selectedReview.submission,
+                                question,
+                                item
+                              )
+
+                              const userAnswer =
+                                selectedReview.submission.answers?.[
+                                  question.id
+                                ]?.[item.id]
+
+                              const correctAnswer = item.answer
+
+                              return (
+                                <div
+                                  key={item.id}
+                                  className={`rounded-xl p-3 border ${
+                                    correct
+                                      ? 'bg-green-50 border-green-100'
+                                      : 'bg-red-50 border-red-100'
+                                  }`}
+                                >
+                                  <div className="flex justify-between mb-2">
+                                    <p className="text-sm font-semibold text-gray-800">
+                                      {item.sentence}
+                                    </p>
+
+                                    <p
+                                      className={`text-xs font-semibold ${
+                                        correct
+                                          ? 'text-green-600'
+                                          : 'text-red-600'
+                                      }`}
+                                    >
+                                      {correct ? 'Correct' : 'Wrong'}
+                                    </p>
+                                  </div>
+
+                                  <p className="text-xs text-gray-500">
+                                    Student:
+                                  </p>
+
+                                  <p className="text-sm text-gray-800 mb-2">
+                                    {userAnswer
+                                      ? `${userAnswer}. ${getSentenceEndingText(
+                                          question,
+                                          userAnswer
+                                        )}`
+                                      : 'No answer'}
+                                  </p>
+
+                                  {!correct && (
+                                    <>
+                                      <p className="text-xs text-gray-500">
+                                        Correct:
+                                      </p>
+
+                                      <p className="text-sm font-medium text-green-700">
+                                        {correctAnswer}.{' '}
+                                        {getSentenceEndingText(
+                                          question,
+                                          correctAnswer
+                                        )}
+                                      </p>
+                                    </>
+                                  )}
+                                </div>
+                              )
+                            })}
+                          </div>
                         </div>
                       ) : question.type === 'table' || question.type === 'summary' ? (
                         <div>
@@ -2863,23 +3823,60 @@ Continue permanent delete?`
         </div>
       )}
 
-      {selectedWritingReview && (
+      {(selectedWritingReview || selectedMockWritingReview) && (() => {
+        const reviewTarget = selectedWritingReview || selectedMockWritingReview
+        const isMockReview = Boolean(selectedMockWritingReview)
+        const reviewTitle = isMockReview
+          ? reviewTarget.mock?.title || reviewTarget.submission.mockTitle || 'Mock Test'
+          : reviewTarget.writing.title
+
+        const task1Prompt = isMockReview
+          ? reviewTarget.mock?.writing?.task1?.prompt || reviewTarget.mock?.task1?.prompt || 'Mock Writing Task 1'
+          : reviewTarget.writing.task1?.prompt
+
+        const task1Image = isMockReview
+          ? reviewTarget.mock?.writing?.task1?.image || reviewTarget.mock?.task1?.image
+          : reviewTarget.writing.task1?.image
+
+        const task2Prompt = isMockReview
+          ? reviewTarget.mock?.writing?.task2?.prompt || reviewTarget.mock?.task2?.prompt || 'Mock Writing Task 2'
+          : reviewTarget.writing.task2?.prompt
+
+        const task1Answer = isMockReview
+          ? getMockTask1Answer(reviewTarget.submission)
+          : reviewTarget.submission.task1Answer
+
+        const task2Answer = isMockReview
+          ? getMockTask2Answer(reviewTarget.submission)
+          : reviewTarget.submission.task2Answer
+
+        const task1WordCount = isMockReview
+          ? getMockTask1WordCount(reviewTarget.submission)
+          : reviewTarget.submission.task1WordCount
+
+        const task2WordCount = isMockReview
+          ? getMockTask2WordCount(reviewTarget.submission)
+          : reviewTarget.submission.task2WordCount
+
+        return (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center px-4">
           <div className="bg-white rounded-2xl w-full max-w-6xl max-h-[90vh] overflow-y-auto p-6">
             <div className="flex items-start justify-between mb-6">
               <div>
                 <h2 className="text-xl font-bold text-gray-900">
-                  Writing Review
+                  {isMockReview ? 'Mock Writing Review' : 'Writing Review'}
                 </h2>
 
                 <p className="text-sm text-gray-400">
-                  {selectedWritingReview.student.name} —{' '}
-                  {selectedWritingReview.writing.title}
+                  {reviewTarget.student.name} — {reviewTitle}
                 </p>
               </div>
 
               <button
-                onClick={() => setSelectedWritingReview(null)}
+                onClick={() => {
+                  setSelectedWritingReview(null)
+                  setSelectedMockWritingReview(null)
+                }}
                 className="text-sm text-gray-400 hover:text-gray-600"
               >
                 Close
@@ -2895,7 +3892,7 @@ Continue permanent delete?`
                     </h3>
 
                     <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1 rounded-full">
-                      {selectedWritingReview.submission.task1WordCount || 0} words
+                      {task1WordCount || 0} words
                     </span>
                   </div>
 
@@ -2904,19 +3901,19 @@ Continue permanent delete?`
                   </p>
 
                   <p className="text-sm text-gray-700 leading-7 whitespace-pre-wrap mb-4 bg-gray-50 rounded-xl p-4">
-                    {selectedWritingReview.writing.task1?.prompt}
+                    {task1Prompt}
                   </p>
 
-                  {selectedWritingReview.writing.task1?.image && (
+                  {task1Image && (
                     <img
-                      src={selectedWritingReview.writing.task1.image}
+                      src={task1Image}
                       alt="Task 1"
                       className="w-full max-h-[320px] object-contain bg-gray-50 rounded-xl border border-gray-100 mb-4"
                     />
                   )}
 
                   <p className="text-sm text-gray-800 leading-7 whitespace-pre-wrap">
-                    {selectedWritingReview.submission.task1Answer}
+                    {task1Answer}
                   </p>
                 </div>
 
@@ -2927,7 +3924,7 @@ Continue permanent delete?`
                     </h3>
 
                     <span className="text-xs bg-indigo-50 text-indigo-600 px-3 py-1 rounded-full">
-                      {selectedWritingReview.submission.task2WordCount || 0} words
+                      {task2WordCount || 0} words
                     </span>
                   </div>
 
@@ -2936,11 +3933,11 @@ Continue permanent delete?`
                   </p>
 
                   <p className="text-sm text-gray-700 leading-7 whitespace-pre-wrap mb-4 bg-gray-50 rounded-xl p-4">
-                    {selectedWritingReview.writing.task2?.prompt}
+                    {task2Prompt}
                   </p>
 
                   <p className="text-sm text-gray-800 leading-7 whitespace-pre-wrap">
-                    {selectedWritingReview.submission.task2Answer}
+                    {task2Answer}
                   </p>
                 </div>
               </div>
@@ -3208,16 +4205,17 @@ Continue permanent delete?`
                 </div>
 
                 <button
-                  onClick={saveWritingReview}
+                  onClick={isMockReview ? saveMockWritingReview : saveWritingReview}
                   className="w-full bg-purple-600 text-white rounded-xl py-3 text-sm font-medium hover:bg-purple-700"
                 >
-                  Save Writing Review
+                  {isMockReview ? 'Save Mock Writing Review' : 'Save Writing Review'}
                 </button>
               </div>
             </div>
           </div>
         </div>
-      )}
+        )
+      })()}
 
       {showPasswordModal && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 px-4">

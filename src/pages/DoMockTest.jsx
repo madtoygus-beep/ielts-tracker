@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { auth, db } from '../firebase'
 import {
   addDoc,
@@ -92,6 +92,8 @@ function getBandFromPercentage(correct, total) {
 function getReadingQuestionCount(question) {
   if (question.type === 'matching') return question.paragraphs?.length || 0
 
+  if (question.type === 'sentenceEndings') return question.items?.length || 0
+
   if (question.type === 'table' || question.type === 'summary') {
     let count = 0
 
@@ -105,6 +107,15 @@ function getReadingQuestionCount(question) {
   }
 
   return 1
+}
+
+function getTotalReadingQuestionCount(reading) {
+  if (!reading?.questions?.length) return 0
+
+  return reading.questions.reduce(
+    (sum, question) => sum + getReadingQuestionCount(question),
+    0
+  )
 }
 
 function getQuestionRangeLabel(questions, question, index) {
@@ -200,6 +211,71 @@ function formatTime(seconds) {
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
 }
 
+function normalizeListeningParts(listening) {
+  if (listening?.parts?.length) {
+    return listening.parts.map((part, index) => ({
+      id: part.id || `part-${index + 1}`,
+      title: part.title || `Part ${index + 1}`,
+      instructions: part.instructions || '',
+      questions: part.questions?.length ? part.questions : []
+    }))
+  }
+
+  return [
+    {
+      id: 'part-1',
+      title: 'Part 1',
+      instructions: '',
+      questions: listening?.questions?.length ? listening.questions : []
+    }
+  ]
+}
+
+function getListeningQuestionCount(question) {
+  if (question.type === 'table' || question.type === 'note') {
+    let count = 0
+
+    question.rows?.forEach(row => {
+      row.cells?.forEach(cell => {
+        if (cell.type === 'blank') count++
+      })
+    })
+
+    return count || 1
+  }
+
+  if (question.type === 'map') {
+    return question.mapItems?.length || 0
+  }
+
+  return 1
+}
+
+function getListeningPartQuestionTotal(part) {
+  return (part.questions || []).reduce(
+    (sum, question) => sum + getListeningQuestionCount(question),
+    0
+  )
+}
+
+function getListeningQuestionRangeLabel(parts, partId, questionIndex) {
+  let start = 1
+
+  for (const part of parts || []) {
+    if (part.id === partId) {
+      const question = part.questions?.[questionIndex]
+      const count = getListeningQuestionCount(question)
+      const end = start + count - 1
+
+      return count > 1 ? `Q${start}-${end}` : `Q${start}`
+    }
+
+    start += getListeningPartQuestionTotal(part)
+  }
+
+  return `Q${questionIndex + 1}`
+}
+
 function getSavedMockState(storageKey) {
   try {
     const saved = localStorage.getItem(storageKey)
@@ -245,6 +321,7 @@ export default function DoMockTest() {
   const [submitting, setSubmitting] = useState(false)
 
   const submittingRef = useRef(false)
+  const handleSubmitMockRef = useRef(null)
   const restoredRef = useRef(false)
   const loadingRef = useRef(true)
   const audioRef = useRef(null)
@@ -487,10 +564,19 @@ export default function DoMockTest() {
     }
   }, [alreadySubmitted, finalResult])
 
+  const listeningParts = useMemo(() => {
+    return normalizeListeningParts(listening)
+  }, [listening])
+
   const sections = useMemo(() => {
     return [
       { key: 'intro', label: 'Start' },
-      { key: 'listening', label: 'Listening' },
+      ...listeningParts.map((part, index) => ({
+        key: `listening-${index}`,
+        label: `L${index + 1}`,
+        listeningPart: part,
+        listeningPartIndex: index
+      })),
       ...readings.map((reading, index) => ({
         key: `reading-${index}`,
         label: `Reading ${index + 1}`,
@@ -501,7 +587,7 @@ export default function DoMockTest() {
       { key: 'writing-task2', label: 'Writing T2' },
       { key: 'review', label: 'Review' }
     ]
-  }, [readings])
+  }, [readings, listeningParts])
 
   const activeSection = sections[sectionIndex] || sections[0]
 
@@ -610,7 +696,7 @@ export default function DoMockTest() {
   }, [writingStarted, writingLocked, writingTimeLeft])
 
   useEffect(() => {
-    if (activeSection.key === 'listening' && !listeningStarted && !listeningLocked) {
+    if (activeSection.key?.startsWith('listening-') && !listeningStarted && !listeningLocked) {
       setListeningStarted(true)
     }
 
@@ -734,6 +820,26 @@ export default function DoMockTest() {
     })
   }
 
+  const handleReadingSentenceEnding = (readingId, questionId, itemId, value) => {
+    if (readingLocked) return
+
+    setReadingAnswers(prev => {
+      const readingSet = prev[readingId] || {}
+      const currentQuestion = readingSet[questionId] || {}
+
+      return {
+        ...prev,
+        [readingId]: {
+          ...readingSet,
+          [questionId]: {
+            ...currentQuestion,
+            [itemId]: value
+          }
+        }
+      }
+    })
+  }
+
   const handleReadingTableAnswer = (readingId, questionId, rowId, cellIndex, value) => {
     if (readingLocked) return
 
@@ -758,6 +864,12 @@ export default function DoMockTest() {
     return normalize(value) === normalize(question.answer)
   }
 
+  const isReadingSentenceEndingCorrect = (readingId, question, item) => {
+    const value = readingAnswers[readingId]?.[question.id]?.[item.id]
+
+    return value?.toString() === item.answer?.toString()
+  }
+
   const isListeningNormalCorrect = question => {
     const value = listeningAnswers[question.id]
 
@@ -769,14 +881,15 @@ export default function DoMockTest() {
   }
 
   const scoreListening = () => {
-    if (!listening || !Array.isArray(listening.questions)) {
+    if (!listening) {
       return { correct: 0, total: 0, band: 0 }
     }
 
     let correct = 0
     let total = 0
 
-    listening.questions.forEach(question => {
+    listeningParts.forEach(part => {
+      part.questions?.forEach(question => {
       if (question.type === 'table' || question.type === 'note') {
         question.rows?.forEach(row => {
           row.cells?.forEach((cell, cellIndex) => {
@@ -819,6 +932,7 @@ export default function DoMockTest() {
       if (isListeningNormalCorrect(question)) {
         correct++
       }
+      })
     })
 
     return {
@@ -843,6 +957,18 @@ export default function DoMockTest() {
           const userAnswer = readingAnswers[reading.id]?.[question.id]?.[paragraph.letter]
 
           if (userAnswer?.toString() === paragraph.answer?.toString()) {
+            correct++
+          }
+        })
+
+        return
+      }
+
+      if (question.type === 'sentenceEndings') {
+        question.items?.forEach(item => {
+          total++
+
+          if (isReadingSentenceEndingCorrect(reading.id, question, item)) {
             correct++
           }
         })
@@ -991,7 +1117,7 @@ export default function DoMockTest() {
     setAudioWarning('Listening audio finished. You cannot replay it.')
   }
 
-  const handleSubmitMock = async ({ auto = false } = {}) => {
+  const handleSubmitMock = useCallback(async ({ auto = false } = {}) => {
     if (submittingRef.current) return
 
     if (alreadySubmitted) {
@@ -1094,7 +1220,22 @@ export default function DoMockTest() {
       submittingRef.current = false
       setSubmitting(false)
     }
-  }
+  }, [
+    alreadySubmitted,
+    user,
+    mock,
+    writingAnswers,
+    storageKey,
+    listeningAnswers,
+    readingAnswers,
+    readings,
+    listening,
+    sections.length
+  ])
+
+  useEffect(() => {
+    handleSubmitMockRef.current = handleSubmitMock
+  }, [handleSubmitMock])
 
   useEffect(() => {
     const handleVisibility = () => {
@@ -1113,7 +1254,7 @@ export default function DoMockTest() {
       if (tabSwitchCountRef.current >= 2) {
         setTabWarning('You left the mock test tab more than once. Your test is being submitted automatically.')
         alert('You left the mock test tab more than once. Your test will be submitted automatically.')
-        handleSubmitMock({ auto: true })
+        handleSubmitMockRef.current?.({ auto: true })
       }
     }
 
@@ -1122,14 +1263,14 @@ export default function DoMockTest() {
     return () => {
       document.removeEventListener('visibilitychange', handleVisibility)
     }
-  }, [alreadySubmitted, finalResult, handleSubmitMock])
+  }, [alreadySubmitted, finalResult])
 
   useEffect(() => {
     if (loading || alreadySubmitted || finalResult) return
     if (!listeningStarted && !readingStarted && !writingStarted) return
 
     if (listeningLocked && readingLocked && writingLocked) {
-      handleSubmitMock({ auto: true })
+      handleSubmitMockRef.current?.({ auto: true })
     }
   }, [
     loading,
@@ -1154,7 +1295,7 @@ export default function DoMockTest() {
   }
 
   const getActiveTimerInfo = () => {
-    if (activeSection.key === 'listening') {
+    if (activeSection.key?.startsWith('listening-')) {
       return {
         label: 'Listening',
         time: listeningTimeLeft,
@@ -1238,7 +1379,7 @@ export default function DoMockTest() {
     )
   }
 
-  const renderListening = () => (
+  const renderListening = part => (
     <div className="space-y-6">
       {renderSectionTimerCard()}
 
@@ -1249,9 +1390,13 @@ export default function DoMockTest() {
       )}
 
       <div className="bg-white border border-gray-100 rounded-2xl p-6 sticky top-[120px] z-10">
-        <h2 className="text-xl font-bold text-gray-900 mb-2">
+        <h2 className="text-xl font-bold text-gray-900 mb-1">
           {listening?.title}
         </h2>
+
+        <p className="text-sm font-semibold text-purple-600 mb-2">
+          {part?.title || 'Listening Part'} {part?.instructions ? `· ${part.instructions}` : ''}
+        </p>
 
         {listening?.instructions && (
           <p className="text-sm text-gray-500 mb-4 whitespace-pre-wrap">
@@ -1281,13 +1426,13 @@ export default function DoMockTest() {
       </div>
 
       <fieldset disabled={listeningLocked} className={listeningLocked ? 'opacity-60' : ''}>
-        {listening?.questions?.map((question, index) => (
+        {(part?.questions || []).map((question, index) => (
           <div
             key={question.id}
             className="bg-white border border-gray-100 rounded-2xl p-6 mb-6"
           >
             <p className="text-xs text-purple-600 font-semibold mb-2">
-              Listening Q{index + 1}
+              Listening {getListeningQuestionRangeLabel(listeningParts, part?.id, index)}
             </p>
 
             {question.type === 'mcq' && (
@@ -1523,285 +1668,388 @@ export default function DoMockTest() {
       )}
 
       <fieldset disabled={readingLocked} className={readingLocked ? 'opacity-60' : ''}>
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="bg-white border border-gray-100 rounded-2xl p-6 h-fit sticky top-[120px]">
-            <h2 className="text-xl font-bold text-gray-900 mb-5">
-              {reading.title}
-            </h2>
+        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)] gap-6">
+          <div className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden lg:sticky lg:top-[150px] lg:h-[calc(100vh-12rem)]">
+            <div className="flex items-center justify-between gap-4 px-5 py-4 border-b border-gray-100 bg-white sticky top-0 z-10">
+              <div className="min-w-0">
+                <h2 className="font-semibold text-gray-900 truncate">
+                  {reading.title}
+                </h2>
 
-            {reading.passageMode === 'sections' ? (
-              <div className="space-y-6">
-                {reading.paragraphs?.map(paragraph => (
-                  <div key={paragraph.id}>
-                    <h3 className="font-semibold text-gray-900 mb-2">
-                      Paragraph {paragraph.letter}
-                    </h3>
+                <p className="text-xs text-gray-400 mt-1">
+                  Reading Passage
+                </p>
+              </div>
 
-                    <p className="text-sm text-gray-700 leading-7 whitespace-pre-wrap">
-                      {paragraph.text}
+              <span className="text-xs bg-gray-100 text-gray-500 px-3 py-1 rounded-full flex-shrink-0">
+                Scroll passage
+              </span>
+            </div>
+
+            <div className="p-5 md:p-7 overflow-y-auto h-[65vh] lg:h-[calc(100vh-16rem)]">
+              {reading.passageMode === 'sections' ? (
+                <div className="space-y-8">
+                  {reading.paragraphs?.map(paragraph => (
+                    <div key={paragraph.id}>
+                      <h3 className="font-semibold text-gray-900 mb-2">
+                        Paragraph {paragraph.letter}
+                      </h3>
+
+                      <p className="text-sm md:text-[15px] text-gray-700 leading-8 whitespace-pre-wrap">
+                        {paragraph.text}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-sm md:text-[15px] text-gray-700 leading-8 whitespace-pre-wrap">
+                  {reading.passage}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden lg:h-[calc(100vh-12rem)]">
+            <div className="flex items-center justify-between gap-4 px-5 py-4 border-b border-gray-100 bg-white sticky top-0 z-10">
+              <h2 className="font-semibold text-gray-800">
+                Questions ({getTotalReadingQuestionCount(reading)})
+              </h2>
+
+              <span className="text-xs bg-blue-50 text-blue-600 px-3 py-1 rounded-full">
+                Answer panel
+              </span>
+            </div>
+
+            <div className="p-5 md:p-7 overflow-y-auto h-[65vh] lg:h-[calc(100vh-16rem)]">
+              <div className="space-y-5">
+                {reading.questions?.map((question, index) => (
+                  <div
+                    key={question.id}
+                    className="bg-gray-50 border border-gray-100 rounded-2xl p-6"
+                  >
+                    <p className="text-xs text-blue-600 font-semibold mb-2">
+                      {getQuestionRangeLabel(reading.questions, question, index)}
                     </p>
+
+                    {question.type === 'matching' && (
+                      <div>
+                        <p className="font-medium text-sm text-gray-800 mb-4">
+                          Choose the correct heading for each paragraph.
+                        </p>
+
+                        <div className="bg-white border border-gray-100 rounded-xl p-4 mb-5">
+                          {reading.headings?.filter(Boolean).map((heading, headingIndex) => (
+                            <p
+                              key={headingIndex}
+                              className="text-sm text-gray-700 mb-1"
+                            >
+                              <span className="font-semibold">
+                                {headingIndex + 1}.
+                              </span>{' '}
+                              {heading}
+                            </p>
+                          ))}
+                        </div>
+
+                        <div className="flex flex-col gap-3">
+                          {question.paragraphs?.map(paragraph => (
+                            <div
+                              key={paragraph.letter}
+                              className="grid grid-cols-[110px_1fr] gap-3 items-center"
+                            >
+                              <label className="text-sm font-medium text-gray-700">
+                                Paragraph {paragraph.letter}
+                              </label>
+
+                              <select
+                                value={
+                                  readingAnswers[reading.id]?.[question.id]?.[
+                                    paragraph.letter
+                                  ] || ''
+                                }
+                                onChange={e =>
+                                  handleReadingMatching(
+                                    reading.id,
+                                    question.id,
+                                    paragraph.letter,
+                                    e.target.value
+                                  )
+                                }
+                                className="w-full min-w-0 border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 bg-white"
+                              >
+                                <option value="">Select heading</option>
+
+                                {reading.headings?.filter(Boolean).map((heading, headingIndex) => (
+                                  <option
+                                    key={headingIndex}
+                                    value={String(headingIndex + 1)}
+                                  >
+                                    {headingIndex + 1}. {heading}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {question.type === 'sentenceEndings' && (
+                      <div>
+                        {question.instruction && (
+                          <p className="text-sm text-gray-700 mb-4">
+                            {question.instruction}
+                          </p>
+                        )}
+
+                        <div className="bg-white border border-gray-100 rounded-xl p-4 mb-5">
+                          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
+                            Endings
+                          </p>
+
+                          <div className="space-y-2">
+                            {question.endings?.filter(Boolean).map((ending, endingIndex) => (
+                              <div
+                                key={endingIndex}
+                                className="flex gap-2 text-sm text-gray-700 leading-5"
+                              >
+                                <span className="font-semibold text-gray-500 min-w-6">
+                                  {letters[endingIndex]}.
+                                </span>
+
+                                <span>{ending}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="flex flex-col gap-3">
+                          {question.items?.map(item => (
+                            <div
+                              key={item.id}
+                              className="grid grid-cols-1 md:grid-cols-[1fr_160px] gap-3 items-center bg-white border border-gray-100 rounded-xl p-3"
+                            >
+                              <p className="text-sm text-gray-800">
+                                {item.sentence}
+                              </p>
+
+                              <select
+                                value={
+                                  readingAnswers[reading.id]?.[question.id]?.[
+                                    item.id
+                                  ] || ''
+                                }
+                                onChange={e =>
+                                  handleReadingSentenceEnding(
+                                    reading.id,
+                                    question.id,
+                                    item.id,
+                                    e.target.value
+                                  )
+                                }
+                                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 bg-white"
+                              >
+                                <option value="">Choose</option>
+
+                                {question.endings?.map((ending, endingIndex) => {
+                                  if (!ending?.trim()) return null
+
+                                  const letter = letters[endingIndex]
+
+                                  return (
+                                    <option key={letter} value={letter}>
+                                      {letter}. {ending}
+                                    </option>
+                                  )
+                                })}
+                              </select>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {(question.type === 'table' ||
+                      question.type === 'summary' ||
+                      question.type === 'note') && (
+                      <div>
+                        <p className="text-sm text-gray-700 mb-4">
+                          {question.instruction}
+                        </p>
+
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm border border-gray-100 rounded-xl overflow-hidden">
+                            <thead>
+                              <tr className="bg-gray-100">
+                                {question.columns?.map((column, columnIndex) => (
+                                  <th
+                                    key={columnIndex}
+                                    className="p-3 text-left font-semibold text-gray-700 border border-white"
+                                  >
+                                    {column}
+                                  </th>
+                                ))}
+                              </tr>
+                            </thead>
+
+                            <tbody>
+                              {question.rows?.map(row => (
+                                <tr key={row.id}>
+                                  {row.cells?.map((cell, cellIndex) => {
+                                    if (cell.type !== 'blank') {
+                                      return (
+                                        <td
+                                          key={cellIndex}
+                                          className="p-3 bg-white border border-gray-100 text-gray-700 whitespace-pre-wrap align-top"
+                                        >
+                                          {cell.text}
+                                        </td>
+                                      )
+                                    }
+
+                                    const key = tableAnswerKey(
+                                      question.id,
+                                      row.id,
+                                      cellIndex
+                                    )
+
+                                    return (
+                                      <td
+                                        key={cellIndex}
+                                        className="p-3 bg-white border border-gray-100 align-top"
+                                      >
+                                        <input
+                                          value={readingAnswers[reading.id]?.[key] || ''}
+                                          onChange={e =>
+                                            handleReadingTableAnswer(
+                                              reading.id,
+                                              question.id,
+                                              row.id,
+                                              cellIndex,
+                                              e.target.value
+                                            )
+                                          }
+                                          placeholder="Type answer..."
+                                          className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 bg-white"
+                                        />
+                                      </td>
+                                    )
+                                  })}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+
+                    {question.type === 'tfng' && (
+                      <div>
+                        <p className="text-sm text-gray-800 mb-3">
+                          {question.question}
+                        </p>
+
+                        <div className="flex gap-2">
+                          {['True', 'False', 'Not Given'].map(option => (
+                            <button
+                              key={option}
+                              type="button"
+                              onClick={() =>
+                                handleReadingAnswer(reading.id, question.id, option)
+                              }
+                              className={`flex-1 py-2 rounded-xl text-xs font-medium border ${
+                                readingAnswers[reading.id]?.[question.id] === option
+                                  ? 'bg-purple-600 text-white border-purple-600'
+                                  : 'border-gray-200 text-gray-500'
+                              }`}
+                            >
+                              {option}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {question.type === 'fitb' && (
+                      <div>
+                        <p className="text-sm text-gray-800 mb-3">
+                          {question.question}
+                        </p>
+
+                        <input
+                          value={readingAnswers[reading.id]?.[question.id] || ''}
+                          onChange={e =>
+                            handleReadingAnswer(reading.id, question.id, e.target.value)
+                          }
+                          placeholder="Type your answer..."
+                          className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 bg-white"
+                        />
+                      </div>
+                    )}
+
+                    {question.type === 'mcq' && (
+                      <div>
+                        <p className="text-sm text-gray-800 mb-3">
+                          {question.question}
+                        </p>
+
+                        {question.mode === 'multi' && (
+                          <p className="text-xs text-amber-600 bg-amber-50 rounded-xl p-3 mb-3">
+                            Choose TWO answers.
+                          </p>
+                        )}
+
+                        <div className="flex flex-col gap-2">
+                          {question.options?.map((option, optionIndex) => {
+                            const letter = letters[optionIndex]
+                            const selectedMulti = Array.isArray(
+                              readingAnswers[reading.id]?.[question.id]
+                            )
+                              ? readingAnswers[reading.id][question.id]
+                              : []
+
+                            const selected =
+                              question.mode === 'multi'
+                                ? selectedMulti.includes(letter)
+                                : readingAnswers[reading.id]?.[question.id] === letter
+
+                            return (
+                              <button
+                                key={optionIndex}
+                                type="button"
+                                onClick={() =>
+                                  question.mode === 'multi'
+                                    ? handleReadingMultiAnswer(
+                                        reading.id,
+                                        question.id,
+                                        letter
+                                      )
+                                    : handleReadingAnswer(
+                                        reading.id,
+                                        question.id,
+                                        letter
+                                      )
+                                }
+                                className={`text-left px-4 py-3 rounded-xl text-sm border ${
+                                  selected
+                                    ? 'bg-purple-600 text-white border-purple-600'
+                                    : 'border-gray-200 text-gray-700 bg-white'
+                                }`}
+                              >
+                                <span className="font-semibold mr-2">
+                                  {letter}.
+                                </span>
+                                {option}
+                              </button>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
-            ) : (
-              <div className="text-sm text-gray-700 leading-7 whitespace-pre-wrap">
-                {reading.passage}
-              </div>
-            )}
-          </div>
-
-          <div className="space-y-5">
-            {reading.questions?.map((question, index) => (
-              <div
-                key={question.id}
-                className="bg-white border border-gray-100 rounded-2xl p-6"
-              >
-                <p className="text-xs text-blue-600 font-semibold mb-2">
-                  {getQuestionRangeLabel(reading.questions, question, index)}
-                </p>
-
-                {question.type === 'matching' && (
-                  <div>
-                    <p className="font-medium text-sm text-gray-800 mb-4">
-                      Choose the correct heading for each paragraph.
-                    </p>
-
-                    <div className="bg-gray-50 border border-gray-100 rounded-xl p-4 mb-5">
-                      {reading.headings?.filter(Boolean).map((heading, headingIndex) => (
-                        <p
-                          key={headingIndex}
-                          className="text-sm text-gray-700 mb-1"
-                        >
-                          <span className="font-semibold">
-                            {headingIndex + 1}.
-                          </span>{' '}
-                          {heading}
-                        </p>
-                      ))}
-                    </div>
-
-                    <div className="flex flex-col gap-3">
-                      {question.paragraphs?.map(paragraph => (
-                        <div
-                          key={paragraph.letter}
-                          className="grid grid-cols-[110px_1fr] gap-3 items-center"
-                        >
-                          <label className="text-sm font-medium text-gray-700">
-                            Paragraph {paragraph.letter}
-                          </label>
-
-                          <select
-                            value={
-                              readingAnswers[reading.id]?.[question.id]?.[
-                                paragraph.letter
-                              ] || ''
-                            }
-                            onChange={e =>
-                              handleReadingMatching(
-                                reading.id,
-                                question.id,
-                                paragraph.letter,
-                                e.target.value
-                              )
-                            }
-                            className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 bg-white"
-                          >
-                            <option value="">Select heading</option>
-
-                            {reading.headings?.filter(Boolean).map((heading, headingIndex) => (
-                              <option
-                                key={headingIndex}
-                                value={String(headingIndex + 1)}
-                              >
-                                {headingIndex + 1}. {heading}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {(question.type === 'table' ||
-                  question.type === 'summary' ||
-                  question.type === 'note') && (
-                  <div>
-                    <p className="text-sm text-gray-700 mb-4">
-                      {question.instruction}
-                    </p>
-
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-sm border border-gray-100 rounded-xl overflow-hidden">
-                        <thead>
-                          <tr className="bg-gray-100">
-                            {question.columns?.map((column, columnIndex) => (
-                              <th
-                                key={columnIndex}
-                                className="p-3 text-left font-semibold text-gray-700 border border-white"
-                              >
-                                {column}
-                              </th>
-                            ))}
-                          </tr>
-                        </thead>
-
-                        <tbody>
-                          {question.rows?.map(row => (
-                            <tr key={row.id}>
-                              {row.cells?.map((cell, cellIndex) => {
-                                if (cell.type !== 'blank') {
-                                  return (
-                                    <td
-                                      key={cellIndex}
-                                      className="p-3 bg-gray-50 border border-white text-gray-700 whitespace-pre-wrap"
-                                    >
-                                      {cell.text}
-                                    </td>
-                                  )
-                                }
-
-                                const key = tableAnswerKey(
-                                  question.id,
-                                  row.id,
-                                  cellIndex
-                                )
-
-                                return (
-                                  <td
-                                    key={cellIndex}
-                                    className="p-3 bg-gray-50 border border-white"
-                                  >
-                                    <input
-                                      value={readingAnswers[reading.id]?.[key] || ''}
-                                      onChange={e =>
-                                        handleReadingTableAnswer(
-                                          reading.id,
-                                          question.id,
-                                          row.id,
-                                          cellIndex,
-                                          e.target.value
-                                        )
-                                      }
-                                      placeholder="Type answer..."
-                                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 bg-white"
-                                    />
-                                  </td>
-                                )
-                              })}
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                )}
-
-                {question.type === 'tfng' && (
-                  <div>
-                    <p className="text-sm text-gray-800 mb-3">
-                      {question.question}
-                    </p>
-
-                    <div className="flex gap-2">
-                      {['True', 'False', 'Not Given'].map(option => (
-                        <button
-                          key={option}
-                          type="button"
-                          onClick={() =>
-                            handleReadingAnswer(reading.id, question.id, option)
-                          }
-                          className={`flex-1 py-2 rounded-xl text-xs font-medium border ${
-                            readingAnswers[reading.id]?.[question.id] === option
-                              ? 'bg-purple-600 text-white border-purple-600'
-                              : 'border-gray-200 text-gray-500'
-                          }`}
-                        >
-                          {option}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {question.type === 'fitb' && (
-                  <div>
-                    <p className="text-sm text-gray-800 mb-3">
-                      {question.question}
-                    </p>
-
-                    <input
-                      value={readingAnswers[reading.id]?.[question.id] || ''}
-                      onChange={e =>
-                        handleReadingAnswer(reading.id, question.id, e.target.value)
-                      }
-                      placeholder="Type your answer..."
-                      className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400"
-                    />
-                  </div>
-                )}
-
-                {question.type === 'mcq' && (
-                  <div>
-                    <p className="text-sm text-gray-800 mb-3">
-                      {question.question}
-                    </p>
-
-                    {question.mode === 'multi' && (
-                      <p className="text-xs text-amber-600 bg-amber-50 rounded-xl p-3 mb-3">
-                        Choose TWO answers.
-                      </p>
-                    )}
-
-                    <div className="flex flex-col gap-2">
-                      {question.options?.map((option, optionIndex) => {
-                        const letter = letters[optionIndex]
-                        const selectedMulti = Array.isArray(
-                          readingAnswers[reading.id]?.[question.id]
-                        )
-                          ? readingAnswers[reading.id][question.id]
-                          : []
-
-                        const selected =
-                          question.mode === 'multi'
-                            ? selectedMulti.includes(letter)
-                            : readingAnswers[reading.id]?.[question.id] === letter
-
-                        return (
-                          <button
-                            key={optionIndex}
-                            type="button"
-                            onClick={() =>
-                              question.mode === 'multi'
-                                ? handleReadingMultiAnswer(
-                                    reading.id,
-                                    question.id,
-                                    letter
-                                  )
-                                : handleReadingAnswer(
-                                    reading.id,
-                                    question.id,
-                                    letter
-                                  )
-                            }
-                            className={`text-left px-4 py-3 rounded-xl text-sm border ${
-                              selected
-                                ? 'bg-purple-600 text-white border-purple-600'
-                                : 'border-gray-200 text-gray-700'
-                            }`}
-                          >
-                            <span className="font-semibold mr-2">
-                              {letter}.
-                            </span>
-                            {option}
-                          </button>
-                        )
-                      })}
-                    </div>
-                  </div>
-                )}
-              </div>
-            ))}
+            </div>
           </div>
         </div>
       </fieldset>
@@ -2230,7 +2478,7 @@ export default function DoMockTest() {
             </h1>
 
             <p className="text-gray-500 mb-6">
-              This mock test runs in one page: Listening → Reading 1 → Reading 2 → Reading 3 → Writing Task 1 → Writing Task 2 → Review.
+              This mock test runs in sections: Listening Part 1 → Part 2 → Part 3 → Part 4 → Reading 1 → Reading 2 → Reading 3 → Writing Task 1 → Writing Task 2 → Review.
             </p>
 
             <div className="grid grid-cols-3 gap-3 mb-8 text-left">
@@ -2263,7 +2511,8 @@ export default function DoMockTest() {
           </div>
         )}
 
-        {activeSection.key === 'listening' && renderListening()}
+        {activeSection.key?.startsWith('listening-') &&
+          renderListening(activeSection.listeningPart)}
 
         {activeSection.key?.startsWith('reading-') &&
           renderReading(activeSection.reading)}

@@ -14,11 +14,84 @@ import { useNavigate, useParams } from 'react-router-dom'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
+function normalizeListeningParts(listening) {
+  if (listening?.parts?.length) {
+    return listening.parts.map((part, index) => ({
+      id: part.id || `part-${index + 1}`,
+      title: part.title || `Part ${index + 1}`,
+      instructions: part.instructions || '',
+      questions: part.questions?.length ? part.questions : []
+    }))
+  }
+
+  return [
+    {
+      id: 'part-1',
+      title: 'Part 1',
+      instructions: '',
+      questions: listening?.questions?.length ? listening.questions : []
+    }
+  ]
+}
+
+function getListeningQuestionCount(question) {
+  if (question.type === 'table' || question.type === 'note') {
+    let count = 0
+
+    question.rows?.forEach(row => {
+      row.cells?.forEach(cell => {
+        if (cell.type === 'blank') count++
+      })
+    })
+
+    return count || 1
+  }
+
+  if (question.type === 'map') {
+    return question.mapItems?.length || 0
+  }
+
+  return 1
+}
+
+function getPartQuestionTotal(part) {
+  return (part.questions || []).reduce(
+    (sum, question) => sum + getListeningQuestionCount(question),
+    0
+  )
+}
+
+function getTotalListeningQuestionCount(parts) {
+  return (parts || []).reduce(
+    (sum, part) => sum + getPartQuestionTotal(part),
+    0
+  )
+}
+
+function getQuestionRangeLabel(parts, partId, questionIndex) {
+  let start = 1
+
+  for (const part of parts || []) {
+    if (part.id === partId) {
+      const question = part.questions?.[questionIndex]
+      const count = getListeningQuestionCount(question)
+      const end = start + count - 1
+
+      return count > 1 ? `Q${start}-${end}` : `Q${start}`
+    }
+
+    start += getPartQuestionTotal(part)
+  }
+
+  return `Q${questionIndex + 1}`
+}
+
 export default function DoListening() {
   const { id } = useParams()
 
   const [user, setUser] = useState(null)
   const [listening, setListening] = useState(null)
+  const [activePartId, setActivePartId] = useState(null)
   const [answers, setAnswers] = useState({})
   const [timeLeft, setTimeLeft] = useState(null)
   const [submitted, setSubmitted] = useState(false)
@@ -29,6 +102,11 @@ export default function DoListening() {
   const timerRef = useRef(null)
   const submittingRef = useRef(false)
   const navigate = useNavigate()
+
+  const parts = listening ? normalizeListeningParts(listening) : []
+  const activePart = parts.find(part => part.id === activePartId) || parts[0]
+  const activeQuestions = activePart?.questions || []
+  const totalQuestionCount = getTotalListeningQuestionCount(parts)
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async currentUser => {
@@ -47,7 +125,10 @@ export default function DoListening() {
         ...snap.data()
       }
 
+      const loadedParts = normalizeListeningParts(data)
+
       setListening(data)
+      setActivePartId(loadedParts[0]?.id || null)
       setTimeLeft((data.timeLimit || 30) * 60)
 
       const q = query(
@@ -269,7 +350,8 @@ export default function DoListening() {
     let correct = 0
     let total = 0
 
-    listening.questions.forEach(question => {
+    parts.forEach(part => {
+      part.questions?.forEach(question => {
       if (question.type === 'table' || question.type === 'note') {
         question.rows?.forEach(row => {
           row.cells?.forEach((cell, cellIndex) => {
@@ -303,6 +385,7 @@ export default function DoListening() {
       if (isNormalCorrect(question)) {
         correct++
       }
+      })
     })
 
     const percentage = total ? correct / total : 0
@@ -420,14 +503,29 @@ export default function DoListening() {
             </h2>
 
             <div className="flex flex-col gap-5">
-              {listening.questions.map((question, index) => (
+              {parts.map(part => (
+                <div key={part.id} className="mb-8">
+                  <div className="mb-4">
+                    <h3 className="font-semibold text-gray-800">
+                      {part.title}
+                    </h3>
+
+                    {part.instructions && (
+                      <p className="text-xs text-gray-400 mt-1">
+                        {part.instructions}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="flex flex-col gap-5">
+                    {part.questions.map((question, index) => (
                 <div
                   key={question.id}
                   className="border border-gray-100 rounded-xl p-5"
                 >
                   <div className="flex items-center gap-2 mb-4">
                     <span className="text-xs font-medium text-gray-400">
-                      Q{index + 1}
+                      {getQuestionRangeLabel(parts, part.id, index)}
                     </span>
 
                     <span
@@ -666,6 +764,9 @@ export default function DoListening() {
                     </div>
                   )}
                 </div>
+                    ))}
+                  </div>
+                </div>
               ))}
             </div>
 
@@ -725,19 +826,51 @@ export default function DoListening() {
         </div>
 
         <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm">
-          <h2 className="font-semibold text-gray-800 mb-5">
-            Questions ({listening.questions.length})
-          </h2>
+          <div className="flex items-start justify-between gap-4 mb-5">
+            <div>
+              <h2 className="font-semibold text-gray-800">
+                Questions ({totalQuestionCount})
+              </h2>
+
+              <p className="text-xs text-gray-400 mt-1">
+                {activePart?.title || 'Part'} {activePart?.instructions ? `· ${activePart.instructions}` : ''}
+              </p>
+            </div>
+
+            <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1.5 rounded-full">
+              {activePart ? `${getPartQuestionTotal(activePart)} in this part` : '0'}
+            </span>
+          </div>
+
+          <div className="flex gap-2 overflow-x-auto mb-6 pb-1">
+            {parts.map(part => (
+              <button
+                key={part.id}
+                type="button"
+                onClick={() => setActivePartId(part.id)}
+                className={`whitespace-nowrap px-4 py-2 rounded-xl text-xs font-medium border ${
+                  activePart?.id === part.id
+                    ? 'bg-purple-600 text-white border-purple-600'
+                    : 'bg-gray-50 text-gray-500 border-gray-100 hover:bg-gray-100'
+                }`}
+              >
+                {part.title}
+                <span className="opacity-70 ml-1">
+                  ({getPartQuestionTotal(part)})
+                </span>
+              </button>
+            ))}
+          </div>
 
           <div className="flex flex-col gap-6">
-            {listening.questions.map((question, index) => (
+            {activeQuestions.map((question, index) => (
               <div
                 key={question.id}
                 className="border border-gray-100 rounded-2xl p-5"
               >
                 <div className="flex items-center gap-2 mb-4">
                   <span className="text-xs font-medium text-gray-400">
-                    Q{index + 1}
+                    {getQuestionRangeLabel(parts, activePart?.id, index)}
                   </span>
 
                   <span

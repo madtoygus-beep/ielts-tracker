@@ -46,6 +46,10 @@ export default function CreateReading() {
       return question.paragraphs?.length || 0
     }
 
+    if (question.type === 'sentenceEndings') {
+      return question.items?.length || 0
+    }
+
     if (question.type === 'table' || question.type === 'summary') {
       let count = 0
 
@@ -77,6 +81,7 @@ export default function CreateReading() {
 
   const getQuestionTypeLabel = question => {
     if (question.type === 'matching') return 'Matching Headings'
+    if (question.type === 'sentenceEndings') return 'Matching Sentence Endings'
     if (question.type === 'tfng') return 'True / False / Not Given'
     if (question.type === 'fitb') return 'Fill in the Blank'
     if (question.type === 'table') return 'Table Completion'
@@ -222,6 +227,32 @@ export default function CreateReading() {
             id: question.id || crypto.randomUUID(),
             type: 'matching',
             paragraphs: question.paragraphs || []
+          }
+        }
+
+        if (question.type === 'sentenceEndings') {
+          return {
+            id: question.id || crypto.randomUUID(),
+            type: 'sentenceEndings',
+            instruction:
+              question.instruction ||
+              'Complete each sentence with the correct ending, A-G, below.',
+            items: question.items?.length
+              ? question.items.map(item => ({
+                  id: item.id || crypto.randomUUID(),
+                  sentence: item.sentence || '',
+                  answer: item.answer || ''
+                }))
+              : [
+                  {
+                    id: crypto.randomUUID(),
+                    sentence: '',
+                    answer: ''
+                  }
+                ],
+            endings: question.endings?.length
+              ? question.endings
+              : ['', '', '', '', '', '', '']
           }
         }
 
@@ -392,6 +423,28 @@ export default function CreateReading() {
       return
     }
 
+    if (type === 'sentenceEndings') {
+      setQuestions(prev => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          type: 'sentenceEndings',
+          instruction:
+            'Complete each sentence with the correct ending, A-G, below.',
+          items: [
+            {
+              id: crypto.randomUUID(),
+              sentence: '',
+              answer: ''
+            }
+          ],
+          endings: ['', '', '', '', '', '', '']
+        }
+      ])
+
+      return
+    }
+
     setQuestions(prev => [
       ...prev,
       {
@@ -510,6 +563,104 @@ export default function CreateReading() {
           paragraphs: q.paragraphs.map(p =>
             p.letter === letter ? { ...p, answer: value } : p
           )
+        }
+      })
+    )
+  }
+
+  const updateSentenceEndingItem = (questionId, itemId, field, value) => {
+    setQuestions(prev =>
+      prev.map(q => {
+        if (q.id !== questionId) return q
+
+        return {
+          ...q,
+          items: q.items.map(item =>
+            item.id === itemId ? { ...item, [field]: value } : item
+          )
+        }
+      })
+    )
+  }
+
+  const addSentenceEndingItem = questionId => {
+    setQuestions(prev =>
+      prev.map(q => {
+        if (q.id !== questionId) return q
+
+        return {
+          ...q,
+          items: [
+            ...q.items,
+            {
+              id: crypto.randomUUID(),
+              sentence: '',
+              answer: ''
+            }
+          ]
+        }
+      })
+    )
+  }
+
+  const removeSentenceEndingItem = (questionId, itemId) => {
+    setQuestions(prev =>
+      prev.map(q => {
+        if (q.id !== questionId) return q
+        if (q.items.length <= 1) return q
+
+        return {
+          ...q,
+          items: q.items.filter(item => item.id !== itemId)
+        }
+      })
+    )
+  }
+
+  const updateSentenceEnding = (questionId, endingIndex, value) => {
+    setQuestions(prev =>
+      prev.map(q => {
+        if (q.id !== questionId) return q
+
+        const endings = [...q.endings]
+        endings[endingIndex] = value
+
+        return {
+          ...q,
+          endings
+        }
+      })
+    )
+  }
+
+  const addSentenceEnding = questionId => {
+    setQuestions(prev =>
+      prev.map(q => {
+        if (q.id !== questionId) return q
+
+        return {
+          ...q,
+          endings: [...q.endings, '']
+        }
+      })
+    )
+  }
+
+  const removeSentenceEnding = (questionId, endingIndex) => {
+    setQuestions(prev =>
+      prev.map(q => {
+        if (q.id !== questionId) return q
+        if (q.endings.length <= 2) return q
+
+        const removedLetter = letters[endingIndex]
+
+        return {
+          ...q,
+          endings: q.endings.filter((_, index) => index !== endingIndex),
+          items: q.items.map(item => ({
+            ...item,
+            answer: item.answer === removedLetter ? '' : item.answer
+          }))
         }
       })
     )
@@ -719,6 +870,27 @@ export default function CreateReading() {
         }
       }
 
+      if (question.type === 'sentenceEndings') {
+        if (!question.instruction?.trim()) {
+          alert('Please add instructions for Matching Sentence Endings.')
+          return false
+        }
+
+        const filledEndings = question.endings.filter(ending => ending.trim())
+
+        if (filledEndings.length < 2) {
+          alert('Matching Sentence Endings needs at least 2 endings.')
+          return false
+        }
+
+        for (const item of question.items) {
+          if (!item.sentence?.trim() || !item.answer) {
+            alert('Please fill all sentence endings items and correct answers.')
+            return false
+          }
+        }
+      }
+
       if (question.type === 'table' || question.type === 'summary') {
         if (!question.instruction?.trim()) {
           alert('Please add table instructions.')
@@ -831,6 +1003,20 @@ export default function CreateReading() {
             letter: p.letter || '',
             answer: p.answer || ''
           }))
+        }
+      }
+
+      if (question.type === 'sentenceEndings') {
+        return {
+          id: question.id,
+          type: 'sentenceEndings',
+          instruction: question.instruction || '',
+          items: question.items.map(item => ({
+            id: item.id,
+            sentence: item.sentence || '',
+            answer: item.answer || ''
+          })),
+          endings: question.endings.filter(ending => ending.trim())
         }
       }
 
@@ -1132,6 +1318,13 @@ export default function CreateReading() {
               </button>
 
               <button
+                onClick={() => addQuestion('sentenceEndings')}
+                className="text-xs bg-cyan-50 text-cyan-600 px-3 py-2 rounded-lg hover:bg-cyan-100"
+              >
+                + Sentence Endings
+              </button>
+
+              <button
                 onClick={() => addQuestion('tfng')}
                 className="text-xs bg-blue-50 text-blue-600 px-3 py-2 rounded-lg hover:bg-blue-100"
               >
@@ -1237,6 +1430,165 @@ export default function CreateReading() {
                           </select>
                         </div>
                       ))}
+                    </div>
+                  </div>
+                )}
+
+                {question.type === 'sentenceEndings' && (
+                  <div>
+                    <label className="text-xs text-gray-400 mb-1 block">
+                      Instruction
+                    </label>
+
+                    <textarea
+                      rows={2}
+                      value={question.instruction}
+                      onChange={e =>
+                        updateQuestion(
+                          question.id,
+                          'instruction',
+                          e.target.value
+                        )
+                      }
+                      placeholder="Complete each sentence with the correct ending, A-G, below."
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 mb-4 resize-none"
+                    />
+
+                    <div className="bg-gray-50 border border-gray-100 rounded-xl p-4 mb-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <p className="text-sm font-medium text-gray-800">
+                          Sentence stems
+                        </p>
+
+                        <button
+                          onClick={() => addSentenceEndingItem(question.id)}
+                          className="text-xs bg-cyan-50 text-cyan-600 px-3 py-1.5 rounded-lg hover:bg-cyan-100"
+                        >
+                          + Add sentence
+                        </button>
+                      </div>
+
+                      <div className="flex flex-col gap-3">
+                        {question.items.map((item, itemIndex) => (
+                          <div
+                            key={item.id}
+                            className="bg-white border border-gray-100 rounded-xl p-3"
+                          >
+                            <div className="flex items-center justify-between mb-2">
+                              <p className="text-xs font-semibold text-gray-500">
+                                Sentence {itemIndex + 1}
+                              </p>
+
+                              {question.items.length > 1 && (
+                                <button
+                                  onClick={() =>
+                                    removeSentenceEndingItem(
+                                      question.id,
+                                      item.id
+                                    )
+                                  }
+                                  className="text-xs text-red-400 hover:text-red-600"
+                                >
+                                  Remove
+                                </button>
+                              )}
+                            </div>
+
+                            <input
+                              value={item.sentence}
+                              onChange={e =>
+                                updateSentenceEndingItem(
+                                  question.id,
+                                  item.id,
+                                  'sentence',
+                                  e.target.value
+                                )
+                              }
+                              placeholder="Sentence stem, e.g. The researchers found that..."
+                              className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 mb-2"
+                            />
+
+                            <select
+                              value={item.answer}
+                              onChange={e =>
+                                updateSentenceEndingItem(
+                                  question.id,
+                                  item.id,
+                                  'answer',
+                                  e.target.value
+                                )
+                              }
+                              className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 bg-white"
+                            >
+                              <option value="">Select correct ending</option>
+
+                              {question.endings
+                                .map((ending, endingIndex) => ({
+                                  text: ending,
+                                  letter: letters[endingIndex]
+                                }))
+                                .filter(ending => ending.text.trim())
+                                .map(ending => (
+                                  <option key={ending.letter} value={ending.letter}>
+                                    {ending.letter}. {ending.text}
+                                  </option>
+                                ))}
+                            </select>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="bg-gray-50 border border-gray-100 rounded-xl p-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <p className="text-sm font-medium text-gray-800">
+                          Endings
+                        </p>
+
+                        <button
+                          onClick={() => addSentenceEnding(question.id)}
+                          className="text-xs bg-gray-100 text-gray-600 px-3 py-1.5 rounded-lg hover:bg-gray-200"
+                        >
+                          + Add ending
+                        </button>
+                      </div>
+
+                      <div className="flex flex-col gap-2">
+                        {question.endings.map((ending, endingIndex) => (
+                          <div key={endingIndex} className="flex items-center gap-2">
+                            <span className="w-7 h-7 rounded-full bg-cyan-50 text-cyan-600 text-xs font-semibold flex items-center justify-center">
+                              {letters[endingIndex]}
+                            </span>
+
+                            <input
+                              value={ending}
+                              onChange={e =>
+                                updateSentenceEnding(
+                                  question.id,
+                                  endingIndex,
+                                  e.target.value
+                                )
+                              }
+                              placeholder={`Ending ${letters[endingIndex]}`}
+                              className="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400"
+                            />
+
+                            {question.endings.length > 2 && (
+                              <button
+                                onClick={() =>
+                                  removeSentenceEnding(
+                                    question.id,
+                                    endingIndex
+                                  )
+                                }
+                                className="text-xs text-red-400 hover:text-red-600 px-2"
+                              >
+                                Remove
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   </div>
                 )}

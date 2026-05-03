@@ -5,13 +5,8 @@ import {
   sendPasswordResetEmail
 } from 'firebase/auth'
 import {
-  collection,
   doc,
-  getDocs,
-  query,
-  setDoc,
-  updateDoc,
-  where
+  setDoc
 } from 'firebase/firestore'
 import { auth, db } from '../firebase'
 import { useNavigate } from 'react-router-dom'
@@ -63,84 +58,11 @@ export default function Signup() {
     setLoading(true)
 
     try {
-      const existingUserQuery = query(
-        collection(db, 'users'),
-        where('email', '==', cleanEmail)
-      )
-
-      const existingUserSnap = await getDocs(existingUserQuery)
-
-      if (!existingUserSnap.empty) {
-        const existingUserDoc = existingUserSnap.docs[0]
-        const existingUser = existingUserDoc.data()
-
-        if (existingUser.deleted || existingUser.status === 'deleted') {
-          await updateDoc(doc(db, 'users', existingUserDoc.id), {
-            name: cleanName,
-            email: cleanEmail,
-            role: null,
-            requestedRole: role,
-            status: 'pending',
-            deleted: false,
-            reactivatedAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString()
-          })
-
-          try {
-            await sendPasswordResetEmail(auth, cleanEmail)
-            setMessage(
-              'Your account request has been reactivated. A password reset email has been sent. Please reset your password and wait for admin approval.'
-            )
-          } catch (resetError) {
-            setMessage(
-              'Your account request has been reactivated. Please login if you remember your password, or ask admin for help.'
-            )
-          }
-
-          setTimeout(() => {
-            navigate('/login')
-          }, 2200)
-
-          return
-        }
-
-        if (existingUser.status === 'pending') {
-          setError('This email already has a pending approval request.')
-          return
-        }
-
-        if (existingUser.status === 'approved' || !existingUser.status) {
-          setError('This email is already registered. Please login instead.')
-          return
-        }
-
-        if (existingUser.status === 'rejected') {
-          await updateDoc(doc(db, 'users', existingUserDoc.id), {
-            name: cleanName,
-            email: cleanEmail,
-            role: null,
-            requestedRole: role,
-            status: 'pending',
-            deleted: false,
-            reappliedAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString()
-          })
-
-          setMessage('Your rejected request has been sent again for admin approval.')
-
-          setTimeout(() => {
-            navigate('/login')
-          }, 1600)
-
-          return
-        }
-      }
-
       const signInMethods = await fetchSignInMethodsForEmail(auth, cleanEmail)
 
       if (signInMethods.length > 0) {
         setError(
-          'This email already exists. Please login or use password reset. If your profile was removed before, ask admin to restore it.'
+          'This email is already registered. Please login or use password reset.'
         )
         return
       }
@@ -168,9 +90,28 @@ export default function Signup() {
         navigate('/login')
       }, 1200)
     } catch (err) {
+      console.error(err)
+
       if (err.code === 'auth/email-already-in-use') {
         setError(
-          'This email is already in use. Please login or use password reset. If the admin deleted your profile before, ask admin to restore it.'
+          'This email is already in use. Please login or use password reset.'
+        )
+        return
+      }
+
+      if (err.code === 'auth/invalid-email') {
+        setError('Please enter a valid email address.')
+        return
+      }
+
+      if (err.code === 'auth/weak-password') {
+        setError('Password must be at least 6 characters.')
+        return
+      }
+
+      if (err.code === 'permission-denied') {
+        setError(
+          'Account was created, but the profile could not be saved because of Firestore permissions. Please contact admin.'
         )
         return
       }

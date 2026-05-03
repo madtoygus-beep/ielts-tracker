@@ -57,6 +57,42 @@ const emptyTableRow = columns => ({
   }))
 })
 
+const emptyPart = number => ({
+  id: crypto.randomUUID(),
+  title: `Part ${number}`,
+  instructions:
+    number === 1
+      ? 'Questions 1-10'
+      : number === 2
+        ? 'Questions 11-20'
+        : number === 3
+          ? 'Questions 21-30'
+          : number === 4
+            ? 'Questions 31-40'
+            : '',
+  questions: [emptyQuestion()]
+})
+
+const normalizeParts = data => {
+  if (data.parts?.length) {
+    return data.parts.map((part, index) => ({
+      id: part.id || crypto.randomUUID(),
+      title: part.title || `Part ${index + 1}`,
+      instructions: part.instructions || '',
+      questions: part.questions?.length ? part.questions : [emptyQuestion()]
+    }))
+  }
+
+  return [
+    {
+      id: crypto.randomUUID(),
+      title: 'Part 1',
+      instructions: 'Questions 1-10',
+      questions: data.questions?.length ? data.questions : [emptyQuestion()]
+    }
+  ]
+}
+
 export default function CreateListening() {
   const { id } = useParams()
   const isEditMode = Boolean(id)
@@ -72,7 +108,13 @@ export default function CreateListening() {
   const [dueDate, setDueDate] = useState('')
   const [timeLimit, setTimeLimit] = useState(30)
   const [assignTo, setAssignTo] = useState([])
-  const [questions, setQuestions] = useState([emptyQuestion()])
+  const [parts, setParts] = useState([
+    emptyPart(1),
+    emptyPart(2),
+    emptyPart(3),
+    emptyPart(4)
+  ])
+  const [activePartId, setActivePartId] = useState(null)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
 
@@ -103,6 +145,12 @@ export default function CreateListening() {
   }, [])
 
   useEffect(() => {
+    if (!activePartId && parts.length > 0) {
+      setActivePartId(parts[0].id)
+    }
+  }, [activePartId, parts])
+
+  useEffect(() => {
     const loadListening = async () => {
       if (!isEditMode) return
 
@@ -122,7 +170,10 @@ export default function CreateListening() {
       setDueDate(data.dueDate || '')
       setTimeLimit(data.timeLimit || 30)
       setAssignTo(data.assignTo || [])
-      setQuestions(data.questions?.length ? data.questions : [emptyQuestion()])
+
+      const loadedParts = normalizeParts(data)
+      setParts(loadedParts)
+      setActivePartId(loadedParts[0]?.id || null)
     }
 
     loadListening()
@@ -144,6 +195,95 @@ export default function CreateListening() {
   const selectedStudents = students.filter(student =>
     assignTo.includes(student.id)
   )
+
+  const activePart = parts.find(part => part.id === activePartId) || parts[0]
+  const questions = activePart?.questions || []
+
+  const setQuestions = updater => {
+    if (!activePart) return
+
+    setParts(prev =>
+      prev.map(part => {
+        if (part.id !== activePart.id) return part
+
+        const nextQuestions =
+          typeof updater === 'function'
+            ? updater(part.questions || [])
+            : updater
+
+        return {
+          ...part,
+          questions: nextQuestions
+        }
+      })
+    )
+  }
+
+  const updatePart = (partId, key, value) => {
+    setParts(prev =>
+      prev.map(part =>
+        part.id === partId
+          ? {
+              ...part,
+              [key]: value
+            }
+          : part
+      )
+    )
+  }
+
+  const addPart = () => {
+    const nextPart = emptyPart(parts.length + 1)
+
+    setParts(prev => [...prev, nextPart])
+    setActivePartId(nextPart.id)
+  }
+
+  const duplicatePart = part => {
+    const clone = JSON.parse(JSON.stringify(part))
+    clone.id = crypto.randomUUID()
+    clone.title = `${part.title || 'Part'} Copy`
+    clone.questions = (clone.questions || []).map(question => ({
+      ...question,
+      id: crypto.randomUUID(),
+      rows: question.rows?.map(row => ({ ...row, id: crypto.randomUUID() })) || [],
+      mapLocations:
+        question.mapLocations?.map(location => ({
+          ...location,
+          id: crypto.randomUUID()
+        })) || [],
+      mapItems:
+        question.mapItems?.map(item => ({
+          ...item,
+          id: crypto.randomUUID()
+        })) || []
+    }))
+
+    setParts(prev => [...prev, clone])
+    setActivePartId(clone.id)
+  }
+
+  const removePart = partId => {
+    if (parts.length === 1) {
+      alert('Listening needs at least one part.')
+      return
+    }
+
+    const ok = window.confirm('Delete this listening part and all questions inside it?')
+    if (!ok) return
+
+    setParts(prev => {
+      const next = prev.filter(part => part.id !== partId)
+
+      if (activePartId === partId) {
+        setActivePartId(next[0]?.id || null)
+      }
+
+      return next
+    })
+  }
+
+  const getPartQuestionCount = part => part.questions?.length || 0
 
   const toggleStudent = studentId => {
     setAssignTo(prev =>
@@ -515,7 +655,18 @@ export default function CreateListening() {
   }
 
   const validateQuestions = () => {
-    for (const question of questions) {
+    for (const part of parts) {
+      if (!part.title?.trim()) {
+        alert('Every listening part needs a title.')
+        return false
+      }
+
+      if (!part.questions?.length) {
+        alert(`${part.title || 'Part'} needs at least one question.`)
+        return false
+      }
+
+      for (const question of part.questions) {
       if (question.type !== 'table' && !question.question.trim()) {
         alert('Please fill in every question text.')
         return false
@@ -598,6 +749,7 @@ export default function CreateListening() {
           }
         }
       }
+      }
     }
 
     return true
@@ -623,6 +775,13 @@ export default function CreateListening() {
 
     setSaving(true)
 
+    const cleanParts = parts.map(part => ({
+      ...part,
+      title: part.title?.trim() || 'Part',
+      instructions: part.instructions || '',
+      questions: part.questions || []
+    }))
+
     const payload = {
       title: title.trim(),
       audioUrl: audioUrl.trim(),
@@ -630,7 +789,14 @@ export default function CreateListening() {
       dueDate,
       timeLimit: Number(timeLimit) || 30,
       assignTo,
-      questions,
+      parts: cleanParts,
+      questions: cleanParts.flatMap(part =>
+        (part.questions || []).map(question => ({
+          ...question,
+          partId: part.id,
+          partTitle: part.title
+        }))
+      ),
       updatedAt: new Date().toISOString()
     }
 
@@ -678,7 +844,7 @@ export default function CreateListening() {
         </h1>
 
         <p className="text-gray-500 mb-8">
-          Add an audio link, questions and assign it to students.
+          Add an audio link, organize questions by IELTS Listening parts and assign it to students.
         </p>
 
         {saved && (
@@ -777,24 +943,103 @@ export default function CreateListening() {
             </div>
 
             <div className="bg-white border border-gray-100 rounded-2xl p-6">
-              <div className="flex items-center justify-between mb-4">
+              <div className="flex items-start justify-between gap-4 mb-5">
                 <div>
                   <h2 className="font-semibold text-gray-800">
-                    Questions
+                    Listening Parts
                   </h2>
 
                   <p className="text-xs text-gray-400 mt-1">
-                    Supports MCQ, fill blank, T/F/NG, table/form, note completion and map labeling.
+                    Build IELTS Listening as Part 1, Part 2, Part 3 and Part 4. Each part can have its own question set.
                   </p>
                 </div>
 
                 <button
-                  onClick={addQuestion}
-                  className="text-xs bg-purple-600 text-white px-4 py-2 rounded-xl hover:bg-purple-700"
+                  onClick={addPart}
+                  className="text-xs bg-gray-900 text-white px-4 py-2 rounded-xl hover:bg-gray-800"
                 >
-                  + Add Question
+                  + Add Part
                 </button>
               </div>
+
+              <div className="flex gap-2 overflow-x-auto mb-5 pb-1">
+                {parts.map((part, partIndex) => (
+                  <button
+                    key={part.id}
+                    type="button"
+                    onClick={() => setActivePartId(part.id)}
+                    className={`whitespace-nowrap px-4 py-2 rounded-xl text-xs font-medium border ${
+                      activePart?.id === part.id
+                        ? 'bg-purple-600 text-white border-purple-600'
+                        : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'
+                    }`}
+                  >
+                    {part.title || `Part ${partIndex + 1}`}
+                    <span className="opacity-70 ml-1">
+                      ({getPartQuestionCount(part)})
+                    </span>
+                  </button>
+                ))}
+              </div>
+
+              {activePart && (
+                <div className="bg-gray-50 border border-gray-100 rounded-2xl p-5 mb-5">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+                    <div>
+                      <label className="text-xs text-gray-400 mb-1 block">
+                        Part title
+                      </label>
+
+                      <input
+                        value={activePart.title || ''}
+                        onChange={e =>
+                          updatePart(activePart.id, 'title', e.target.value)
+                        }
+                        placeholder="Part 1"
+                        className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 bg-white"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs text-gray-400 mb-1 block">
+                        Part instructions / optional
+                      </label>
+
+                      <input
+                        value={activePart.instructions || ''}
+                        onChange={e =>
+                          updatePart(activePart.id, 'instructions', e.target.value)
+                        }
+                        placeholder="Questions 1-10"
+                        className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 bg-white"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2 flex-wrap">
+                    <button
+                      onClick={addQuestion}
+                      className="text-xs bg-purple-600 text-white px-4 py-2 rounded-xl hover:bg-purple-700"
+                    >
+                      + Add Question to {activePart.title || 'Part'}
+                    </button>
+
+                    <button
+                      onClick={() => duplicatePart(activePart)}
+                      className="text-xs bg-white border border-gray-200 text-gray-500 px-4 py-2 rounded-xl hover:bg-gray-50"
+                    >
+                      Duplicate Part
+                    </button>
+
+                    <button
+                      onClick={() => removePart(activePart.id)}
+                      className="text-xs bg-red-50 text-red-500 px-4 py-2 rounded-xl hover:bg-red-100"
+                    >
+                      Delete Part
+                    </button>
+                  </div>
+                </div>
+              )}
 
               <div className="flex flex-col gap-4">
                 {questions.map((question, index) => (
@@ -804,7 +1049,7 @@ export default function CreateListening() {
                   >
                     <div className="flex items-center justify-between gap-3 mb-4">
                       <p className="text-sm font-semibold text-gray-800">
-                        Question {index + 1}
+                        {activePart?.title || 'Part'} · Question {index + 1}
                       </p>
 
                       <div className="flex gap-2">

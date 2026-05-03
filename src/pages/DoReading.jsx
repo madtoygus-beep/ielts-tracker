@@ -114,6 +114,10 @@ export default function DoReading() {
       return question.paragraphs?.length || 0
     }
 
+    if (question.type === 'sentenceEndings') {
+      return question.items?.length || 0
+    }
+
     if (question.type === 'table' || question.type === 'summary') {
       let count = 0
 
@@ -127,6 +131,15 @@ export default function DoReading() {
     }
 
     return 1
+  }
+
+  const getTotalQuestionCount = () => {
+    if (!reading?.questions?.length) return 0
+
+    return reading.questions.reduce(
+      (sum, question) => sum + getQuestionItemCount(question),
+      0
+    )
   }
 
   const getQuestionStartNumber = index => {
@@ -145,6 +158,7 @@ export default function DoReading() {
 
   const getQuestionTypeLabel = question => {
     if (question.type === 'matching') return 'Matching Headings'
+    if (question.type === 'sentenceEndings') return 'Sentence Endings'
     if (question.type === 'tfng') return 'T/F/NG'
     if (question.type === 'fitb') return 'Fill blank'
     if (question.type === 'table') return 'Table Completion'
@@ -196,6 +210,22 @@ export default function DoReading() {
         [letter]: value
       }
     }))
+  }
+
+  const handleSentenceEnding = (questionId, itemId, value) => {
+    setAnswers(prev => ({
+      ...prev,
+      [questionId]: {
+        ...(prev[questionId] || {}),
+        [itemId]: value
+      }
+    }))
+  }
+
+  const getSentenceEndingText = (question, letter) => {
+    if (!letter) return 'No answer'
+    const index = letters.indexOf(letter)
+    return question.endings?.[index] || `Ending ${letter}`
   }
 
   const getHeadingText = number => {
@@ -269,6 +299,15 @@ export default function DoReading() {
     return userAnswer === correctAnswer
   }
 
+  const isSentenceEndingCorrect = (question, item) => {
+    const userAnswer = answers[question.id]?.[item.id]?.toString()
+    const correctAnswer = item.answer?.toString()
+
+    if (!userAnswer || !correctAnswer) return false
+
+    return userAnswer === correctAnswer
+  }
+
   const calculateScore = () => {
     let correct = 0
     let total = 0
@@ -279,6 +318,18 @@ export default function DoReading() {
           total++
 
           if (isMatchingCorrect(question, paragraph)) {
+            correct++
+          }
+        })
+
+        return
+      }
+
+      if (question.type === 'sentenceEndings') {
+        question.items?.forEach(item => {
+          total++
+
+          if (isSentenceEndingCorrect(question, item)) {
             correct++
           }
         })
@@ -465,7 +516,9 @@ export default function DoReading() {
                         className={`text-xs px-2 py-1 rounded-full ${
                           question.type === 'matching'
                             ? 'bg-indigo-50 text-indigo-600'
-                            : question.type === 'tfng'
+                            : question.type === 'sentenceEndings'
+                              ? 'bg-cyan-50 text-cyan-600'
+                              : question.type === 'tfng'
                               ? 'bg-blue-50 text-blue-600'
                               : question.type === 'fitb'
                                 ? 'bg-amber-50 text-amber-600'
@@ -535,6 +588,98 @@ export default function DoReading() {
 
                                     <p className="text-sm font-medium text-green-700">
                                       {correctAnswer}. {getHeadingText(correctAnswer)}
+                                    </p>
+                                  </>
+                                )}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {question.type === 'sentenceEndings' && (
+                      <div>
+                        <p className="font-medium text-sm text-gray-800 mb-2">
+                          Matching Sentence Endings
+                        </p>
+
+                        {question.instruction && (
+                          <p className="text-sm text-gray-600 mb-4">
+                            {question.instruction}
+                          </p>
+                        )}
+
+                        <div className="bg-gray-50 border border-gray-100 rounded-xl p-4 mb-5">
+                          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
+                            Endings
+                          </p>
+
+                          <div className="space-y-2">
+                            {question.endings?.filter(Boolean).map((ending, endingIndex) => (
+                              <div
+                                key={endingIndex}
+                                className="flex gap-2 text-sm text-gray-700 leading-5"
+                              >
+                                <span className="font-semibold text-gray-500 min-w-6">
+                                  {letters[endingIndex]}.
+                                </span>
+
+                                <span>{ending}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="flex flex-col gap-3">
+                          {question.items?.map(item => {
+                            const userAnswer = answers[question.id]?.[item.id]
+                            const correctAnswer = item.answer
+                            const correct = isSentenceEndingCorrect(question, item)
+
+                            return (
+                              <div
+                                key={item.id}
+                                className={`rounded-xl p-4 border ${
+                                  correct
+                                    ? 'bg-green-50 border-green-100'
+                                    : 'bg-red-50 border-red-100'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between mb-2">
+                                  <p className="text-sm font-semibold text-gray-800">
+                                    {item.sentence}
+                                  </p>
+
+                                  <span
+                                    className={`text-xs font-semibold ${
+                                      correct
+                                        ? 'text-green-600'
+                                        : 'text-red-600'
+                                    }`}
+                                  >
+                                    {correct ? 'Correct' : 'Wrong'}
+                                  </span>
+                                </div>
+
+                                <p className="text-xs text-gray-500 mb-1">
+                                  Your answer:
+                                </p>
+
+                                <p className="text-sm text-gray-800 mb-2">
+                                  {userAnswer
+                                    ? `${userAnswer}. ${getSentenceEndingText(question, userAnswer)}`
+                                    : 'No answer'}
+                                </p>
+
+                                {!correct && (
+                                  <>
+                                    <p className="text-xs text-gray-500 mb-1">
+                                      Correct answer:
+                                    </p>
+
+                                    <p className="text-sm font-medium text-green-700">
+                                      {correctAnswer}. {getSentenceEndingText(question, correctAnswer)}
                                     </p>
                                   </>
                                 )}
@@ -632,7 +777,7 @@ export default function DoReading() {
                       </div>
                     )}
 
-                    {question.type !== 'matching' && question.type !== 'table' && question.type !== 'summary' && (
+                    {question.type !== 'matching' && question.type !== 'sentenceEndings' && question.type !== 'table' && question.type !== 'summary' && (
                       <div>
                         <p className="text-sm text-gray-800 mb-4">
                           {question.question}
@@ -707,21 +852,21 @@ export default function DoReading() {
   }
 
   return (
-    <div className="min-h-screen bg-[#faf9f6] flex flex-col">
-      <nav className="flex justify-between items-center px-8 py-4 bg-white border-b border-gray-100 sticky top-0 z-10">
+    <div className="min-h-screen bg-[#faf9f6]">
+      <nav className="flex flex-col md:flex-row md:justify-between md:items-center gap-3 px-5 md:px-8 py-4 bg-white border-b border-gray-100 sticky top-0 z-20">
         <img
           src="/1.png"
           alt="Maxima"
           className="h-10 object-contain"
         />
 
-        <div className="flex items-center gap-4">
-          <span className="text-sm font-medium text-gray-700 uppercase tracking-wide">
+        <div className="flex items-center justify-between md:justify-end gap-4">
+          <span className="text-sm font-medium text-gray-700 uppercase tracking-wide truncate max-w-[220px] md:max-w-[520px]">
             {reading.title}
           </span>
 
           <div
-            className={`font-mono text-lg font-bold px-4 py-1.5 rounded-xl ${
+            className={`font-mono text-lg font-bold px-4 py-1.5 rounded-xl flex-shrink-0 ${
               timeLeft <= 60
                 ? 'bg-red-50 text-red-600'
                 : timeLeft <= 300
@@ -734,43 +879,60 @@ export default function DoReading() {
         </div>
       </nav>
 
-      <div className="flex flex-1 overflow-hidden">
-        <div className="w-1/2 overflow-y-auto p-8 border-r border-gray-100">
-          <h2 className="font-semibold text-gray-800 mb-5">
-            Reading Passage
-          </h2>
+      <div className="max-w-[1500px] mx-auto px-4 md:px-6 py-6">
+        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)] gap-6">
+          <div className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden lg:sticky lg:top-24 lg:h-[calc(100vh-8rem)]">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 bg-white sticky top-0 z-10">
+              <h2 className="font-semibold text-gray-800">
+                Reading Passage
+              </h2>
 
-          {reading.passageMode === 'sections' ? (
-            <div className="space-y-8">
-              {reading.paragraphs.map(paragraph => (
-                <div key={paragraph.id}>
-                  <h3 className="font-semibold text-gray-900 mb-2">
-                    Paragraph {paragraph.letter}
-                  </h3>
+              <span className="text-xs bg-gray-100 text-gray-500 px-3 py-1 rounded-full">
+                Scroll passage
+              </span>
+            </div>
 
-                  <p className="text-sm text-gray-700 leading-7 whitespace-pre-wrap">
-                    {paragraph.text}
-                  </p>
+            <div className="p-5 md:p-7 overflow-y-auto h-[65vh] lg:h-[calc(100vh-12rem)]">
+              {reading.passageMode === 'sections' ? (
+                <div className="space-y-8">
+                  {reading.paragraphs.map(paragraph => (
+                    <div key={paragraph.id}>
+                      <h3 className="font-semibold text-gray-900 mb-2">
+                        Paragraph {paragraph.letter}
+                      </h3>
+
+                      <p className="text-sm md:text-[15px] text-gray-700 leading-8 whitespace-pre-wrap">
+                        {paragraph.text}
+                      </p>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              ) : (
+                <div className="text-sm md:text-[15px] text-gray-700 leading-8 whitespace-pre-wrap">
+                  {reading.passage}
+                </div>
+              )}
             </div>
-          ) : (
-            <div className="text-sm text-gray-700 leading-7 whitespace-pre-wrap">
-              {reading.passage}
-            </div>
-          )}
-        </div>
+          </div>
 
-        <div className="w-1/2 overflow-y-auto p-8">
-          <h2 className="font-semibold text-gray-800 mb-5">
-            Questions ({reading.questions.length})
-          </h2>
+          <div className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden lg:h-[calc(100vh-8rem)]">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 bg-white sticky top-0 z-10">
+              <h2 className="font-semibold text-gray-800">
+                Questions ({getTotalQuestionCount()})
+              </h2>
+
+              <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1 rounded-full">
+                Answer panel
+              </span>
+            </div>
+
+            <div className="p-5 md:p-7 overflow-y-auto h-[65vh] lg:h-[calc(100vh-12rem)]">
 
           <div className="flex flex-col gap-6">
             {reading.questions.map((question, index) => (
               <div
                 key={question.id}
-                className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm overflow-hidden"
+                className="bg-gray-50 border border-gray-100 rounded-2xl p-5 overflow-hidden"
               >
                 <div className="flex items-center gap-2 mb-4">
                   <span className="text-xs font-medium text-gray-400">
@@ -781,7 +943,9 @@ export default function DoReading() {
                     className={`text-xs px-2 py-1 rounded-full ${
                       question.type === 'matching'
                         ? 'bg-indigo-50 text-indigo-600'
-                        : question.type === 'tfng'
+                        : question.type === 'sentenceEndings'
+                          ? 'bg-cyan-50 text-cyan-600'
+                          : question.type === 'tfng'
                           ? 'bg-blue-50 text-blue-600'
                           : question.type === 'fitb'
                             ? 'bg-amber-50 text-amber-600'
@@ -858,6 +1022,76 @@ export default function DoReading() {
                                   {headingIndex + 1}. {heading}
                                 </option>
                               ))}
+                          </select>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {question.type === 'sentenceEndings' && (
+                  <div>
+                    {question.instruction && (
+                      <p className="text-sm text-gray-700 mb-4">
+                        {question.instruction}
+                      </p>
+                    )}
+
+                    <div className="bg-white border border-gray-100 rounded-xl p-4 mb-5">
+                      <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
+                        Endings
+                      </p>
+
+                      <div className="space-y-2">
+                        {question.endings?.filter(Boolean).map((ending, endingIndex) => (
+                          <div
+                            key={endingIndex}
+                            className="flex gap-2 text-sm text-gray-700 leading-5"
+                          >
+                            <span className="font-semibold text-gray-500 min-w-6">
+                              {letters[endingIndex]}.
+                            </span>
+
+                            <span>{ending}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col gap-3">
+                      {question.items?.map(item => (
+                        <div
+                          key={item.id}
+                          className="grid grid-cols-1 md:grid-cols-[1fr_160px] gap-3 items-center bg-white border border-gray-100 rounded-xl p-3"
+                        >
+                          <p className="text-sm text-gray-800">
+                            {item.sentence}
+                          </p>
+
+                          <select
+                            value={answers[question.id]?.[item.id] || ''}
+                            onChange={e =>
+                              handleSentenceEnding(
+                                question.id,
+                                item.id,
+                                e.target.value
+                              )
+                            }
+                            className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 bg-white"
+                          >
+                            <option value="">Choose</option>
+
+                            {question.endings?.map((ending, endingIndex) => {
+                              if (!ending?.trim()) return null
+
+                              const letter = letters[endingIndex]
+
+                              return (
+                                <option key={letter} value={letter}>
+                                  {letter}. {ending}
+                                </option>
+                              )
+                            })}
                           </select>
                         </div>
                       ))}
@@ -1032,13 +1266,15 @@ export default function DoReading() {
             ))}
           </div>
 
-          <button
-            onClick={() => handleSubmit(false)}
-            disabled={submitting}
-            className="w-full bg-purple-600 text-white rounded-xl py-4 text-sm font-medium hover:bg-purple-700 mt-8 disabled:opacity-60"
-          >
-            {submitting ? 'Submitting...' : 'Submit answers'}
-          </button>
+              <button
+                onClick={() => handleSubmit(false)}
+                disabled={submitting}
+                className="w-full bg-purple-600 text-white rounded-xl py-4 text-sm font-medium hover:bg-purple-700 mt-8 disabled:opacity-60"
+              >
+                {submitting ? 'Submitting...' : 'Submit answers'}
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
