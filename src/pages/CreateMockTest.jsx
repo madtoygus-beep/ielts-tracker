@@ -26,7 +26,7 @@ export default function CreateMockTest() {
   const [writings, setWritings] = useState([])
   const [students, setStudents] = useState([])
 
-  const [listeningId, setListeningId] = useState('')
+  const [listeningIds, setListeningIds] = useState(['', '', '', ''])
   const [readingIds, setReadingIds] = useState(['', '', ''])
   const [writingId, setWritingId] = useState('')
   const [assignTo, setAssignTo] = useState([])
@@ -156,18 +156,32 @@ export default function CreateMockTest() {
     return students.filter(student => assignTo.includes(student.id))
   }, [students, assignTo])
 
+  const selectedListeningIds = listeningIds.filter(Boolean)
   const selectedReadingIds = readingIds.filter(Boolean)
+
+  const hasDuplicateListenings =
+    selectedListeningIds.length !== new Set(selectedListeningIds).size
+
   const hasDuplicateReadings =
     selectedReadingIds.length !== new Set(selectedReadingIds).size
 
   const canCreate =
     title.trim() &&
-    listeningId &&
+    selectedListeningIds.length >= 1 &&
+    !hasDuplicateListenings &&
     selectedReadingIds.length === 3 &&
     !hasDuplicateReadings &&
     writingId &&
     assignTo.length > 0 &&
     !saving
+
+  const updateListeningId = (index, value) => {
+    setListeningIds(prev => {
+      const copy = [...prev]
+      copy[index] = value
+      return copy
+    })
+  }
 
   const updateReadingId = (index, value) => {
     setReadingIds(prev => {
@@ -198,6 +212,7 @@ export default function CreateMockTest() {
     if (saving) return
 
     const cleanTitle = title.trim()
+    const cleanListeningIds = listeningIds.filter(Boolean)
     const cleanReadingIds = readingIds.filter(Boolean)
 
     if (!cleanTitle) {
@@ -205,8 +220,13 @@ export default function CreateMockTest() {
       return
     }
 
-    if (!listeningId) {
-      alert('Please select a listening test.')
+    if (cleanListeningIds.length === 0) {
+      alert('Please select at least one listening part/test.')
+      return
+    }
+
+    if (Array.from(new Set(cleanListeningIds)).length !== cleanListeningIds.length) {
+      alert('Please select different listening parts/tests or leave unused parts empty.')
       return
     }
 
@@ -242,7 +262,8 @@ export default function CreateMockTest() {
       await addDoc(collection(db, 'mockTests'), {
         title: cleanTitle,
         dueDate,
-        listeningId,
+        listeningId: cleanListeningIds[0] || '',
+        listeningIds: cleanListeningIds,
         readingIds: cleanReadingIds,
         writingId,
         assignTo,
@@ -293,7 +314,7 @@ export default function CreateMockTest() {
         </h1>
 
         <p className="text-gray-500 mb-8">
-          IELTS format: Listening → Reading Passage 1, 2, 3 → Writing. Students complete it inside one flow.
+          IELTS format: selected Listening parts → Reading Passage 1, 2, 3 → Writing. Students complete it inside one flow.
         </p>
 
         {saved && (
@@ -348,23 +369,60 @@ export default function CreateMockTest() {
               </h2>
 
               <div className="grid grid-cols-1 gap-4">
-                <div>
-                  <label className="text-xs text-gray-400 mb-1 block">
-                    Listening
-                  </label>
+                <div className="bg-purple-50 border border-purple-100 rounded-2xl p-4">
+                  <div className="flex items-start justify-between gap-4 mb-3">
+                    <div>
+                      <h3 className="text-sm font-semibold text-gray-800">
+                        Listening Parts
+                      </h3>
 
-                  <select
-                    value={listeningId}
-                    onChange={e => setListeningId(e.target.value)}
-                    className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white"
-                  >
-                    <option value="">Select listening test</option>
-                    {listenings.map(item => (
-                      <option key={item.id} value={item.id}>
-                        {item.title}
-                      </option>
+                      <p className="text-xs text-gray-500 mt-1">
+                        Select at least one listening test. You may leave unused parts empty.
+                      </p>
+                    </div>
+
+                    <span className="text-xs bg-white text-purple-600 px-3 py-1 rounded-full">
+                      {selectedListeningIds.length}/4 selected
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-3">
+                    {[0, 1, 2, 3].map(index => (
+                      <div key={index}>
+                        <label className="text-xs text-gray-400 mb-1 block">
+                          Listening Part {index + 1} {index === 0 ? '/ required' : '/ optional'}
+                        </label>
+
+                        <select
+                          value={listeningIds[index]}
+                          onChange={e => updateListeningId(index, e.target.value)}
+                          className={`w-full border rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white ${
+                            hasDuplicateListenings && listeningIds[index]
+                              ? 'border-red-300'
+                              : 'border-gray-200'
+                          }`}
+                        >
+                          <option value="">
+                            {index === 0
+                              ? 'Select listening part/test'
+                              : 'Optional: select listening part/test'}
+                          </option>
+
+                          {listenings.map(item => (
+                            <option key={item.id} value={item.id}>
+                              {item.title}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
                     ))}
-                  </select>
+                  </div>
+
+                  {hasDuplicateListenings && (
+                    <p className="text-xs text-red-500 mt-3">
+                      Please choose different listening tests or leave unused parts empty.
+                    </p>
+                  )}
                 </div>
 
                 {[0, 1, 2].map(index => (
@@ -432,7 +490,7 @@ export default function CreateMockTest() {
               </h2>
 
               <p className="text-sm text-gray-500 leading-6">
-                Students will not jump to separate homework pages. They will start the mock and move through each section with Next Section buttons.
+                Students will not jump to separate homework pages. They will start the mock and move through each selected listening part, reading passage and writing section with Next Section buttons.
               </p>
             </div>
           </div>

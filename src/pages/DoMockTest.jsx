@@ -291,7 +291,7 @@ export default function DoMockTest() {
 
   const [user, setUser] = useState(null)
   const [mock, setMock] = useState(null)
-  const [listening, setListening] = useState(null)
+  const [listenings, setListenings] = useState([])
   const [readings, setReadings] = useState([])
   const [writing, setWriting] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -403,8 +403,14 @@ export default function DoMockTest() {
             ? [mockData.readingId]
             : []
 
-        if (!mockData.listeningId) {
-          throw new Error('Mock test is missing listeningId.')
+        const listeningIds = Array.isArray(mockData.listeningIds)
+          ? mockData.listeningIds.filter(Boolean)
+          : mockData.listeningId
+            ? [mockData.listeningId]
+            : []
+
+        if (listeningIds.length === 0) {
+          throw new Error('Mock test is missing listeningIds.')
         }
 
         if (readingIds.length === 0) {
@@ -415,14 +421,22 @@ export default function DoMockTest() {
           throw new Error('Mock test is missing writingId.')
         }
 
-        const [listeningSnap, writingSnap] = await Promise.all([
-          getDoc(doc(db, 'listenings', mockData.listeningId)),
+        const [listeningDocs, writingSnap] = await Promise.all([
+          Promise.all(
+            listeningIds.map(listeningId =>
+              getDoc(doc(db, 'listenings', listeningId))
+            )
+          ),
           getDoc(doc(db, 'writingHomeworks', mockData.writingId))
         ])
 
         if (!isActive) return
 
-        if (!listeningSnap.exists()) {
+        const loadedListenings = listeningDocs
+          .filter(snap => snap.exists())
+          .map(snap => ({ id: snap.id, ...snap.data() }))
+
+        if (loadedListenings.length === 0) {
           throw new Error('Listening test was not found.')
         }
 
@@ -430,7 +444,7 @@ export default function DoMockTest() {
           throw new Error('Writing test was not found.')
         }
 
-        setListening({ id: listeningSnap.id, ...listeningSnap.data() })
+        setListenings(loadedListenings)
         setWriting({ id: writingSnap.id, ...writingSnap.data() })
 
         const readingDocs = await Promise.all(
@@ -565,8 +579,24 @@ export default function DoMockTest() {
   }, [alreadySubmitted, finalResult])
 
   const listeningParts = useMemo(() => {
-    return normalizeListeningParts(listening)
-  }, [listening])
+    return listenings.flatMap((listeningItem, listeningIndex) => {
+      const normalizedParts = normalizeListeningParts(listeningItem)
+
+      return normalizedParts.map((part, partIndex) => ({
+        ...part,
+        id: `${listeningItem.id}_${part.id || partIndex}`,
+        originalPartId: part.id,
+        listeningId: listeningItem.id,
+        listeningTitle: listeningItem.title || `Listening ${listeningIndex + 1}`,
+        listeningAudioUrl: listeningItem.audioUrl || '',
+        listeningInstructions: listeningItem.instructions || '',
+        displayTitle:
+          listenings.length > 1
+            ? `L${listeningIndex + 1}`
+            : part.title || `Part ${partIndex + 1}`
+      }))
+    })
+  }, [listenings])
 
   const sections = useMemo(() => {
     return [
@@ -590,6 +620,20 @@ export default function DoMockTest() {
   }, [readings, listeningParts])
 
   const activeSection = sections[sectionIndex] || sections[0]
+
+  useEffect(() => {
+    if (!activeSection.key?.startsWith('listening-')) return
+
+    setAudioStarted(false)
+    setAudioLocked(false)
+    setAudioWarning('')
+    audioLastTimeRef.current = 0
+
+    if (audioRef.current) {
+      audioRef.current.pause()
+      audioRef.current.currentTime = 0
+    }
+  }, [activeSection.key])
 
   useEffect(() => {
     if (!listeningStarted || listeningLocked) return
@@ -881,7 +925,7 @@ export default function DoMockTest() {
   }
 
   const scoreListening = () => {
-    if (!listening) {
+    if (!listenings.length) {
       return { correct: 0, total: 0, band: 0 }
     }
 
@@ -1181,7 +1225,14 @@ export default function DoMockTest() {
         uid: user.uid,
         mockTestId: mock.id,
         title: mock.title,
-        listeningId: mock.listeningId,
+        listeningId: Array.isArray(mock.listeningIds)
+          ? mock.listeningIds.filter(Boolean)[0] || mock.listeningId || ''
+          : mock.listeningId || '',
+        listeningIds: Array.isArray(mock.listeningIds)
+          ? mock.listeningIds.filter(Boolean)
+          : mock.listeningId
+            ? [mock.listeningId]
+            : [],
         readingIds: Array.isArray(mock.readingIds) ? mock.readingIds : mock.readingId ? [mock.readingId] : [],
         writingId: mock.writingId,
         listeningAnswers,
@@ -1229,7 +1280,8 @@ export default function DoMockTest() {
     listeningAnswers,
     readingAnswers,
     readings,
-    listening,
+    listenings,
+    listeningParts,
     sections.length
   ])
 
@@ -1391,16 +1443,16 @@ export default function DoMockTest() {
 
       <div className="bg-white border border-gray-100 rounded-2xl p-6 sticky top-[120px] z-10">
         <h2 className="text-xl font-bold text-gray-900 mb-1">
-          {listening?.title}
+          {part?.listeningTitle || 'Listening'}
         </h2>
 
         <p className="text-sm font-semibold text-purple-600 mb-2">
           {part?.title || 'Listening Part'} {part?.instructions ? `· ${part.instructions}` : ''}
         </p>
 
-        {listening?.instructions && (
+        {part?.listeningInstructions && (
           <p className="text-sm text-gray-500 mb-4 whitespace-pre-wrap">
-            {listening.instructions}
+            {part.listeningInstructions}
           </p>
         )}
 
@@ -1415,7 +1467,7 @@ export default function DoMockTest() {
           controls
           controlsList="nodownload noplaybackrate"
           disablePictureInPicture
-          src={listening?.audioUrl}
+          src={part?.listeningAudioUrl}
           className="w-full"
           onPlay={handleAudioPlay}
           onPause={handleAudioPause}
@@ -2478,7 +2530,7 @@ export default function DoMockTest() {
             </h1>
 
             <p className="text-gray-500 mb-6">
-              This mock test runs in sections: Listening Part 1 → Part 2 → Part 3 → Part 4 → Reading 1 → Reading 2 → Reading 3 → Writing Task 1 → Writing Task 2 → Review.
+              This mock test runs in sections: selected Listening part(s) → Reading 1 → Reading 2 → Reading 3 → Writing Task 1 → Writing Task 2 → Review.
             </p>
 
             <div className="grid grid-cols-3 gap-3 mb-8 text-left">

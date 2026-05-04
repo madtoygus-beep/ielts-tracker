@@ -1,1193 +1,1664 @@
-import { useState, useEffect } from 'react'
-import { auth, db } from '../firebase'
-import { collection, query, where, onSnapshot, doc, getDoc } from 'firebase/firestore'
-import { signOut, onAuthStateChanged, updatePassword } from 'firebase/auth'
-import { useNavigate } from 'react-router-dom'
+  import { useState, useEffect } from 'react'
+  import { auth, db } from '../firebase'
+  import { collection, query, where, onSnapshot, doc, getDoc } from 'firebase/firestore'
+  import { signOut, onAuthStateChanged, updatePassword } from 'firebase/auth'
+  import { useNavigate } from 'react-router-dom'
 
-const isHiddenForCurrentUser = (item, uid) =>
-  Array.isArray(item.hiddenFor) && item.hiddenFor.includes(uid)
+  const isHiddenForCurrentUser = (item, uid) =>
+    Array.isArray(item.hiddenFor) && item.hiddenFor.includes(uid)
 
 
-function getBandColor(value) {
-  const band = Number(value)
-  if (band >= 7) return 'text-green-600'
-  if (band >= 6) return 'text-amber-600'
-  return 'text-red-500'
-}
+  function getBandColor(value) {
+    const band = Number(value)
+    if (band >= 7) return 'text-green-600'
+    if (band >= 6) return 'text-amber-600'
+    return 'text-red-500'
+  }
 
-function getBandBg(value) {
-  const band = Number(value)
-  if (band >= 7) return 'bg-green-50'
-  if (band >= 6) return 'bg-amber-50'
-  return 'bg-red-50'
-}
+  function getBandBg(value) {
+    const band = Number(value)
+    if (band >= 7) return 'bg-green-50'
+    if (band >= 6) return 'bg-amber-50'
+    return 'bg-red-50'
+  }
 
-function toNumber(value) {
-  const number = Number(value)
-  return Number.isFinite(number) ? number : null
-}
+  function toNumber(value) {
+    const number = Number(value)
+    return Number.isFinite(number) ? number : null
+  }
 
-function formatBand(value) {
-  const number = toNumber(value)
-  return number === null ? '-' : number.toFixed(1)
-}
+  function formatBand(value) {
+    const number = toNumber(value)
+    return number === null ? '-' : number.toFixed(1)
+  }
 
-function getChangeLabel(current, previous) {
-  const c = toNumber(current)
-  const p = toNumber(previous)
+  function getChangeLabel(current, previous) {
+    const c = toNumber(current)
+    const p = toNumber(previous)
 
-  if (c === null || p === null) return null
+    if (c === null || p === null) return null
 
-  const diff = c - p
+    const diff = c - p
 
-  if (diff === 0) return 'No change'
+    if (diff === 0) return 'No change'
 
-  return `${diff > 0 ? '+' : ''}${diff.toFixed(1)}`
-}
+    return `${diff > 0 ? '+' : ''}${diff.toFixed(1)}`
+  }
 
-function getChangeColor(current, previous) {
-  const c = toNumber(current)
-  const p = toNumber(previous)
+  function getChangeColor(current, previous) {
+    const c = toNumber(current)
+    const p = toNumber(previous)
 
-  if (c === null || p === null) return 'text-gray-400'
-  if (c > p) return 'text-green-600'
-  if (c < p) return 'text-red-500'
-  return 'text-gray-400'
-}
+    if (c === null || p === null) return 'text-gray-400'
+    if (c > p) return 'text-green-600'
+    if (c < p) return 'text-red-500'
+    return 'text-gray-400'
+  }
 
-function average(numbers) {
-  const clean = numbers
-    .map(toNumber)
-    .filter(value => value !== null)
+  function average(numbers) {
+    const clean = numbers
+      .map(toNumber)
+      .filter(value => value !== null)
 
-  if (clean.length === 0) return null
+    if (clean.length === 0) return null
 
-  return clean.reduce((sum, value) => sum + value, 0) / clean.length
-}
+    return clean.reduce((sum, value) => sum + value, 0) / clean.length
+  }
 
-function daysUntilDue(dateString) {
-  if (!dateString) return null
+  function daysUntilDue(dateString) {
+    if (!dateString) return null
 
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
 
-  const due = new Date(dateString)
-  due.setHours(0, 0, 0, 0)
+    const due = new Date(dateString)
+    due.setHours(0, 0, 0, 0)
 
-  return Math.ceil((due - today) / (1000 * 60 * 60 * 24))
-}
+    return Math.ceil((due - today) / (1000 * 60 * 60 * 24))
+  }
 
-function dueLabel(homework) {
-  if (!homework.dueDate) {
+  function dueLabel(homework) {
+    if (!homework.dueDate) {
+      return {
+        text: 'No deadline',
+        style: 'bg-gray-100 text-gray-500'
+      }
+    }
+
+    const days = daysUntilDue(homework.dueDate)
+
+    if (days < 0) {
+      return {
+        text: 'Overdue',
+        style: 'bg-red-50 text-red-600'
+      }
+    }
+
+    if (days <= 3) {
+      return {
+        text: `Due in ${days} day${days !== 1 ? 's' : ''}`,
+        style: 'bg-amber-50 text-amber-600'
+      }
+    }
+
     return {
-      text: 'No deadline',
-      style: 'bg-gray-100 text-gray-500'
+      text: `Due in ${days} days`,
+      style: 'bg-blue-50 text-blue-600'
     }
   }
 
-  const days = daysUntilDue(homework.dueDate)
 
-  if (days < 0) {
-    return {
-      text: 'Overdue',
-      style: 'bg-red-50 text-red-600'
+  const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
+
+  const numberWords = {
+    zero: '0', one: '1', two: '2', three: '3', four: '4', five: '5',
+    six: '6', seven: '7', eight: '8', nine: '9', ten: '10', eleven: '11',
+    twelve: '12', thirteen: '13', fourteen: '14', fifteen: '15', sixteen: '16',
+    seventeen: '17', eighteen: '18', nineteen: '19', twenty: '20'
+  }
+
+  function normalizeAnswer(value) {
+    if (value === undefined || value === null) return ''
+
+    const clean = value
+      .toString()
+      .trim()
+      .toLowerCase()
+      .replace(/[.,!?;:()]/g, '')
+      .replace(/\s+/g, ' ')
+
+    return numberWords[clean] || clean
+  }
+
+  function sortAnswers(value) {
+    if (!Array.isArray(value)) return []
+    return [...value].map(v => v?.toString().trim()).sort()
+  }
+
+  function tableAnswerKey(questionId, rowId, cellIndex) {
+    return `${questionId}_${rowId}_${cellIndex}`
+  }
+
+  function parseAcceptedAnswers(cell) {
+    const main = cell.answer ? [cell.answer] : []
+    const alternatives = cell.acceptedAnswers
+      ? cell.acceptedAnswers.split(',').map(item => item.trim()).filter(Boolean)
+      : []
+
+    return [...main, ...alternatives]
+  }
+
+  function getWordCount(value) {
+    const clean = normalizeAnswer(value)
+    if (!clean) return 0
+    return clean.split(' ').filter(Boolean).length
+  }
+
+  function isWithinWordLimit(value, maxWords) {
+    if (!maxWords) return true
+    return getWordCount(value) <= Number(maxWords)
+  }
+
+  function isNormalCorrect(submission, question) {
+    if (question.type === 'mcq' && question.mode === 'multi') {
+      const userAnswer = sortAnswers(submission.answers?.[question.id]).join('|')
+      const correctAnswer = sortAnswers(question.answers || []).join('|')
+
+      return userAnswer === correctAnswer
     }
-  }
 
-  if (days <= 3) {
-    return {
-      text: `Due in ${days} day${days !== 1 ? 's' : ''}`,
-      style: 'bg-amber-50 text-amber-600'
-    }
-  }
-
-  return {
-    text: `Due in ${days} days`,
-    style: 'bg-blue-50 text-blue-600'
-  }
-}
-
-
-const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
-
-const numberWords = {
-  zero: '0', one: '1', two: '2', three: '3', four: '4', five: '5',
-  six: '6', seven: '7', eight: '8', nine: '9', ten: '10', eleven: '11',
-  twelve: '12', thirteen: '13', fourteen: '14', fifteen: '15', sixteen: '16',
-  seventeen: '17', eighteen: '18', nineteen: '19', twenty: '20'
-}
-
-function normalizeAnswer(value) {
-  if (value === undefined || value === null) return ''
-
-  const clean = value
-    .toString()
-    .trim()
-    .toLowerCase()
-    .replace(/[.,!?;:()]/g, '')
-    .replace(/\s+/g, ' ')
-
-  return numberWords[clean] || clean
-}
-
-function sortAnswers(value) {
-  if (!Array.isArray(value)) return []
-  return [...value].map(v => v?.toString().trim()).sort()
-}
-
-function tableAnswerKey(questionId, rowId, cellIndex) {
-  return `${questionId}_${rowId}_${cellIndex}`
-}
-
-function parseAcceptedAnswers(cell) {
-  const main = cell.answer ? [cell.answer] : []
-  const alternatives = cell.acceptedAnswers
-    ? cell.acceptedAnswers.split(',').map(item => item.trim()).filter(Boolean)
-    : []
-
-  return [...main, ...alternatives]
-}
-
-function getWordCount(value) {
-  const clean = normalizeAnswer(value)
-  if (!clean) return 0
-  return clean.split(' ').filter(Boolean).length
-}
-
-function isWithinWordLimit(value, maxWords) {
-  if (!maxWords) return true
-  return getWordCount(value) <= Number(maxWords)
-}
-
-function isNormalCorrect(submission, question) {
-  if (question.type === 'mcq' && question.mode === 'multi') {
-    const userAnswer = sortAnswers(submission.answers?.[question.id]).join('|')
-    const correctAnswer = sortAnswers(question.answers || []).join('|')
+    const userAnswer = normalizeAnswer(submission.answers?.[question.id])
+    const correctAnswer = normalizeAnswer(question.answer)
 
     return userAnswer === correctAnswer
   }
 
-  const userAnswer = normalizeAnswer(submission.answers?.[question.id])
-  const correctAnswer = normalizeAnswer(question.answer)
+  function isMatchingCorrect(submission, question, paragraph) {
+    const userAnswer = submission.answers?.[question.id]?.[paragraph.letter]
+      ?.toString()
+      .trim()
 
-  return userAnswer === correctAnswer
-}
+    const correctAnswer = paragraph.answer?.toString().trim()
 
-function isMatchingCorrect(submission, question, paragraph) {
-  const userAnswer = submission.answers?.[question.id]?.[paragraph.letter]
-    ?.toString()
-    .trim()
+    return userAnswer === correctAnswer
+  }
 
-  const correctAnswer = paragraph.answer?.toString().trim()
+  function isSentenceEndingCorrect(submission, question, item) {
+    const userAnswer = submission.answers?.[question.id]?.[item.id]
+      ?.toString()
+      .trim()
 
-  return userAnswer === correctAnswer
-}
+    const correctAnswer = item.answer?.toString().trim()
 
-function isTableCellCorrect(submission, question, row, cellIndex) {
-  const key = tableAnswerKey(question.id, row.id, cellIndex)
-  const cell = row.cells[cellIndex]
-  const userAnswer = normalizeAnswer(submission.answers?.[key])
-  const acceptedAnswers = parseAcceptedAnswers(cell).map(normalizeAnswer)
+    return userAnswer === correctAnswer
+  }
 
-  if (!isWithinWordLimit(submission.answers?.[key], cell.maxWords)) return false
+  function isTableCellCorrect(submission, question, row, cellIndex) {
+    const key = tableAnswerKey(question.id, row.id, cellIndex)
+    const cell = row.cells[cellIndex]
+    const userAnswer = normalizeAnswer(submission.answers?.[key])
+    const acceptedAnswers = parseAcceptedAnswers(cell).map(normalizeAnswer)
 
-  return acceptedAnswers.includes(userAnswer)
-}
+    if (!isWithinWordLimit(submission.answers?.[key], cell.maxWords)) return false
 
-function estimateHomeworkBand(correct, total) {
-  if (!total) return null
+    return acceptedAnswers.includes(userAnswer)
+  }
 
-  const percentage = (correct / total) * 100
+  function estimateHomeworkBand(correct, total) {
+    if (!total) return null
 
-  if (percentage >= 90) return 9
-  if (percentage >= 85) return 8.5
-  if (percentage >= 80) return 8
-  if (percentage >= 75) return 7.5
-  if (percentage >= 70) return 7
-  if (percentage >= 65) return 6.5
-  if (percentage >= 60) return 6
-  if (percentage >= 50) return 5.5
-  if (percentage >= 40) return 5
-  if (percentage >= 30) return 4.5
-  if (percentage >= 20) return 4
-  return 3.5
-}
+    const percentage = (correct / total) * 100
 
-function getQuestionTypeLabel(type) {
-  if (type === 'matching') return 'Matching Headings'
-  if (type === 'mcq') return 'MCQ'
-  if (type === 'fitb') return 'Fill Blank'
-  if (type === 'tfng') return 'T/F/NG'
-  if (type === 'table') return 'Table Completion'
-  if (type === 'summary') return 'Summary Completion'
-  if (type === 'note') return 'Note Completion'
-  return type
-}
+    if (percentage >= 90) return 9
+    if (percentage >= 85) return 8.5
+    if (percentage >= 80) return 8
+    if (percentage >= 75) return 7.5
+    if (percentage >= 70) return 7
+    if (percentage >= 65) return 6.5
+    if (percentage >= 60) return 6
+    if (percentage >= 50) return 5.5
+    if (percentage >= 40) return 5
+    if (percentage >= 30) return 4.5
+    if (percentage >= 20) return 4
+    return 3.5
+  }
 
-function getAnalyticsColor(value) {
-  if (value === null || value === undefined) return 'text-gray-400'
-  if (value >= 75) return 'text-green-600'
-  if (value >= 60) return 'text-amber-600'
-  return 'text-red-500'
-}
+  function getQuestionTypeLabel(type) {
+    if (type === 'matching') return 'Matching Headings'
+    if (type === 'sentenceEndings') return 'Sentence Endings'
+    if (type === 'mcq') return 'MCQ'
+    if (type === 'fitb') return 'Fill Blank'
+    if (type === 'tfng') return 'T/F/NG'
+    if (type === 'table') return 'Table Completion'
+    if (type === 'summary') return 'Summary Completion'
+    if (type === 'note') return 'Note Completion'
+    return type
+  }
 
-function getAnalyticsBg(value) {
-  if (value === null || value === undefined) return 'bg-gray-100'
-  if (value >= 75) return 'bg-green-600'
-  if (value >= 60) return 'bg-amber-500'
-  return 'bg-red-500'
-}
+  function getAnalyticsColor(value) {
+    if (value === null || value === undefined) return 'text-gray-400'
+    if (value >= 75) return 'text-green-600'
+    if (value >= 60) return 'text-amber-600'
+    return 'text-red-500'
+  }
 
-function calculateSkillAnalytics(homeworks, submissions, idField, typeKeys) {
-  const stats = {}
+  function getAnalyticsBg(value) {
+    if (value === null || value === undefined) return 'bg-gray-100'
+    if (value >= 75) return 'bg-green-600'
+    if (value >= 60) return 'bg-amber-500'
+    return 'bg-red-500'
+  }
 
-  typeKeys.forEach(key => {
-    stats[key] = {
-      correct: 0,
-      total: 0
-    }
-  })
+  function calculateSkillAnalytics(homeworks, submissions, idField, typeKeys) {
+    const stats = {}
 
-  let totalCorrect = 0
-  let totalQuestions = 0
-
-  submissions.forEach(submission => {
-    const homework = homeworks.find(item => item.id === submission[idField])
-    if (!homework) return
-
-    homework.questions?.forEach(question => {
-      if (question.type === 'matching') {
-        question.paragraphs?.forEach(paragraph => {
-          if (!stats.matching) {
-            stats.matching = { correct: 0, total: 0 }
-          }
-
-          stats.matching.total++
-          totalQuestions++
-
-          if (isMatchingCorrect(submission, question, paragraph)) {
-            stats.matching.correct++
-            totalCorrect++
-          }
-        })
-
-        return
+    typeKeys.forEach(key => {
+      stats[key] = {
+        correct: 0,
+        total: 0
       }
+    })
 
-      if (question.type === 'table' || question.type === 'summary' || question.type === 'note') {
-        const key = question.type === 'summary'
-          ? 'summary'
-          : question.type === 'note'
-            ? 'note'
-            : 'table'
+    let totalCorrect = 0
+    let totalQuestions = 0
 
-        if (!stats[key]) {
-          stats[key] = { correct: 0, total: 0 }
-        }
+    submissions.forEach(submission => {
+      const homework = homeworks.find(item => item.id === submission[idField])
+      if (!homework) return
 
-        question.rows?.forEach(row => {
-          row.cells?.forEach((cell, cellIndex) => {
-            if (cell.type === 'blank') {
-              stats[key].total++
-              totalQuestions++
+      homework.questions?.forEach(question => {
+        if (question.type === 'matching') {
+          question.paragraphs?.forEach(paragraph => {
+            if (!stats.matching) {
+              stats.matching = { correct: 0, total: 0 }
+            }
 
-              if (isTableCellCorrect(submission, question, row, cellIndex)) {
-                stats[key].correct++
-                totalCorrect++
-              }
+            stats.matching.total++
+            totalQuestions++
+
+            if (isMatchingCorrect(submission, question, paragraph)) {
+              stats.matching.correct++
+              totalCorrect++
             }
           })
-        })
 
-        return
-      }
-
-      if (!stats[question.type]) {
-        stats[question.type] = { correct: 0, total: 0 }
-      }
-
-      stats[question.type].total++
-      totalQuestions++
-
-      if (isNormalCorrect(submission, question)) {
-        stats[question.type].correct++
-        totalCorrect++
-      }
-    })
-  })
-
-  const typeAnalytics = Object.entries(stats).map(([key, value]) => ({
-    key,
-    correct: value.correct,
-    total: value.total,
-    percentage: value.total
-      ? Math.round((value.correct / value.total) * 100)
-      : null
-  }))
-
-  const attemptedTypes = typeAnalytics.filter(item => item.total > 0)
-
-  const weakest = attemptedTypes.length
-    ? [...attemptedTypes].sort((a, b) => a.percentage - b.percentage)[0]
-    : null
-
-  const averageAccuracy = totalQuestions
-    ? Math.round((totalCorrect / totalQuestions) * 100)
-    : null
-
-  return {
-    totalCorrect,
-    totalQuestions,
-    averageAccuracy,
-    estimatedBand: estimateHomeworkBand(totalCorrect, totalQuestions),
-    typeAnalytics,
-    weakest
-  }
-}
-
-
-function getReviewDate(submission) {
-  return (
-    submission.reviewedAt ||
-    submission.submittedAt ||
-    submission.createdAt ||
-    ''
-  )
-}
-
-function getRubricAverages(review) {
-  const task1 = review?.rubric?.task1 || {}
-  const task2 = review?.rubric?.task2 || {}
-
-  return {
-    taskResponse: average([
-      task1.taskAchievement,
-      task2.taskResponse
-    ]),
-    coherenceCohesion: average([
-      task1.coherenceCohesion,
-      task2.coherenceCohesion
-    ]),
-    lexicalResource: average([
-      task1.lexicalResource,
-      task2.lexicalResource
-    ]),
-    grammarRangeAccuracy: average([
-      task1.grammarRangeAccuracy,
-      task2.grammarRangeAccuracy
-    ])
-  }
-}
-
-function getCriterionLabel(key) {
-  if (key === 'taskResponse') return 'TR / TA'
-  if (key === 'coherenceCohesion') return 'CC'
-  if (key === 'lexicalResource') return 'LR'
-  if (key === 'grammarRangeAccuracy') return 'GRA'
-  return key
-}
-
-function getCriterionFullLabel(key) {
-  if (key === 'taskResponse') return 'Task Response / Achievement'
-  if (key === 'coherenceCohesion') return 'Coherence & Cohesion'
-  if (key === 'lexicalResource') return 'Lexical Resource'
-  if (key === 'grammarRangeAccuracy') return 'Grammar Range & Accuracy'
-  return key
-}
-
-
-function StudentSkillAnalytics({ user }) {
-  const [readings, setReadings] = useState([])
-  const [readingSubmissions, setReadingSubmissions] = useState([])
-  const [listenings, setListenings] = useState([])
-  const [listeningSubmissions, setListeningSubmissions] = useState([])
-
-  useEffect(() => {
-    if (!user) return
-
-    const q = query(collection(db, 'readings'))
-
-    const unsub = onSnapshot(q, snap => {
-      const data = snap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
-        .filter(item =>
-          !item.archived &&
-          item.assignTo?.includes(user.uid) &&
-          !isHiddenForCurrentUser(item, user.uid)
-        )
-
-      setReadings(data)
-    })
-
-    return unsub
-  }, [user])
-
-  useEffect(() => {
-    if (!user) return
-
-    const q = query(
-      collection(db, 'readingSubmissions'),
-      where('uid', '==', user.uid)
-    )
-
-    const unsub = onSnapshot(q, snap => {
-      const data = snap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
-        .filter(item => item.archived !== true)
-
-      setReadingSubmissions(data)
-    })
-
-    return unsub
-  }, [user])
-
-  useEffect(() => {
-    if (!user) return
-
-    const q = query(collection(db, 'listenings'))
-
-    const unsub = onSnapshot(q, snap => {
-      const data = snap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
-        .filter(item =>
-          !item.archived &&
-          item.assignTo?.includes(user.uid) &&
-          !isHiddenForCurrentUser(item, user.uid)
-        )
-
-      setListenings(data)
-    })
-
-    return unsub
-  }, [user])
-
-  useEffect(() => {
-    if (!user) return
-
-    const q = query(
-      collection(db, 'listeningSubmissions'),
-      where('uid', '==', user.uid)
-    )
-
-    const unsub = onSnapshot(q, snap => {
-      const data = snap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
-        .filter(item => item.archived !== true)
-
-      setListeningSubmissions(data)
-    })
-
-    return unsub
-  }, [user])
-
-  const readingAnalytics = calculateSkillAnalytics(
-    readings,
-    readingSubmissions,
-    'readingId',
-    ['matching', 'mcq', 'fitb', 'tfng', 'table', 'summary', 'note']
-  )
-
-  const listeningAnalytics = calculateSkillAnalytics(
-    listenings,
-    listeningSubmissions,
-    'listeningId',
-    ['mcq', 'fitb', 'tfng', 'table', 'summary', 'note']
-  )
-
-  const readingCompletion = {
-    completed: readingSubmissions.filter(sub =>
-      readings.some(reading => reading.id === sub.readingId)
-    ).length,
-    assigned: readings.length
-  }
-
-  const listeningCompletion = {
-    completed: listeningSubmissions.filter(sub =>
-      listenings.some(listening => listening.id === sub.listeningId)
-    ).length,
-    assigned: listenings.length
-  }
-
-  const hasData =
-    readingSubmissions.length > 0 ||
-    listeningSubmissions.length > 0 ||
-    readings.length > 0 ||
-    listenings.length > 0
-
-  const renderSkillCard = (title, icon, analytics, completion, colorClass) => (
-    <div className="bg-white border border-gray-100 rounded-2xl p-6">
-      <div className="flex items-center justify-between gap-4 mb-5">
-        <div>
-          <h2 className="font-semibold text-gray-800">
-            {icon} My {title} Analytics
-          </h2>
-
-          <p className="text-xs text-gray-400 mt-1">
-            Based on your submitted {title.toLowerCase()} homework.
-          </p>
-        </div>
-
-        <span className="text-xs bg-gray-100 text-gray-500 px-3 py-1.5 rounded-full">
-          {completion.completed}/{completion.assigned} completed
-        </span>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-5">
-        <div className="bg-gray-900 text-white rounded-2xl p-5">
-          <p className="text-xs text-gray-400 mb-1">
-            Average Accuracy
-          </p>
-
-          <p className="text-3xl font-bold">
-            {analytics.averageAccuracy === null ? '--' : `${analytics.averageAccuracy}%`}
-          </p>
-
-          <p className="text-xs text-gray-400 mt-2">
-            {analytics.totalCorrect}/{analytics.totalQuestions} correct
-          </p>
-        </div>
-
-        <div className="bg-purple-50 rounded-2xl p-5">
-          <p className="text-xs text-gray-500 mb-1">
-            Estimated Band
-          </p>
-
-          <p className="text-3xl font-bold text-purple-600">
-            {analytics.estimatedBand ? analytics.estimatedBand.toFixed(1) : '--'}
-          </p>
-
-          <p className="text-xs text-gray-500 mt-2">
-            Homework estimate, not full IELTS band
-          </p>
-        </div>
-
-        <div className="bg-amber-50 rounded-2xl p-5">
-          <p className="text-xs text-gray-500 mb-1">
-            Weakest Area
-          </p>
-
-          <p className="text-lg font-bold text-amber-700">
-            {analytics.weakest ? getQuestionTypeLabel(analytics.weakest.key) : '--'}
-          </p>
-
-          <p className="text-xs text-gray-500 mt-2">
-            {analytics.weakest
-              ? `${analytics.weakest.percentage}% accuracy`
-              : 'No question data yet'}
-          </p>
-        </div>
-      </div>
-
-      <div className="bg-gray-50 rounded-2xl p-5">
-        <h3 className="text-sm font-semibold text-gray-700 mb-3">
-          Accuracy by Question Type
-        </h3>
-
-        <div className="flex flex-col gap-3">
-          {analytics.typeAnalytics.map(item => (
-            <div key={item.key}>
-              <div className="flex justify-between mb-1">
-                <p className="text-xs text-gray-500">
-                  {getQuestionTypeLabel(item.key)}
-                </p>
-
-                <p className={`text-xs font-semibold ${getAnalyticsColor(item.percentage)}`}>
-                  {item.percentage === null ? '--' : `${item.percentage}%`}
-                </p>
-              </div>
-
-              <div className="w-full bg-white rounded-full h-2 overflow-hidden">
-                <div
-                  className={`${item.percentage === null ? 'bg-gray-200' : colorClass} h-2 rounded-full`}
-                  style={{ width: `${item.percentage || 0}%` }}
-                />
-              </div>
-
-              <p className="text-[10px] text-gray-400 mt-1">
-                {item.correct}/{item.total} correct
-              </p>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  )
-
-  if (!hasData) {
-    return (
-      <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
-        <div className="flex items-center justify-between mb-2">
-          <h2 className="font-semibold text-gray-800">
-            📊 My Reading & Listening Analytics
-          </h2>
-
-          <span className="text-xs bg-gray-100 text-gray-500 px-3 py-1.5 rounded-full">
-            No data yet
-          </span>
-        </div>
-
-        <p className="text-sm text-gray-400">
-          Once you complete reading or listening homework, your accuracy, estimated band and weakest question types will appear here.
-        </p>
-      </div>
-    )
-  }
-
-  return (
-    <div className="grid grid-cols-1 gap-6 mb-8">
-      {renderSkillCard(
-        'Reading',
-        '📖',
-        readingAnalytics,
-        readingCompletion,
-        'bg-blue-600'
-      )}
-
-      {renderSkillCard(
-        'Listening',
-        '🎧',
-        listeningAnalytics,
-        listeningCompletion,
-        'bg-purple-600'
-      )}
-    </div>
-  )
-}
-
-
-function ReadingHomeworkSection({ user }) {
-  const [readings, setReadings] = useState([])
-  const [submissions, setSubmissions] = useState([])
-  const navigate = useNavigate()
-
-  useEffect(() => {
-    if (!user) return
-
-    const q = query(collection(db, 'readings'))
-
-    const unsub = onSnapshot(q, snap => {
-      const all = snap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
-        .filter(r =>
-          !r.archived &&
-          r.assignTo?.includes(user.uid) &&
-          !isHiddenForCurrentUser(r, user.uid)
-        )
-
-      all.sort((a, b) => {
-        if (!a.dueDate) return 1
-        if (!b.dueDate) return -1
-        return new Date(a.dueDate) - new Date(b.dueDate)
-      })
-
-      setReadings(all)
-    })
-
-    return unsub
-  }, [user])
-
-  useEffect(() => {
-    if (!user) return
-
-    const q = query(
-      collection(db, 'readingSubmissions'),
-      where('uid', '==', user.uid)
-    )
-
-    const unsub = onSnapshot(q, snap => {
-      const data = snap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
-        .filter(item => item.archived !== true)
-
-      setSubmissions(data)
-    })
-
-    return unsub
-  }, [user])
-
-  const isDone = readingId =>
-    submissions.some(s => s.readingId === readingId)
-
-  const getResult = readingId =>
-    submissions.find(s => s.readingId === readingId)?.result
-
-  const todoReadings = readings.filter(r => !isDone(r.id))
-  const completedReadings = readings.filter(r => isDone(r.id))
-
-  if (readings.length === 0) return null
-
-  return (
-    <div className="mt-8 mb-8">
-      <h2 className="font-semibold text-gray-800 mb-4">
-        📖 Reading Homework
-      </h2>
-
-      {todoReadings.length > 0 && (
-        <div className="mb-6">
-          <p className="text-xs font-semibold text-red-500 uppercase tracking-wider mb-3">
-            To Do
-          </p>
-
-          <div className="flex flex-col gap-3">
-            {todoReadings.map(r => {
-              const badge = dueLabel(r)
-
-              return (
-                <div
-                  key={r.id}
-                  className="bg-white border border-red-100 rounded-2xl p-5 flex items-center justify-between shadow-sm"
-                >
-                  <div>
-                    <p className="text-sm font-medium text-gray-800">
-                      {r.title}
-                    </p>
-
-                    <p className="text-xs text-gray-400 mt-0.5">
-                      ⏱ {r.timeLimit} min · {r.questions?.length || 0} question sets
-                    </p>
-
-                    <div className="flex gap-2 mt-2 flex-wrap">
-                      <span className={`text-xs px-3 py-1 rounded-full ${badge.style}`}>
-                        {badge.text}
-                      </span>
-
-                      <span className="text-xs bg-red-50 text-red-500 px-3 py-1 rounded-full">
-                        Not completed
-                      </span>
-                    </div>
-                  </div>
-
-                  <button
-                    onClick={() => navigate(`/do-reading/${r.id}`)}
-                    className="bg-purple-600 text-white px-4 py-2 rounded-xl text-xs font-medium hover:bg-purple-700"
-                  >
-                    Start →
-                  </button>
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      )}
-
-      {completedReadings.length > 0 && (
-        <div>
-          <p className="text-xs font-semibold text-green-600 uppercase tracking-wider mb-3">
-            Completed
-          </p>
-
-          <div className="flex flex-col gap-3">
-            {completedReadings.map(r => {
-              const result = getResult(r.id)
-
-              return (
-                <div
-                  key={r.id}
-                  className="bg-white border border-gray-100 rounded-2xl p-5 flex items-center justify-between"
-                >
-                  <div>
-                    <p className="text-sm font-medium text-gray-800">
-                      {r.title}
-                    </p>
-
-                    <p className="text-xs text-gray-400 mt-0.5">
-                      ⏱ {r.timeLimit} min · {r.questions?.length || 0} question sets
-                    </p>
-
-                    <p className="text-xs text-green-600 mt-1 font-medium">
-                      ✓ Completed — Estimated Band {result?.band}
-                    </p>
-                  </div>
-
-                  <span className="text-xs bg-green-50 text-green-600 px-3 py-1.5 rounded-full">
-                    Done
-                  </span>
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-
-function ListeningHomeworkSection({ user }) {
-  const [listenings, setListenings] = useState([])
-  const [submissions, setSubmissions] = useState([])
-  const navigate = useNavigate()
-
-  useEffect(() => {
-    if (!user) return
-
-    const q = query(collection(db, 'listenings'))
-
-    const unsub = onSnapshot(q, snap => {
-      const all = snap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
-        .filter(l =>
-          !l.archived &&
-          l.assignTo?.includes(user.uid) &&
-          !isHiddenForCurrentUser(l, user.uid)
-        )
-
-      all.sort((a, b) => {
-        if (!a.dueDate) return 1
-        if (!b.dueDate) return -1
-        return new Date(a.dueDate) - new Date(b.dueDate)
-      })
-
-      setListenings(all)
-    })
-
-    return unsub
-  }, [user])
-
-  useEffect(() => {
-    if (!user) return
-
-    const q = query(
-      collection(db, 'listeningSubmissions'),
-      where('uid', '==', user.uid)
-    )
-
-    const unsub = onSnapshot(q, snap => {
-      const data = snap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
-        .filter(item => item.archived !== true)
-
-      setSubmissions(data)
-    })
-
-    return unsub
-  }, [user])
-
-  const isDone = listeningId =>
-    submissions.some(s => s.listeningId === listeningId)
-
-  const getResult = listeningId =>
-    submissions.find(s => s.listeningId === listeningId)?.result
-
-  const todoListenings = listenings.filter(l => !isDone(l.id))
-  const completedListenings = listenings.filter(l => isDone(l.id))
-
-  if (listenings.length === 0) return null
-
-  return (
-    <div className="mt-8 mb-8">
-      <h2 className="font-semibold text-gray-800 mb-4">
-        🎧 Listening Homework
-      </h2>
-
-      {todoListenings.length > 0 && (
-        <div className="mb-6">
-          <p className="text-xs font-semibold text-red-500 uppercase tracking-wider mb-3">
-            To Do
-          </p>
-
-          <div className="flex flex-col gap-3">
-            {todoListenings.map(l => {
-              const badge = dueLabel(l)
-
-              return (
-                <div
-                  key={l.id}
-                  className="bg-white border border-red-100 rounded-2xl p-5 flex items-center justify-between shadow-sm"
-                >
-                  <div>
-                    <p className="text-sm font-medium text-gray-800">
-                      {l.title}
-                    </p>
-
-                    <p className="text-xs text-gray-400 mt-0.5">
-                      ⏱ {l.timeLimit || 30} min · {l.questions?.length || 0} questions
-                    </p>
-
-                    <div className="flex gap-2 mt-2 flex-wrap">
-                      <span className={`text-xs px-3 py-1 rounded-full ${badge.style}`}>
-                        {badge.text}
-                      </span>
-
-                      <span className="text-xs bg-red-50 text-red-500 px-3 py-1 rounded-full">
-                        Not completed
-                      </span>
-                    </div>
-                  </div>
-
-                  <button
-                    onClick={() => navigate(`/do-listening/${l.id}`)}
-                    className="bg-purple-600 text-white px-4 py-2 rounded-xl text-xs font-medium hover:bg-purple-700"
-                  >
-                    Start →
-                  </button>
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      )}
-
-      {completedListenings.length > 0 && (
-        <div>
-          <p className="text-xs font-semibold text-green-600 uppercase tracking-wider mb-3">
-            Completed
-          </p>
-
-          <div className="flex flex-col gap-3">
-            {completedListenings.map(l => {
-              const result = getResult(l.id)
-
-              return (
-                <div
-                  key={l.id}
-                  className="bg-white border border-gray-100 rounded-2xl p-5 flex items-center justify-between"
-                >
-                  <div>
-                    <p className="text-sm font-medium text-gray-800">
-                      {l.title}
-                    </p>
-
-                    <p className="text-xs text-gray-400 mt-0.5">
-                      ⏱ {l.timeLimit || 30} min · {l.questions?.length || 0} questions
-                    </p>
-
-                    <p className="text-xs text-green-600 mt-1 font-medium">
-                      ✓ Completed — Estimated Band {result?.band}
-                    </p>
-                  </div>
-
-                  <span className="text-xs bg-green-50 text-green-600 px-3 py-1.5 rounded-full">
-                    Done
-                  </span>
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-
-
-function MockAnalysis({ user }) {
-  const [mockSubmissions, setMockSubmissions] = useState([])
-  const [mockMap, setMockMap] = useState({})
-
-  useEffect(() => {
-    if (!user) return
-
-    const q = query(
-      collection(db, 'mockSubmissions'),
-      where('uid', '==', user.uid)
-    )
-
-    const unsub = onSnapshot(q, snap => {
-      const data = snap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
-        .filter(item => item.archived !== true)
-
-      data.sort(
-        (a, b) => new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0)
-      )
-
-      setMockSubmissions(data)
-    })
-
-    return unsub
-  }, [user])
-
-  useEffect(() => {
-    if (!user) return
-
-    const q = query(collection(db, 'mockTests'))
-
-    const unsub = onSnapshot(q, snap => {
-      const map = {}
-
-      snap.docs.forEach(d => {
-        const item = {
-          id: d.id,
-          ...d.data()
+          return
         }
 
-        if (isHiddenForCurrentUser(item, user.uid)) return
+        if (question.type === 'sentenceEndings') {
+          if (!stats.sentenceEndings) {
+            stats.sentenceEndings = { correct: 0, total: 0 }
+          }
 
-        map[d.id] = item
+          question.items?.forEach(item => {
+            stats.sentenceEndings.total++
+            totalQuestions++
+
+            if (isSentenceEndingCorrect(submission, question, item)) {
+              stats.sentenceEndings.correct++
+              totalCorrect++
+            }
+          })
+
+          return
+        }
+
+        if (question.type === 'table' || question.type === 'summary' || question.type === 'note') {
+          const key = question.type === 'summary'
+            ? 'summary'
+            : question.type === 'note'
+              ? 'note'
+              : 'table'
+
+          if (!stats[key]) {
+            stats[key] = { correct: 0, total: 0 }
+          }
+
+          question.rows?.forEach(row => {
+            row.cells?.forEach((cell, cellIndex) => {
+              if (cell.type === 'blank') {
+                stats[key].total++
+                totalQuestions++
+
+                if (isTableCellCorrect(submission, question, row, cellIndex)) {
+                  stats[key].correct++
+                  totalCorrect++
+                }
+              }
+            })
+          })
+
+          return
+        }
+
+        if (!stats[question.type]) {
+          stats[question.type] = { correct: 0, total: 0 }
+        }
+
+        stats[question.type].total++
+        totalQuestions++
+
+        if (isNormalCorrect(submission, question)) {
+          stats[question.type].correct++
+          totalCorrect++
+        }
       })
-
-      setMockMap(map)
     })
 
-    return unsub
-  }, [user])
+    const typeAnalytics = Object.entries(stats).map(([key, value]) => ({
+      key,
+      correct: value.correct,
+      total: value.total,
+      percentage: value.total
+        ? Math.round((value.correct / value.total) * 100)
+        : null
+    }))
 
-  const completed = mockSubmissions.length
-  const latest = mockSubmissions[0]
-  const previous = mockSubmissions[1]
+    const attemptedTypes = typeAnalytics.filter(item => item.total > 0)
 
-  const getMockOverall = submission => {
-    const result = submission?.result || {}
+    const weakest = attemptedTypes.length
+      ? [...attemptedTypes].sort((a, b) => a.percentage - b.percentage)[0]
+      : null
 
+    const averageAccuracy = totalQuestions
+      ? Math.round((totalCorrect / totalQuestions) * 100)
+      : null
+
+    return {
+      totalCorrect,
+      totalQuestions,
+      averageAccuracy,
+      estimatedBand: estimateHomeworkBand(totalCorrect, totalQuestions),
+      typeAnalytics,
+      weakest
+    }
+  }
+
+
+  function getReviewDate(submission) {
     return (
-      result.reviewedOverall ||
-      result.finalOverall ||
-      result.overall ||
-      result.overallEstimate ||
-      null
+      submission.reviewedAt ||
+      submission.submittedAt ||
+      submission.createdAt ||
+      ''
     )
   }
 
-  const getWritingBand = submission => {
-    const result = submission?.result || {}
+  function getRubricAverages(review) {
+    const task1 = review?.rubric?.task1 || {}
+    const task2 = review?.rubric?.task2 || {}
 
-    return (
-      result.writing?.band ||
-      result.writingBand ||
-      submission?.writingReview?.overall ||
-      submission?.review?.writingOverall ||
-      null
+    return {
+      taskResponse: average([
+        task1.taskAchievement,
+        task2.taskResponse
+      ]),
+      coherenceCohesion: average([
+        task1.coherenceCohesion,
+        task2.coherenceCohesion
+      ]),
+      lexicalResource: average([
+        task1.lexicalResource,
+        task2.lexicalResource
+      ]),
+      grammarRangeAccuracy: average([
+        task1.grammarRangeAccuracy,
+        task2.grammarRangeAccuracy
+      ])
+    }
+  }
+
+  function getCriterionLabel(key) {
+    if (key === 'taskResponse') return 'TR / TA'
+    if (key === 'coherenceCohesion') return 'CC'
+    if (key === 'lexicalResource') return 'LR'
+    if (key === 'grammarRangeAccuracy') return 'GRA'
+    return key
+  }
+
+  function getCriterionFullLabel(key) {
+    if (key === 'taskResponse') return 'Task Response / Achievement'
+    if (key === 'coherenceCohesion') return 'Coherence & Cohesion'
+    if (key === 'lexicalResource') return 'Lexical Resource'
+    if (key === 'grammarRangeAccuracy') return 'Grammar Range & Accuracy'
+    return key
+  }
+
+
+  function StudentSkillAnalytics({ user }) {
+    const [readings, setReadings] = useState([])
+    const [readingSubmissions, setReadingSubmissions] = useState([])
+    const [listenings, setListenings] = useState([])
+    const [listeningSubmissions, setListeningSubmissions] = useState([])
+
+    useEffect(() => {
+      if (!user) return
+
+      const q = query(collection(db, 'readings'))
+
+      const unsub = onSnapshot(q, snap => {
+        const data = snap.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .filter(item =>
+            !item.archived &&
+            item.assignTo?.includes(user.uid) &&
+            !isHiddenForCurrentUser(item, user.uid)
+          )
+
+        setReadings(data)
+      })
+
+      return unsub
+    }, [user])
+
+    useEffect(() => {
+      if (!user) return
+
+      const q = query(
+        collection(db, 'readingSubmissions'),
+        where('uid', '==', user.uid)
+      )
+
+      const unsub = onSnapshot(q, snap => {
+        const data = snap.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .filter(item => item.archived !== true)
+
+        setReadingSubmissions(data)
+      })
+
+      return unsub
+    }, [user])
+
+    useEffect(() => {
+      if (!user) return
+
+      const q = query(collection(db, 'listenings'))
+
+      const unsub = onSnapshot(q, snap => {
+        const data = snap.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .filter(item =>
+            !item.archived &&
+            item.assignTo?.includes(user.uid) &&
+            !isHiddenForCurrentUser(item, user.uid)
+          )
+
+        setListenings(data)
+      })
+
+      return unsub
+    }, [user])
+
+    useEffect(() => {
+      if (!user) return
+
+      const q = query(
+        collection(db, 'listeningSubmissions'),
+        where('uid', '==', user.uid)
+      )
+
+      const unsub = onSnapshot(q, snap => {
+        const data = snap.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .filter(item => item.archived !== true)
+
+        setListeningSubmissions(data)
+      })
+
+      return unsub
+    }, [user])
+
+    const readingAnalytics = calculateSkillAnalytics(
+      readings,
+      readingSubmissions,
+      'readingId',
+      ['matching', 'sentenceEndings', 'mcq', 'fitb', 'tfng', 'table', 'summary', 'note']
     )
-  }
 
-  const getWritingStatus = submission => {
-    const writingBand = getWritingBand(submission)
+    const listeningAnalytics = calculateSkillAnalytics(
+      listenings,
+      listeningSubmissions,
+      'listeningId',
+      ['mcq', 'fitb', 'tfng', 'table', 'summary', 'note']
+    )
 
-    if (writingBand) return `Reviewed · Band ${formatBand(writingBand)}`
+    const readingCompletion = {
+      completed: readingSubmissions.filter(sub =>
+        readings.some(reading => reading.id === sub.readingId)
+      ).length,
+      assigned: readings.length
+    }
 
-    return 'Pending teacher review'
-  }
+    const listeningCompletion = {
+      completed: listeningSubmissions.filter(sub =>
+        listenings.some(listening => listening.id === sub.listeningId)
+      ).length,
+      assigned: listenings.length
+    }
 
-  const latestOverall = getMockOverall(latest)
-  const previousOverall = getMockOverall(previous)
+    const hasData =
+      readingSubmissions.length > 0 ||
+      listeningSubmissions.length > 0 ||
+      readings.length > 0 ||
+      listenings.length > 0
 
-  const trend = [...mockSubmissions]
-    .reverse()
-    .slice(-6)
+    const renderSkillCard = (title, icon, analytics, completion, colorClass) => (
+      <div className="bg-white border border-gray-100 rounded-2xl p-6">
+        <div className="flex items-center justify-between gap-4 mb-5">
+          <div>
+            <h2 className="font-semibold text-gray-800">
+              {icon} My {title} Analytics
+            </h2>
 
-  const overallChange = getChangeLabel(latestOverall, previousOverall)
-  const latestMockTitle = latest
-    ? mockMap[latest.mockTestId]?.title || latest.mockTitle || 'Mock Test'
-    : 'No mock completed yet'
-
-  if (completed === 0) {
-    return (
-      <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
-        <div className="flex items-center justify-between mb-2">
-          <h2 className="font-semibold text-gray-800">
-            🧠 My Mock Analysis
-          </h2>
+            <p className="text-xs text-gray-400 mt-1">
+              Based on your submitted {title.toLowerCase()} homework.
+            </p>
+          </div>
 
           <span className="text-xs bg-gray-100 text-gray-500 px-3 py-1.5 rounded-full">
-            No completed mock yet
+            {completion.completed}/{completion.assigned} completed
           </span>
         </div>
 
-        <p className="text-sm text-gray-400">
-          Once you complete a full mock test, your mock trend, latest estimate and section performance will appear here.
-        </p>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-5">
+          <div className="bg-gray-900 text-white rounded-2xl p-5">
+            <p className="text-xs text-gray-400 mb-1">
+              Average Accuracy
+            </p>
+
+            <p className="text-3xl font-bold">
+              {analytics.averageAccuracy === null ? '--' : `${analytics.averageAccuracy}%`}
+            </p>
+
+            <p className="text-xs text-gray-400 mt-2">
+              {analytics.totalCorrect}/{analytics.totalQuestions} correct
+            </p>
+          </div>
+
+          <div className="bg-purple-50 rounded-2xl p-5">
+            <p className="text-xs text-gray-500 mb-1">
+              Estimated Band
+            </p>
+
+            <p className="text-3xl font-bold text-purple-600">
+              {analytics.estimatedBand ? analytics.estimatedBand.toFixed(1) : '--'}
+            </p>
+
+            <p className="text-xs text-gray-500 mt-2">
+              Homework estimate, not full IELTS band
+            </p>
+          </div>
+
+          <div className="bg-amber-50 rounded-2xl p-5">
+            <p className="text-xs text-gray-500 mb-1">
+              Weakest Area
+            </p>
+
+            <p className="text-lg font-bold text-amber-700">
+              {analytics.weakest ? getQuestionTypeLabel(analytics.weakest.key) : '--'}
+            </p>
+
+            <p className="text-xs text-gray-500 mt-2">
+              {analytics.weakest
+                ? `${analytics.weakest.percentage}% accuracy`
+                : 'No question data yet'}
+            </p>
+          </div>
+        </div>
+
+        <div className="bg-gray-50 rounded-2xl p-5">
+          <h3 className="text-sm font-semibold text-gray-700 mb-3">
+            Accuracy by Question Type
+          </h3>
+
+          <div className="flex flex-col gap-3">
+            {analytics.typeAnalytics.map(item => (
+              <div key={item.key}>
+                <div className="flex justify-between mb-1">
+                  <p className="text-xs text-gray-500">
+                    {getQuestionTypeLabel(item.key)}
+                  </p>
+
+                  <p className={`text-xs font-semibold ${getAnalyticsColor(item.percentage)}`}>
+                    {item.percentage === null ? '--' : `${item.percentage}%`}
+                  </p>
+                </div>
+
+                <div className="w-full bg-white rounded-full h-2 overflow-hidden">
+                  <div
+                    className={`${item.percentage === null ? 'bg-gray-200' : colorClass} h-2 rounded-full`}
+                    style={{ width: `${item.percentage || 0}%` }}
+                  />
+                </div>
+
+                <p className="text-[10px] text-gray-400 mt-1">
+                  {item.correct}/{item.total} correct
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    )
+
+    if (!hasData) {
+      return (
+        <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="font-semibold text-gray-800">
+              📊 My Reading & Listening Analytics
+            </h2>
+
+            <span className="text-xs bg-gray-100 text-gray-500 px-3 py-1.5 rounded-full">
+              No data yet
+            </span>
+          </div>
+
+          <p className="text-sm text-gray-400">
+            Once you complete reading or listening homework, your accuracy, estimated band and weakest question types will appear here.
+          </p>
+        </div>
+      )
+    }
+
+    return (
+      <div className="grid grid-cols-1 gap-6 mb-8">
+        {renderSkillCard(
+          'Reading',
+          '📖',
+          readingAnalytics,
+          readingCompletion,
+          'bg-blue-600'
+        )}
+
+        {renderSkillCard(
+          'Listening',
+          '🎧',
+          listeningAnalytics,
+          listeningCompletion,
+          'bg-purple-600'
+        )}
       </div>
     )
   }
 
-  return (
-    <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
-      <div className="flex items-start justify-between gap-4 mb-5">
+
+  function ReadingHomeworkSection({ user }) {
+    const [readings, setReadings] = useState([])
+    const [submissions, setSubmissions] = useState([])
+    const navigate = useNavigate()
+
+    useEffect(() => {
+      if (!user) return
+
+      const q = query(collection(db, 'readings'))
+
+      const unsub = onSnapshot(q, snap => {
+        const all = snap.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .filter(r =>
+            !r.archived &&
+            r.assignTo?.includes(user.uid) &&
+            !isHiddenForCurrentUser(r, user.uid)
+          )
+
+        all.sort((a, b) => {
+          if (!a.dueDate) return 1
+          if (!b.dueDate) return -1
+          return new Date(a.dueDate) - new Date(b.dueDate)
+        })
+
+        setReadings(all)
+      })
+
+      return unsub
+    }, [user])
+
+    useEffect(() => {
+      if (!user) return
+
+      const q = query(
+        collection(db, 'readingSubmissions'),
+        where('uid', '==', user.uid)
+      )
+
+      const unsub = onSnapshot(q, snap => {
+        const data = snap.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .filter(item => item.archived !== true)
+
+        setSubmissions(data)
+      })
+
+      return unsub
+    }, [user])
+
+    const isDone = readingId =>
+      submissions.some(s => s.readingId === readingId)
+
+    const getResult = readingId =>
+      submissions.find(s => s.readingId === readingId)?.result
+
+    const todoReadings = readings.filter(r => !isDone(r.id))
+    const completedReadings = readings.filter(r => isDone(r.id))
+
+    if (readings.length === 0) return null
+
+    return (
+      <div className="mt-8 mb-8">
+        <h2 className="font-semibold text-gray-800 mb-4">
+          📖 Reading Homework
+        </h2>
+
+        {todoReadings.length > 0 && (
+          <div className="mb-6">
+            <p className="text-xs font-semibold text-red-500 uppercase tracking-wider mb-3">
+              To Do
+            </p>
+
+            <div className="flex flex-col gap-3">
+              {todoReadings.map(r => {
+                const badge = dueLabel(r)
+
+                return (
+                  <div
+                    key={r.id}
+                    className="bg-white border border-red-100 rounded-2xl p-5 flex items-center justify-between shadow-sm"
+                  >
+                    <div>
+                      <p className="text-sm font-medium text-gray-800">
+                        {r.title}
+                      </p>
+
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        ⏱ {r.timeLimit} min · {r.questions?.length || 0} question sets
+                      </p>
+
+                      <div className="flex gap-2 mt-2 flex-wrap">
+                        <span className={`text-xs px-3 py-1 rounded-full ${badge.style}`}>
+                          {badge.text}
+                        </span>
+
+                        <span className="text-xs bg-red-50 text-red-500 px-3 py-1 rounded-full">
+                          Not completed
+                        </span>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => navigate(`/do-reading/${r.id}`)}
+                      className="bg-purple-600 text-white px-4 py-2 rounded-xl text-xs font-medium hover:bg-purple-700"
+                    >
+                      Start →
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {completedReadings.length > 0 && (
+          <div>
+            <p className="text-xs font-semibold text-green-600 uppercase tracking-wider mb-3">
+              Completed
+            </p>
+
+            <div className="flex flex-col gap-3">
+              {completedReadings.map(r => {
+                const result = getResult(r.id)
+
+                return (
+                  <div
+                    key={r.id}
+                    className="bg-white border border-gray-100 rounded-2xl p-5 flex items-center justify-between"
+                  >
+                    <div>
+                      <p className="text-sm font-medium text-gray-800">
+                        {r.title}
+                      </p>
+
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        ⏱ {r.timeLimit} min · {r.questions?.length || 0} question sets
+                      </p>
+
+                      <p className="text-xs text-green-600 mt-1 font-medium">
+                        ✓ Completed — Estimated Band {result?.band}
+                      </p>
+                    </div>
+
+                    <span className="text-xs bg-green-50 text-green-600 px-3 py-1.5 rounded-full">
+                      Done
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+
+  function ListeningHomeworkSection({ user }) {
+    const [listenings, setListenings] = useState([])
+    const [submissions, setSubmissions] = useState([])
+    const navigate = useNavigate()
+
+    useEffect(() => {
+      if (!user) return
+
+      const q = query(collection(db, 'listenings'))
+
+      const unsub = onSnapshot(q, snap => {
+        const all = snap.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .filter(l =>
+            !l.archived &&
+            l.assignTo?.includes(user.uid) &&
+            !isHiddenForCurrentUser(l, user.uid)
+          )
+
+        all.sort((a, b) => {
+          if (!a.dueDate) return 1
+          if (!b.dueDate) return -1
+          return new Date(a.dueDate) - new Date(b.dueDate)
+        })
+
+        setListenings(all)
+      })
+
+      return unsub
+    }, [user])
+
+    useEffect(() => {
+      if (!user) return
+
+      const q = query(
+        collection(db, 'listeningSubmissions'),
+        where('uid', '==', user.uid)
+      )
+
+      const unsub = onSnapshot(q, snap => {
+        const data = snap.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .filter(item => item.archived !== true)
+
+        setSubmissions(data)
+      })
+
+      return unsub
+    }, [user])
+
+    const isDone = listeningId =>
+      submissions.some(s => s.listeningId === listeningId)
+
+    const getResult = listeningId =>
+      submissions.find(s => s.listeningId === listeningId)?.result
+
+    const todoListenings = listenings.filter(l => !isDone(l.id))
+    const completedListenings = listenings.filter(l => isDone(l.id))
+
+    if (listenings.length === 0) return null
+
+    return (
+      <div className="mt-8 mb-8">
+        <h2 className="font-semibold text-gray-800 mb-4">
+          🎧 Listening Homework
+        </h2>
+
+        {todoListenings.length > 0 && (
+          <div className="mb-6">
+            <p className="text-xs font-semibold text-red-500 uppercase tracking-wider mb-3">
+              To Do
+            </p>
+
+            <div className="flex flex-col gap-3">
+              {todoListenings.map(l => {
+                const badge = dueLabel(l)
+
+                return (
+                  <div
+                    key={l.id}
+                    className="bg-white border border-red-100 rounded-2xl p-5 flex items-center justify-between shadow-sm"
+                  >
+                    <div>
+                      <p className="text-sm font-medium text-gray-800">
+                        {l.title}
+                      </p>
+
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        ⏱ {l.timeLimit || 30} min · {l.questions?.length || 0} questions
+                      </p>
+
+                      <div className="flex gap-2 mt-2 flex-wrap">
+                        <span className={`text-xs px-3 py-1 rounded-full ${badge.style}`}>
+                          {badge.text}
+                        </span>
+
+                        <span className="text-xs bg-red-50 text-red-500 px-3 py-1 rounded-full">
+                          Not completed
+                        </span>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => navigate(`/do-listening/${l.id}`)}
+                      className="bg-purple-600 text-white px-4 py-2 rounded-xl text-xs font-medium hover:bg-purple-700"
+                    >
+                      Start →
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {completedListenings.length > 0 && (
+          <div>
+            <p className="text-xs font-semibold text-green-600 uppercase tracking-wider mb-3">
+              Completed
+            </p>
+
+            <div className="flex flex-col gap-3">
+              {completedListenings.map(l => {
+                const result = getResult(l.id)
+
+                return (
+                  <div
+                    key={l.id}
+                    className="bg-white border border-gray-100 rounded-2xl p-5 flex items-center justify-between"
+                  >
+                    <div>
+                      <p className="text-sm font-medium text-gray-800">
+                        {l.title}
+                      </p>
+
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        ⏱ {l.timeLimit || 30} min · {l.questions?.length || 0} questions
+                      </p>
+
+                      <p className="text-xs text-green-600 mt-1 font-medium">
+                        ✓ Completed — Estimated Band {result?.band}
+                      </p>
+                    </div>
+
+                    <span className="text-xs bg-green-50 text-green-600 px-3 py-1.5 rounded-full">
+                      Done
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+
+
+  function MockAnalysis({ user }) {
+    const [mockSubmissions, setMockSubmissions] = useState([])
+    const [mockMap, setMockMap] = useState({})
+
+    useEffect(() => {
+      if (!user) return
+
+      const q = query(
+        collection(db, 'mockSubmissions'),
+        where('uid', '==', user.uid)
+      )
+
+      const unsub = onSnapshot(q, snap => {
+        const data = snap.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .filter(item => item.archived !== true)
+
+        data.sort(
+          (a, b) => new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0)
+        )
+
+        setMockSubmissions(data)
+      })
+
+      return unsub
+    }, [user])
+
+    useEffect(() => {
+      if (!user) return
+
+      const q = query(collection(db, 'mockTests'))
+
+      const unsub = onSnapshot(q, snap => {
+        const map = {}
+
+        snap.docs.forEach(d => {
+          const item = {
+            id: d.id,
+            ...d.data()
+          }
+
+          if (isHiddenForCurrentUser(item, user.uid)) return
+
+          map[d.id] = item
+        })
+
+        setMockMap(map)
+      })
+
+      return unsub
+    }, [user])
+
+    const completed = mockSubmissions.length
+    const latest = mockSubmissions[0]
+    const previous = mockSubmissions[1]
+
+    const getMockOverall = submission => {
+      const result = submission?.result || {}
+
+      return (
+        result.reviewedOverall ||
+        result.finalOverall ||
+        result.overall ||
+        result.overallEstimate ||
+        null
+      )
+    }
+
+    const getWritingBand = submission => {
+      const result = submission?.result || {}
+
+      return (
+        result.writing?.band ||
+        result.writingBand ||
+        submission?.writingReview?.overall ||
+        submission?.review?.writingOverall ||
+        null
+      )
+    }
+
+    const getWritingStatus = submission => {
+      const writingBand = getWritingBand(submission)
+
+      if (writingBand) return `Reviewed · Band ${formatBand(writingBand)}`
+
+      return 'Pending teacher review'
+    }
+
+    const latestOverall = getMockOverall(latest)
+    const previousOverall = getMockOverall(previous)
+
+    const trend = [...mockSubmissions]
+      .reverse()
+      .slice(-6)
+
+    const overallChange = getChangeLabel(latestOverall, previousOverall)
+    const latestMockTitle = latest
+      ? mockMap[latest.mockTestId]?.title || latest.mockTitle || 'Mock Test'
+      : 'No mock completed yet'
+
+    if (completed === 0) {
+      return (
+        <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="font-semibold text-gray-800">
+              🧠 My Mock Analysis
+            </h2>
+
+            <span className="text-xs bg-gray-100 text-gray-500 px-3 py-1.5 rounded-full">
+              No completed mock yet
+            </span>
+          </div>
+
+          <p className="text-sm text-gray-400">
+            Once you complete a full mock test, your mock trend, latest estimate and section performance will appear here.
+          </p>
+        </div>
+      )
+    }
+
+    return (
+      <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
+        <div className="flex items-start justify-between gap-4 mb-5">
+          <div>
+            <h2 className="font-semibold text-gray-800">
+              🧠 My Mock Analysis
+            </h2>
+
+            <p className="text-xs text-gray-400 mt-1">
+              Based on your completed full IELTS mock tests.
+            </p>
+          </div>
+
+          <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1.5 rounded-full">
+            {completed} completed
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-5">
+          <div className="bg-gray-900 text-white rounded-2xl p-5">
+            <p className="text-xs text-gray-400 mb-1">
+              Latest Mock Overall
+            </p>
+
+            <p className="text-4xl font-bold">
+              {latestOverall ? formatBand(latestOverall) : '--'}
+            </p>
+
+            <p className="text-xs text-gray-400 mt-2 truncate">
+              {latestMockTitle}
+            </p>
+          </div>
+
+          <div className="bg-purple-50 rounded-2xl p-5">
+            <p className="text-xs text-gray-500 mb-1">
+              Listening
+            </p>
+
+            <p className="text-3xl font-bold text-purple-600">
+              {formatBand(latest?.result?.listening?.band)}
+            </p>
+
+            <p className="text-xs text-gray-500 mt-2">
+              {latest?.result?.listening?.correct ?? '-'}/{latest?.result?.listening?.total ?? '-'} correct
+            </p>
+          </div>
+
+          <div className="bg-blue-50 rounded-2xl p-5">
+            <p className="text-xs text-gray-500 mb-1">
+              Reading
+            </p>
+
+            <p className="text-3xl font-bold text-blue-600">
+              {formatBand(latest?.result?.reading?.band)}
+            </p>
+
+            <p className="text-xs text-gray-500 mt-2">
+              {latest?.result?.reading?.correct ?? '-'}/{latest?.result?.reading?.total ?? '-'} correct
+            </p>
+          </div>
+
+          <div className="bg-amber-50 rounded-2xl p-5">
+            <p className="text-xs text-gray-500 mb-1">
+              Writing
+            </p>
+
+            <p className="text-lg font-bold text-amber-700">
+              {getWritingStatus(latest)}
+            </p>
+
+            <p className={`text-xs mt-2 ${getChangeColor(latestOverall, previousOverall)}`}>
+              {overallChange ? `${overallChange} from previous mock` : 'No previous mock yet'}
+            </p>
+          </div>
+        </div>
+
+        {trend.length > 1 && (
+          <div className="mb-5">
+            <h3 className="text-sm font-semibold text-gray-700 mb-3">
+              Mock Progress Trend
+            </h3>
+
+            <div className="flex items-end gap-2 h-28 bg-gray-50 rounded-2xl p-4 overflow-x-auto">
+              {trend.map((submission, index) => {
+                const overall = Number(getMockOverall(submission)) || 0
+                const height = Math.max(14, Math.min(100, (overall / 9) * 100))
+                const title = mockMap[submission.mockTestId]?.title || `Mock ${index + 1}`
+
+                return (
+                  <div
+                    key={submission.id}
+                    className="flex flex-col items-center justify-end min-w-[58px] h-full"
+                    title={title}
+                  >
+                    <p className="text-xs font-semibold text-purple-600 mb-1">
+                      {overall ? formatBand(overall) : '--'}
+                    </p>
+
+                    <div
+                      className="w-8 rounded-t-xl bg-purple-600"
+                      style={{ height: `${height}%` }}
+                    />
+
+                    <p className="text-[10px] text-gray-400 mt-1">
+                      M{index + 1}
+                    </p>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
         <div>
-          <h2 className="font-semibold text-gray-800">
-            🧠 My Mock Analysis
-          </h2>
-
-          <p className="text-xs text-gray-400 mt-1">
-            Based on your completed full IELTS mock tests.
-          </p>
-        </div>
-
-        <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1.5 rounded-full">
-          {completed} completed
-        </span>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-5">
-        <div className="bg-gray-900 text-white rounded-2xl p-5">
-          <p className="text-xs text-gray-400 mb-1">
-            Latest Mock Overall
-          </p>
-
-          <p className="text-4xl font-bold">
-            {latestOverall ? formatBand(latestOverall) : '--'}
-          </p>
-
-          <p className="text-xs text-gray-400 mt-2 truncate">
-            {latestMockTitle}
-          </p>
-        </div>
-
-        <div className="bg-purple-50 rounded-2xl p-5">
-          <p className="text-xs text-gray-500 mb-1">
-            Listening
-          </p>
-
-          <p className="text-3xl font-bold text-purple-600">
-            {formatBand(latest?.result?.listening?.band)}
-          </p>
-
-          <p className="text-xs text-gray-500 mt-2">
-            {latest?.result?.listening?.correct ?? '-'}/{latest?.result?.listening?.total ?? '-'} correct
-          </p>
-        </div>
-
-        <div className="bg-blue-50 rounded-2xl p-5">
-          <p className="text-xs text-gray-500 mb-1">
-            Reading
-          </p>
-
-          <p className="text-3xl font-bold text-blue-600">
-            {formatBand(latest?.result?.reading?.band)}
-          </p>
-
-          <p className="text-xs text-gray-500 mt-2">
-            {latest?.result?.reading?.correct ?? '-'}/{latest?.result?.reading?.total ?? '-'} correct
-          </p>
-        </div>
-
-        <div className="bg-amber-50 rounded-2xl p-5">
-          <p className="text-xs text-gray-500 mb-1">
-            Writing
-          </p>
-
-          <p className="text-lg font-bold text-amber-700">
-            {getWritingStatus(latest)}
-          </p>
-
-          <p className={`text-xs mt-2 ${getChangeColor(latestOverall, previousOverall)}`}>
-            {overallChange ? `${overallChange} from previous mock` : 'No previous mock yet'}
-          </p>
-        </div>
-      </div>
-
-      {trend.length > 1 && (
-        <div className="mb-5">
           <h3 className="text-sm font-semibold text-gray-700 mb-3">
-            Mock Progress Trend
+            Recent Mock Tests
           </h3>
 
-          <div className="flex items-end gap-2 h-28 bg-gray-50 rounded-2xl p-4 overflow-x-auto">
-            {trend.map((submission, index) => {
-              const overall = Number(getMockOverall(submission)) || 0
-              const height = Math.max(14, Math.min(100, (overall / 9) * 100))
-              const title = mockMap[submission.mockTestId]?.title || `Mock ${index + 1}`
+          <div className="flex flex-col gap-2">
+            {mockSubmissions.slice(0, 4).map(submission => {
+              const result = submission.result || {}
+              const overall = getMockOverall(submission)
+              const title = mockMap[submission.mockTestId]?.title || submission.mockTitle || 'Mock Test'
 
               return (
                 <div
                   key={submission.id}
-                  className="flex flex-col items-center justify-end min-w-[58px] h-full"
-                  title={title}
+                  className="border border-gray-100 bg-gray-50 rounded-xl p-4 flex items-center justify-between gap-4"
+                >
+                  <div>
+                    <p className="text-sm font-medium text-gray-800">
+                      {title}
+                    </p>
+
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      Submitted {submission.submittedAt ? new Date(submission.submittedAt).toLocaleDateString() : 'No date'}
+                    </p>
+
+                    <p className="text-xs text-gray-500 mt-1">
+                      L {formatBand(result.listening?.band)} · R {formatBand(result.reading?.band)} · Writing {getWritingStatus(submission)}
+                    </p>
+                  </div>
+
+                  <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1.5 rounded-full font-semibold">
+                    Overall {overall ? formatBand(overall) : '--'}
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+
+  function MockTestSection({ user }) {
+    const [mocks, setMocks] = useState([])
+    const [submissions, setSubmissions] = useState([])
+    const navigate = useNavigate()
+
+    useEffect(() => {
+      if (!user) return
+
+      const q = query(collection(db, 'mockTests'))
+
+      const unsub = onSnapshot(q, snap => {
+        const list = snap.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .filter(m =>
+            !m.archived &&
+            m.assignTo?.includes(user.uid) &&
+            !isHiddenForCurrentUser(m, user.uid)
+          )
+
+        list.sort((a, b) => {
+          if (!a.dueDate) return 1
+          if (!b.dueDate) return -1
+          return new Date(a.dueDate) - new Date(b.dueDate)
+        })
+
+        setMocks(list)
+      })
+
+      return unsub
+    }, [user])
+
+    useEffect(() => {
+      if (!user) return
+
+      const q = query(
+        collection(db, 'mockSubmissions'),
+        where('uid', '==', user.uid)
+      )
+
+      const unsub = onSnapshot(q, snap => {
+        const data = snap.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .filter(item => item.archived !== true)
+
+        setSubmissions(data)
+      })
+
+      return unsub
+    }, [user])
+
+    const getSubmission = mockId =>
+      submissions.find(submission => submission.mockTestId === mockId)
+
+    const todoMocks = mocks.filter(mock => !getSubmission(mock.id))
+    const completedMocks = mocks.filter(mock => getSubmission(mock.id))
+
+    if (mocks.length === 0) return null
+
+    return (
+      <div className="mt-8 mb-8">
+        <h2 className="font-semibold text-gray-800 mb-4">
+          🧠 Full Mock Tests
+        </h2>
+
+        {todoMocks.length > 0 && (
+          <div className="mb-6">
+            <p className="text-xs font-semibold text-red-500 uppercase tracking-wider mb-3">
+              To Do
+            </p>
+
+            <div className="flex flex-col gap-3">
+              {todoMocks.map(mock => {
+                const badge = dueLabel(mock)
+
+                return (
+                  <div
+                    key={mock.id}
+                    className="bg-white border border-purple-100 rounded-2xl p-5 flex items-center justify-between shadow-sm"
+                  >
+                    <div>
+                      <p className="text-sm font-medium text-gray-800">
+                        {mock.title}
+                      </p>
+
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        Listening + Reading Passage 1, 2, 3 + Writing
+                      </p>
+
+                      <div className="flex gap-2 mt-2 flex-wrap">
+                        <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1 rounded-full">
+                          Full IELTS Mock
+                        </span>
+
+                        <span className={`text-xs px-3 py-1 rounded-full ${badge.style}`}>
+                          {badge.text}
+                        </span>
+
+                        <span className="text-xs bg-red-50 text-red-500 px-3 py-1 rounded-full">
+                          Not completed
+                        </span>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => navigate(`/do-mock/${mock.id}`)}
+                      className="bg-purple-600 text-white px-4 py-2 rounded-xl text-xs font-medium hover:bg-purple-700"
+                    >
+                      Start →
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {completedMocks.length > 0 && (
+          <div>
+            <p className="text-xs font-semibold text-green-600 uppercase tracking-wider mb-3">
+              Completed
+            </p>
+
+            <div className="flex flex-col gap-3">
+              {completedMocks.map(mock => {
+                const submission = getSubmission(mock.id)
+                const result = submission?.result
+
+                return (
+                  <div
+                    key={mock.id}
+                    className="bg-white border border-gray-100 rounded-2xl p-5 flex items-center justify-between gap-4"
+                  >
+                    <div>
+                      <p className="text-sm font-medium text-gray-800">
+                        {mock.title}
+                      </p>
+
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        Submitted {submission?.submittedAt ? new Date(submission.submittedAt).toLocaleDateString() : ''}
+                      </p>
+
+                      <div className="flex gap-2 mt-2 flex-wrap">
+                        <span className="text-xs bg-green-50 text-green-600 px-3 py-1 rounded-full">
+                          Completed
+                        </span>
+
+                        <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1 rounded-full">
+                          Overall {result?.overallEstimate || '-'}
+                        </span>
+
+                        <span className="text-xs bg-amber-50 text-amber-600 px-3 py-1 rounded-full">
+                          Writing pending review
+                        </span>
+                      </div>
+                    </div>
+
+                    <span className="text-xs bg-green-50 text-green-600 px-3 py-1.5 rounded-full">
+                      Done
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+
+  function WritingProgressAnalytics({ user }) {
+    const [submissions, setSubmissions] = useState([])
+    const [writingMap, setWritingMap] = useState({})
+
+    useEffect(() => {
+      if (!user) return
+
+      const q = query(
+        collection(db, 'writingSubmissions'),
+        where('uid', '==', user.uid)
+      )
+
+      const unsub = onSnapshot(q, snap => {
+        const data = snap.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .filter(item => item.archived !== true)
+
+        setSubmissions(data)
+      })
+
+      return unsub
+    }, [user])
+
+    useEffect(() => {
+      if (!user) return
+
+      const q = query(collection(db, 'writingHomeworks'))
+
+      const unsub = onSnapshot(q, snap => {
+        const map = {}
+
+        snap.docs.forEach(d => {
+          const item = {
+            id: d.id,
+            ...d.data()
+          }
+
+          if (isHiddenForCurrentUser(item, user.uid)) return
+
+          map[d.id] = item
+        })
+
+        setWritingMap(map)
+      })
+
+      return unsub
+    }, [user])
+
+    const reviewed = submissions
+      .filter(sub => sub.reviewed && sub.review?.overall)
+      .sort((a, b) => new Date(getReviewDate(a)) - new Date(getReviewDate(b)))
+
+    if (reviewed.length === 0) {
+      return (
+        <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="font-semibold text-gray-800">
+              ✍️ Writing Progress Analytics
+            </h2>
+
+            <span className="text-xs bg-gray-100 text-gray-500 px-3 py-1.5 rounded-full">
+              No reviewed writing yet
+            </span>
+          </div>
+
+          <p className="text-sm text-gray-400">
+            Once your teacher reviews your writing homework, your writing band trend and rubric strengths will appear here.
+          </p>
+        </div>
+      )
+    }
+
+    const first = reviewed[0]
+    const latest = reviewed[reviewed.length - 1]
+    const previous = reviewed[reviewed.length - 2]
+
+    const firstOverall = toNumber(first.review?.overall)
+    const latestOverall = toNumber(latest.review?.overall)
+    const previousOverall = previous ? toNumber(previous.review?.overall) : null
+
+    const improvement =
+      firstOverall !== null && latestOverall !== null
+        ? latestOverall - firstOverall
+        : null
+
+    const latestRubric = getRubricAverages(latest.review)
+
+    const criteria = [
+      'taskResponse',
+      'coherenceCohesion',
+      'lexicalResource',
+      'grammarRangeAccuracy'
+    ]
+
+    const rubricItems = criteria
+      .map(key => ({
+        key,
+        value: latestRubric[key]
+      }))
+      .filter(item => item.value !== null)
+
+    const weakest = rubricItems.length
+      ? [...rubricItems].sort((a, b) => a.value - b.value)[0]
+      : null
+
+    const strongest = rubricItems.length
+      ? [...rubricItems].sort((a, b) => b.value - a.value)[0]
+      : null
+
+    const recent = [...reviewed]
+      .sort((a, b) => new Date(getReviewDate(b)) - new Date(getReviewDate(a)))
+      .slice(0, 5)
+
+    const trend = reviewed.slice(-5)
+
+    return (
+      <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
+        <div className="flex items-center justify-between gap-4 mb-5">
+          <div>
+            <h2 className="font-semibold text-gray-800">
+              ✍️ Writing Progress Analytics
+            </h2>
+
+            <p className="text-xs text-gray-400 mt-1">
+              Based on teacher-reviewed Task 1 and Task 2 submissions.
+            </p>
+          </div>
+
+          <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1.5 rounded-full">
+            {reviewed.length} reviewed
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-5">
+          <div className="bg-gray-900 text-white rounded-2xl p-5">
+            <p className="text-xs text-gray-400 mb-1">
+              Latest Writing Band
+            </p>
+
+            <p className="text-4xl font-bold">
+              {formatBand(latestOverall)}
+            </p>
+
+            {previousOverall !== null && (
+              <p className={`text-xs mt-2 ${getChangeColor(latestOverall, previousOverall)}`}>
+                {getChangeLabel(latestOverall, previousOverall)} from previous review
+              </p>
+            )}
+          </div>
+
+          <div className="bg-purple-50 rounded-2xl p-5">
+            <p className="text-xs text-gray-500 mb-1">
+              Improvement Since First Review
+            </p>
+
+            <p className={`text-3xl font-bold ${
+              improvement !== null && improvement >= 0
+                ? 'text-green-600'
+                : 'text-red-500'
+            }`}>
+              {improvement === null
+                ? '-'
+                : `${improvement >= 0 ? '+' : ''}${improvement.toFixed(1)}`}
+            </p>
+
+            <p className="text-xs text-gray-400 mt-2">
+              First: {formatBand(firstOverall)} → Latest: {formatBand(latestOverall)}
+            </p>
+          </div>
+
+          <div className="bg-amber-50 rounded-2xl p-5">
+            <p className="text-xs text-gray-500 mb-1">
+              Weakest Criterion
+            </p>
+
+            <p className="text-xl font-bold text-amber-700">
+              {weakest ? getCriterionLabel(weakest.key) : '-'}
+            </p>
+
+            <p className="text-xs text-gray-500 mt-2">
+              {weakest
+                ? `${getCriterionFullLabel(weakest.key)} · ${formatBand(weakest.value)}`
+                : 'Rubric data is not available yet.'}
+            </p>
+          </div>
+        </div>
+
+        <div className="mb-5">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold text-gray-700">
+              Last 5 Writing Trend
+            </h3>
+
+            {strongest && (
+              <span className="text-xs bg-green-50 text-green-600 px-3 py-1.5 rounded-full">
+                Strongest: {getCriterionLabel(strongest.key)}
+              </span>
+            )}
+          </div>
+
+          <div className="flex items-end gap-2 h-28 bg-gray-50 rounded-2xl p-4 overflow-x-auto">
+            {trend.map((sub, index) => {
+              const band = toNumber(sub.review?.overall) || 0
+              const height = Math.max(14, Math.min(100, (band / 9) * 100))
+
+              return (
+                <div
+                  key={sub.id}
+                  className="flex flex-col items-center justify-end min-w-[54px] h-full"
                 >
                   <p className="text-xs font-semibold text-purple-600 mb-1">
-                    {overall ? formatBand(overall) : '--'}
+                    {formatBand(band)}
                   </p>
 
                   <div
@@ -1196,1414 +1667,972 @@ function MockAnalysis({ user }) {
                   />
 
                   <p className="text-[10px] text-gray-400 mt-1">
-                    M{index + 1}
+                    W{reviewed.length - trend.length + index + 1}
                   </p>
                 </div>
               )
             })}
           </div>
         </div>
-      )}
 
-      <div>
-        <h3 className="text-sm font-semibold text-gray-700 mb-3">
-          Recent Mock Tests
-        </h3>
+        {rubricItems.length > 0 && (
+          <div className="mb-5">
+            <h3 className="text-sm font-semibold text-gray-700 mb-3">
+              Latest Rubric Breakdown
+            </h3>
 
-        <div className="flex flex-col gap-2">
-          {mockSubmissions.slice(0, 4).map(submission => {
-            const result = submission.result || {}
-            const overall = getMockOverall(submission)
-            const title = mockMap[submission.mockTestId]?.title || submission.mockTitle || 'Mock Test'
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {rubricItems.map(item => {
+                const percent = Math.min(100, Math.round((item.value / 9) * 100))
 
-            return (
-              <div
-                key={submission.id}
-                className="border border-gray-100 bg-gray-50 rounded-xl p-4 flex items-center justify-between gap-4"
-              >
-                <div>
-                  <p className="text-sm font-medium text-gray-800">
-                    {title}
-                  </p>
-
-                  <p className="text-xs text-gray-400 mt-0.5">
-                    Submitted {submission.submittedAt ? new Date(submission.submittedAt).toLocaleDateString() : 'No date'}
-                  </p>
-
-                  <p className="text-xs text-gray-500 mt-1">
-                    L {formatBand(result.listening?.band)} · R {formatBand(result.reading?.band)} · Writing {getWritingStatus(submission)}
-                  </p>
-                </div>
-
-                <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1.5 rounded-full font-semibold">
-                  Overall {overall ? formatBand(overall) : '--'}
-                </span>
-              </div>
-            )
-          })}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-
-function MockTestSection({ user }) {
-  const [mocks, setMocks] = useState([])
-  const [submissions, setSubmissions] = useState([])
-  const navigate = useNavigate()
-
-  useEffect(() => {
-    if (!user) return
-
-    const q = query(collection(db, 'mockTests'))
-
-    const unsub = onSnapshot(q, snap => {
-      const list = snap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
-        .filter(m =>
-          !m.archived &&
-          m.assignTo?.includes(user.uid) &&
-          !isHiddenForCurrentUser(m, user.uid)
-        )
-
-      list.sort((a, b) => {
-        if (!a.dueDate) return 1
-        if (!b.dueDate) return -1
-        return new Date(a.dueDate) - new Date(b.dueDate)
-      })
-
-      setMocks(list)
-    })
-
-    return unsub
-  }, [user])
-
-  useEffect(() => {
-    if (!user) return
-
-    const q = query(
-      collection(db, 'mockSubmissions'),
-      where('uid', '==', user.uid)
-    )
-
-    const unsub = onSnapshot(q, snap => {
-      const data = snap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
-        .filter(item => item.archived !== true)
-
-      setSubmissions(data)
-    })
-
-    return unsub
-  }, [user])
-
-  const getSubmission = mockId =>
-    submissions.find(submission => submission.mockTestId === mockId)
-
-  const todoMocks = mocks.filter(mock => !getSubmission(mock.id))
-  const completedMocks = mocks.filter(mock => getSubmission(mock.id))
-
-  if (mocks.length === 0) return null
-
-  return (
-    <div className="mt-8 mb-8">
-      <h2 className="font-semibold text-gray-800 mb-4">
-        🧠 Full Mock Tests
-      </h2>
-
-      {todoMocks.length > 0 && (
-        <div className="mb-6">
-          <p className="text-xs font-semibold text-red-500 uppercase tracking-wider mb-3">
-            To Do
-          </p>
-
-          <div className="flex flex-col gap-3">
-            {todoMocks.map(mock => {
-              const badge = dueLabel(mock)
-
-              return (
-                <div
-                  key={mock.id}
-                  className="bg-white border border-purple-100 rounded-2xl p-5 flex items-center justify-between shadow-sm"
-                >
-                  <div>
-                    <p className="text-sm font-medium text-gray-800">
-                      {mock.title}
-                    </p>
-
-                    <p className="text-xs text-gray-400 mt-0.5">
-                      Listening + Reading Passage 1, 2, 3 + Writing
-                    </p>
-
-                    <div className="flex gap-2 mt-2 flex-wrap">
-                      <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1 rounded-full">
-                        Full IELTS Mock
-                      </span>
-
-                      <span className={`text-xs px-3 py-1 rounded-full ${badge.style}`}>
-                        {badge.text}
-                      </span>
-
-                      <span className="text-xs bg-red-50 text-red-500 px-3 py-1 rounded-full">
-                        Not completed
-                      </span>
-                    </div>
-                  </div>
-
-                  <button
-                    onClick={() => navigate(`/do-mock/${mock.id}`)}
-                    className="bg-purple-600 text-white px-4 py-2 rounded-xl text-xs font-medium hover:bg-purple-700"
-                  >
-                    Start →
-                  </button>
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      )}
-
-      {completedMocks.length > 0 && (
-        <div>
-          <p className="text-xs font-semibold text-green-600 uppercase tracking-wider mb-3">
-            Completed
-          </p>
-
-          <div className="flex flex-col gap-3">
-            {completedMocks.map(mock => {
-              const submission = getSubmission(mock.id)
-              const result = submission?.result
-
-              return (
-                <div
-                  key={mock.id}
-                  className="bg-white border border-gray-100 rounded-2xl p-5 flex items-center justify-between gap-4"
-                >
-                  <div>
-                    <p className="text-sm font-medium text-gray-800">
-                      {mock.title}
-                    </p>
-
-                    <p className="text-xs text-gray-400 mt-0.5">
-                      Submitted {submission?.submittedAt ? new Date(submission.submittedAt).toLocaleDateString() : ''}
-                    </p>
-
-                    <div className="flex gap-2 mt-2 flex-wrap">
-                      <span className="text-xs bg-green-50 text-green-600 px-3 py-1 rounded-full">
-                        Completed
-                      </span>
-
-                      <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1 rounded-full">
-                        Overall {result?.overallEstimate || '-'}
-                      </span>
-
-                      <span className="text-xs bg-amber-50 text-amber-600 px-3 py-1 rounded-full">
-                        Writing pending review
-                      </span>
-                    </div>
-                  </div>
-
-                  <span className="text-xs bg-green-50 text-green-600 px-3 py-1.5 rounded-full">
-                    Done
-                  </span>
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-
-function WritingProgressAnalytics({ user }) {
-  const [submissions, setSubmissions] = useState([])
-  const [writingMap, setWritingMap] = useState({})
-
-  useEffect(() => {
-    if (!user) return
-
-    const q = query(
-      collection(db, 'writingSubmissions'),
-      where('uid', '==', user.uid)
-    )
-
-    const unsub = onSnapshot(q, snap => {
-      const data = snap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
-        .filter(item => item.archived !== true)
-
-      setSubmissions(data)
-    })
-
-    return unsub
-  }, [user])
-
-  useEffect(() => {
-    if (!user) return
-
-    const q = query(collection(db, 'writingHomeworks'))
-
-    const unsub = onSnapshot(q, snap => {
-      const map = {}
-
-      snap.docs.forEach(d => {
-        const item = {
-          id: d.id,
-          ...d.data()
-        }
-
-        if (isHiddenForCurrentUser(item, user.uid)) return
-
-        map[d.id] = item
-      })
-
-      setWritingMap(map)
-    })
-
-    return unsub
-  }, [user])
-
-  const reviewed = submissions
-    .filter(sub => sub.reviewed && sub.review?.overall)
-    .sort((a, b) => new Date(getReviewDate(a)) - new Date(getReviewDate(b)))
-
-  if (reviewed.length === 0) {
-    return (
-      <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
-        <div className="flex items-center justify-between mb-2">
-          <h2 className="font-semibold text-gray-800">
-            ✍️ Writing Progress Analytics
-          </h2>
-
-          <span className="text-xs bg-gray-100 text-gray-500 px-3 py-1.5 rounded-full">
-            No reviewed writing yet
-          </span>
-        </div>
-
-        <p className="text-sm text-gray-400">
-          Once your teacher reviews your writing homework, your writing band trend and rubric strengths will appear here.
-        </p>
-      </div>
-    )
-  }
-
-  const first = reviewed[0]
-  const latest = reviewed[reviewed.length - 1]
-  const previous = reviewed[reviewed.length - 2]
-
-  const firstOverall = toNumber(first.review?.overall)
-  const latestOverall = toNumber(latest.review?.overall)
-  const previousOverall = previous ? toNumber(previous.review?.overall) : null
-
-  const improvement =
-    firstOverall !== null && latestOverall !== null
-      ? latestOverall - firstOverall
-      : null
-
-  const latestRubric = getRubricAverages(latest.review)
-
-  const criteria = [
-    'taskResponse',
-    'coherenceCohesion',
-    'lexicalResource',
-    'grammarRangeAccuracy'
-  ]
-
-  const rubricItems = criteria
-    .map(key => ({
-      key,
-      value: latestRubric[key]
-    }))
-    .filter(item => item.value !== null)
-
-  const weakest = rubricItems.length
-    ? [...rubricItems].sort((a, b) => a.value - b.value)[0]
-    : null
-
-  const strongest = rubricItems.length
-    ? [...rubricItems].sort((a, b) => b.value - a.value)[0]
-    : null
-
-  const recent = [...reviewed]
-    .sort((a, b) => new Date(getReviewDate(b)) - new Date(getReviewDate(a)))
-    .slice(0, 5)
-
-  const trend = reviewed.slice(-5)
-
-  return (
-    <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
-      <div className="flex items-center justify-between gap-4 mb-5">
-        <div>
-          <h2 className="font-semibold text-gray-800">
-            ✍️ Writing Progress Analytics
-          </h2>
-
-          <p className="text-xs text-gray-400 mt-1">
-            Based on teacher-reviewed Task 1 and Task 2 submissions.
-          </p>
-        </div>
-
-        <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1.5 rounded-full">
-          {reviewed.length} reviewed
-        </span>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-5">
-        <div className="bg-gray-900 text-white rounded-2xl p-5">
-          <p className="text-xs text-gray-400 mb-1">
-            Latest Writing Band
-          </p>
-
-          <p className="text-4xl font-bold">
-            {formatBand(latestOverall)}
-          </p>
-
-          {previousOverall !== null && (
-            <p className={`text-xs mt-2 ${getChangeColor(latestOverall, previousOverall)}`}>
-              {getChangeLabel(latestOverall, previousOverall)} from previous review
-            </p>
-          )}
-        </div>
-
-        <div className="bg-purple-50 rounded-2xl p-5">
-          <p className="text-xs text-gray-500 mb-1">
-            Improvement Since First Review
-          </p>
-
-          <p className={`text-3xl font-bold ${
-            improvement !== null && improvement >= 0
-              ? 'text-green-600'
-              : 'text-red-500'
-          }`}>
-            {improvement === null
-              ? '-'
-              : `${improvement >= 0 ? '+' : ''}${improvement.toFixed(1)}`}
-          </p>
-
-          <p className="text-xs text-gray-400 mt-2">
-            First: {formatBand(firstOverall)} → Latest: {formatBand(latestOverall)}
-          </p>
-        </div>
-
-        <div className="bg-amber-50 rounded-2xl p-5">
-          <p className="text-xs text-gray-500 mb-1">
-            Weakest Criterion
-          </p>
-
-          <p className="text-xl font-bold text-amber-700">
-            {weakest ? getCriterionLabel(weakest.key) : '-'}
-          </p>
-
-          <p className="text-xs text-gray-500 mt-2">
-            {weakest
-              ? `${getCriterionFullLabel(weakest.key)} · ${formatBand(weakest.value)}`
-              : 'Rubric data is not available yet.'}
-          </p>
-        </div>
-      </div>
-
-      <div className="mb-5">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-semibold text-gray-700">
-            Last 5 Writing Trend
-          </h3>
-
-          {strongest && (
-            <span className="text-xs bg-green-50 text-green-600 px-3 py-1.5 rounded-full">
-              Strongest: {getCriterionLabel(strongest.key)}
-            </span>
-          )}
-        </div>
-
-        <div className="flex items-end gap-2 h-28 bg-gray-50 rounded-2xl p-4 overflow-x-auto">
-          {trend.map((sub, index) => {
-            const band = toNumber(sub.review?.overall) || 0
-            const height = Math.max(14, Math.min(100, (band / 9) * 100))
-
-            return (
-              <div
-                key={sub.id}
-                className="flex flex-col items-center justify-end min-w-[54px] h-full"
-              >
-                <p className="text-xs font-semibold text-purple-600 mb-1">
-                  {formatBand(band)}
-                </p>
-
-                <div
-                  className="w-8 rounded-t-xl bg-purple-600"
-                  style={{ height: `${height}%` }}
-                />
-
-                <p className="text-[10px] text-gray-400 mt-1">
-                  W{reviewed.length - trend.length + index + 1}
-                </p>
-              </div>
-            )
-          })}
-        </div>
-      </div>
-
-      {rubricItems.length > 0 && (
-        <div className="mb-5">
-          <h3 className="text-sm font-semibold text-gray-700 mb-3">
-            Latest Rubric Breakdown
-          </h3>
-
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {rubricItems.map(item => {
-              const percent = Math.min(100, Math.round((item.value / 9) * 100))
-
-              return (
-                <div
-                  key={item.key}
-                  className="bg-gray-50 rounded-xl p-4"
-                >
-                  <div className="flex items-center justify-between mb-2">
-                    <p className="text-xs text-gray-500">
-                      {getCriterionLabel(item.key)}
-                    </p>
-
-                    <p className={`text-sm font-bold ${getBandColor(item.value)}`}>
-                      {formatBand(item.value)}
-                    </p>
-                  </div>
-
-                  <div className="w-full bg-white rounded-full h-2 overflow-hidden">
-                    <div
-                      className="bg-purple-600 h-2 rounded-full"
-                      style={{ width: `${percent}%` }}
-                    />
-                  </div>
-
-                  <p className="text-[10px] text-gray-400 mt-2">
-                    {getCriterionFullLabel(item.key)}
-                  </p>
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      )}
-
-      <div>
-        <h3 className="text-sm font-semibold text-gray-700 mb-3">
-          Recent Writing Reviews
-        </h3>
-
-        <div className="flex flex-col gap-2">
-          {recent.map(sub => {
-            const homework = writingMap[sub.writingId]
-            const rubric = getRubricAverages(sub.review)
-
-            return (
-              <div
-                key={sub.id}
-                className="border border-gray-100 rounded-xl p-4 bg-gray-50"
-              >
-                <div className="flex items-center justify-between gap-3 mb-2">
-                  <div>
-                    <p className="text-sm font-medium text-gray-800">
-                      {homework?.title || 'Writing Homework'}
-                    </p>
-
-                    <p className="text-xs text-gray-400">
-                      {getReviewDate(sub)
-                        ? new Date(getReviewDate(sub)).toLocaleDateString()
-                        : 'No date'}
-                    </p>
-                  </div>
-
-                  <p className="text-xl font-bold text-purple-600">
-                    {formatBand(sub.review?.overall)}
-                  </p>
-                </div>
-
-                <div className="grid grid-cols-4 gap-2">
-                  {criteria.map(key => (
-                    <div
-                      key={key}
-                      className="bg-white rounded-lg p-2 text-center"
-                    >
-                      <p className="text-[10px] text-gray-400">
-                        {getCriterionLabel(key)}
-                      </p>
-
-                      <p className={`text-xs font-semibold ${getBandColor(rubric[key])}`}>
-                        {formatBand(rubric[key])}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function WritingHomeworkSection({ user }) {
-  const [writings, setWritings] = useState([])
-  const [submissions, setSubmissions] = useState([])
-  const [selectedReview, setSelectedReview] = useState(null)
-  const navigate = useNavigate()
-
-  useEffect(() => {
-    if (!user) return
-
-    const q = query(collection(db, 'writingHomeworks'))
-
-    const unsub = onSnapshot(q, snap => {
-      const all = snap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
-        .filter(w =>
-          !w.archived &&
-          w.assignTo?.includes(user.uid) &&
-          !isHiddenForCurrentUser(w, user.uid)
-        )
-
-      all.sort((a, b) => {
-        if (!a.dueDate) return 1
-        if (!b.dueDate) return -1
-        return new Date(a.dueDate) - new Date(b.dueDate)
-      })
-
-      setWritings(all)
-    })
-
-    return unsub
-  }, [user])
-
-  useEffect(() => {
-    if (!user) return
-
-    const q = query(
-      collection(db, 'writingSubmissions'),
-      where('uid', '==', user.uid)
-    )
-
-    const unsub = onSnapshot(q, snap => {
-      const data = snap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
-        .filter(item => item.archived !== true)
-
-      setSubmissions(data)
-    })
-
-    return unsub
-  }, [user])
-
-  const getSubmission = writingId =>
-    submissions.find(s => s.writingId === writingId)
-
-  const isDone = writingId => Boolean(getSubmission(writingId))
-
-  const todoWritings = writings.filter(w => !isDone(w.id))
-  const completedWritings = writings.filter(w => isDone(w.id))
-
-  if (writings.length === 0) return null
-
-  return (
-    <div className="mt-8 mb-8">
-      <h2 className="font-semibold text-gray-800 mb-4">
-        ✍️ Writing Homework
-      </h2>
-
-      {todoWritings.length > 0 && (
-        <div className="mb-6">
-          <p className="text-xs font-semibold text-red-500 uppercase tracking-wider mb-3">
-            To Do
-          </p>
-
-          <div className="flex flex-col gap-3">
-            {todoWritings.map(w => {
-              const badge = dueLabel(w)
-
-              return (
-                <div
-                  key={w.id}
-                  className="bg-white border border-red-100 rounded-2xl p-5 flex items-center justify-between shadow-sm"
-                >
-                  <div>
-                    <p className="text-sm font-medium text-gray-800">
-                      {w.title}
-                    </p>
-
-                    <p className="text-xs text-gray-400 mt-0.5">
-                      ⏱ {w.timeLimit || 60} min · Task 1 + Task 2
-                    </p>
-
-                    <div className="flex gap-2 mt-2 flex-wrap">
-                      <span className={`text-xs px-3 py-1 rounded-full ${badge.style}`}>
-                        {badge.text}
-                      </span>
-
-                      <span className="text-xs bg-red-50 text-red-500 px-3 py-1 rounded-full">
-                        Not completed
-                      </span>
-
-                      <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1 rounded-full">
-                        Teacher graded
-                      </span>
-                    </div>
-                  </div>
-
-                  <button
-                    onClick={() => navigate(`/do-writing/${w.id}`)}
-                    className="bg-purple-600 text-white px-4 py-2 rounded-xl text-xs font-medium hover:bg-purple-700"
-                  >
-                    Start →
-                  </button>
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      )}
-
-      {completedWritings.length > 0 && (
-        <div>
-          <p className="text-xs font-semibold text-green-600 uppercase tracking-wider mb-3">
-            Completed
-          </p>
-
-          <div className="flex flex-col gap-3">
-            {completedWritings.map(w => {
-              const submission = getSubmission(w.id)
-              const reviewed = Boolean(submission?.reviewed)
-
-              return (
-                <div
-                  key={w.id}
-                  className="bg-white border border-gray-100 rounded-2xl p-5 flex items-center justify-between gap-4"
-                >
-                  <div>
-                    <p className="text-sm font-medium text-gray-800">
-                      {w.title}
-                    </p>
-
-                    <p className="text-xs text-gray-400 mt-0.5">
-                      ⏱ {w.timeLimit || 60} min · Task 1 + Task 2
-                    </p>
-
-                    {reviewed ? (
-                      <p className="text-xs text-green-600 mt-1 font-medium">
-                        ✓ Reviewed — Band {submission?.review?.overall || '-'}
-                      </p>
-                    ) : (
-                      <p className="text-xs text-amber-600 mt-1 font-medium">
-                        ✓ Submitted — Waiting for teacher review
-                      </p>
-                    )}
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    {reviewed && (
-                      <button
-                        onClick={() =>
-                          setSelectedReview({
-                            writing: w,
-                            submission
-                          })
-                        }
-                        className="text-xs bg-purple-600 text-white px-3 py-2 rounded-xl hover:bg-purple-700"
-                      >
-                        Review
-                      </button>
-                    )}
-
-                    <span
-                      className={`text-xs px-3 py-1.5 rounded-full ${
-                        reviewed
-                          ? 'bg-green-50 text-green-600'
-                          : 'bg-amber-50 text-amber-600'
-                      }`}
-                    >
-                      {reviewed ? 'Reviewed' : 'Pending review'}
-                    </span>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      )}
-
-      {selectedReview && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center px-4">
-          <div className="bg-white rounded-2xl w-full max-w-5xl max-h-[90vh] overflow-y-auto p-6">
-            <div className="flex items-start justify-between mb-6">
-              <div>
-                <h2 className="text-xl font-bold text-gray-900">
-                  Writing Feedback
-                </h2>
-
-                <p className="text-sm text-gray-400">
-                  {selectedReview.writing.title}
-                </p>
-
-                <p className="text-sm text-purple-600 font-semibold mt-1">
-                  Overall Band {selectedReview.submission.review?.overall}
-                </p>
-              </div>
-
-              <button
-                onClick={() => setSelectedReview(null)}
-                className="text-sm text-gray-400 hover:text-gray-600"
-              >
-                Close
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-6">
-              <div className="bg-purple-50 rounded-xl p-4 text-center">
-                <p className="text-xs text-gray-500 mb-1">Task 1 Band</p>
-                <p className="text-2xl font-bold text-purple-600">
-                  {selectedReview.submission.review?.task1Band || '-'}
-                </p>
-              </div>
-
-              <div className="bg-indigo-50 rounded-xl p-4 text-center">
-                <p className="text-xs text-gray-500 mb-1">Task 2 Band</p>
-                <p className="text-2xl font-bold text-indigo-600">
-                  {selectedReview.submission.review?.task2Band || '-'}
-                </p>
-              </div>
-
-              <div className="bg-green-50 rounded-xl p-4 text-center">
-                <p className="text-xs text-gray-500 mb-1">Overall</p>
-                <p className="text-2xl font-bold text-green-600">
-                  {selectedReview.submission.review?.overall || '-'}
-                </p>
-              </div>
-            </div>
-
-            {selectedReview.submission.review?.rubric && (
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-                {Object.entries(getRubricAverages(selectedReview.submission.review)).map(
-                  ([key, value]) => (
-                    <div
-                      key={key}
-                      className="bg-gray-50 rounded-xl p-3 text-center"
-                    >
-                      <p className="text-xs text-gray-400 mb-1">
-                        {getCriterionLabel(key)}
-                      </p>
-
-                      <p className={`text-lg font-bold ${getBandColor(value)}`}>
-                        {formatBand(value)}
-                      </p>
-                    </div>
-                  )
-                )}
-              </div>
-            )}
-
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <div className="border border-gray-100 rounded-2xl p-5">
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="font-semibold text-gray-800">
-                    Task 1
-                  </h3>
-
-                  <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1 rounded-full">
-                    {selectedReview.submission.task1WordCount || 0} words
-                  </span>
-                </div>
-
-                <p className="text-xs text-gray-400 mb-2">
-                  Your answer
-                </p>
-
-                <p className="text-sm text-gray-800 leading-7 whitespace-pre-wrap bg-gray-50 rounded-xl p-4 mb-4">
-                  {selectedReview.submission.task1Answer}
-                </p>
-
-                <p className="text-xs text-gray-400 mb-2">
-                  Teacher feedback
-                </p>
-
-                <p className="text-sm text-gray-800 leading-7 whitespace-pre-wrap bg-green-50 rounded-xl p-4">
-                  {selectedReview.submission.review?.task1Feedback || 'No feedback.'}
-                </p>
-              </div>
-
-              <div className="border border-gray-100 rounded-2xl p-5">
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="font-semibold text-gray-800">
-                    Task 2
-                  </h3>
-
-                  <span className="text-xs bg-indigo-50 text-indigo-600 px-3 py-1 rounded-full">
-                    {selectedReview.submission.task2WordCount || 0} words
-                  </span>
-                </div>
-
-                <p className="text-xs text-gray-400 mb-2">
-                  Your answer
-                </p>
-
-                <p className="text-sm text-gray-800 leading-7 whitespace-pre-wrap bg-gray-50 rounded-xl p-4 mb-4">
-                  {selectedReview.submission.task2Answer}
-                </p>
-
-                <p className="text-xs text-gray-400 mb-2">
-                  Teacher feedback
-                </p>
-
-                <p className="text-sm text-gray-800 leading-7 whitespace-pre-wrap bg-green-50 rounded-xl p-4">
-                  {selectedReview.submission.review?.task2Feedback || 'No feedback.'}
-                </p>
-              </div>
-            </div>
-
-            <div className="bg-purple-50 rounded-2xl p-5 mt-6">
-              <p className="text-xs text-gray-500 mb-2">
-                General Feedback
-              </p>
-
-              <p className="text-sm text-purple-800 leading-7 whitespace-pre-wrap">
-                {selectedReview.submission.review?.generalFeedback || 'No general feedback.'}
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-export default function StudentDashboard() {
-  const [scores, setScores] = useState([])
-  const [user, setUser] = useState(null)
-  const [showPasswordModal, setShowPasswordModal] = useState(false)
-  const [newPassword, setNewPassword] = useState('')
-  const [passwordMsg, setPasswordMsg] = useState('')
-  const [activeTab, setActiveTab] = useState('overview')
-  const [profile, setProfile] = useState(null)
-  const navigate = useNavigate()
-
-  const targetBand = profile?.targetBand !== undefined && profile?.targetBand !== null
-    ? Number(profile.targetBand)
-    : null
-
-  useEffect(() => {
-    let unsubScores = null
-    let active = true
-
-    const unsubAuth = onAuthStateChanged(auth, async currentUser => {
-      if (unsubScores) {
-        unsubScores()
-        unsubScores = null
-      }
-
-      if (!currentUser) {
-        navigate('/login')
-        return
-      }
-
-      try {
-        const profileSnap = await getDoc(doc(db, 'users', currentUser.uid))
-
-        if (!active) return
-
-        if (!profileSnap.exists()) {
-          await signOut(auth)
-          navigate('/login')
-          return
-        }
-
-        const profile = profileSnap.data()
-
-        if (
-          profile.deleted ||
-          profile.status === 'deleted' ||
-          profile.status === 'pending' ||
-          profile.status === 'rejected' ||
-          profile.role !== 'student'
-        ) {
-          await signOut(auth)
-          navigate('/login')
-          return
-        }
-
-        setUser(currentUser)
-        setProfile(profile)
-
-        const q = query(
-          collection(db, 'scores'),
-          where('uid', '==', currentUser.uid)
-        )
-
-        unsubScores = onSnapshot(q, snap => {
-          const data = snap.docs
-            .map(d => ({ id: d.id, ...d.data() }))
-            .filter(item => item.archived !== true)
-
-          data.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0))
-
-          setScores(data)
-        })
-      } catch (error) {
-        console.error(error)
-
-        if (active) {
-          await signOut(auth)
-          navigate('/login')
-        }
-      }
-    })
-
-    return () => {
-      active = false
-      unsubAuth()
-
-      if (unsubScores) {
-        unsubScores()
-      }
-    }
-  }, [navigate])
-
-  const manualScores = scores.filter(score => score.source !== 'mock_test')
-  const latest = manualScores[0]
-  const previous = manualScores[1]
-
-  const currentBand = latest ? Number(latest.overall) : 0
-
-  const progress = latest && targetBand
-    ? Math.min(Math.round((currentBand / targetBand) * 100), 100)
-    : 0
-
-  const overallChange =
-    latest && previous
-      ? (Number(latest.overall) - Number(previous.overall)).toFixed(1)
-      : null
-
-  const homeworkScores = scores.filter(score => score.source === 'mock_test')
-  const latestMockScore = homeworkScores[0]
-
-  const overviewCards = [
-    {
-      title: 'Latest IELTS Score',
-      value: latest ? latest.overall : '--',
-      note: latest ? latest.date : 'No manual IELTS score yet',
-      style: 'bg-gray-900 text-white',
-      valueStyle: 'text-white'
-    },
-    {
-      title: 'Latest Mock Estimate',
-      value: latestMockScore ? latestMockScore.overall : '--',
-      note: latestMockScore ? latestMockScore.date || 'Mock completed' : 'No mock completed yet',
-      style: 'bg-purple-50 text-gray-900',
-      valueStyle: 'text-purple-600'
-    },
-    {
-      title: 'Target Band',
-      value: targetBand ? targetBand.toFixed(1) : 'Not set',
-      note: targetBand
-        ? latest
-          ? `Progress ${progress}%`
-          : 'Progress starts after first score'
-        : 'Ask admin to set your target',
-      style: 'bg-blue-50 text-gray-900',
-      valueStyle: 'text-blue-600'
-    }
-  ]
-
-  const tabs = [
-    ['overview', 'Overview'],
-    ['homework', 'Homework'],
-    ['mock', 'Mock Tests'],
-    ['analytics', 'Analytics']
-  ]
-
-  const renderOverview = () => (
-    <div>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-        {overviewCards.map(card => (
-          <div
-            key={card.title}
-            className={`${card.style} rounded-2xl p-5 border border-gray-100`}
-          >
-            <p className="text-xs opacity-70 mb-1">
-              {card.title}
-            </p>
-
-            <p className={`text-3xl font-bold ${card.valueStyle}`}>
-              {card.value}
-            </p>
-
-            <p className="text-xs opacity-60 mt-2">
-              {card.note}
-            </p>
-          </div>
-        ))}
-      </div>
-
-      {manualScores.length === 0 ? (
-        <div className="bg-white border border-gray-100 rounded-2xl p-12 text-center mb-8">
-          <div className="text-4xl mb-4">
-            📋
-          </div>
-
-          <p className="text-gray-700 font-medium mb-2">
-            No scores yet
-          </p>
-
-          <p className="text-gray-400 text-sm">
-            Your teacher will log your IELTS scores here.
-          </p>
-        </div>
-      ) : (
-        <>
-          {latest && (
-            <>
-              <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-6">
-                <div className="flex items-center justify-between mb-4">
-                  <div>
-                    <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">
-                      Target progress
-                    </p>
-
-                    <p className="text-lg font-semibold text-gray-900">
-                      Target Band {targetBand ? targetBand.toFixed(1) : 'Not set'}
-                    </p>
-                  </div>
-
-                  <div className="text-right">
-                    <p className="text-xs text-gray-400 mb-1">
-                      Current
-                    </p>
-
-                    <p className={`text-2xl font-bold ${getBandColor(currentBand)}`}>
-                      {currentBand.toFixed(1)}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="w-full bg-gray-100 rounded-full h-3 overflow-hidden">
+                return (
                   <div
-                    className="bg-purple-600 h-3 rounded-full"
-                    style={{ width: `${progress}%` }}
-                  />
-                </div>
-
-                <div className="flex justify-between mt-2">
-                  <p className="text-xs text-gray-400">
-                    {targetBand ? `Progress ${progress}%` : 'Target not set'}
-                  </p>
-
-                  {overallChange !== null && (
-                    <p
-                      className={`text-xs font-medium ${
-                        Number(overallChange) >= 0
-                          ? 'text-green-600'
-                          : 'text-red-500'
-                      }`}
-                    >
-                      {Number(overallChange) >= 0 ? '+' : ''}
-                      {overallChange}
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              <div className="bg-gray-900 text-white rounded-2xl p-6 mb-6">
-                <div className="flex justify-between items-start mb-4">
-                  <div>
-                    <p className="text-gray-400 text-xs uppercase tracking-wider mb-1">
-                      Latest test
-                    </p>
-
-                    <p className="text-gray-300 text-sm">
-                      {latest.date}
-                    </p>
-                  </div>
-
-                  <div className="text-right">
-                    <p className="text-gray-400 text-xs mb-1">
-                      Overall
-                    </p>
-
-                    <p className="text-4xl font-bold">
-                      {latest.overall}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-4 gap-3">
-                  {['listening', 'reading', 'writing', 'speaking'].map(skill => (
-                    <div
-                      key={skill}
-                      className="bg-white/10 rounded-xl p-3 text-center"
-                    >
-                      <p className="text-gray-400 text-xs capitalize mb-1">
-                        {skill}
+                    key={item.key}
+                    className="bg-gray-50 rounded-xl p-4"
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-xs text-gray-500">
+                        {getCriterionLabel(item.key)}
                       </p>
 
-                      <p className="text-xl font-bold">
-                        {latest[skill]}
+                      <p className={`text-sm font-bold ${getBandColor(item.value)}`}>
+                        {formatBand(item.value)}
                       </p>
                     </div>
-                  ))}
-                </div>
-              </div>
-            </>
-          )}
 
-          <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
-            <h2 className="font-semibold text-gray-800 mb-4">
-              Score history
-            </h2>
+                    <div className="w-full bg-white rounded-full h-2 overflow-hidden">
+                      <div
+                        className="bg-purple-600 h-2 rounded-full"
+                        style={{ width: `${percent}%` }}
+                      />
+                    </div>
 
-            <div className="flex flex-col gap-0">
-              {manualScores.map((score, i) => (
-                <div
-                  key={score.id}
-                  className={`py-4 ${
-                    i !== manualScores.length - 1
-                      ? 'border-b border-gray-50'
-                      : ''
-                  }`}
-                >
-                  <div className="flex items-center justify-between mb-2">
-                    <p className="text-sm font-medium text-gray-700">
-                      {score.date}
+                    <p className="text-[10px] text-gray-400 mt-2">
+                      {getCriterionFullLabel(item.key)}
                     </p>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
 
-                    <p className={`text-xl font-bold ${getBandColor(score.overall)}`}>
-                      {score.overall}
+        <div>
+          <h3 className="text-sm font-semibold text-gray-700 mb-3">
+            Recent Writing Reviews
+          </h3>
+
+          <div className="flex flex-col gap-2">
+            {recent.map(sub => {
+              const homework = writingMap[sub.writingId]
+              const rubric = getRubricAverages(sub.review)
+
+              return (
+                <div
+                  key={sub.id}
+                  className="border border-gray-100 rounded-xl p-4 bg-gray-50"
+                >
+                  <div className="flex items-center justify-between gap-3 mb-2">
+                    <div>
+                      <p className="text-sm font-medium text-gray-800">
+                        {homework?.title || 'Writing Homework'}
+                      </p>
+
+                      <p className="text-xs text-gray-400">
+                        {getReviewDate(sub)
+                          ? new Date(getReviewDate(sub)).toLocaleDateString()
+                          : 'No date'}
+                      </p>
+                    </div>
+
+                    <p className="text-xl font-bold text-purple-600">
+                      {formatBand(sub.review?.overall)}
                     </p>
                   </div>
 
                   <div className="grid grid-cols-4 gap-2">
-                    {['listening', 'reading', 'writing', 'speaking'].map(skill => (
+                    {criteria.map(key => (
                       <div
-                        key={skill}
-                        className={`rounded-lg p-2 text-center ${getBandBg(score[skill])}`}
+                        key={key}
+                        className="bg-white rounded-lg p-2 text-center"
                       >
-                        <p className="text-xs text-gray-400 capitalize mb-0.5">
-                          {skill.slice(0, 3)}
+                        <p className="text-[10px] text-gray-400">
+                          {getCriterionLabel(key)}
                         </p>
 
-                        <p className={`text-sm font-semibold ${getBandColor(score[skill])}`}>
-                          {score[skill]}
+                        <p className={`text-xs font-semibold ${getBandColor(rubric[key])}`}>
+                          {formatBand(rubric[key])}
                         </p>
                       </div>
                     ))}
                   </div>
                 </div>
-              ))}
-            </div>
+              )
+            })}
           </div>
-        </>
-      )}
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        <button
-          onClick={() => setActiveTab('homework')}
-          className="bg-white border border-gray-100 rounded-2xl p-5 text-left hover:border-purple-200 hover:shadow-sm"
-        >
-          <p className="font-semibold text-gray-800 mb-1">
-            📚 Homework
-          </p>
-
-          <p className="text-sm text-gray-400">
-            View your reading, listening and writing homework.
-          </p>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('mock')}
-          className="bg-white border border-gray-100 rounded-2xl p-5 text-left hover:border-purple-200 hover:shadow-sm"
-        >
-          <p className="font-semibold text-gray-800 mb-1">
-            🧠 Mock Tests
-          </p>
-
-          <p className="text-sm text-gray-400">
-            Start or review your full IELTS mock tests.
-          </p>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('analytics')}
-          className="bg-white border border-gray-100 rounded-2xl p-5 text-left hover:border-purple-200 hover:shadow-sm"
-        >
-          <p className="font-semibold text-gray-800 mb-1">
-            📊 Analytics
-          </p>
-
-          <p className="text-sm text-gray-400">
-            See your reading, listening and writing progress.
-          </p>
-        </button>
+        </div>
       </div>
-    </div>
-  )
-
-  const handleChangePassword = async () => {
-    if (newPassword.length < 6) {
-      setPasswordMsg('Password must be at least 6 characters')
-      return
-    }
-
-    try {
-      await updatePassword(auth.currentUser, newPassword)
-      setPasswordMsg('Password changed successfully!')
-      setNewPassword('')
-    } catch (err) {
-      setPasswordMsg(
-        'Error: Please log out and log back in first, then try again.'
-      )
-    }
+    )
   }
 
-  return (
-    <div className="min-h-screen bg-[#faf9f6]">
-      <nav className="flex justify-between items-center px-8 py-4 bg-white border-b border-gray-100">
-        <img
-          src="/1.png"
-          alt="Maxima"
-          className="h-10 object-contain"
-        />
+  function WritingHomeworkSection({ user }) {
+    const [writings, setWritings] = useState([])
+    const [submissions, setSubmissions] = useState([])
+    const [selectedReview, setSelectedReview] = useState(null)
+    const navigate = useNavigate()
 
-        <div className="flex items-center gap-4">
-          <span className="text-sm text-gray-400">
-            {user?.email}
-          </span>
+    useEffect(() => {
+      if (!user) return
 
-          <button
-            onClick={() => setShowPasswordModal(true)}
-            className="text-sm text-gray-400 hover:text-gray-600"
-          >
-            Change Password
-          </button>
+      const q = query(collection(db, 'writingHomeworks'))
 
-          <button
-            onClick={() => {
-              signOut(auth)
-              navigate('/')
-            }}
-            className="text-sm text-gray-400 hover:text-gray-600"
-          >
-            Logout
-          </button>
-        </div>
-      </nav>
+      const unsub = onSnapshot(q, snap => {
+        const all = snap.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .filter(w =>
+            !w.archived &&
+            w.assignTo?.includes(user.uid) &&
+            !isHiddenForCurrentUser(w, user.uid)
+          )
 
-      <div className="max-w-3xl mx-auto px-6 py-10">
-        <h1 className="text-2xl font-bold text-gray-900 mb-1">
-          My Dashboard
-        </h1>
+        all.sort((a, b) => {
+          if (!a.dueDate) return 1
+          if (!b.dueDate) return -1
+          return new Date(a.dueDate) - new Date(b.dueDate)
+        })
 
-        <p className="text-gray-400 text-sm mb-8">
-          Your IELTS results and homework
-        </p>
+        setWritings(all)
+      })
 
-        <div className="bg-white border border-gray-100 rounded-2xl p-2 mb-8 flex gap-2 overflow-x-auto">
-          {tabs.map(([key, label]) => (
-            <button
-              key={key}
-              onClick={() => setActiveTab(key)}
-              className={`whitespace-nowrap px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                activeTab === key
-                  ? 'bg-purple-600 text-white'
-                  : 'text-gray-500 hover:bg-gray-100'
-              }`}
+      return unsub
+    }, [user])
+
+    useEffect(() => {
+      if (!user) return
+
+      const q = query(
+        collection(db, 'writingSubmissions'),
+        where('uid', '==', user.uid)
+      )
+
+      const unsub = onSnapshot(q, snap => {
+        const data = snap.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .filter(item => item.archived !== true)
+
+        setSubmissions(data)
+      })
+
+      return unsub
+    }, [user])
+
+    const getSubmission = writingId =>
+      submissions.find(s => s.writingId === writingId)
+
+    const isDone = writingId => Boolean(getSubmission(writingId))
+
+    const todoWritings = writings.filter(w => !isDone(w.id))
+    const completedWritings = writings.filter(w => isDone(w.id))
+
+    if (writings.length === 0) return null
+
+    return (
+      <div className="mt-8 mb-8">
+        <h2 className="font-semibold text-gray-800 mb-4">
+          ✍️ Writing Homework
+        </h2>
+
+        {todoWritings.length > 0 && (
+          <div className="mb-6">
+            <p className="text-xs font-semibold text-red-500 uppercase tracking-wider mb-3">
+              To Do
+            </p>
+
+            <div className="flex flex-col gap-3">
+              {todoWritings.map(w => {
+                const badge = dueLabel(w)
+
+                return (
+                  <div
+                    key={w.id}
+                    className="bg-white border border-red-100 rounded-2xl p-5 flex items-center justify-between shadow-sm"
+                  >
+                    <div>
+                      <p className="text-sm font-medium text-gray-800">
+                        {w.title}
+                      </p>
+
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        ⏱ {w.timeLimit || 60} min · Task 1 + Task 2
+                      </p>
+
+                      <div className="flex gap-2 mt-2 flex-wrap">
+                        <span className={`text-xs px-3 py-1 rounded-full ${badge.style}`}>
+                          {badge.text}
+                        </span>
+
+                        <span className="text-xs bg-red-50 text-red-500 px-3 py-1 rounded-full">
+                          Not completed
+                        </span>
+
+                        <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1 rounded-full">
+                          Teacher graded
+                        </span>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => navigate(`/do-writing/${w.id}`)}
+                      className="bg-purple-600 text-white px-4 py-2 rounded-xl text-xs font-medium hover:bg-purple-700"
+                    >
+                      Start →
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {completedWritings.length > 0 && (
+          <div>
+            <p className="text-xs font-semibold text-green-600 uppercase tracking-wider mb-3">
+              Completed
+            </p>
+
+            <div className="flex flex-col gap-3">
+              {completedWritings.map(w => {
+                const submission = getSubmission(w.id)
+                const reviewed = Boolean(submission?.reviewed)
+
+                return (
+                  <div
+                    key={w.id}
+                    className="bg-white border border-gray-100 rounded-2xl p-5 flex items-center justify-between gap-4"
+                  >
+                    <div>
+                      <p className="text-sm font-medium text-gray-800">
+                        {w.title}
+                      </p>
+
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        ⏱ {w.timeLimit || 60} min · Task 1 + Task 2
+                      </p>
+
+                      {reviewed ? (
+                        <p className="text-xs text-green-600 mt-1 font-medium">
+                          ✓ Reviewed — Band {submission?.review?.overall || '-'}
+                        </p>
+                      ) : (
+                        <p className="text-xs text-amber-600 mt-1 font-medium">
+                          ✓ Submitted — Waiting for teacher review
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      {reviewed && (
+                        <button
+                          onClick={() =>
+                            setSelectedReview({
+                              writing: w,
+                              submission
+                            })
+                          }
+                          className="text-xs bg-purple-600 text-white px-3 py-2 rounded-xl hover:bg-purple-700"
+                        >
+                          Review
+                        </button>
+                      )}
+
+                      <span
+                        className={`text-xs px-3 py-1.5 rounded-full ${
+                          reviewed
+                            ? 'bg-green-50 text-green-600'
+                            : 'bg-amber-50 text-amber-600'
+                        }`}
+                      >
+                        {reviewed ? 'Reviewed' : 'Pending review'}
+                      </span>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {selectedReview && (
+          <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center px-4">
+            <div className="bg-white rounded-2xl w-full max-w-5xl max-h-[90vh] overflow-y-auto p-6">
+              <div className="flex items-start justify-between mb-6">
+                <div>
+                  <h2 className="text-xl font-bold text-gray-900">
+                    Writing Feedback
+                  </h2>
+
+                  <p className="text-sm text-gray-400">
+                    {selectedReview.writing.title}
+                  </p>
+
+                  <p className="text-sm text-purple-600 font-semibold mt-1">
+                    Overall Band {selectedReview.submission.review?.overall}
+                  </p>
+                </div>
+
+                <button
+                  onClick={() => setSelectedReview(null)}
+                  className="text-sm text-gray-400 hover:text-gray-600"
+                >
+                  Close
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-6">
+                <div className="bg-purple-50 rounded-xl p-4 text-center">
+                  <p className="text-xs text-gray-500 mb-1">Task 1 Band</p>
+                  <p className="text-2xl font-bold text-purple-600">
+                    {selectedReview.submission.review?.task1Band || '-'}
+                  </p>
+                </div>
+
+                <div className="bg-indigo-50 rounded-xl p-4 text-center">
+                  <p className="text-xs text-gray-500 mb-1">Task 2 Band</p>
+                  <p className="text-2xl font-bold text-indigo-600">
+                    {selectedReview.submission.review?.task2Band || '-'}
+                  </p>
+                </div>
+
+                <div className="bg-green-50 rounded-xl p-4 text-center">
+                  <p className="text-xs text-gray-500 mb-1">Overall</p>
+                  <p className="text-2xl font-bold text-green-600">
+                    {selectedReview.submission.review?.overall || '-'}
+                  </p>
+                </div>
+              </div>
+
+              {selectedReview.submission.review?.rubric && (
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+                  {Object.entries(getRubricAverages(selectedReview.submission.review)).map(
+                    ([key, value]) => (
+                      <div
+                        key={key}
+                        className="bg-gray-50 rounded-xl p-3 text-center"
+                      >
+                        <p className="text-xs text-gray-400 mb-1">
+                          {getCriterionLabel(key)}
+                        </p>
+
+                        <p className={`text-lg font-bold ${getBandColor(value)}`}>
+                          {formatBand(value)}
+                        </p>
+                      </div>
+                    )
+                  )}
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="border border-gray-100 rounded-2xl p-5">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="font-semibold text-gray-800">
+                      Task 1
+                    </h3>
+
+                    <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1 rounded-full">
+                      {selectedReview.submission.task1WordCount || 0} words
+                    </span>
+                  </div>
+
+                  <p className="text-xs text-gray-400 mb-2">
+                    Your answer
+                  </p>
+
+                  <p className="text-sm text-gray-800 leading-7 whitespace-pre-wrap bg-gray-50 rounded-xl p-4 mb-4">
+                    {selectedReview.submission.task1Answer}
+                  </p>
+
+                  <p className="text-xs text-gray-400 mb-2">
+                    Teacher feedback
+                  </p>
+
+                  <p className="text-sm text-gray-800 leading-7 whitespace-pre-wrap bg-green-50 rounded-xl p-4">
+                    {selectedReview.submission.review?.task1Feedback || 'No feedback.'}
+                  </p>
+                </div>
+
+                <div className="border border-gray-100 rounded-2xl p-5">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="font-semibold text-gray-800">
+                      Task 2
+                    </h3>
+
+                    <span className="text-xs bg-indigo-50 text-indigo-600 px-3 py-1 rounded-full">
+                      {selectedReview.submission.task2WordCount || 0} words
+                    </span>
+                  </div>
+
+                  <p className="text-xs text-gray-400 mb-2">
+                    Your answer
+                  </p>
+
+                  <p className="text-sm text-gray-800 leading-7 whitespace-pre-wrap bg-gray-50 rounded-xl p-4 mb-4">
+                    {selectedReview.submission.task2Answer}
+                  </p>
+
+                  <p className="text-xs text-gray-400 mb-2">
+                    Teacher feedback
+                  </p>
+
+                  <p className="text-sm text-gray-800 leading-7 whitespace-pre-wrap bg-green-50 rounded-xl p-4">
+                    {selectedReview.submission.review?.task2Feedback || 'No feedback.'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="bg-purple-50 rounded-2xl p-5 mt-6">
+                <p className="text-xs text-gray-500 mb-2">
+                  General Feedback
+                </p>
+
+                <p className="text-sm text-purple-800 leading-7 whitespace-pre-wrap">
+                  {selectedReview.submission.review?.generalFeedback || 'No general feedback.'}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  export default function StudentDashboard() {
+    const [scores, setScores] = useState([])
+    const [user, setUser] = useState(null)
+    const [showPasswordModal, setShowPasswordModal] = useState(false)
+    const [newPassword, setNewPassword] = useState('')
+    const [passwordMsg, setPasswordMsg] = useState('')
+    const [activeTab, setActiveTab] = useState('overview')
+    const [profile, setProfile] = useState(null)
+    const navigate = useNavigate()
+
+    const targetBand = profile?.targetBand !== undefined && profile?.targetBand !== null
+      ? Number(profile.targetBand)
+      : null
+
+    useEffect(() => {
+      let unsubScores = null
+      let active = true
+
+      const unsubAuth = onAuthStateChanged(auth, async currentUser => {
+        if (unsubScores) {
+          unsubScores()
+          unsubScores = null
+        }
+
+        if (!currentUser) {
+          navigate('/login')
+          return
+        }
+
+        try {
+          const profileSnap = await getDoc(doc(db, 'users', currentUser.uid))
+
+          if (!active) return
+
+          if (!profileSnap.exists()) {
+            await signOut(auth)
+            navigate('/login')
+            return
+          }
+
+          const profile = profileSnap.data()
+
+          if (
+            profile.deleted ||
+            profile.status === 'deleted' ||
+            profile.status === 'pending' ||
+            profile.status === 'rejected' ||
+            profile.role !== 'student'
+          ) {
+            await signOut(auth)
+            navigate('/login')
+            return
+          }
+
+          setUser(currentUser)
+          setProfile(profile)
+
+          const q = query(
+            collection(db, 'scores'),
+            where('uid', '==', currentUser.uid)
+          )
+
+          unsubScores = onSnapshot(q, snap => {
+            const data = snap.docs
+              .map(d => ({ id: d.id, ...d.data() }))
+              .filter(item => item.archived !== true)
+
+            data.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0))
+
+            setScores(data)
+          })
+        } catch (error) {
+          console.error(error)
+
+          if (active) {
+            await signOut(auth)
+            navigate('/login')
+          }
+        }
+      })
+
+      return () => {
+        active = false
+        unsubAuth()
+
+        if (unsubScores) {
+          unsubScores()
+        }
+      }
+    }, [navigate])
+
+    const manualScores = scores.filter(score => score.source !== 'mock_test')
+    const latest = manualScores[0]
+    const previous = manualScores[1]
+
+    const currentBand = latest ? Number(latest.overall) : 0
+
+    const progress = latest && targetBand
+      ? Math.min(Math.round((currentBand / targetBand) * 100), 100)
+      : 0
+
+    const overallChange =
+      latest && previous
+        ? (Number(latest.overall) - Number(previous.overall)).toFixed(1)
+        : null
+
+    const homeworkScores = scores.filter(score => score.source === 'mock_test')
+    const latestMockScore = homeworkScores[0]
+
+    const overviewCards = [
+      {
+        title: 'Latest IELTS Score',
+        value: latest ? latest.overall : '--',
+        note: latest ? latest.date : 'No manual IELTS score yet',
+        style: 'bg-gray-900 text-white',
+        valueStyle: 'text-white'
+      },
+      {
+        title: 'Latest Mock Estimate',
+        value: latestMockScore ? latestMockScore.overall : '--',
+        note: latestMockScore ? latestMockScore.date || 'Mock completed' : 'No mock completed yet',
+        style: 'bg-purple-50 text-gray-900',
+        valueStyle: 'text-purple-600'
+      },
+      {
+        title: 'Target Band',
+        value: targetBand ? targetBand.toFixed(1) : 'Not set',
+        note: targetBand
+          ? latest
+            ? `Progress ${progress}%`
+            : 'Progress starts after first score'
+          : 'Ask admin to set your target',
+        style: 'bg-blue-50 text-gray-900',
+        valueStyle: 'text-blue-600'
+      }
+    ]
+
+    const tabs = [
+      ['overview', 'Overview'],
+      ['homework', 'Homework'],
+      ['mock', 'Mock Tests'],
+      ['analytics', 'Analytics']
+    ]
+
+    const renderOverview = () => (
+      <div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+          {overviewCards.map(card => (
+            <div
+              key={card.title}
+              className={`${card.style} rounded-2xl p-5 border border-gray-100`}
             >
-              {label}
-            </button>
+              <p className="text-xs opacity-70 mb-1">
+                {card.title}
+              </p>
+
+              <p className={`text-3xl font-bold ${card.valueStyle}`}>
+                {card.value}
+              </p>
+
+              <p className="text-xs opacity-60 mt-2">
+                {card.note}
+              </p>
+            </div>
           ))}
         </div>
 
-        {activeTab === 'overview' && renderOverview()}
+        {manualScores.length === 0 ? (
+          <div className="bg-white border border-gray-100 rounded-2xl p-12 text-center mb-8">
+            <div className="text-4xl mb-4">
+              📋
+            </div>
 
-        {activeTab === 'homework' && (
+            <p className="text-gray-700 font-medium mb-2">
+              No scores yet
+            </p>
+
+            <p className="text-gray-400 text-sm">
+              Your teacher will log your IELTS scores here.
+            </p>
+          </div>
+        ) : (
           <>
-            <ListeningHomeworkSection user={user} />
+            {latest && (
+              <>
+                <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-6">
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">
+                        Target progress
+                      </p>
 
-            <ReadingHomeworkSection user={user} />
+                      <p className="text-lg font-semibold text-gray-900">
+                        Target Band {targetBand ? targetBand.toFixed(1) : 'Not set'}
+                      </p>
+                    </div>
 
-            <WritingHomeworkSection user={user} />
-          </>
-        )}
+                    <div className="text-right">
+                      <p className="text-xs text-gray-400 mb-1">
+                        Current
+                      </p>
 
-        {activeTab === 'mock' && (
-          <>
-            <MockAnalysis user={user} />
+                      <p className={`text-2xl font-bold ${getBandColor(currentBand)}`}>
+                        {currentBand.toFixed(1)}
+                      </p>
+                    </div>
+                  </div>
 
-            <MockTestSection user={user} />
-          </>
-        )}
+                  <div className="w-full bg-gray-100 rounded-full h-3 overflow-hidden">
+                    <div
+                      className="bg-purple-600 h-3 rounded-full"
+                      style={{ width: `${progress}%` }}
+                    />
+                  </div>
 
-        {activeTab === 'analytics' && (
-          <>
-            <StudentSkillAnalytics user={user} />
+                  <div className="flex justify-between mt-2">
+                    <p className="text-xs text-gray-400">
+                      {targetBand ? `Progress ${progress}%` : 'Target not set'}
+                    </p>
 
-            <WritingProgressAnalytics user={user} />
-          </>
-        )}
-      </div>
+                    {overallChange !== null && (
+                      <p
+                        className={`text-xs font-medium ${
+                          Number(overallChange) >= 0
+                            ? 'text-green-600'
+                            : 'text-red-500'
+                        }`}
+                      >
+                        {Number(overallChange) >= 0 ? '+' : ''}
+                        {overallChange}
+                      </p>
+                    )}
+                  </div>
+                </div>
 
-      {showPasswordModal && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 px-4">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-sm">
-            <h2 className="font-semibold text-gray-800 mb-4">
-              Change Password
-            </h2>
+                <div className="bg-gray-900 text-white rounded-2xl p-6 mb-6">
+                  <div className="flex justify-between items-start mb-4">
+                    <div>
+                      <p className="text-gray-400 text-xs uppercase tracking-wider mb-1">
+                        Latest test
+                      </p>
 
-            {passwordMsg && (
-              <div
-                className={`text-sm rounded-xl p-3 mb-4 ${
-                  passwordMsg.includes('Error')
-                    ? 'bg-red-50 text-red-600'
-                    : 'bg-green-50 text-green-600'
-                }`}
-              >
-                {passwordMsg}
-              </div>
+                      <p className="text-gray-300 text-sm">
+                        {latest.date}
+                      </p>
+                    </div>
+
+                    <div className="text-right">
+                      <p className="text-gray-400 text-xs mb-1">
+                        Overall
+                      </p>
+
+                      <p className="text-4xl font-bold">
+                        {latest.overall}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-4 gap-3">
+                    {['listening', 'reading', 'writing', 'speaking'].map(skill => (
+                      <div
+                        key={skill}
+                        className="bg-white/10 rounded-xl p-3 text-center"
+                      >
+                        <p className="text-gray-400 text-xs capitalize mb-1">
+                          {skill}
+                        </p>
+
+                        <p className="text-xl font-bold">
+                          {latest[skill]}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
             )}
 
-            <div className="mb-4">
-              <label className="text-xs text-gray-400 mb-1 block">
-                New password
-              </label>
+            <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
+              <h2 className="font-semibold text-gray-800 mb-4">
+                Score history
+              </h2>
 
-              <input
-                type="password"
-                value={newPassword}
-                onChange={e => setNewPassword(e.target.value)}
-                className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-purple-400"
-              />
+              <div className="flex flex-col gap-0">
+                {manualScores.map((score, i) => (
+                  <div
+                    key={score.id}
+                    className={`py-4 ${
+                      i !== manualScores.length - 1
+                        ? 'border-b border-gray-50'
+                        : ''
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-sm font-medium text-gray-700">
+                        {score.date}
+                      </p>
+
+                      <p className={`text-xl font-bold ${getBandColor(score.overall)}`}>
+                        {score.overall}
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-4 gap-2">
+                      {['listening', 'reading', 'writing', 'speaking'].map(skill => (
+                        <div
+                          key={skill}
+                          className={`rounded-lg p-2 text-center ${getBandBg(score[skill])}`}
+                        >
+                          <p className="text-xs text-gray-400 capitalize mb-0.5">
+                            {skill.slice(0, 3)}
+                          </p>
+
+                          <p className={`text-sm font-semibold ${getBandColor(score[skill])}`}>
+                            {score[skill]}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
+          </>
+        )}
 
-            <div className="flex gap-2">
-              <button
-                onClick={() => {
-                  setShowPasswordModal(false)
-                  setPasswordMsg('')
-                  setNewPassword('')
-                }}
-                className="flex-1 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-500"
-              >
-                Cancel
-              </button>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <button
+            onClick={() => setActiveTab('homework')}
+            className="bg-white border border-gray-100 rounded-2xl p-5 text-left hover:border-purple-200 hover:shadow-sm"
+          >
+            <p className="font-semibold text-gray-800 mb-1">
+              📚 Homework
+            </p>
 
+            <p className="text-sm text-gray-400">
+              View your reading, listening and writing homework.
+            </p>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('mock')}
+            className="bg-white border border-gray-100 rounded-2xl p-5 text-left hover:border-purple-200 hover:shadow-sm"
+          >
+            <p className="font-semibold text-gray-800 mb-1">
+              🧠 Mock Tests
+            </p>
+
+            <p className="text-sm text-gray-400">
+              Start or review your full IELTS mock tests.
+            </p>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('analytics')}
+            className="bg-white border border-gray-100 rounded-2xl p-5 text-left hover:border-purple-200 hover:shadow-sm"
+          >
+            <p className="font-semibold text-gray-800 mb-1">
+              📊 Analytics
+            </p>
+
+            <p className="text-sm text-gray-400">
+              See your reading, listening and writing progress.
+            </p>
+          </button>
+        </div>
+      </div>
+    )
+
+    const handleChangePassword = async () => {
+      if (newPassword.length < 6) {
+        setPasswordMsg('Password must be at least 6 characters')
+        return
+      }
+
+      try {
+        await updatePassword(auth.currentUser, newPassword)
+        setPasswordMsg('Password changed successfully!')
+        setNewPassword('')
+      } catch (err) {
+        setPasswordMsg(
+          'Error: Please log out and log back in first, then try again.'
+        )
+      }
+    }
+
+    return (
+      <div className="min-h-screen bg-[#faf9f6]">
+        <nav className="flex justify-between items-center px-8 py-4 bg-white border-b border-gray-100">
+          <img
+            src="/1.png"
+            alt="Maxima"
+            className="h-10 object-contain"
+          />
+
+          <div className="flex items-center gap-4">
+            <span className="text-sm text-gray-400">
+              {user?.email}
+            </span>
+
+            <button
+              onClick={() => setShowPasswordModal(true)}
+              className="text-sm text-gray-400 hover:text-gray-600"
+            >
+              Change Password
+            </button>
+
+            <button
+              onClick={() => {
+                signOut(auth)
+                navigate('/')
+              }}
+              className="text-sm text-gray-400 hover:text-gray-600"
+            >
+              Logout
+            </button>
+          </div>
+        </nav>
+
+        <div className="max-w-3xl mx-auto px-6 py-10">
+          <h1 className="text-2xl font-bold text-gray-900 mb-1">
+            My Dashboard
+          </h1>
+
+          <p className="text-gray-400 text-sm mb-8">
+            Your IELTS results and homework
+          </p>
+
+          <div className="bg-white border border-gray-100 rounded-2xl p-2 mb-8 flex gap-2 overflow-x-auto">
+            {tabs.map(([key, label]) => (
               <button
-                onClick={handleChangePassword}
-                className="flex-1 py-2.5 rounded-xl bg-purple-600 text-white text-sm font-medium"
+                key={key}
+                onClick={() => setActiveTab(key)}
+                className={`whitespace-nowrap px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                  activeTab === key
+                    ? 'bg-purple-600 text-white'
+                    : 'text-gray-500 hover:bg-gray-100'
+                }`}
               >
-                Save
+                {label}
               </button>
+            ))}
+          </div>
+
+          {activeTab === 'overview' && renderOverview()}
+
+          {activeTab === 'homework' && (
+            <>
+              <ListeningHomeworkSection user={user} />
+
+              <ReadingHomeworkSection user={user} />
+
+              <WritingHomeworkSection user={user} />
+            </>
+          )}
+
+          {activeTab === 'mock' && (
+            <>
+              <MockAnalysis user={user} />
+
+              <MockTestSection user={user} />
+            </>
+          )}
+
+          {activeTab === 'analytics' && (
+            <>
+              <StudentSkillAnalytics user={user} />
+
+              <WritingProgressAnalytics user={user} />
+            </>
+          )}
+        </div>
+
+        {showPasswordModal && (
+          <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 px-4">
+            <div className="bg-white rounded-2xl p-6 w-full max-w-sm">
+              <h2 className="font-semibold text-gray-800 mb-4">
+                Change Password
+              </h2>
+
+              {passwordMsg && (
+                <div
+                  className={`text-sm rounded-xl p-3 mb-4 ${
+                    passwordMsg.includes('Error')
+                      ? 'bg-red-50 text-red-600'
+                      : 'bg-green-50 text-green-600'
+                  }`}
+                >
+                  {passwordMsg}
+                </div>
+              )}
+
+              <div className="mb-4">
+                <label className="text-xs text-gray-400 mb-1 block">
+                  New password
+                </label>
+
+                <input
+                  type="password"
+                  value={newPassword}
+                  onChange={e => setNewPassword(e.target.value)}
+                  className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-purple-400"
+                />
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  onClick={() => {
+                    setShowPasswordModal(false)
+                    setPasswordMsg('')
+                    setNewPassword('')
+                  }}
+                  className="flex-1 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-500"
+                >
+                  Cancel
+                </button>
+
+                <button
+                  onClick={handleChangePassword}
+                  className="flex-1 py-2.5 rounded-xl bg-purple-600 text-white text-sm font-medium"
+                >
+                  Save
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
-    </div>
-  )
-}
+        )}
+      </div>
+    )
+  }
