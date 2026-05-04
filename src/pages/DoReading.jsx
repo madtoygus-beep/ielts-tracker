@@ -118,6 +118,10 @@ export default function DoReading() {
       return question.items?.length || 0
     }
 
+    if (question.type === 'mcq' && question.mode === 'multi') {
+      return question.answers?.length || 2
+    }
+
     if (question.type === 'table' || question.type === 'summary') {
       let count = 0
 
@@ -308,6 +312,33 @@ export default function DoReading() {
     return userAnswer === correctAnswer
   }
 
+  const getMultiAnswerScore = question => {
+    const selected = Array.isArray(answers[question.id])
+      ? answers[question.id].map(item => item?.toString())
+      : []
+
+    const correctAnswers = Array.isArray(question.answers)
+      ? question.answers.map(item => item?.toString())
+      : []
+
+    const correctCount = selected.filter(answer =>
+      correctAnswers.includes(answer)
+    ).length
+
+    return {
+      correct: correctCount,
+      total: correctAnswers.length || 2
+    }
+  }
+
+  const getMultiAnswerStatus = question => {
+    const score = getMultiAnswerScore(question)
+
+    if (score.correct === score.total) return 'Correct'
+    if (score.correct > 0) return `Partly correct (${score.correct}/${score.total})`
+    return 'Wrong'
+  }
+
   const calculateScore = () => {
     let correct = 0
     let total = 0
@@ -337,7 +368,11 @@ export default function DoReading() {
         return
       }
 
-      if (question.type === 'table' || question.type === 'summary') {
+      if (question.type === 'mcq' && question.mode === 'multi') {
+      return question.answers?.length || 2
+    }
+
+    if (question.type === 'table' || question.type === 'summary') {
         question.rows.forEach(row => {
           row.cells.forEach((cell, cellIndex) => {
             if (cell.type === 'blank') {

@@ -30,7 +30,7 @@ const emptyQuestion = () => ({
       id: crypto.randomUUID(),
       cells: [
         { type: 'text', text: '' },
-        { type: 'blank', answer: '', acceptedAnswers: '', maxWords: '' }
+        { type: 'blank', beforeText: '', afterText: '', answer: '', acceptedAnswers: '', maxWords: '' }
       ]
     }
   ],
@@ -51,6 +51,8 @@ const emptyTableRow = columns => ({
   cells: columns.map((_, index) => ({
     type: index === columns.length - 1 ? 'blank' : 'text',
     text: '',
+    beforeText: '',
+    afterText: '',
     answer: '',
     acceptedAnswers: '',
     maxWords: ''
@@ -428,7 +430,7 @@ export default function CreateListening() {
           ...row,
           cells: [
             ...(row.cells || []),
-            { type: 'blank', text: '', answer: '' }
+            { type: 'blank', text: '', beforeText: '', afterText: '', answer: '', acceptedAnswers: '', maxWords: '' }
           ]
         }))
 
@@ -1452,10 +1454,38 @@ export default function CreateListening() {
                                         />
                                       ) : (
                                         <div className="space-y-2">
+                                          <div className="bg-purple-50 border border-purple-100 rounded-lg p-2">
+                                            <p className="text-[10px] text-purple-500 font-medium mb-2">
+                                              Inline blank preview
+                                            </p>
+
+                                            <div className="text-xs text-gray-700 leading-6">
+                                              <span>{cell.beforeText || ''}</span>
+                                              <span className="inline-block min-w-[72px] mx-1 px-2 py-0.5 rounded-md bg-white border border-purple-200 text-purple-500 text-center">
+                                                answer
+                                              </span>
+                                              <span>{cell.afterText || ''}</span>
+                                            </div>
+                                          </div>
+
+                                          <input
+                                            value={cell.beforeText || ''}
+                                            onChange={e => updateTableCell(question.id, row.id, cellIndex, 'beforeText', e.target.value)}
+                                            placeholder="Text before blank, e.g. The"
+                                            className="w-full border border-gray-200 rounded-lg px-2 py-1 text-xs outline-none focus:border-purple-400 bg-white"
+                                          />
+
                                           <input
                                             value={cell.answer || ''}
                                             onChange={e => updateTableCell(question.id, row.id, cellIndex, 'answer', e.target.value)}
                                             placeholder="Main correct answer..."
+                                            className="w-full border border-gray-200 rounded-lg px-2 py-1 text-xs outline-none focus:border-purple-400 bg-white"
+                                          />
+
+                                          <input
+                                            value={cell.afterText || ''}
+                                            onChange={e => updateTableCell(question.id, row.id, cellIndex, 'afterText', e.target.value)}
+                                            placeholder="Text after blank, e.g. is a good place for a drink"
                                             className="w-full border border-gray-200 rounded-lg px-2 py-1 text-xs outline-none focus:border-purple-400 bg-white"
                                           />
 

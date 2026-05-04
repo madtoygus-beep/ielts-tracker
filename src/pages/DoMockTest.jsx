@@ -94,6 +94,10 @@ function getReadingQuestionCount(question) {
 
   if (question.type === 'sentenceEndings') return question.items?.length || 0
 
+  if (question.type === 'mcq' && question.mode === 'multi') {
+    return question.answers?.length || 2
+  }
+
   if (question.type === 'table' || question.type === 'summary') {
     let count = 0
 
@@ -914,6 +918,25 @@ export default function DoMockTest() {
     return value?.toString() === item.answer?.toString()
   }
 
+  const getReadingMultiAnswerScore = (readingId, question) => {
+    const selected = Array.isArray(readingAnswers[readingId]?.[question.id])
+      ? readingAnswers[readingId][question.id].map(item => item?.toString())
+      : []
+
+    const correctAnswers = Array.isArray(question.answers)
+      ? question.answers.map(item => item?.toString())
+      : []
+
+    const correctCount = selected.filter(answer =>
+      correctAnswers.includes(answer)
+    ).length
+
+    return {
+      correct: correctCount,
+      total: correctAnswers.length || 2
+    }
+  }
+
   const isListeningNormalCorrect = question => {
     const value = listeningAnswers[question.id]
 
@@ -1016,6 +1039,15 @@ export default function DoMockTest() {
             correct++
           }
         })
+
+        return
+      }
+
+      if (question.type === 'mcq' && question.mode === 'multi') {
+        const score = getReadingMultiAnswerScore(reading.id, question)
+
+        correct += score.correct
+        total += score.total
 
         return
       }
@@ -1616,21 +1648,57 @@ export default function DoMockTest() {
                             return (
                               <td
                                 key={cellIndex}
-                                className="p-3 bg-gray-50 border border-white"
+                                className="p-3 bg-gray-50 border border-white align-top"
                               >
-                                <input
-                                  value={listeningAnswers[key] || ''}
-                                  onChange={e =>
-                                    handleListeningTableAnswer(
-                                      question.id,
-                                      row.id,
-                                      cellIndex,
-                                      e.target.value
-                                    )
-                                  }
-                                  placeholder="Type answer..."
-                                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 bg-white"
-                                />
+                                {(cell.beforeText || cell.afterText) ? (
+                                  <div className="text-sm text-gray-700 leading-8">
+                                    {cell.beforeText && (
+                                      <span className="whitespace-pre-wrap">
+                                        {cell.beforeText}{' '}
+                                      </span>
+                                    )}
+
+                                    <input
+                                      value={listeningAnswers[key] || ''}
+                                      onChange={e =>
+                                        handleListeningTableAnswer(
+                                          question.id,
+                                          row.id,
+                                          cellIndex,
+                                          e.target.value
+                                        )
+                                      }
+                                      placeholder="answer"
+                                      className="inline-block min-w-[120px] max-w-[220px] border border-gray-200 rounded-xl px-3 py-1.5 text-sm outline-none focus:border-purple-400 bg-white mx-1"
+                                    />
+
+                                    {cell.afterText && (
+                                      <span className="whitespace-pre-wrap">
+                                        {' '}{cell.afterText}
+                                      </span>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <input
+                                    value={listeningAnswers[key] || ''}
+                                    onChange={e =>
+                                      handleListeningTableAnswer(
+                                        question.id,
+                                        row.id,
+                                        cellIndex,
+                                        e.target.value
+                                      )
+                                    }
+                                    placeholder="Type answer..."
+                                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 bg-white"
+                                  />
+                                )}
+
+                                {cell.maxWords && (
+                                  <p className="text-[10px] text-gray-400 mt-1">
+                                    Max {cell.maxWords} word{Number(cell.maxWords) > 1 ? 's' : ''}
+                                  </p>
+                                )}
                               </td>
                             )
                           })}

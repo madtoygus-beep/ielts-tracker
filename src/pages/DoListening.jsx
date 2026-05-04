@@ -678,6 +678,26 @@ export default function DoListening() {
                                           : 'bg-red-50'
                                       }`}
                                     >
+                                      {(cell.beforeText || cell.afterText) && (
+                                        <div className="text-sm text-gray-700 leading-7 mb-3">
+                                          {cell.beforeText && (
+                                            <span className="whitespace-pre-wrap">
+                                              {cell.beforeText}{' '}
+                                            </span>
+                                          )}
+
+                                          <span className="inline-block min-w-[90px] px-2 py-0.5 rounded-md bg-white border border-gray-200 text-center">
+                                            {answers[key] || 'No answer'}
+                                          </span>
+
+                                          {cell.afterText && (
+                                            <span className="whitespace-pre-wrap">
+                                              {' '}{cell.afterText}
+                                            </span>
+                                          )}
+                                        </div>
+                                      )}
+
                                       <p className="text-xs text-gray-500 mb-1">
                                         Your answer:
                                       </p>
@@ -1046,19 +1066,49 @@ export default function DoListening() {
                                     key={cellIndex}
                                     className="p-3 bg-gray-50 border border-white align-top"
                                   >
-                                    <input
-                                      value={answers[key] || ''}
-                                      onChange={e =>
-                                        handleTableAnswer(
-                                          question.id,
-                                          row.id,
-                                          cellIndex,
-                                          e.target.value
-                                        )
-                                      }
-                                      placeholder="Type answer..."
-                                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 bg-white"
-                                    />
+                                    {(cell.beforeText || cell.afterText) ? (
+                                      <div className="text-sm text-gray-700 leading-8">
+                                        {cell.beforeText && (
+                                          <span className="whitespace-pre-wrap">
+                                            {cell.beforeText}{' '}
+                                          </span>
+                                        )}
+
+                                        <input
+                                          value={answers[key] || ''}
+                                          onChange={e =>
+                                            handleTableAnswer(
+                                              question.id,
+                                              row.id,
+                                              cellIndex,
+                                              e.target.value
+                                            )
+                                          }
+                                          placeholder="answer"
+                                          className="inline-block min-w-[120px] max-w-[220px] border border-gray-200 rounded-xl px-3 py-1.5 text-sm outline-none focus:border-purple-400 bg-white mx-1"
+                                        />
+
+                                        {cell.afterText && (
+                                          <span className="whitespace-pre-wrap">
+                                            {' '}{cell.afterText}
+                                          </span>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      <input
+                                        value={answers[key] || ''}
+                                        onChange={e =>
+                                          handleTableAnswer(
+                                            question.id,
+                                            row.id,
+                                            cellIndex,
+                                            e.target.value
+                                          )
+                                        }
+                                        placeholder="Type answer..."
+                                        className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 bg-white"
+                                      />
+                                    )}
 
                                     {cell.maxWords && (
                                       <p className="text-[10px] text-gray-400 mt-1">
