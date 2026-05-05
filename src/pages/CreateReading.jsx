@@ -50,6 +50,10 @@ export default function CreateReading() {
       return question.items?.length || 0
     }
 
+    if (question.type === 'summaryOptions') {
+      return question.items?.length || 0
+    }
+
     if (question.type === 'table' || question.type === 'summary') {
       let count = 0
 
@@ -82,6 +86,7 @@ export default function CreateReading() {
   const getQuestionTypeLabel = question => {
     if (question.type === 'matching') return 'Matching Headings'
     if (question.type === 'sentenceEndings') return 'Matching Sentence Endings'
+    if (question.type === 'summaryOptions') return 'Summary Options'
     if (question.type === 'tfng') return 'True / False / Not Given'
     if (question.type === 'fitb') return 'Fill in the Blank'
     if (question.type === 'table') return 'Table Completion'
@@ -217,6 +222,37 @@ export default function CreateReading() {
                             { type: 'text', text: '' },
                             { type: 'blank', answer: '' }
                           ]
+                  }
+                ]
+          }
+        }
+
+        if (question.type === 'summaryOptions') {
+          return {
+            id: question.id || crypto.randomUUID(),
+            type: 'summaryOptions',
+            instruction:
+              question.instruction ||
+              'Complete the summary using the list of phrases, A-H, below.',
+            title: question.title || '',
+            options: question.options?.length
+              ? question.options
+              : ['', '', '', '', '', '', '', ''],
+            items: question.items?.length
+              ? question.items.map(item => ({
+                  id: item.id || crypto.randomUUID(),
+                  number: item.number || '',
+                  beforeText: item.beforeText || '',
+                  answer: item.answer || '',
+                  afterText: item.afterText || ''
+                }))
+              : [
+                  {
+                    id: crypto.randomUUID(),
+                    number: '',
+                    beforeText: '',
+                    answer: '',
+                    afterText: ''
                   }
                 ]
           }
@@ -406,6 +442,31 @@ export default function CreateReading() {
       return
     }
 
+    if (type === 'summaryOptions') {
+      setQuestions(prev => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          type: 'summaryOptions',
+          instruction:
+            'Complete the summary using the list of phrases, A-H, below.',
+          title: '',
+          options: ['', '', '', '', '', '', '', ''],
+          items: [
+            {
+              id: crypto.randomUUID(),
+              number: '',
+              beforeText: '',
+              answer: '',
+              afterText: ''
+            }
+          ]
+        }
+      ])
+
+      return
+    }
+
     if (type === 'mcq') {
       setQuestions(prev => [
         ...prev,
@@ -563,6 +624,106 @@ export default function CreateReading() {
           paragraphs: q.paragraphs.map(p =>
             p.letter === letter ? { ...p, answer: value } : p
           )
+        }
+      })
+    )
+  }
+
+  const updateSummaryOptionItem = (questionId, itemId, field, value) => {
+    setQuestions(prev =>
+      prev.map(q => {
+        if (q.id !== questionId) return q
+
+        return {
+          ...q,
+          items: q.items.map(item =>
+            item.id === itemId ? { ...item, [field]: value } : item
+          )
+        }
+      })
+    )
+  }
+
+  const addSummaryOptionItem = questionId => {
+    setQuestions(prev =>
+      prev.map(q => {
+        if (q.id !== questionId) return q
+
+        return {
+          ...q,
+          items: [
+            ...q.items,
+            {
+              id: crypto.randomUUID(),
+              number: '',
+              beforeText: '',
+              answer: '',
+              afterText: ''
+            }
+          ]
+        }
+      })
+    )
+  }
+
+  const removeSummaryOptionItem = (questionId, itemId) => {
+    setQuestions(prev =>
+      prev.map(q => {
+        if (q.id !== questionId) return q
+        if (q.items.length <= 1) return q
+
+        return {
+          ...q,
+          items: q.items.filter(item => item.id !== itemId)
+        }
+      })
+    )
+  }
+
+  const updateSummaryOption = (questionId, optionIndex, value) => {
+    setQuestions(prev =>
+      prev.map(q => {
+        if (q.id !== questionId) return q
+
+        const options = [...q.options]
+        options[optionIndex] = value
+
+        return {
+          ...q,
+          options
+        }
+      })
+    )
+  }
+
+  const addSummaryOption = questionId => {
+    setQuestions(prev =>
+      prev.map(q => {
+        if (q.id !== questionId) return q
+
+        return {
+          ...q,
+          options: [...q.options, '']
+        }
+      })
+    )
+  }
+
+  const removeSummaryOption = (questionId, optionIndex) => {
+    setQuestions(prev =>
+      prev.map(q => {
+        if (q.id !== questionId) return q
+        if (q.options.length <= 2) return q
+
+        const removedLetter = letters[optionIndex]
+
+        return {
+          ...q,
+          options: q.options.filter((_, index) => index !== optionIndex),
+          items: q.items.map(item => ({
+            ...item,
+            answer: item.answer === removedLetter ? '' : item.answer
+          }))
         }
       })
     )
@@ -891,6 +1052,32 @@ export default function CreateReading() {
         }
       }
 
+      if (question.type === 'summaryOptions') {
+        if (!question.instruction?.trim()) {
+          alert('Please add instructions for Summary Options.')
+          return false
+        }
+
+        if (!question.title?.trim()) {
+          alert('Please add a title for Summary Options.')
+          return false
+        }
+
+        const filledOptions = question.options.filter(option => option.trim())
+
+        if (filledOptions.length < 2) {
+          alert('Summary Options needs at least 2 options.')
+          return false
+        }
+
+        for (const item of question.items) {
+          if (!item.number?.toString().trim() || !item.answer) {
+            alert('Every Summary Options blank needs a question number and correct option.')
+            return false
+          }
+        }
+      }
+
       if (question.type === 'table' || question.type === 'summary') {
         if (!question.instruction?.trim()) {
           alert('Please add table instructions.')
@@ -991,6 +1178,23 @@ export default function CreateReading() {
                 ? { type: 'blank', answer: cell.answer || '' }
                 : { type: 'text', text: cell.text || '' }
             )
+          }))
+        }
+      }
+
+      if (question.type === 'summaryOptions') {
+        return {
+          id: question.id,
+          type: 'summaryOptions',
+          instruction: question.instruction || '',
+          title: question.title || '',
+          options: question.options.filter(option => option.trim()),
+          items: question.items.map(item => ({
+            id: item.id,
+            number: item.number || '',
+            beforeText: item.beforeText || '',
+            answer: item.answer || '',
+            afterText: item.afterText || ''
           }))
         }
       }
@@ -1325,6 +1529,13 @@ export default function CreateReading() {
               </button>
 
               <button
+                onClick={() => addQuestion('summaryOptions')}
+                className="text-xs bg-fuchsia-50 text-fuchsia-600 px-3 py-2 rounded-lg hover:bg-fuchsia-100"
+              >
+                + Summary Options
+              </button>
+
+              <button
                 onClick={() => addQuestion('tfng')}
                 className="text-xs bg-blue-50 text-blue-600 px-3 py-2 rounded-lg hover:bg-blue-100"
               >
@@ -1586,6 +1797,210 @@ export default function CreateReading() {
                                 Remove
                               </button>
                             )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {question.type === 'summaryOptions' && (
+                  <div>
+                    <label className="text-xs text-gray-400 mb-1 block">
+                      Instruction
+                    </label>
+
+                    <textarea
+                      rows={2}
+                      value={question.instruction}
+                      onChange={e =>
+                        updateQuestion(
+                          question.id,
+                          'instruction',
+                          e.target.value
+                        )
+                      }
+                      placeholder="Complete the summary using the list of phrases, A-H, below."
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 mb-4 resize-none"
+                    />
+
+                    <label className="text-xs text-gray-400 mb-1 block">
+                      Summary title
+                    </label>
+
+                    <input
+                      value={question.title || ''}
+                      onChange={e =>
+                        updateQuestion(question.id, 'title', e.target.value)
+                      }
+                      placeholder="e.g. Calls by the umpire"
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 mb-4"
+                    />
+
+                    <div className="bg-gray-50 border border-gray-100 rounded-xl p-4 mb-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <p className="text-sm font-medium text-gray-800">
+                          Options
+                        </p>
+
+                        <button
+                          onClick={() => addSummaryOption(question.id)}
+                          className="text-xs bg-gray-100 text-gray-600 px-3 py-1.5 rounded-lg hover:bg-gray-200"
+                        >
+                          + Add option
+                        </button>
+                      </div>
+
+                      <div className="flex flex-col gap-2">
+                        {question.options.map((option, optionIndex) => (
+                          <div key={optionIndex} className="flex items-center gap-2">
+                            <span className="w-7 h-7 rounded-full bg-fuchsia-50 text-fuchsia-600 text-xs font-semibold flex items-center justify-center">
+                              {letters[optionIndex]}
+                            </span>
+
+                            <input
+                              value={option}
+                              onChange={e =>
+                                updateSummaryOption(
+                                  question.id,
+                                  optionIndex,
+                                  e.target.value
+                                )
+                              }
+                              placeholder={`Option ${letters[optionIndex]}`}
+                              className="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 bg-white"
+                            />
+
+                            {question.options.length > 2 && (
+                              <button
+                                onClick={() =>
+                                  removeSummaryOption(
+                                    question.id,
+                                    optionIndex
+                                  )
+                                }
+                                className="text-xs text-red-400 hover:text-red-600 px-2"
+                              >
+                                Remove
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="bg-gray-50 border border-gray-100 rounded-xl p-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <p className="text-sm font-medium text-gray-800">
+                          Summary blanks
+                        </p>
+
+                        <button
+                          onClick={() => addSummaryOptionItem(question.id)}
+                          className="text-xs bg-fuchsia-50 text-fuchsia-600 px-3 py-1.5 rounded-lg hover:bg-fuchsia-100"
+                        >
+                          + Add blank
+                        </button>
+                      </div>
+
+                      <div className="flex flex-col gap-3">
+                        {question.items.map((item, itemIndex) => (
+                          <div
+                            key={item.id}
+                            className="bg-white border border-gray-100 rounded-xl p-3"
+                          >
+                            <div className="flex items-center justify-between mb-2">
+                              <p className="text-xs font-semibold text-gray-500">
+                                Blank {itemIndex + 1}
+                              </p>
+
+                              {question.items.length > 1 && (
+                                <button
+                                  onClick={() =>
+                                    removeSummaryOptionItem(
+                                      question.id,
+                                      item.id
+                                    )
+                                  }
+                                  className="text-xs text-red-400 hover:text-red-600"
+                                >
+                                  Remove
+                                </button>
+                              )}
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-[90px_1fr_140px_1fr] gap-2">
+                              <input
+                                value={item.number || ''}
+                                onChange={e =>
+                                  updateSummaryOptionItem(
+                                    question.id,
+                                    item.id,
+                                    'number',
+                                    e.target.value
+                                  )
+                                }
+                                placeholder="33"
+                                className="border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400"
+                              />
+
+                              <textarea
+                                rows={2}
+                                value={item.beforeText || ''}
+                                onChange={e =>
+                                  updateSummaryOptionItem(
+                                    question.id,
+                                    item.id,
+                                    'beforeText',
+                                    e.target.value
+                                  )
+                                }
+                                placeholder="Text before blank..."
+                                className="border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 resize-none"
+                              />
+
+                              <select
+                                value={item.answer || ''}
+                                onChange={e =>
+                                  updateSummaryOptionItem(
+                                    question.id,
+                                    item.id,
+                                    'answer',
+                                    e.target.value
+                                  )
+                                }
+                                className="border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 bg-white"
+                              >
+                                <option value="">Correct option</option>
+
+                                {question.options
+                                  .map((option, optionIndex) => ({
+                                    text: option,
+                                    letter: letters[optionIndex]
+                                  }))
+                                  .filter(option => option.text.trim())
+                                  .map(option => (
+                                    <option key={option.letter} value={option.letter}>
+                                      {option.letter}. {option.text}
+                                    </option>
+                                  ))}
+                              </select>
+
+                              <textarea
+                                rows={2}
+                                value={item.afterText || ''}
+                                onChange={e =>
+                                  updateSummaryOptionItem(
+                                    question.id,
+                                    item.id,
+                                    'afterText',
+                                    e.target.value
+                                  )
+                                }
+                                placeholder="Text after blank..."
+                                className="border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 resize-none"
+                              />
+                            </div>
                           </div>
                         ))}
                       </div>

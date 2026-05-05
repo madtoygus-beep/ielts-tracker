@@ -94,6 +94,8 @@ function getReadingQuestionCount(question) {
 
   if (question.type === 'sentenceEndings') return question.items?.length || 0
 
+  if (question.type === 'summaryOptions') return question.items?.length || 0
+
   if (question.type === 'mcq' && question.mode === 'multi') {
     return question.answers?.length || 2
   }
@@ -888,6 +890,26 @@ export default function DoMockTest() {
     })
   }
 
+  const handleReadingSummaryOption = (readingId, questionId, itemId, value) => {
+    if (readingLocked) return
+
+    setReadingAnswers(prev => {
+      const readingSet = prev[readingId] || {}
+      const currentQuestion = readingSet[questionId] || {}
+
+      return {
+        ...prev,
+        [readingId]: {
+          ...readingSet,
+          [questionId]: {
+            ...currentQuestion,
+            [itemId]: value
+          }
+        }
+      }
+    })
+  }
+
   const handleReadingTableAnswer = (readingId, questionId, rowId, cellIndex, value) => {
     if (readingLocked) return
 
@@ -913,6 +935,12 @@ export default function DoMockTest() {
   }
 
   const isReadingSentenceEndingCorrect = (readingId, question, item) => {
+    const value = readingAnswers[readingId]?.[question.id]?.[item.id]
+
+    return value?.toString() === item.answer?.toString()
+  }
+
+  const isReadingSummaryOptionCorrect = (readingId, question, item) => {
     const value = readingAnswers[readingId]?.[question.id]?.[item.id]
 
     return value?.toString() === item.answer?.toString()
@@ -1036,6 +1064,18 @@ export default function DoMockTest() {
           total++
 
           if (isReadingSentenceEndingCorrect(reading.id, question, item)) {
+            correct++
+          }
+        })
+
+        return
+      }
+
+      if (question.type === 'summaryOptions') {
+        question.items?.forEach(item => {
+          total++
+
+          if (isReadingSummaryOptionCorrect(reading.id, question, item)) {
             correct++
           }
         })
@@ -1985,6 +2025,100 @@ export default function DoMockTest() {
                               </select>
                             </div>
                           ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {question.type === 'summaryOptions' && (
+                      <div>
+                        {question.instruction && (
+                          <p className="text-sm text-gray-700 mb-4">
+                            {question.instruction}
+                          </p>
+                        )}
+
+                        <div className="bg-white border border-gray-100 rounded-xl p-5 mb-5">
+                          <p className="font-semibold text-gray-900 text-center mb-4">
+                            {question.title}
+                          </p>
+
+                          <div className="text-sm text-gray-700 leading-8">
+                            {question.items?.map(item => (
+                              <span key={item.id}>
+                                {item.beforeText && (
+                                  <span className="whitespace-pre-wrap">
+                                    {item.beforeText}{' '}
+                                  </span>
+                                )}
+
+                                <span className="inline-flex items-center gap-2 mx-1">
+                                  <span className="text-xs font-semibold text-gray-400">
+                                    ({item.number})
+                                  </span>
+
+                                  <select
+                                    value={
+                                      readingAnswers[reading.id]?.[question.id]?.[
+                                        item.id
+                                      ] || ''
+                                    }
+                                    onChange={e =>
+                                      handleReadingSummaryOption(
+                                        reading.id,
+                                        question.id,
+                                        item.id,
+                                        e.target.value
+                                      )
+                                    }
+                                    className="border border-gray-200 rounded-xl px-3 py-1.5 text-sm outline-none focus:border-purple-400 bg-white"
+                                  >
+                                    <option value="">Choose</option>
+
+                                    {question.options?.map((option, optionIndex) => {
+                                      if (!option?.trim()) return null
+
+                                      const letter = letters[optionIndex]
+
+                                      return (
+                                        <option key={letter} value={letter}>
+                                          {letter}. {option}
+                                        </option>
+                                      )
+                                    })}
+                                  </select>
+                                </span>
+
+                                {item.afterText && (
+                                  <span className="whitespace-pre-wrap">
+                                    {' '}{item.afterText}
+                                  </span>
+                                )}
+
+                                {' '}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="bg-white border border-gray-100 rounded-xl p-4">
+                          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
+                            Options
+                          </p>
+
+                          <div className="space-y-2">
+                            {question.options?.filter(Boolean).map((option, optionIndex) => (
+                              <div
+                                key={optionIndex}
+                                className="flex gap-2 text-sm text-gray-700 leading-5"
+                              >
+                                <span className="font-semibold text-gray-500 min-w-6">
+                                  {letters[optionIndex]}.
+                                </span>
+
+                                <span>{option}</span>
+                              </div>
+                            ))}
+                          </div>
                         </div>
                       </div>
                     )}

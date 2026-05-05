@@ -118,6 +118,10 @@ export default function DoReading() {
       return question.items?.length || 0
     }
 
+    if (question.type === 'summaryOptions') {
+      return question.items?.length || 0
+    }
+
     if (question.type === 'mcq' && question.mode === 'multi') {
       return question.answers?.length || 2
     }
@@ -163,6 +167,7 @@ export default function DoReading() {
   const getQuestionTypeLabel = question => {
     if (question.type === 'matching') return 'Matching Headings'
     if (question.type === 'sentenceEndings') return 'Sentence Endings'
+    if (question.type === 'summaryOptions') return 'Summary Options'
     if (question.type === 'tfng') return 'T/F/NG'
     if (question.type === 'fitb') return 'Fill blank'
     if (question.type === 'table') return 'Table Completion'
@@ -224,6 +229,22 @@ export default function DoReading() {
         [itemId]: value
       }
     }))
+  }
+
+  const handleSummaryOption = (questionId, itemId, value) => {
+    setAnswers(prev => ({
+      ...prev,
+      [questionId]: {
+        ...(prev[questionId] || {}),
+        [itemId]: value
+      }
+    }))
+  }
+
+  const getSummaryOptionText = (question, letter) => {
+    if (!letter) return 'No answer'
+    const index = letters.indexOf(letter)
+    return question.options?.[index] || `Option ${letter}`
   }
 
   const getSentenceEndingText = (question, letter) => {
@@ -312,6 +333,15 @@ export default function DoReading() {
     return userAnswer === correctAnswer
   }
 
+  const isSummaryOptionCorrect = (question, item) => {
+    const userAnswer = answers[question.id]?.[item.id]?.toString()
+    const correctAnswer = item.answer?.toString()
+
+    if (!userAnswer || !correctAnswer) return false
+
+    return userAnswer === correctAnswer
+  }
+
   const getMultiAnswerScore = question => {
     const selected = Array.isArray(answers[question.id])
       ? answers[question.id].map(item => item?.toString())
@@ -368,11 +398,28 @@ export default function DoReading() {
         return
       }
 
-      if (question.type === 'mcq' && question.mode === 'multi') {
-      return question.answers?.length || 2
-    }
+      if (question.type === 'summaryOptions') {
+        question.items?.forEach(item => {
+          total++
 
-    if (question.type === 'table' || question.type === 'summary') {
+          if (isSummaryOptionCorrect(question, item)) {
+            correct++
+          }
+        })
+
+        return
+      }
+
+      if (question.type === 'mcq' && question.mode === 'multi') {
+        const score = getMultiAnswerScore(question)
+
+        correct += score.correct
+        total += score.total
+
+        return
+      }
+
+      if (question.type === 'table' || question.type === 'summary') {
         question.rows.forEach(row => {
           row.cells.forEach((cell, cellIndex) => {
             if (cell.type === 'blank') {
@@ -553,7 +600,9 @@ export default function DoReading() {
                             ? 'bg-indigo-50 text-indigo-600'
                             : question.type === 'sentenceEndings'
                               ? 'bg-cyan-50 text-cyan-600'
-                              : question.type === 'tfng'
+                              : question.type === 'summaryOptions'
+                                ? 'bg-fuchsia-50 text-fuchsia-600'
+                                : question.type === 'tfng'
                               ? 'bg-blue-50 text-blue-600'
                               : question.type === 'fitb'
                                 ? 'bg-amber-50 text-amber-600'
@@ -725,6 +774,109 @@ export default function DoReading() {
                       </div>
                     )}
 
+                    {question.type === 'summaryOptions' && (
+                      <div>
+                        <p className="font-medium text-sm text-gray-800 mb-2">
+                          {question.title}
+                        </p>
+
+                        {question.instruction && (
+                          <p className="text-sm text-gray-600 mb-4">
+                            {question.instruction}
+                          </p>
+                        )}
+
+                        <div className="bg-gray-50 border border-gray-100 rounded-xl p-4 mb-5">
+                          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
+                            Options
+                          </p>
+
+                          <div className="space-y-2">
+                            {question.options?.filter(Boolean).map((option, optionIndex) => (
+                              <div
+                                key={optionIndex}
+                                className="flex gap-2 text-sm text-gray-700 leading-5"
+                              >
+                                <span className="font-semibold text-gray-500 min-w-6">
+                                  {letters[optionIndex]}.
+                                </span>
+
+                                <span>{option}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="flex flex-col gap-3">
+                          {question.items?.map(item => {
+                            const userAnswer = answers[question.id]?.[item.id]
+                            const correctAnswer = item.answer
+                            const correct = isSummaryOptionCorrect(question, item)
+
+                            return (
+                              <div
+                                key={item.id}
+                                className={`rounded-xl p-4 border ${
+                                  correct
+                                    ? 'bg-green-50 border-green-100'
+                                    : 'bg-red-50 border-red-100'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between mb-3">
+                                  <p className="text-sm font-semibold text-gray-800">
+                                    Question {item.number}
+                                  </p>
+
+                                  <span
+                                    className={`text-xs font-semibold ${
+                                      correct
+                                        ? 'text-green-600'
+                                        : 'text-red-600'
+                                    }`}
+                                  >
+                                    {correct ? 'Correct' : 'Wrong'}
+                                  </span>
+                                </div>
+
+                                <div className="text-sm text-gray-700 leading-7 mb-3">
+                                  {item.beforeText && (
+                                    <span className="whitespace-pre-wrap">
+                                      {item.beforeText}{' '}
+                                    </span>
+                                  )}
+
+                                  <span className="inline-block min-w-[90px] px-2 py-0.5 rounded-md bg-white border border-gray-200 text-center">
+                                    {userAnswer
+                                      ? `${userAnswer}. ${getSummaryOptionText(question, userAnswer)}`
+                                      : 'No answer'}
+                                  </span>
+
+                                  {item.afterText && (
+                                    <span className="whitespace-pre-wrap">
+                                      {' '}{item.afterText}
+                                    </span>
+                                  )}
+                                </div>
+
+                                {!correct && (
+                                  <>
+                                    <p className="text-xs text-gray-500 mb-1">
+                                      Correct answer:
+                                    </p>
+
+                                    <p className="text-sm font-medium text-green-700">
+                                      {correctAnswer}. {getSummaryOptionText(question, correctAnswer)}
+                                    </p>
+                                  </>
+                                )}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+
                     {(question.type === 'table' || question.type === 'summary') && (
                       <div>
                         <p className="text-sm text-gray-700 mb-4">
@@ -812,7 +964,7 @@ export default function DoReading() {
                       </div>
                     )}
 
-                    {question.type !== 'matching' && question.type !== 'sentenceEndings' && question.type !== 'table' && question.type !== 'summary' && (
+                    {question.type !== 'matching' && question.type !== 'sentenceEndings' && question.type !== 'summaryOptions' && question.type !== 'table' && question.type !== 'summary' && (
                       <div>
                         <p className="text-sm text-gray-800 mb-4">
                           {question.question}
@@ -980,7 +1132,9 @@ export default function DoReading() {
                         ? 'bg-indigo-50 text-indigo-600'
                         : question.type === 'sentenceEndings'
                           ? 'bg-cyan-50 text-cyan-600'
-                          : question.type === 'tfng'
+                          : question.type === 'summaryOptions'
+                            ? 'bg-fuchsia-50 text-fuchsia-600'
+                            : question.type === 'tfng'
                           ? 'bg-blue-50 text-blue-600'
                           : question.type === 'fitb'
                             ? 'bg-amber-50 text-amber-600'
@@ -1130,6 +1284,95 @@ export default function DoReading() {
                           </select>
                         </div>
                       ))}
+                    </div>
+                  </div>
+                )}
+
+                {question.type === 'summaryOptions' && (
+                  <div>
+                    {question.instruction && (
+                      <p className="text-sm text-gray-700 mb-4">
+                        {question.instruction}
+                      </p>
+                    )}
+
+                    <div className="bg-white border border-gray-100 rounded-xl p-5 mb-5">
+                      <p className="font-semibold text-gray-900 text-center mb-4">
+                        {question.title}
+                      </p>
+
+                      <div className="text-sm text-gray-700 leading-8">
+                        {question.items?.map(item => (
+                          <span key={item.id}>
+                            {item.beforeText && (
+                              <span className="whitespace-pre-wrap">
+                                {item.beforeText}{' '}
+                              </span>
+                            )}
+
+                            <span className="inline-flex items-center gap-2 mx-1">
+                              <span className="text-xs font-semibold text-gray-400">
+                                ({item.number})
+                              </span>
+
+                              <select
+                                value={answers[question.id]?.[item.id] || ''}
+                                onChange={e =>
+                                  handleSummaryOption(
+                                    question.id,
+                                    item.id,
+                                    e.target.value
+                                  )
+                                }
+                                className="border border-gray-200 rounded-xl px-3 py-1.5 text-sm outline-none focus:border-purple-400 bg-white"
+                              >
+                                <option value="">Choose</option>
+
+                                {question.options?.map((option, optionIndex) => {
+                                  if (!option?.trim()) return null
+
+                                  const letter = letters[optionIndex]
+
+                                  return (
+                                    <option key={letter} value={letter}>
+                                      {letter}. {option}
+                                    </option>
+                                  )
+                                })}
+                              </select>
+                            </span>
+
+                            {item.afterText && (
+                              <span className="whitespace-pre-wrap">
+                                {' '}{item.afterText}
+                              </span>
+                            )}
+
+                            {' '}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="bg-white border border-gray-100 rounded-xl p-4">
+                      <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
+                        Options
+                      </p>
+
+                      <div className="space-y-2">
+                        {question.options?.filter(Boolean).map((option, optionIndex) => (
+                          <div
+                            key={optionIndex}
+                            className="flex gap-2 text-sm text-gray-700 leading-5"
+                          >
+                            <span className="font-semibold text-gray-500 min-w-6">
+                              {letters[optionIndex]}.
+                            </span>
+
+                            <span>{option}</span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   </div>
                 )}
