@@ -83,6 +83,34 @@ export default function CreateReading() {
     return count > 1 ? `Questions ${start}-${end}` : `Question ${start}`
   }
 
+  const getReadingBlankNumber = (questionId, rowId, cellIndex) => {
+    let number = 1
+
+    for (const question of questions || []) {
+      if (question.id === questionId) {
+        for (const row of question.rows || []) {
+          for (let index = 0; index < (row.cells || []).length; index++) {
+            const cell = row.cells[index]
+
+            if (cell.type !== 'blank') continue
+
+            if (row.id === rowId && index === cellIndex) {
+              return number
+            }
+
+            number++
+          }
+        }
+
+        return number
+      }
+
+      number += getQuestionItemCount(question)
+    }
+
+    return number
+  }
+
   const getQuestionTypeLabel = question => {
     if (question.type === 'matching') return 'Matching Headings'
     if (question.type === 'sentenceEndings') return 'Matching Sentence Endings'
@@ -2185,20 +2213,28 @@ export default function CreateReading() {
                                   </div>
 
                                   {cell.type === 'blank' ? (
-                                    <input
-                                      value={cell.answer || ''}
-                                      onChange={e =>
-                                        updateTableCell(
-                                          question.id,
-                                          row.id,
-                                          cellIndex,
-                                          'answer',
-                                          e.target.value
-                                        )
-                                      }
-                                      placeholder="Correct answer"
-                                      className="w-full border border-purple-200 bg-white rounded-lg px-2 py-2 text-xs outline-none"
-                                    />
+                                    <div className="space-y-2">
+                                      <div className="flex items-center gap-2">
+                                        <span className="bg-purple-50 border border-purple-100 text-purple-600 font-semibold rounded-md px-2 py-1 text-xs">
+                                          Q{getReadingBlankNumber(question.id, row.id, cellIndex)}
+                                        </span>
+
+                                        <input
+                                          value={cell.answer || ''}
+                                          onChange={e =>
+                                            updateTableCell(
+                                              question.id,
+                                              row.id,
+                                              cellIndex,
+                                              'answer',
+                                              e.target.value
+                                            )
+                                          }
+                                          placeholder="Correct answer"
+                                          className="w-full border border-purple-200 bg-white rounded-lg px-2 py-2 text-xs outline-none"
+                                        />
+                                      </div>
+                                    </div>
                                   ) : (
                                     <textarea
                                       rows={3}

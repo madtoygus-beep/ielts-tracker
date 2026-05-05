@@ -285,6 +285,56 @@ export default function CreateListening() {
     })
   }
 
+  const getListeningQuestionPointCount = question => {
+    if (question.type === 'table' || question.type === 'note') {
+      let count = 0
+
+      question.rows?.forEach(row => {
+        row.cells?.forEach(cell => {
+          if (cell.type === 'blank') count++
+        })
+      })
+
+      return count || 1
+    }
+
+    if (question.type === 'map') {
+      return question.mapItems?.length || 0
+    }
+
+    return 1
+  }
+
+  const getListeningBlankNumber = (partId, questionId, rowId, cellIndex) => {
+    let number = 1
+
+    for (const part of parts || []) {
+      for (const question of part.questions || []) {
+        if (question.id === questionId) {
+          for (const row of question.rows || []) {
+            for (let index = 0; index < (row.cells || []).length; index++) {
+              const cell = row.cells[index]
+
+              if (cell.type !== 'blank') continue
+
+              if (part.id === partId && row.id === rowId && index === cellIndex) {
+                return number
+              }
+
+              number++
+            }
+          }
+
+          return number
+        }
+
+        number += getListeningQuestionPointCount(question)
+      }
+    }
+
+    return number
+  }
+
   const getPartQuestionCount = part => part.questions?.length || 0
 
   const toggleStudent = studentId => {
@@ -1460,6 +1510,9 @@ export default function CreateListening() {
                                             </p>
 
                                             <div className="text-xs text-gray-700 leading-6">
+                                              <span className="inline-block bg-white border border-purple-200 text-purple-600 font-semibold rounded-md px-2 py-0.5 mr-1">
+                                                Q{getListeningBlankNumber(activePart.id, question.id, row.id, cellIndex)}
+                                              </span>
                                               <span>{cell.beforeText || ''}</span>
                                               <span className="inline-block min-w-[72px] mx-1 px-2 py-0.5 rounded-md bg-white border border-purple-200 text-purple-500 text-center">
                                                 answer

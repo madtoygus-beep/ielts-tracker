@@ -164,6 +164,34 @@ export default function DoReading() {
     return count > 1 ? `Q${start}-${end}` : `Q${start}`
   }
 
+  const getReadingBlankNumber = (questionId, rowId, cellIndex) => {
+    let number = 1
+
+    for (const question of reading?.questions || []) {
+      if (question.id === questionId) {
+        for (const row of question.rows || []) {
+          for (let index = 0; index < (row.cells || []).length; index++) {
+            const cell = row.cells[index]
+
+            if (cell.type !== 'blank') continue
+
+            if (row.id === rowId && index === cellIndex) {
+              return number
+            }
+
+            number++
+          }
+        }
+
+        return number
+      }
+
+      number += getQuestionItemCount(question)
+    }
+
+    return number
+  }
+
   const getQuestionTypeLabel = question => {
     if (question.type === 'matching') return 'Matching Headings'
     if (question.type === 'sentenceEndings') return 'Sentence Endings'
@@ -934,13 +962,21 @@ export default function DoReading() {
                                             : 'bg-red-50'
                                         }`}
                                       >
-                                        <p className="text-xs text-gray-500 mb-1">
-                                          Your answer:
-                                        </p>
+                                        <div className="flex items-center gap-2 mb-2">
+                                          <span className="bg-white border border-gray-200 text-purple-600 font-semibold rounded-md px-2 py-1 text-xs">
+                                            Q{getReadingBlankNumber(question.id, row.id, cellIndex)}
+                                          </span>
 
-                                        <p className="text-sm text-gray-800 mb-2">
-                                          {answers[key] || 'No answer'}
-                                        </p>
+                                          <div>
+                                            <p className="text-xs text-gray-500 mb-1">
+                                              Your answer:
+                                            </p>
+
+                                            <p className="text-sm text-gray-800">
+                                              {answers[key] || 'No answer'}
+                                            </p>
+                                          </div>
+                                        </div>
 
                                         {!correct && (
                                           <>
@@ -1424,19 +1460,25 @@ export default function DoReading() {
                                     key={cellIndex}
                                     className="p-3 bg-gray-50 border border-white align-top"
                                   >
-                                    <input
-                                      value={answers[key] || ''}
-                                      onChange={e =>
-                                        handleTableAnswer(
-                                          question.id,
-                                          row.id,
-                                          cellIndex,
-                                          e.target.value
-                                        )
-                                      }
-                                      placeholder="Type answer..."
-                                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 bg-white"
-                                    />
+                                    <div className="flex items-center gap-2">
+                                      <span className="bg-purple-50 border border-purple-100 text-purple-600 font-semibold rounded-md px-2 py-1 text-xs">
+                                        Q{getReadingBlankNumber(question.id, row.id, cellIndex)}
+                                      </span>
+
+                                      <input
+                                        value={answers[key] || ''}
+                                        onChange={e =>
+                                          handleTableAnswer(
+                                            question.id,
+                                            row.id,
+                                            cellIndex,
+                                            e.target.value
+                                          )
+                                        }
+                                        placeholder="Type answer..."
+                                        className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 bg-white"
+                                      />
+                                    </div>
                                   </td>
                                 )
                               })}

@@ -282,6 +282,65 @@ function getListeningQuestionRangeLabel(parts, partId, questionIndex) {
   return `Q${questionIndex + 1}`
 }
 
+
+function getListeningBlankQuestionNumber(parts, partId, questionId, rowId, cellIndex) {
+  let number = 1
+
+  for (const part of parts || []) {
+    for (const question of part.questions || []) {
+      if (question.id === questionId) {
+        for (const row of question.rows || []) {
+          for (let index = 0; index < (row.cells || []).length; index++) {
+            const cell = row.cells[index]
+
+            if (cell.type !== 'blank') continue
+
+            if (part.id === partId && row.id === rowId && index === cellIndex) {
+              return number
+            }
+
+            number++
+          }
+        }
+
+        return number
+      }
+
+      number += getListeningQuestionCount(question)
+    }
+  }
+
+  return number
+}
+
+function getReadingBlankQuestionNumber(reading, questionId, rowId, cellIndex) {
+  let number = 1
+
+  for (const question of reading?.questions || []) {
+    if (question.id === questionId) {
+      for (const row of question.rows || []) {
+        for (let index = 0; index < (row.cells || []).length; index++) {
+          const cell = row.cells[index]
+
+          if (cell.type !== 'blank') continue
+
+          if (row.id === rowId && index === cellIndex) {
+            return number
+          }
+
+          number++
+        }
+      }
+
+      return number
+    }
+
+    number += getReadingQuestionCount(question)
+  }
+
+  return number
+}
+
 function getSavedMockState(storageKey) {
   try {
     const saved = localStorage.getItem(storageKey)
@@ -1692,6 +1751,10 @@ export default function DoMockTest() {
                               >
                                 {(cell.beforeText || cell.afterText) ? (
                                   <div className="text-sm text-gray-700 leading-8">
+                                    <span className="inline-block bg-purple-50 border border-purple-100 text-purple-600 font-semibold rounded-md px-2 py-0.5 mr-1">
+                                      Q{getListeningBlankQuestionNumber(listeningParts, part?.id, question.id, row.id, cellIndex)}
+                                    </span>
+
                                     {cell.beforeText && (
                                       <span className="whitespace-pre-wrap">
                                         {cell.beforeText}{' '}
@@ -1719,8 +1782,13 @@ export default function DoMockTest() {
                                     )}
                                   </div>
                                 ) : (
-                                  <input
-                                    value={listeningAnswers[key] || ''}
+                                  <div className="flex items-center gap-2">
+                                    <span className="bg-purple-50 border border-purple-100 text-purple-600 font-semibold rounded-md px-2 py-1 text-xs">
+                                      Q{getListeningBlankQuestionNumber(listeningParts, part?.id, question.id, row.id, cellIndex)}
+                                    </span>
+
+                                    <input
+                                      value={listeningAnswers[key] || ''}
                                     onChange={e =>
                                       handleListeningTableAnswer(
                                         question.id,
@@ -1730,8 +1798,9 @@ export default function DoMockTest() {
                                       )
                                     }
                                     placeholder="Type answer..."
-                                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 bg-white"
-                                  />
+                                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 bg-white"
+                                    />
+                                  </div>
                                 )}
 
                                 {cell.maxWords && (

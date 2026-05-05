@@ -86,6 +86,37 @@ function getQuestionRangeLabel(parts, partId, questionIndex) {
   return `Q${questionIndex + 1}`
 }
 
+
+function getBlankQuestionNumber(parts, partId, questionId, rowId, cellIndex) {
+  let number = 1
+
+  for (const part of parts || []) {
+    for (const question of part.questions || []) {
+      if (question.id === questionId) {
+        for (const row of question.rows || []) {
+          for (let index = 0; index < (row.cells || []).length; index++) {
+            const cell = row.cells[index]
+
+            if (cell.type !== 'blank') continue
+
+            if (part.id === partId && row.id === rowId && index === cellIndex) {
+              return number
+            }
+
+            number++
+          }
+        }
+
+        return number
+      }
+
+      number += getListeningQuestionCount(question)
+    }
+  }
+
+  return number
+}
+
 export default function DoListening() {
   const { id } = useParams()
 
@@ -680,6 +711,10 @@ export default function DoListening() {
                                     >
                                       {(cell.beforeText || cell.afterText) && (
                                         <div className="text-sm text-gray-700 leading-7 mb-3">
+                                          <span className="inline-block bg-white border border-gray-200 text-purple-600 font-semibold rounded-md px-2 py-0.5 mr-1">
+                                            Q{getBlankQuestionNumber(parts, part.id, question.id, row.id, cellIndex)}
+                                          </span>
+
                                           {cell.beforeText && (
                                             <span className="whitespace-pre-wrap">
                                               {cell.beforeText}{' '}
@@ -1068,6 +1103,10 @@ export default function DoListening() {
                                   >
                                     {(cell.beforeText || cell.afterText) ? (
                                       <div className="text-sm text-gray-700 leading-8">
+                                        <span className="inline-block bg-purple-50 border border-purple-100 text-purple-600 font-semibold rounded-md px-2 py-0.5 mr-1">
+                                          Q{getBlankQuestionNumber(parts, activePart?.id, question.id, row.id, cellIndex)}
+                                        </span>
+
                                         {cell.beforeText && (
                                           <span className="whitespace-pre-wrap">
                                             {cell.beforeText}{' '}
@@ -1095,8 +1134,13 @@ export default function DoListening() {
                                         )}
                                       </div>
                                     ) : (
-                                      <input
-                                        value={answers[key] || ''}
+                                      <div className="flex items-center gap-2">
+                                        <span className="bg-purple-50 border border-purple-100 text-purple-600 font-semibold rounded-md px-2 py-1 text-xs">
+                                          Q{getBlankQuestionNumber(parts, activePart?.id, question.id, row.id, cellIndex)}
+                                        </span>
+
+                                        <input
+                                          value={answers[key] || ''}
                                         onChange={e =>
                                           handleTableAnswer(
                                             question.id,
@@ -1106,8 +1150,9 @@ export default function DoListening() {
                                           )
                                         }
                                         placeholder="Type answer..."
-                                        className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 bg-white"
-                                      />
+                                          className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 bg-white"
+                                        />
+                                      </div>
                                     )}
 
                                     {cell.maxWords && (
