@@ -235,6 +235,7 @@ export default function CreateReading() {
               question.instruction ||
               'Complete the summary using the list of phrases, A-H, below.',
             title: question.title || '',
+            startNumber: question.startNumber || question.items?.[0]?.number || '',
             options: question.options?.length
               ? question.options
               : ['', '', '', '', '', '', '', ''],
@@ -451,11 +452,13 @@ export default function CreateReading() {
           instruction:
             'Complete the summary using the list of phrases, A-H, below.',
           title: '',
+          startNumber: String(
+            prev.reduce((sum, question) => sum + getQuestionItemCount(question), 0) + 1
+          ),
           options: ['', '', '', '', '', '', '', ''],
           items: [
             {
               id: crypto.randomUUID(),
-              number: '',
               beforeText: '',
               answer: '',
               afterText: ''
@@ -655,7 +658,6 @@ export default function CreateReading() {
             ...q.items,
             {
               id: crypto.randomUUID(),
-              number: '',
               beforeText: '',
               answer: '',
               afterText: ''
@@ -1063,6 +1065,11 @@ export default function CreateReading() {
           return false
         }
 
+        if (!question.startNumber?.toString().trim()) {
+          alert('Please add the first question number for Summary Options.')
+          return false
+        }
+
         const filledOptions = question.options.filter(option => option.trim())
 
         if (filledOptions.length < 2) {
@@ -1071,8 +1078,8 @@ export default function CreateReading() {
         }
 
         for (const item of question.items) {
-          if (!item.number?.toString().trim() || !item.answer) {
-            alert('Every Summary Options blank needs a question number and correct option.')
+          if (!item.answer) {
+            alert('Every Summary Options blank needs a correct option.')
             return false
           }
         }
@@ -1188,10 +1195,11 @@ export default function CreateReading() {
           type: 'summaryOptions',
           instruction: question.instruction || '',
           title: question.title || '',
+          startNumber: question.startNumber || '',
           options: question.options.filter(option => option.trim()),
-          items: question.items.map(item => ({
+          items: question.items.map((item, itemIndex) => ({
             id: item.id,
-            number: item.number || '',
+            number: String(Number(question.startNumber || 1) + itemIndex),
             beforeText: item.beforeText || '',
             answer: item.answer || '',
             afterText: item.afterText || ''
@@ -1837,6 +1845,21 @@ export default function CreateReading() {
                       className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 mb-4"
                     />
 
+                    <label className="text-xs text-gray-400 mb-1 block">
+                      First question number
+                    </label>
+
+                    <input
+                      type="number"
+                      min="1"
+                      value={question.startNumber || ''}
+                      onChange={e =>
+                        updateQuestion(question.id, 'startNumber', e.target.value)
+                      }
+                      placeholder="e.g. 33"
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 mb-4"
+                    />
+
                     <div className="bg-gray-50 border border-gray-100 rounded-xl p-4 mb-4">
                       <div className="flex items-center justify-between mb-3">
                         <p className="text-sm font-medium text-gray-800">
@@ -1930,19 +1953,9 @@ export default function CreateReading() {
                             </div>
 
                             <div className="grid grid-cols-1 md:grid-cols-[90px_1fr_140px_1fr] gap-2">
-                              <input
-                                value={item.number || ''}
-                                onChange={e =>
-                                  updateSummaryOptionItem(
-                                    question.id,
-                                    item.id,
-                                    'number',
-                                    e.target.value
-                                  )
-                                }
-                                placeholder="33"
-                                className="border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400"
-                              />
+                              <div className="border border-fuchsia-100 bg-fuchsia-50 rounded-xl px-3 py-2 text-sm font-semibold text-fuchsia-600 flex items-center justify-center">
+                                Q{Number(question.startNumber || 1) + itemIndex}
+                              </div>
 
                               <textarea
                                 rows={2}
