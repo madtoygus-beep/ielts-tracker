@@ -2106,6 +2106,325 @@
     )
   }
 
+
+  function StudentTodoSummary({ user }) {
+    const [readings, setReadings] = useState([])
+    const [listenings, setListenings] = useState([])
+    const [writings, setWritings] = useState([])
+    const [mocks, setMocks] = useState([])
+
+    const [readingSubmissions, setReadingSubmissions] = useState([])
+    const [listeningSubmissions, setListeningSubmissions] = useState([])
+    const [writingSubmissions, setWritingSubmissions] = useState([])
+    const [mockSubmissions, setMockSubmissions] = useState([])
+
+    const navigate = useNavigate()
+
+    useEffect(() => {
+      if (!user) return
+
+      const unsubReadings = onSnapshot(collection(db, 'readings'), snap => {
+        const data = snap.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .filter(item =>
+            !item.archived &&
+            item.assignTo?.includes(user.uid) &&
+            !isHiddenForCurrentUser(item, user.uid)
+          )
+
+        setReadings(data)
+      })
+
+      const unsubListenings = onSnapshot(collection(db, 'listenings'), snap => {
+        const data = snap.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .filter(item =>
+            !item.archived &&
+            item.assignTo?.includes(user.uid) &&
+            !isHiddenForCurrentUser(item, user.uid)
+          )
+
+        setListenings(data)
+      })
+
+      const unsubWritings = onSnapshot(collection(db, 'writingHomeworks'), snap => {
+        const data = snap.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .filter(item =>
+            !item.archived &&
+            item.assignTo?.includes(user.uid) &&
+            !isHiddenForCurrentUser(item, user.uid)
+          )
+
+        setWritings(data)
+      })
+
+      const unsubMocks = onSnapshot(collection(db, 'mockTests'), snap => {
+        const data = snap.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .filter(item =>
+            !item.archived &&
+            item.assignTo?.includes(user.uid) &&
+            !isHiddenForCurrentUser(item, user.uid)
+          )
+
+        setMocks(data)
+      })
+
+      return () => {
+        unsubReadings()
+        unsubListenings()
+        unsubWritings()
+        unsubMocks()
+      }
+    }, [user])
+
+    useEffect(() => {
+      if (!user) return
+
+      const unsubReadingSubmissions = onSnapshot(
+        query(collection(db, 'readingSubmissions'), where('uid', '==', user.uid)),
+        snap => {
+          setReadingSubmissions(
+            snap.docs
+              .map(d => ({ id: d.id, ...d.data() }))
+              .filter(item => item.archived !== true)
+          )
+        }
+      )
+
+      const unsubListeningSubmissions = onSnapshot(
+        query(collection(db, 'listeningSubmissions'), where('uid', '==', user.uid)),
+        snap => {
+          setListeningSubmissions(
+            snap.docs
+              .map(d => ({ id: d.id, ...d.data() }))
+              .filter(item => item.archived !== true)
+          )
+        }
+      )
+
+      const unsubWritingSubmissions = onSnapshot(
+        query(collection(db, 'writingSubmissions'), where('uid', '==', user.uid)),
+        snap => {
+          setWritingSubmissions(
+            snap.docs
+              .map(d => ({ id: d.id, ...d.data() }))
+              .filter(item => item.archived !== true)
+          )
+        }
+      )
+
+      const unsubMockSubmissions = onSnapshot(
+        query(collection(db, 'mockSubmissions'), where('uid', '==', user.uid)),
+        snap => {
+          setMockSubmissions(
+            snap.docs
+              .map(d => ({ id: d.id, ...d.data() }))
+              .filter(item => item.archived !== true)
+          )
+        }
+      )
+
+      return () => {
+        unsubReadingSubmissions()
+        unsubListeningSubmissions()
+        unsubWritingSubmissions()
+        unsubMockSubmissions()
+      }
+    }, [user])
+
+    const hasReadingSubmission = readingId =>
+      readingSubmissions.some(submission => submission.readingId === readingId)
+
+    const hasListeningSubmission = listeningId =>
+      listeningSubmissions.some(submission => submission.listeningId === listeningId)
+
+    const hasWritingSubmission = writingId =>
+      writingSubmissions.some(submission => submission.writingId === writingId)
+
+    const hasMockSubmission = mockId =>
+      mockSubmissions.some(submission => submission.mockTestId === mockId)
+
+    const todoItems = [
+      ...readings
+        .filter(item => !hasReadingSubmission(item.id))
+        .map(item => ({
+          ...item,
+          type: 'Reading',
+          icon: '📖',
+          path: `/do-reading/${item.id}`,
+          color: 'blue'
+        })),
+      ...listenings
+        .filter(item => !hasListeningSubmission(item.id))
+        .map(item => ({
+          ...item,
+          type: 'Listening',
+          icon: '🎧',
+          path: `/do-listening/${item.id}`,
+          color: 'purple'
+        })),
+      ...writings
+        .filter(item => !hasWritingSubmission(item.id))
+        .map(item => ({
+          ...item,
+          type: 'Writing',
+          icon: '✍️',
+          path: `/do-writing/${item.id}`,
+          color: 'amber'
+        })),
+      ...mocks
+        .filter(item => !hasMockSubmission(item.id))
+        .map(item => ({
+          ...item,
+          type: 'Mock Test',
+          icon: '🧠',
+          path: `/do-mock/${item.id}`,
+          color: 'green'
+        }))
+    ].sort((a, b) => {
+      if (!a.dueDate) return 1
+      if (!b.dueDate) return -1
+      return new Date(a.dueDate) - new Date(b.dueDate)
+    })
+
+    const overdueCount = todoItems.filter(item => daysUntilDue(item.dueDate) !== null && daysUntilDue(item.dueDate) < 0).length
+    const urgentCount = todoItems.filter(item => {
+      const days = daysUntilDue(item.dueDate)
+      return days !== null && days >= 0 && days <= 3
+    }).length
+
+    const getTypeBadgeStyle = type => {
+      if (type === 'Reading') return 'bg-blue-50 text-blue-600'
+      if (type === 'Listening') return 'bg-purple-50 text-purple-600'
+      if (type === 'Writing') return 'bg-amber-50 text-amber-600'
+      return 'bg-green-50 text-green-600'
+    }
+
+    return (
+      <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
+        <div className="flex items-start justify-between gap-4 mb-5">
+          <div>
+            <h2 className="font-semibold text-gray-800">
+              🔔 New / Remaining Homework
+            </h2>
+
+            <p className="text-xs text-gray-400 mt-1">
+              Newly assigned or unfinished tasks are listed here.
+            </p>
+          </div>
+
+          <span
+            className={`text-xs px-3 py-1.5 rounded-full ${
+              todoItems.length > 0
+                ? 'bg-red-50 text-red-600'
+                : 'bg-green-50 text-green-600'
+            }`}
+          >
+            {todoItems.length > 0 ? `${todoItems.length} to do` : 'All done'}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-5">
+          <div className="bg-gray-900 text-white rounded-2xl p-5">
+            <p className="text-xs text-gray-400 mb-1">
+              Remaining Tasks
+            </p>
+
+            <p className="text-3xl font-bold">
+              {todoItems.length}
+            </p>
+
+            <p className="text-xs text-gray-400 mt-2">
+              Reading, listening, writing and mock tests
+            </p>
+          </div>
+
+          <div className="bg-red-50 rounded-2xl p-5">
+            <p className="text-xs text-gray-500 mb-1">
+              Overdue
+            </p>
+
+            <p className="text-3xl font-bold text-red-600">
+              {overdueCount}
+            </p>
+
+            <p className="text-xs text-gray-500 mt-2">
+              Past due date
+            </p>
+          </div>
+
+          <div className="bg-amber-50 rounded-2xl p-5">
+            <p className="text-xs text-gray-500 mb-1">
+              Due Soon
+            </p>
+
+            <p className="text-3xl font-bold text-amber-600">
+              {urgentCount}
+            </p>
+
+            <p className="text-xs text-gray-500 mt-2">
+              Due within 3 days
+            </p>
+          </div>
+        </div>
+
+        {todoItems.length === 0 ? (
+          <div className="bg-green-50 text-green-700 rounded-xl p-4 text-sm">
+            ✅ No remaining homework right now.
+          </div>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {todoItems.slice(0, 5).map(item => {
+              const badge = dueLabel(item)
+
+              return (
+                <div
+                  key={`${item.type}-${item.id}`}
+                  className="border border-gray-100 bg-gray-50 rounded-xl p-4 flex items-center justify-between gap-4"
+                >
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className={`text-xs px-2.5 py-1 rounded-full ${getTypeBadgeStyle(item.type)}`}>
+                        {item.icon} {item.type}
+                      </span>
+
+                      <span className={`text-xs px-2.5 py-1 rounded-full ${badge.style}`}>
+                        {badge.text}
+                      </span>
+                    </div>
+
+                    <p className="text-sm font-medium text-gray-800">
+                      {item.title || 'Untitled homework'}
+                    </p>
+
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      Not completed yet
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={() => navigate(item.path)}
+                    className="bg-purple-600 text-white px-4 py-2 rounded-xl text-xs font-medium hover:bg-purple-700"
+                  >
+                    Start →
+                  </button>
+                </div>
+              )
+            })}
+
+            {todoItems.length > 5 && (
+              <p className="text-xs text-gray-400 text-center pt-1">
+                Showing the nearest 5 tasks. Open each section tab to see all remaining homework.
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+    )
+  }
+
   export default function StudentDashboard() {
     const [scores, setScores] = useState([])
     const [user, setUser] = useState(null)
@@ -2245,13 +2564,18 @@
 
     const tabs = [
       ['overview', 'Overview'],
-      ['homework', 'Homework'],
+      ['todo', 'To Do'],
+      ['reading', 'Reading'],
+      ['listening', 'Listening'],
+      ['writing', 'Writing'],
       ['mock', 'Mock Tests'],
       ['analytics', 'Analytics']
     ]
 
     const renderOverview = () => (
       <div>
+        <StudentTodoSummary user={user} />
+
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
           {overviewCards.map(card => (
             <div
@@ -2434,15 +2758,15 @@
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <button
-            onClick={() => setActiveTab('homework')}
+            onClick={() => setActiveTab('todo')}
             className="bg-white border border-gray-100 rounded-2xl p-5 text-left hover:border-purple-200 hover:shadow-sm"
           >
             <p className="font-semibold text-gray-800 mb-1">
-              📚 Homework
+              🔔 To Do
             </p>
 
             <p className="text-sm text-gray-400">
-              View your reading, listening and writing homework.
+              See new or remaining homework first.
             </p>
           </button>
 
@@ -2531,7 +2855,7 @@
           </h1>
 
           <p className="text-gray-400 text-sm mb-8">
-            Your IELTS results and homework
+            Your IELTS results, homework and progress
           </p>
 
           <div className="bg-white border border-gray-100 rounded-2xl p-2 mb-8 flex gap-2 overflow-x-auto">
@@ -2552,14 +2876,20 @@
 
           {activeTab === 'overview' && renderOverview()}
 
-          {activeTab === 'homework' && (
-            <>
-              <ListeningHomeworkSection user={user} />
+          {activeTab === 'todo' && (
+            <StudentTodoSummary user={user} />
+          )}
 
-              <ReadingHomeworkSection user={user} />
+          {activeTab === 'reading' && (
+            <ReadingHomeworkSection user={user} />
+          )}
 
-              <WritingHomeworkSection user={user} />
-            </>
+          {activeTab === 'listening' && (
+            <ListeningHomeworkSection user={user} />
+          )}
+
+          {activeTab === 'writing' && (
+            <WritingHomeworkSection user={user} />
           )}
 
           {activeTab === 'mock' && (
