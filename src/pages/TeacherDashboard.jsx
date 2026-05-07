@@ -220,6 +220,9 @@ export default function TeacherDashboard() {
 
   const activeListenings = listenings.filter(l => !l.archived)
   const archivedListenings = listenings.filter(l => l.archived)
+
+  const activeMockTests = mockTests.filter(mock => !mock.archived)
+  const archivedMockTests = mockTests.filter(mock => mock.archived)
   
 
   const overall = score => {
@@ -343,6 +346,26 @@ export default function TeacherDashboard() {
       new Date(a.submission.submittedAt || 0)
     )
 
+  const reviewedWritingReviews = writingSubmissions
+    .filter(submission => submission.reviewed)
+    .map(submission => {
+      const student = students.find(item => item.id === submission.uid)
+      const writing = writings.find(item => item.id === submission.writingId)
+
+      if (!student || !writing) return null
+
+      return {
+        submission,
+        student,
+        writing
+      }
+    })
+    .filter(Boolean)
+    .sort((a, b) =>
+      new Date(b.submission.reviewedAt || b.submission.submittedAt || 0) -
+      new Date(a.submission.reviewedAt || a.submission.submittedAt || 0)
+    )
+
   const getMockWritingStatus = submission => {
     return (
       submission.result?.writing?.status ||
@@ -415,6 +438,31 @@ export default function TeacherDashboard() {
     .sort((a, b) =>
       new Date(b.submission.submittedAt || 0) -
       new Date(a.submission.submittedAt || 0)
+    )
+
+  const reviewedMockWritingReviews = mockSubmissions
+    .filter(submission => {
+      if (submission.archived) return false
+      if (!getMockTask1Answer(submission) && !getMockTask2Answer(submission)) return false
+
+      return getMockWritingStatus(submission) === 'reviewed'
+    })
+    .map(submission => {
+      const student = students.find(item => item.id === submission.uid)
+      const mock = mockTests.find(item => item.id === submission.mockTestId)
+
+      if (!student) return null
+
+      return {
+        submission,
+        student,
+        mock
+      }
+    })
+    .filter(Boolean)
+    .sort((a, b) =>
+      new Date(b.submission.reviewedAt || b.submission.submittedAt || 0) -
+      new Date(a.submission.reviewedAt || a.submission.submittedAt || 0)
     )
 
   const reviewedMockWritingCount = mockSubmissions.filter(
@@ -748,6 +796,61 @@ Continue permanent delete?`
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     })
+  }
+
+  const archiveMockTest = async mockTest => {
+    const ok = window.confirm(
+      `"${mockTest.title}" will be archived and removed from students' mock test list. Existing submissions will stay saved.`
+    )
+
+    if (!ok) return
+
+    await updateDoc(doc(db, 'mockTests', mockTest.id), {
+      archived: true,
+      assignTo: []
+    })
+  }
+
+  const restoreMockTest = async mockTest => {
+    await updateDoc(doc(db, 'mockTests', mockTest.id), {
+      archived: false
+    })
+  }
+
+  const deleteMockTest = async mockTest => {
+    const submittedCount = getMockSubmittedCount(mockTest)
+
+    if (submittedCount > 0) {
+      const forceDelete = window.confirm(
+        `"${mockTest.title}" has ${submittedCount} mock submission(s).
+
+Deleting will permanently remove:
+- Mock test
+- Student mock answers
+- Mock results/bands
+- Writing reviews connected to this mock
+
+Continue permanent delete?`
+      )
+
+      if (!forceDelete) return
+
+      const relatedSubs = mockSubmissions.filter(
+        submission => submission.mockTestId === mockTest.id
+      )
+
+      for (const submission of relatedSubs) {
+        await deleteDoc(doc(db, 'mockSubmissions', submission.id))
+      }
+
+      await deleteDoc(doc(db, 'mockTests', mockTest.id))
+      return
+    }
+
+    const ok = window.confirm(`Delete "${mockTest.title}" permanently?`)
+    if (!ok) return
+
+    await deleteDoc(doc(db, 'mockTests', mockTest.id))
   }
 
   const numberWords = {
@@ -1794,10 +1897,14 @@ Continue permanent delete?`
     return mockTest.assignTo?.length || 0
   }
 
-  const renderMockTestCard = mockTest => (
+  const renderMockTestCard = (mockTest, archived = false) => (
     <div
       key={mockTest.id}
-      className="border border-gray-100 bg-gray-50 rounded-xl p-4 flex items-center justify-between gap-4"
+      className={`border rounded-xl p-4 flex items-center justify-between gap-4 ${
+        archived
+          ? 'border-gray-100 bg-gray-50 opacity-80'
+          : 'border-gray-100 bg-gray-50'
+      }`}
     >
       <div>
         <p className="text-sm font-medium text-gray-800">
@@ -1811,14 +1918,45 @@ Continue permanent delete?`
         <p className="text-xs text-gray-400 mt-1">
           Listening + Reading + Writing full mock flow
         </p>
+
+        {archived && (
+          <p className="text-xs text-amber-600 mt-1 font-medium">
+            Archived — hidden from students
+          </p>
+        )}
       </div>
 
       <div className="flex gap-2 flex-wrap justify-end">
+        {!archived && (
+          <button
+            onClick={() => openAssignmentManager(mockTest, 'mock')}
+            className="text-xs bg-purple-600 text-white px-3 py-2 rounded-xl hover:bg-purple-700"
+          >
+            Manage
+          </button>
+        )}
+
+        {archived ? (
+          <button
+            onClick={() => restoreMockTest(mockTest)}
+            className="text-xs bg-green-50 text-green-600 px-3 py-2 rounded-xl hover:bg-green-100"
+          >
+            Restore
+          </button>
+        ) : (
+          <button
+            onClick={() => archiveMockTest(mockTest)}
+            className="text-xs bg-amber-50 text-amber-600 px-3 py-2 rounded-xl hover:bg-amber-100"
+          >
+            Archive
+          </button>
+        )}
+
         <button
-          onClick={() => openAssignmentManager(mockTest, 'mock')}
-          className="text-xs bg-purple-600 text-white px-3 py-2 rounded-xl hover:bg-purple-700"
+          onClick={() => deleteMockTest(mockTest)}
+          className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
         >
-          Manage
+          Delete
         </button>
       </div>
     </div>
@@ -2722,6 +2860,126 @@ Continue permanent delete?`
           )}
         </div>
 
+        <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
+          <div className="flex items-center justify-between gap-4 mb-4">
+            <div>
+              <h2 className="font-semibold text-gray-800">
+                Reviewed Writing Reviews
+              </h2>
+
+              <p className="text-xs text-gray-400 mt-1">
+                Previously graded writing homework. Click Edit Review to update scores, rubric or feedback.
+              </p>
+            </div>
+
+            <span className="text-xs bg-green-50 text-green-600 px-3 py-1.5 rounded-full">
+              {reviewedWritingReviews.length} reviewed
+            </span>
+          </div>
+
+          {reviewedWritingReviews.length === 0 ? (
+            <div className="bg-gray-50 text-gray-500 rounded-xl p-4 text-sm">
+              No reviewed writing homework yet.
+            </div>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {reviewedWritingReviews.slice(0, 10).map(item => (
+                <div
+                  key={item.submission.id}
+                  className="border border-green-100 bg-green-50/40 rounded-xl p-4 flex items-center justify-between gap-4"
+                >
+                  <div>
+                    <p className="text-sm font-medium text-gray-800">
+                      {item.student.name}
+                    </p>
+
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      {item.writing.title} · Reviewed {formatDateShort(item.submission.reviewedAt || item.submission.submittedAt)}
+                    </p>
+
+                    <p className="text-xs text-gray-400 mt-1">
+                      Overall Band {item.submission.review?.overall || '-'} · Task 1 {item.submission.review?.task1Band || '-'} · Task 2 {item.submission.review?.task2Band || '-'}
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={() => openWritingReview(item)}
+                    className="text-xs bg-green-600 text-white px-4 py-2 rounded-xl hover:bg-green-700"
+                  >
+                    Edit Review
+                  </button>
+                </div>
+              ))}
+
+              {reviewedWritingReviews.length > 10 && (
+                <p className="text-xs text-gray-400 text-center pt-2">
+                  Showing latest 10 reviewed writing homework submissions.
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
+          <div className="flex items-center justify-between gap-4 mb-4">
+            <div>
+              <h2 className="font-semibold text-gray-800">
+                Reviewed Mock Writing Reviews
+              </h2>
+
+              <p className="text-xs text-gray-400 mt-1">
+                Previously graded mock writing sections. Click Edit Mock Review to update the writing band and final mock overall.
+              </p>
+            </div>
+
+            <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1.5 rounded-full">
+              {reviewedMockWritingReviews.length} reviewed
+            </span>
+          </div>
+
+          {reviewedMockWritingReviews.length === 0 ? (
+            <div className="bg-gray-50 text-gray-500 rounded-xl p-4 text-sm">
+              No reviewed mock writing yet.
+            </div>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {reviewedMockWritingReviews.slice(0, 10).map(item => (
+                <div
+                  key={item.submission.id}
+                  className="border border-purple-100 bg-purple-50/40 rounded-xl p-4 flex items-center justify-between gap-4"
+                >
+                  <div>
+                    <p className="text-sm font-medium text-gray-800">
+                      {item.student.name}
+                    </p>
+
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      {item.mock?.title || item.submission.mockTitle || 'Mock Test'} · Reviewed {formatDateShort(item.submission.reviewedAt || item.submission.submittedAt)}
+                    </p>
+
+                    <p className="text-xs text-gray-400 mt-1">
+                      Writing Band {item.submission.result?.writing?.band || item.submission.writingReview?.overall || '-'} · Overall {item.submission.result?.overall || item.submission.result?.overallEstimate || '-'}
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={() => openMockWritingReview(item)}
+                    className="text-xs bg-purple-600 text-white px-4 py-2 rounded-xl hover:bg-purple-700"
+                  >
+                    Edit Mock Review
+                  </button>
+                </div>
+              ))}
+
+              {reviewedMockWritingReviews.length > 10 && (
+                <p className="text-xs text-gray-400 text-center pt-2">
+                  Showing latest 10 reviewed mock writing submissions.
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+
 
           </>
         )}
@@ -2904,13 +3162,25 @@ Continue permanent delete?`
                 </button>
               </div>
 
-              {mockTests.length === 0 ? (
+              {activeMockTests.length === 0 ? (
                 <p className="text-sm text-gray-400 bg-gray-50 rounded-xl p-4">
-                  No mock tests found yet.
+                  No active mock tests found yet.
                 </p>
               ) : (
                 <div className="flex flex-col gap-3">
-                  {mockTests.map(mockTest => renderMockTestCard(mockTest))}
+                  {activeMockTests.map(mockTest => renderMockTestCard(mockTest, false))}
+                </div>
+              )}
+
+              {archivedMockTests.length > 0 && (
+                <div className="mt-8">
+                  <h3 className="text-sm font-semibold text-gray-700 mb-3">
+                    Archived Mock Tests
+                  </h3>
+
+                  <div className="flex flex-col gap-3">
+                    {archivedMockTests.map(mockTest => renderMockTestCard(mockTest, true))}
+                  </div>
                 </div>
               )}
             </div>
