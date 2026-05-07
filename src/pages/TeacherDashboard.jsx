@@ -490,7 +490,9 @@ export default function TeacherDashboard() {
         ? 'readings'
         : selectedHomeworkType === 'listening'
           ? 'listenings'
-          : 'writingHomeworks'
+          : selectedHomeworkType === 'mock'
+            ? 'mockTests'
+            : 'writingHomeworks'
 
     await updateDoc(doc(db, collectionName, selectedHomework.id), {
       assignTo: assignmentDraft,
@@ -1813,10 +1815,10 @@ Continue permanent delete?`
 
       <div className="flex gap-2 flex-wrap justify-end">
         <button
-          onClick={() => navigate('/create-mock')}
+          onClick={() => openAssignmentManager(mockTest, 'mock')}
           className="text-xs bg-purple-600 text-white px-3 py-2 rounded-xl hover:bg-purple-700"
         >
-          Create New
+          Manage
         </button>
       </div>
     </div>
@@ -3418,7 +3420,13 @@ Continue permanent delete?`
                     ? getSubmission(student.id, selectedHomework.id)
                     : selectedHomeworkType === 'listening'
                       ? getListeningSubmission(student.id, selectedHomework.id)
-                      : getWritingSubmission(student.id, selectedHomework.id)
+                      : selectedHomeworkType === 'mock'
+                        ? mockSubmissions.find(
+                            submission =>
+                              submission.uid === student.id &&
+                              submission.mockTestId === selectedHomework.id
+                          )
+                        : getWritingSubmission(student.id, selectedHomework.id)
 
                 return (
                   <label
