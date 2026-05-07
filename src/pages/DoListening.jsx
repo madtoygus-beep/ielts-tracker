@@ -7,6 +7,8 @@ import {
   collection,
   query,
   where,
+  orderBy,
+  limit,
   getDocs
 } from 'firebase/firestore'
 import { onAuthStateChanged } from 'firebase/auth'
@@ -86,6 +88,15 @@ function getQuestionRangeLabel(parts, partId, questionIndex) {
   return `Q${questionIndex + 1}`
 }
 
+function getSavedListeningState(storageKey) {
+  try {
+    const saved = localStorage.getItem(storageKey)
+    return saved ? JSON.parse(saved) : null
+  } catch {
+    return null
+  }
+}
+
 
 function getBlankQuestionNumber(parts, partId, questionId, rowId, cellIndex) {
   let number = 1
@@ -117,6 +128,43 @@ function getBlankQuestionNumber(parts, partId, questionId, rowId, cellIndex) {
   return number
 }
 
+function getPercentageBand(correct, total) {
+  const percentage = total ? correct / total : 0
+
+  if (percentage >= 0.97) return 9
+  if (percentage >= 0.93) return 8.5
+  if (percentage >= 0.87) return 8
+  if (percentage >= 0.8) return 7.5
+  if (percentage >= 0.72) return 7
+  if (percentage >= 0.63) return 6.5
+  if (percentage >= 0.53) return 6
+  if (percentage >= 0.43) return 5.5
+  if (percentage >= 0.33) return 5
+  if (percentage >= 0.23) return 4.5
+
+  return 4
+}
+
+function getListeningBand(correct, total) {
+  if (total === 40) {
+    if (correct >= 39) return 9
+    if (correct >= 37) return 8.5
+    if (correct >= 35) return 8
+    if (correct >= 32) return 7.5
+    if (correct >= 30) return 7
+    if (correct >= 26) return 6.5
+    if (correct >= 23) return 6
+    if (correct >= 18) return 5.5
+    if (correct >= 16) return 5
+    if (correct >= 13) return 4.5
+    if (correct >= 10) return 4
+
+    return 3.5
+  }
+
+  return getPercentageBand(correct, total)
+}
+
 export default function DoListening() {
   const { id } = useParams()
 
@@ -132,7 +180,10 @@ export default function DoListening() {
 
   const timerRef = useRef(null)
   const submittingRef = useRef(false)
+  const restoredRef = useRef(false)
   const navigate = useNavigate()
+
+  const storageKey = user?.uid && id ? `listening_progress_${id}_${user.uid}` : null
 
   const parts = listening ? normalizeListeningParts(listening) : []
   const activePart = parts.find(part => part.id === activePartId) || parts[0]
@@ -165,7 +216,9 @@ export default function DoListening() {
       const q = query(
         collection(db, 'listeningSubmissions'),
         where('uid', '==', currentUser.uid),
-        where('listeningId', '==', id)
+        where('listeningId', '==', id),
+        orderBy('submittedAt', 'desc'),
+        limit(1)
       )
 
       const existing = await getDocs(q)
@@ -177,11 +230,73 @@ export default function DoListening() {
         setAnswers(sub.answers || {})
         setResult(sub.result)
         setSubmitted(true)
+
+        const key = `listening_progress_${id}_${currentUser.uid}`
+        localStorage.removeItem(key)
       }
     })
 
     return unsub
   }, [id, navigate])
+
+  useEffect(() => {
+    if (!storageKey || restoredRef.current || !listening) return
+    if (submitted || alreadyDone) return
+
+    const saved = getSavedListeningState(storageKey)
+
+    if (!saved) {
+      restoredRef.current = true
+      return
+    }
+
+    setAnswers(saved.answers || {})
+
+    if (saved.activePartId) {
+      setActivePartId(saved.activePartId)
+    }
+
+    if (typeof saved.timeLeft === 'number') {
+      setTimeLeft(saved.timeLeft)
+    }
+
+    restoredRef.current = true
+  }, [storageKey, listening, submitted, alreadyDone])
+
+  useEffect(() => {
+    if (!storageKey || !listening || submitted || alreadyDone) return
+
+    const timeout = setTimeout(() => {
+      localStorage.setItem(
+        storageKey,
+        JSON.stringify({
+          answers,
+          activePartId,
+          timeLeft,
+          updatedAt: new Date().toISOString()
+        })
+      )
+    }, 300)
+
+    return () => clearTimeout(timeout)
+  }, [storageKey, listening, submitted, alreadyDone, answers, activePartId, timeLeft])
+
+  useEffect(() => {
+    if (submitted || alreadyDone) return
+
+    const handleBeforeUnload = event => {
+      if (!listening || Object.keys(answers || {}).length === 0) return
+
+      event.preventDefault()
+      event.returnValue = ''
+    }
+
+    window.addEventListener('beforeunload', handleBeforeUnload)
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload)
+    }
+  }, [submitted, alreadyDone, listening, answers])
 
   useEffect(() => {
     if (timeLeft === null || submitted) return
@@ -419,25 +534,10 @@ export default function DoListening() {
       })
     })
 
-    const percentage = total ? correct / total : 0
-
-    let band = 4
-
-    if (percentage >= 0.97) band = 9
-    else if (percentage >= 0.93) band = 8.5
-    else if (percentage >= 0.87) band = 8
-    else if (percentage >= 0.8) band = 7.5
-    else if (percentage >= 0.72) band = 7
-    else if (percentage >= 0.63) band = 6.5
-    else if (percentage >= 0.53) band = 6
-    else if (percentage >= 0.43) band = 5.5
-    else if (percentage >= 0.33) band = 5
-    else if (percentage >= 0.23) band = 4.5
-
     return {
       correct,
       total,
-      band
+      band: getListeningBand(correct, total)
     }
   }
 
@@ -466,6 +566,10 @@ export default function DoListening() {
         finishedLate: timeLeft <= 0,
         autoSubmitted: autoSubmit
       })
+
+      if (storageKey) {
+        localStorage.removeItem(storageKey)
+      }
 
       setResult(res)
       setSubmitted(true)

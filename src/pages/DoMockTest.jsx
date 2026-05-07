@@ -7,7 +7,9 @@ import {
   getDoc,
   getDocs,
   query,
-  where
+  where,
+  orderBy,
+  limit
 } from 'firebase/firestore'
 import { onAuthStateChanged } from 'firebase/auth'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -87,6 +89,26 @@ function getBandFromPercentage(correct, total) {
   if (percentage >= 0.33) return 5
   if (percentage >= 0.23) return 4.5
   return 4
+}
+
+function getListeningBand(correct, total) {
+  if (total === 40) {
+    if (correct >= 39) return 9
+    if (correct >= 37) return 8.5
+    if (correct >= 35) return 8
+    if (correct >= 32) return 7.5
+    if (correct >= 30) return 7
+    if (correct >= 26) return 6.5
+    if (correct >= 23) return 6
+    if (correct >= 18) return 5.5
+    if (correct >= 16) return 5
+    if (correct >= 13) return 4.5
+    if (correct >= 10) return 4
+
+    return 3.5
+  }
+
+  return getBandFromPercentage(correct, total)
 }
 
 function getReadingQuestionCount(question) {
@@ -449,7 +471,9 @@ export default function DoMockTest() {
         const existingQuery = query(
           collection(db, 'mockSubmissions'),
           where('uid', '==', currentUser.uid),
-          where('mockTestId', '==', id)
+          where('mockTestId', '==', id),
+          orderBy('submittedAt', 'desc'),
+          limit(1)
         )
 
         const existingSnap = await getDocs(existingQuery)
@@ -460,6 +484,9 @@ export default function DoMockTest() {
           setAlreadySubmitted(true)
           const submission = existingSnap.docs[0].data()
           setFinalResult(submission.result || null)
+
+          const key = `mock_progress_${id}_${currentUser.uid}`
+          localStorage.removeItem(key)
         }
 
         const readingIds = Array.isArray(mockData.readingIds)
@@ -1092,7 +1119,7 @@ export default function DoMockTest() {
     return {
       correct,
       total,
-      band: getBandFromPercentage(correct, total)
+      band: getListeningBand(correct, total)
     }
   }
 
@@ -1328,7 +1355,9 @@ export default function DoMockTest() {
       const existingQuery = query(
         collection(db, 'mockSubmissions'),
         where('uid', '==', user.uid),
-        where('mockTestId', '==', mock.id)
+        where('mockTestId', '==', mock.id),
+        orderBy('submittedAt', 'desc'),
+        limit(1)
       )
 
       const existingSnap = await getDocs(existingQuery)
