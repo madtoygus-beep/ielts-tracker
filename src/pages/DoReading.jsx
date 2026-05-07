@@ -14,6 +14,43 @@ import { useNavigate, useParams } from 'react-router-dom'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
+function getBandFromPercentage(correct, total) {
+  const percentage = total ? correct / total : 0
+
+  if (percentage >= 0.97) return 9
+  if (percentage >= 0.93) return 8.5
+  if (percentage >= 0.87) return 8
+  if (percentage >= 0.8) return 7.5
+  if (percentage >= 0.72) return 7
+  if (percentage >= 0.63) return 6.5
+  if (percentage >= 0.53) return 6
+  if (percentage >= 0.43) return 5.5
+  if (percentage >= 0.33) return 5
+  if (percentage >= 0.23) return 4.5
+
+  return 4
+}
+
+function getReadingBand(correct, total) {
+  if (total === 40) {
+    if (correct >= 39) return 9
+    if (correct >= 37) return 8.5
+    if (correct >= 35) return 8
+    if (correct >= 33) return 7.5
+    if (correct >= 30) return 7
+    if (correct >= 27) return 6.5
+    if (correct >= 23) return 6
+    if (correct >= 19) return 5.5
+    if (correct >= 15) return 5
+    if (correct >= 13) return 4.5
+    if (correct >= 10) return 4
+
+    return 3.5
+  }
+
+  return getBandFromPercentage(correct, total)
+}
+
 export default function DoReading() {
   const { id } = useParams()
 
@@ -470,25 +507,10 @@ export default function DoReading() {
       }
     })
 
-    const percentage = total ? correct / total : 0
-
-    let band = 4
-
-    if (percentage >= 0.97) band = 9
-    else if (percentage >= 0.93) band = 8.5
-    else if (percentage >= 0.87) band = 8
-    else if (percentage >= 0.8) band = 7.5
-    else if (percentage >= 0.72) band = 7
-    else if (percentage >= 0.63) band = 6.5
-    else if (percentage >= 0.53) band = 6
-    else if (percentage >= 0.43) band = 5.5
-    else if (percentage >= 0.33) band = 5
-    else if (percentage >= 0.23) band = 4.5
-
     return {
       correct,
       total,
-      band
+      band: getReadingBand(correct, total)
     }
   }
 

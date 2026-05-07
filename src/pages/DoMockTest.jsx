@@ -111,6 +111,26 @@ function getListeningBand(correct, total) {
   return getBandFromPercentage(correct, total)
 }
 
+function getReadingBand(correct, total) {
+  if (total === 40) {
+    if (correct >= 39) return 9
+    if (correct >= 37) return 8.5
+    if (correct >= 35) return 8
+    if (correct >= 33) return 7.5
+    if (correct >= 30) return 7
+    if (correct >= 27) return 6.5
+    if (correct >= 23) return 6
+    if (correct >= 19) return 5.5
+    if (correct >= 15) return 5
+    if (correct >= 13) return 4.5
+    if (correct >= 10) return 4
+
+    return 3.5
+  }
+
+  return getBandFromPercentage(correct, total)
+}
+
 function getReadingQuestionCount(question) {
   if (question.type === 'matching') return question.paragraphs?.length || 0
 
@@ -1213,7 +1233,7 @@ export default function DoMockTest() {
     return {
       correct,
       total,
-      band: getBandFromPercentage(correct, total)
+      band: getReadingBand(correct, total)
     }
   }
 
@@ -1236,7 +1256,7 @@ export default function DoMockTest() {
       0
     )
 
-    const readingBand = getBandFromPercentage(
+    const readingBand = getReadingBand(
       totalReadingCorrect,
       totalReadingQuestions
     )
