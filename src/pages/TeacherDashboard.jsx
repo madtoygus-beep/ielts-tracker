@@ -1783,6 +1783,45 @@ Continue permanent delete?`
     resetWritingReviewForm()
   }
 
+
+  const getMockSubmittedCount = mockTest => {
+    return mockSubmissions.filter(submission => submission.mockTestId === mockTest.id).length
+  }
+
+  const getMockAssignedCount = mockTest => {
+    return mockTest.assignTo?.length || 0
+  }
+
+  const renderMockTestCard = mockTest => (
+    <div
+      key={mockTest.id}
+      className="border border-gray-100 bg-gray-50 rounded-xl p-4 flex items-center justify-between gap-4"
+    >
+      <div>
+        <p className="text-sm font-medium text-gray-800">
+          {mockTest.title || 'Untitled Mock Test'}
+        </p>
+
+        <p className="text-xs text-gray-400 mt-0.5">
+          Assigned to {getMockAssignedCount(mockTest)} students · Submitted by {getMockSubmittedCount(mockTest)} students
+        </p>
+
+        <p className="text-xs text-gray-400 mt-1">
+          Listening + Reading + Writing full mock flow
+        </p>
+      </div>
+
+      <div className="flex gap-2 flex-wrap justify-end">
+        <button
+          onClick={() => navigate('/create-mock')}
+          className="text-xs bg-purple-600 text-white px-3 py-2 rounded-xl hover:bg-purple-700"
+        >
+          Create New
+        </button>
+      </div>
+    </div>
+  )
+
   const renderReadingHomeworkCard = (reading, archived = false) => (
     <div
       key={reading.id}
@@ -2039,9 +2078,12 @@ Continue permanent delete?`
   const teacherTabs = [
     ['overview', 'Overview'],
     ['students', 'Students'],
-    ['library', 'Homework Library'],
+    ['reading', 'Reading'],
+    ['listening', 'Listening'],
+    ['writing', 'Writing'],
+    ['mock', 'Mock Tests'],
     ['analytics', 'Analytics'],
-    ['reviews', 'Writing Reviews']
+    ['reviews', 'Reviews']
   ]
 
   return (
@@ -2682,7 +2724,7 @@ Continue permanent delete?`
           </>
         )}
 
-        {activeTab === 'library' && (
+        {activeTab === 'reading' && (
           <>
         <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
           <div className="flex items-center justify-between mb-4">
@@ -2731,6 +2773,11 @@ Continue permanent delete?`
         </div>
 
 
+          </>
+        )}
+
+        {activeTab === 'listening' && (
+          <>
         <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
           <div className="flex items-center justify-between mb-4">
             <div>
@@ -2777,6 +2824,11 @@ Continue permanent delete?`
           )}
         </div>
 
+          </>
+        )}
+
+        {activeTab === 'writing' && (
+          <>
         <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
           <div className="flex items-center justify-between mb-4">
             <div>
@@ -2825,6 +2877,41 @@ Continue permanent delete?`
         </div>
 
 
+          </>
+        )}
+
+        {activeTab === 'mock' && (
+          <>
+            <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h2 className="font-semibold text-gray-800">
+                    Mock Test Library
+                  </h2>
+
+                  <p className="text-xs text-gray-400 mt-1">
+                    Manage full mock tests and monitor student submissions.
+                  </p>
+                </div>
+
+                <button
+                  onClick={() => navigate('/create-mock')}
+                  className="text-xs bg-green-600 text-white px-4 py-2 rounded-xl hover:bg-green-700"
+                >
+                  + Create Mock Test
+                </button>
+              </div>
+
+              {mockTests.length === 0 ? (
+                <p className="text-sm text-gray-400 bg-gray-50 rounded-xl p-4">
+                  No mock tests found yet.
+                </p>
+              ) : (
+                <div className="flex flex-col gap-3">
+                  {mockTests.map(mockTest => renderMockTestCard(mockTest))}
+                </div>
+              )}
+            </div>
           </>
         )}
 
