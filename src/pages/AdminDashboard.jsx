@@ -529,8 +529,19 @@ export default function AdminDashboard() {
       </nav>
 
       <div className="max-w-4xl mx-auto px-6 py-10">
-        <h1 className="text-2xl font-bold text-gray-900 mb-1">Admin Panel</h1>
-        <p className="text-gray-400 text-sm mb-6">Manage all accounts and scores</p>
+        <div className="flex items-start justify-between gap-4 mb-6">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900 mb-1">Admin Panel</h1>
+            <p className="text-gray-400 text-sm">Manage all accounts, scores and classes</p>
+          </div>
+
+          <button
+            onClick={() => navigate('/admin/classes')}
+            className="bg-white border border-purple-200 text-purple-600 px-4 py-2 rounded-xl text-sm font-medium hover:bg-purple-50"
+          >
+            🏫 Manage Classes
+          </button>
+        </div>
 
         <div className="grid grid-cols-4 gap-4 mb-8">
           <div className="bg-white border border-gray-100 rounded-2xl p-5 text-center">

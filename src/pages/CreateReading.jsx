@@ -27,6 +27,7 @@ export default function CreateReading() {
 
   const [user, setUser] = useState(null)
   const [students, setStudents] = useState([])
+  const [classes, setClasses] = useState([])
 
   const [title, setTitle] = useState('')
   const [timeLimit, setTimeLimit] = useState(60)
@@ -201,7 +202,27 @@ export default function CreateReading() {
   useEffect(() => {
     const q = query(collection(db, 'users'), where('role', '==', 'student'))
     return onSnapshot(q, snap => {
-      setStudents(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+      setStudents(
+        snap.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .filter(student => student.status === 'approved' && student.deleted !== true)
+          .sort((a, b) =>
+            (a.name || a.email || '').localeCompare(b.name || b.email || '')
+          )
+      )
+    })
+  }, [])
+
+  useEffect(() => {
+    const q = query(collection(db, 'classes'))
+
+    return onSnapshot(q, snap => {
+      const list = snap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .filter(classItem => classItem.archived !== true)
+        .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+
+      setClasses(list)
     })
   }, [])
 
@@ -445,6 +466,42 @@ export default function CreateReading() {
         ? prev.filter(s => s !== studentId)
         : [...prev, studentId]
     )
+  }
+
+  const assignClassToReading = classItem => {
+    const classStudentIds = classItem.studentIds || []
+
+    if (classStudentIds.length === 0) {
+      alert('This class has no students yet.')
+      return
+    }
+
+    setAssignTo(prev => Array.from(new Set([...prev, ...classStudentIds])))
+  }
+
+  const removeClassFromReading = classItem => {
+    const classStudentIds = classItem.studentIds || []
+
+    setAssignTo(prev =>
+      prev.filter(studentId => !classStudentIds.includes(studentId))
+    )
+  }
+
+  const isClassFullyAssigned = classItem => {
+    const classStudentIds = classItem.studentIds || []
+    if (classStudentIds.length === 0) return false
+    return classStudentIds.every(studentId => assignTo.includes(studentId))
+  }
+
+  const isClassPartlyAssigned = classItem => {
+    const classStudentIds = classItem.studentIds || []
+    if (classStudentIds.length === 0) return false
+    return classStudentIds.some(studentId => assignTo.includes(studentId))
+  }
+
+  const getStudentName = studentId => {
+    const student = students.find(item => item.id === studentId)
+    return student?.name || student?.email || 'Unknown student'
   }
 
   // ============================================================
@@ -1674,25 +1731,129 @@ export default function CreateReading() {
 
         {/* Students */}
         <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-5">
-          <h2 className="font-semibold text-gray-800 mb-4">Assign Students</h2>
+          <div className="flex items-center justify-between gap-4 mb-4">
+            <div>
+              <h2 className="font-semibold text-gray-800">Assign Students</h2>
+              <p className="text-xs text-gray-400 mt-1">
+                Select students one by one or add a whole class.
+              </p>
+            </div>
+
+            {assignTo.length > 0 && (
+              <button
+                onClick={() => setAssignTo([])}
+                className="text-xs bg-red-50 text-red-500 px-3 py-2 rounded-xl hover:bg-red-100"
+              >
+                Clear all ({assignTo.length})
+              </button>
+            )}
+          </div>
+
+          {classes.length > 0 && (
+            <div className="bg-purple-50 border border-purple-100 rounded-2xl p-4 mb-5">
+              <div className="flex items-center justify-between gap-3 mb-3">
+                <div>
+                  <p className="text-sm font-semibold text-purple-800">
+                    Assign by Class
+                  </p>
+                  <p className="text-xs text-purple-500">
+                    Click Add to select all students in that class.
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                {classes.map(classItem => {
+                  const classStudentIds = classItem.studentIds || []
+                  const fullyAssigned = isClassFullyAssigned(classItem)
+                  const partlyAssigned = isClassPartlyAssigned(classItem)
+
+                  return (
+                    <div
+                      key={classItem.id}
+                      className={`bg-white border rounded-xl p-3 ${
+                        fullyAssigned
+                          ? 'border-purple-300'
+                          : partlyAssigned
+                            ? 'border-amber-200'
+                            : 'border-gray-100'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-gray-800 truncate">
+                            {classItem.name}
+                          </p>
+
+                          <p className="text-xs text-gray-400 mt-0.5">
+                            {classStudentIds.length} student{classStudentIds.length === 1 ? '' : 's'}
+                            {partlyAssigned && !fullyAssigned ? ' · partly selected' : ''}
+                            {fullyAssigned ? ' · selected' : ''}
+                          </p>
+
+                          {classStudentIds.length > 0 && (
+                            <p className="text-[11px] text-gray-400 mt-1 truncate">
+                              {classStudentIds.slice(0, 3).map(getStudentName).join(', ')}
+                              {classStudentIds.length > 3
+                                ? ` +${classStudentIds.length - 3} more`
+                                : ''}
+                            </p>
+                          )}
+                        </div>
+
+                        {fullyAssigned ? (
+                          <button
+                            onClick={() => removeClassFromReading(classItem)}
+                            className="text-xs bg-red-50 text-red-500 px-3 py-1.5 rounded-lg hover:bg-red-100 flex-shrink-0"
+                          >
+                            Remove
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => assignClassToReading(classItem)}
+                            className="text-xs bg-purple-600 text-white px-3 py-1.5 rounded-lg hover:bg-purple-700 flex-shrink-0"
+                          >
+                            Add
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
 
           {students.length === 0 ? (
             <p className="text-sm text-gray-400">No students found.</p>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-              {students.map(student => (
-                <label key={student.id} className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={assignTo.includes(student.id)}
-                    onChange={() => toggleStudent(student.id)}
-                    className="accent-purple-600"
-                  />
-                  <span className="text-sm text-gray-700">
-                    {student.name} — {student.email}
-                  </span>
-                </label>
-              ))}
+            <div>
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
+                Individual Students ({assignTo.length} selected)
+              </p>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                {students.map(student => (
+                  <label
+                    key={student.id}
+                    className={`flex items-center gap-2 cursor-pointer rounded-xl border px-3 py-2 ${
+                      assignTo.includes(student.id)
+                        ? 'bg-purple-50 border-purple-200'
+                        : 'bg-white border-gray-100 hover:bg-gray-50'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={assignTo.includes(student.id)}
+                      onChange={() => toggleStudent(student.id)}
+                      className="accent-purple-600"
+                    />
+                    <span className="text-sm text-gray-700 truncate">
+                      {student.name} — {student.email}
+                    </span>
+                  </label>
+                ))}
+              </div>
             </div>
           )}
         </div>

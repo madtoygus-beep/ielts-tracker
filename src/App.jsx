@@ -20,6 +20,8 @@ import DoListening from './pages/DoListening'
 import CreateMockTest from './pages/CreateMockTest'
 import DoMockTest from './pages/DoMockTest'
 
+import ManageClasses from './pages/ManageClasses'
+
 function App() {
   return (
     <BrowserRouter>
@@ -47,6 +49,9 @@ function App() {
 
         <Route path="/create-mock" element={<CreateMockTest />} />
         <Route path="/do-mock/:id" element={<DoMockTest />} />
+
+        <Route path="/teacher/classes" element={<ManageClasses />} />
+        <Route path="/admin/classes" element={<ManageClasses />} />
 
       </Routes>
     </BrowserRouter>

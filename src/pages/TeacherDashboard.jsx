@@ -2290,6 +2290,13 @@ Continue permanent delete?`
           >
             🧪 Create Mock Test
           </button>
+
+          <button
+            onClick={() => navigate('/teacher/classes')}
+            className="bg-white border border-purple-200 text-purple-600 px-4 py-2 rounded-xl text-sm font-medium hover:bg-purple-50"
+          >
+            🏫 Manage Classes
+          </button>
         </div>
 
         <div className="bg-white border border-gray-100 rounded-2xl p-2 mb-8 flex gap-2 overflow-x-auto">
