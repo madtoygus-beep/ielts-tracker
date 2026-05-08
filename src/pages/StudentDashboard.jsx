@@ -143,6 +143,10 @@
     return `${questionId}_${paragraphId}_${partId}`
   }
 
+  function listeningCompletionAnswerKey(questionId, sectionId, itemId) {
+    return `${questionId}_${sectionId}_${itemId}`
+  }
+
   function parseAcceptedAnswers(cell) {
     const main = cell.answer ? [cell.answer] : []
     const alternatives = cell.acceptedAnswers
@@ -226,6 +230,26 @@
     return acceptedAnswers.includes(normalizeAnswer(userAnswer))
   }
 
+  function isListeningCompletionPartCorrect(submission, question, section, item) {
+    const key = listeningCompletionAnswerKey(question.id, section.id, item.id)
+    const userAnswer = submission.answers?.[key]
+
+    if (question.completionMode === 'choose') {
+      return userAnswer?.toString().trim() === item.answer?.toString().trim()
+    }
+
+    const acceptedAnswers = [
+      item.answer,
+      ...(item.acceptedAnswers
+        ? item.acceptedAnswers.split(',').map(answer => answer.trim()).filter(Boolean)
+        : [])
+    ].map(normalizeAnswer)
+
+    if (!isWithinWordLimit(userAnswer, item.maxWords)) return false
+
+    return acceptedAnswers.includes(normalizeAnswer(userAnswer))
+  }
+
   function estimateHomeworkBand(correct, total) {
     if (!total) return null
 
@@ -255,6 +279,7 @@
     if (type === 'summary') return 'Summary Completion'
     if (type === 'note') return 'Note Completion'
     if (type === 'noteCompletion') return 'Note Completion'
+    if (type === 'listeningCompletion') return 'Listening Note/Summary Completion'
     return type
   }
 
@@ -341,6 +366,30 @@
               totalQuestions++
 
               if (isNoteCompletionPartCorrect(submission, question, paragraph, part)) {
+                stats[key].correct++
+                totalCorrect++
+              }
+            })
+          })
+
+          return
+        }
+
+        if (question.type === 'listeningCompletion') {
+          const key = 'listeningCompletion'
+
+          if (!stats[key]) {
+            stats[key] = { correct: 0, total: 0 }
+          }
+
+          question.sections?.forEach(section => {
+            section.parts?.forEach(item => {
+              if (item.type !== 'blank') return
+
+              stats[key].total++
+              totalQuestions++
+
+              if (isListeningCompletionPartCorrect(submission, question, section, item)) {
                 stats[key].correct++
                 totalCorrect++
               }
@@ -567,7 +616,7 @@
       listenings,
       listeningSubmissions,
       'listeningId',
-      ['mcq', 'fitb', 'tfng', 'table', 'summary', 'note']
+      ['mcq', 'fitb', 'tfng', 'table', 'summary', 'note', 'listeningCompletion']
     )
 
     const readingCompletion = {

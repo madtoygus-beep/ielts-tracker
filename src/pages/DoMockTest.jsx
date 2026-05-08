@@ -33,6 +33,10 @@ function tableAnswerKey(questionId, rowId, cellIndex) {
   return `${questionId}_${rowId}_${cellIndex}`
 }
 
+function listeningCompletionAnswerKey(questionId, sectionId, itemId) {
+  return `${questionId}_${sectionId}_${itemId}`
+}
+
 function noteAnswerKey(questionId, paragraphId, partId) {
   return `${questionId}_${paragraphId}_${partId}`
 }
@@ -308,6 +312,18 @@ function getListeningQuestionCount(question) {
     return count || 1
   }
 
+  if (question.type === 'listeningCompletion') {
+    let count = 0
+
+    question.sections?.forEach(section => {
+      section.parts?.forEach(part => {
+        if (part.type === 'blank') count++
+      })
+    })
+
+    return count || 1
+  }
+
   if (question.type === 'map') {
     return question.mapItems?.length || 0
   }
@@ -354,6 +370,34 @@ function getListeningBlankQuestionNumber(parts, partId, questionId, rowId, cellI
             if (cell.type !== 'blank') continue
 
             if (part.id === partId && row.id === rowId && index === cellIndex) {
+              return number
+            }
+
+            number++
+          }
+        }
+
+        return number
+      }
+
+      number += getListeningQuestionCount(question)
+    }
+  }
+
+  return number
+}
+
+function getListeningCompletionQuestionNumber(parts, partId, questionId, sectionId, itemId) {
+  let number = 1
+
+  for (const part of parts || []) {
+    for (const question of part.questions || []) {
+      if (question.id === questionId) {
+        for (const section of question.sections || []) {
+          for (const item of section.parts || []) {
+            if (item.type !== 'blank') continue
+
+            if (part.id === partId && section.id === sectionId && item.id === itemId) {
               return number
             }
 
@@ -955,6 +999,15 @@ export default function DoMockTest() {
     }))
   }
 
+  const handleListeningCompletionAnswer = (questionId, sectionId, itemId, value) => {
+    if (listeningLocked) return
+
+    setListeningAnswers(prev => ({
+      ...prev,
+      [listeningCompletionAnswerKey(questionId, sectionId, itemId)]: value
+    }))
+  }
+
   const handleListeningMapAnswer = (questionId, itemId, value) => {
     if (listeningLocked) return
 
@@ -1148,6 +1201,28 @@ export default function DoMockTest() {
     }
   }
 
+  const isListeningCompletionPartCorrect = (question, section, item) => {
+    const key = listeningCompletionAnswerKey(question.id, section.id, item.id)
+    const userAnswer = listeningAnswers[key]
+
+    if (question.completionMode === 'choose') {
+      return userAnswer?.toString().trim() === item.answer?.toString().trim()
+    }
+
+    return isBlankCorrect(
+      userAnswer,
+      item.answer,
+      item.acceptedAnswers,
+      item.maxWords
+    )
+  }
+
+  const getListeningCompletionOptionText = (question, letter) => {
+    if (!letter) return 'No answer'
+    const index = letters.indexOf(letter)
+    return question.options?.[index] || `Option ${letter}`
+  }
+
   const isListeningNormalCorrect = question => {
     const value = listeningAnswers[question.id]
 
@@ -1185,6 +1260,22 @@ export default function DoMockTest() {
               ) {
                 correct++
               }
+            }
+          })
+        })
+
+        return
+      }
+
+      if (question.type === 'listeningCompletion') {
+        question.sections?.forEach(section => {
+          section.parts?.forEach(item => {
+            if (item.type !== 'blank') return
+
+            total++
+
+            if (isListeningCompletionPartCorrect(question, section, item)) {
+              correct++
             }
           })
         })
@@ -1704,6 +1795,144 @@ export default function DoMockTest() {
     )
   }
 
+  const renderListeningCompletion = (question, partId) => (
+    <div>
+      {question.instruction && (
+        <p className="text-sm text-gray-700 mb-4">
+          {question.instruction}
+        </p>
+      )}
+
+      <div className="bg-white border border-gray-100 rounded-xl p-5">
+        {question.completionTitle && (
+          <p className="font-semibold text-gray-900 text-center mb-5">
+            {question.completionTitle}
+          </p>
+        )}
+
+        <div className="space-y-4">
+          {question.sections?.map(section => (
+            <div key={section.id}>
+              {section.heading && (
+                <p className="text-sm font-bold text-gray-900 mb-1">
+                  {section.heading}
+                </p>
+              )}
+
+              <div className="text-sm md:text-[15px] text-gray-800 leading-8">
+                {section.parts?.map((item, itemIndex) => {
+                  if (item.type === 'text') {
+                    return (
+                      <span key={itemIndex} className="whitespace-pre-wrap">
+                        {item.content}
+                      </span>
+                    )
+                  }
+
+                  const key = listeningCompletionAnswerKey(
+                    question.id,
+                    section.id,
+                    item.id
+                  )
+
+                  const questionNumber = getListeningCompletionQuestionNumber(
+                    listeningParts,
+                    partId,
+                    question.id,
+                    section.id,
+                    item.id
+                  )
+
+                  if (question.completionMode === 'choose') {
+                    return (
+                      <span key={item.id} className="inline-flex items-center gap-2 mx-1">
+                        <span className="text-xs font-semibold text-gray-400">
+                          Q{questionNumber}
+                        </span>
+
+                        <select
+                          value={listeningAnswers[key] || ''}
+                          onChange={e =>
+                            handleListeningCompletionAnswer(
+                              question.id,
+                              section.id,
+                              item.id,
+                              e.target.value
+                            )
+                          }
+                          className="border border-gray-200 rounded-xl px-3 py-1.5 text-sm outline-none focus:border-purple-400 bg-white"
+                        >
+                          <option value="">Choose</option>
+
+                          {question.options?.map((option, optionIndex) => {
+                            if (!option?.trim()) return null
+
+                            const letter = letters[optionIndex]
+
+                            return (
+                              <option key={letter} value={letter}>
+                                {letter}. {option}
+                              </option>
+                            )
+                          })}
+                        </select>
+                      </span>
+                    )
+                  }
+
+                  return (
+                    <span key={item.id} className="inline-flex items-center gap-2 mx-1">
+                      <span className="text-xs font-semibold text-gray-400">
+                        Q{questionNumber}
+                      </span>
+
+                      <input
+                        value={listeningAnswers[key] || ''}
+                        onChange={e =>
+                          handleListeningCompletionAnswer(
+                            question.id,
+                            section.id,
+                            item.id,
+                            e.target.value
+                          )
+                        }
+                        placeholder="answer"
+                        className="inline-block w-[150px] border border-gray-200 rounded-xl px-3 py-1.5 text-sm outline-none focus:border-purple-400 bg-white"
+                      />
+                    </span>
+                  )
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {question.completionMode === 'choose' && (
+        <div className="bg-white border border-gray-100 rounded-xl p-4 mt-4">
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
+            Options
+          </p>
+
+          <div className="space-y-2">
+            {question.options?.filter(Boolean).map((option, optionIndex) => (
+              <div
+                key={optionIndex}
+                className="flex gap-2 text-sm text-gray-700 leading-5"
+              >
+                <span className="font-semibold text-gray-500 min-w-6">
+                  {letters[optionIndex]}.
+                </span>
+
+                <span>{option}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+
   const renderListening = part => (
     <div className="space-y-6">
       {renderSectionTimerCard()}
@@ -1847,6 +2076,9 @@ export default function DoMockTest() {
                 />
               </div>
             )}
+
+            {question.type === 'listeningCompletion' &&
+              renderListeningCompletion(question, part?.id)}
 
             {(question.type === 'table' || question.type === 'note') && (
               <div>
