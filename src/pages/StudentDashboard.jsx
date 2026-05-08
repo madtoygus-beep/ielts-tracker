@@ -139,6 +139,10 @@
     return `${questionId}_${rowId}_${cellIndex}`
   }
 
+  function noteAnswerKey(questionId, paragraphId, partId) {
+    return `${questionId}_${paragraphId}_${partId}`
+  }
+
   function parseAcceptedAnswers(cell) {
     const main = cell.answer ? [cell.answer] : []
     const alternatives = cell.acceptedAnswers
@@ -204,6 +208,24 @@
     return acceptedAnswers.includes(userAnswer)
   }
 
+  function isNoteCompletionPartCorrect(submission, question, paragraph, part) {
+    const key = noteAnswerKey(question.id, paragraph.id, part.id)
+    const userAnswer = submission.answers?.[key]
+
+    if (question.mode === 'choose') {
+      return userAnswer?.toString().trim() === part.answer?.toString().trim()
+    }
+
+    const acceptedAnswers = [
+      part.answer,
+      ...(part.acceptedAnswers
+        ? part.acceptedAnswers.split(',').map(item => item.trim()).filter(Boolean)
+        : [])
+    ].map(normalizeAnswer)
+
+    return acceptedAnswers.includes(normalizeAnswer(userAnswer))
+  }
+
   function estimateHomeworkBand(correct, total) {
     if (!total) return null
 
@@ -232,6 +254,7 @@
     if (type === 'table') return 'Table Completion'
     if (type === 'summary') return 'Summary Completion'
     if (type === 'note') return 'Note Completion'
+    if (type === 'noteCompletion') return 'Note Completion'
     return type
   }
 
@@ -298,6 +321,30 @@
               stats.sentenceEndings.correct++
               totalCorrect++
             }
+          })
+
+          return
+        }
+
+        if (question.type === 'noteCompletion') {
+          const key = 'noteCompletion'
+
+          if (!stats[key]) {
+            stats[key] = { correct: 0, total: 0 }
+          }
+
+          question.paragraphs?.forEach(paragraph => {
+            paragraph.parts?.forEach(part => {
+              if (part.type !== 'blank') return
+
+              stats[key].total++
+              totalQuestions++
+
+              if (isNoteCompletionPartCorrect(submission, question, paragraph, part)) {
+                stats[key].correct++
+                totalCorrect++
+              }
+            })
           })
 
           return
@@ -513,7 +560,7 @@
       readings,
       readingSubmissions,
       'readingId',
-      ['matching', 'sentenceEndings', 'mcq', 'fitb', 'tfng', 'table', 'summary', 'note']
+      ['matching', 'sentenceEndings', 'mcq', 'fitb', 'tfng', 'table', 'summary', 'note', 'noteCompletion']
     )
 
     const listeningAnalytics = calculateSkillAnalytics(
@@ -2376,7 +2423,7 @@
           </div>
         ) : (
           <div className="flex flex-col gap-3">
-            {todoItems.slice(0, 5).map(item => {
+            {todoItems.map(item => {
               const badge = dueLabel(item)
 
               return (
@@ -2416,7 +2463,7 @@
 
             {todoItems.length > 5 && (
               <p className="text-xs text-gray-400 text-center pt-1">
-                Showing the nearest 5 tasks. Open each section tab to see all remaining homework.
+                Showing all remaining homework.
               </p>
             )}
           </div>

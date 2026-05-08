@@ -1209,9 +1209,7 @@ export default function DoReading() {
 
                     {question.type === 'noteCompletion' && renderNoteCompletion(question, true)}
 
-                    {question.type === 'noteCompletion' && renderNoteCompletion(question)}
-
-                {(question.type === 'table' || question.type === 'summary') && (
+                    {(question.type === 'table' || question.type === 'summary') && (
                       <div>
                         <p className="text-sm text-gray-700 mb-4">
                           {question.instruction}
@@ -1718,6 +1716,8 @@ export default function DoReading() {
                     </div>
                   </div>
                 )}
+
+                {question.type === 'noteCompletion' && renderNoteCompletion(question)}
 
                 {(question.type === 'table' || question.type === 'summary') && (
                   <div>
