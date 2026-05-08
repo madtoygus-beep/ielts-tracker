@@ -146,6 +146,35 @@ export default function DoReading() {
     return `${questionId}_${rowId}_${cellIndex}`
   }
 
+  const noteAnswerKey = (questionId, paragraphId, partId) => {
+    return `${questionId}_${paragraphId}_${partId}`
+  }
+
+  const getAcceptedAnswers = (mainAnswer, acceptedAnswers) => {
+    const list = []
+
+    if (mainAnswer) list.push(mainAnswer)
+
+    if (acceptedAnswers) {
+      acceptedAnswers
+        .split(',')
+        .map(item => item.trim())
+        .filter(Boolean)
+        .forEach(item => list.push(item))
+    }
+
+    return list.map(normalize)
+  }
+
+  const isBlankAnswerCorrect = (userAnswer, mainAnswer, acceptedAnswers = '') => {
+    const cleanUser = normalize(userAnswer)
+    const accepted = getAcceptedAnswers(mainAnswer, acceptedAnswers)
+
+    if (!cleanUser || accepted.length === 0) return false
+
+    return accepted.includes(cleanUser)
+  }
+
   const getQuestionItemCount = question => {
     if (question.type === 'matching') {
       return question.paragraphs?.length || 0
@@ -157,6 +186,18 @@ export default function DoReading() {
 
     if (question.type === 'summaryOptions') {
       return question.items?.length || 0
+    }
+
+    if (question.type === 'noteCompletion') {
+      let count = 0
+
+      question.paragraphs?.forEach(paragraph => {
+        paragraph.parts?.forEach(part => {
+          if (part.type === 'blank') count++
+        })
+      })
+
+      return count || 1
     }
 
     if (question.type === 'mcq' && question.mode === 'multi') {
@@ -229,10 +270,41 @@ export default function DoReading() {
     return number
   }
 
+  const getNoteBlankNumber = (questionId, paragraphId, partId) => {
+    let number = 1
+
+    for (const question of reading?.questions || []) {
+      if (question.id === questionId) {
+        for (const paragraph of question.paragraphs || []) {
+          for (const part of paragraph.parts || []) {
+            if (part.type !== 'blank') continue
+
+            if (paragraph.id === paragraphId && part.id === partId) {
+              return number
+            }
+
+            number++
+          }
+        }
+
+        return number
+      }
+
+      number += getQuestionItemCount(question)
+    }
+
+    return number
+  }
+
   const getQuestionTypeLabel = question => {
     if (question.type === 'matching') return 'Matching Headings'
     if (question.type === 'sentenceEndings') return 'Sentence Endings'
     if (question.type === 'summaryOptions') return 'Summary Options'
+    if (question.type === 'noteCompletion') {
+      return question.mode === 'choose'
+        ? 'Note Completion — Choose A-H'
+        : 'Note Completion'
+    }
     if (question.type === 'tfng') return 'T/F/NG'
     if (question.type === 'fitb') return 'Fill blank'
     if (question.type === 'table') return 'Table Completion'
@@ -304,6 +376,21 @@ export default function DoReading() {
         [itemId]: value
       }
     }))
+  }
+
+  const handleNoteCompletion = (questionId, paragraphId, partId, value) => {
+    const key = noteAnswerKey(questionId, paragraphId, partId)
+
+    setAnswers(prev => ({
+      ...prev,
+      [key]: value
+    }))
+  }
+
+  const getNoteOptionText = (question, letter) => {
+    if (!letter) return 'No answer'
+    const index = letters.indexOf(letter)
+    return question.options?.[index] || `Option ${letter}`
   }
 
   const getSummaryOptionText = (question, letter) => {
@@ -407,6 +494,21 @@ export default function DoReading() {
     return userAnswer === correctAnswer
   }
 
+  const isNotePartCorrect = (question, paragraph, part) => {
+    const key = noteAnswerKey(question.id, paragraph.id, part.id)
+    const userAnswer = answers[key]
+
+    if (question.mode === 'choose') {
+      return userAnswer?.toString() === part.answer?.toString()
+    }
+
+    return isBlankAnswerCorrect(
+      userAnswer,
+      part.answer,
+      part.acceptedAnswers
+    )
+  }
+
   const getMultiAnswerScore = question => {
     const selected = Array.isArray(answers[question.id])
       ? answers[question.id].map(item => item?.toString())
@@ -470,6 +572,22 @@ export default function DoReading() {
           if (isSummaryOptionCorrect(question, item)) {
             correct++
           }
+        })
+
+        return
+      }
+
+      if (question.type === 'noteCompletion') {
+        question.paragraphs?.forEach(paragraph => {
+          paragraph.parts?.forEach(part => {
+            if (part.type !== 'blank') return
+
+            total++
+
+            if (isNotePartCorrect(question, paragraph, part)) {
+              correct++
+            }
+          })
         })
 
         return
@@ -549,6 +667,168 @@ export default function DoReading() {
       setSubmitting(false)
     }
   }
+
+  const renderNoteCompletion = (question, reviewMode = false) => (
+    <div>
+      {question.instruction && (
+        <p className="text-sm text-gray-700 mb-4">
+          {question.instruction}
+        </p>
+      )}
+
+      <div className="bg-white border border-gray-100 rounded-xl p-5">
+        {question.title && (
+          <p className="font-semibold text-gray-900 text-center mb-5">
+            {question.title}
+          </p>
+        )}
+
+        <div className="space-y-4">
+          {question.paragraphs?.map(paragraph => (
+            <div key={paragraph.id}>
+              {paragraph.heading && (
+                <p className="text-sm font-bold text-gray-900 mb-1">
+                  {paragraph.heading}
+                </p>
+              )}
+
+              <div className="text-sm md:text-[15px] text-gray-800 leading-8">
+                {paragraph.parts?.map((part, partIndex) => {
+                  if (part.type === 'text') {
+                    return (
+                      <span key={partIndex} className="whitespace-pre-wrap">
+                        {part.content}
+                      </span>
+                    )
+                  }
+
+                  const key = noteAnswerKey(question.id, paragraph.id, part.id)
+                  const questionNumber = getNoteBlankNumber(
+                    question.id,
+                    paragraph.id,
+                    part.id
+                  )
+                  const correct = isNotePartCorrect(question, paragraph, part)
+
+                  if (reviewMode) {
+                    return (
+                      <span
+                        key={part.id}
+                        className={`inline-flex items-center gap-2 mx-1 px-2 py-1 rounded-xl border ${
+                          correct
+                            ? 'bg-green-50 border-green-100'
+                            : 'bg-red-50 border-red-100'
+                        }`}
+                      >
+                        <span className="text-xs font-semibold text-purple-600">
+                          ({questionNumber})
+                        </span>
+
+                        <span className="font-medium text-gray-800">
+                          {answers[key] || 'No answer'}
+                        </span>
+
+                        {!correct && (
+                          <span className="text-xs font-semibold text-green-700">
+                            Correct:{' '}
+                            {question.mode === 'choose'
+                              ? `${part.answer}. ${getNoteOptionText(question, part.answer)}`
+                              : part.answer}
+                          </span>
+                        )}
+                      </span>
+                    )
+                  }
+
+                  if (question.mode === 'choose') {
+                    return (
+                      <span key={part.id} className="inline-flex items-center gap-2 mx-1">
+                        <span className="text-xs font-semibold text-gray-400">
+                          ({questionNumber})
+                        </span>
+
+                        <select
+                          value={answers[key] || ''}
+                          onChange={e =>
+                            handleNoteCompletion(
+                              question.id,
+                              paragraph.id,
+                              part.id,
+                              e.target.value
+                            )
+                          }
+                          className="border border-gray-200 rounded-xl px-3 py-1.5 text-sm outline-none focus:border-purple-400 bg-white"
+                        >
+                          <option value="">Choose</option>
+
+                          {question.options?.map((option, optionIndex) => {
+                            if (!option?.trim()) return null
+
+                            const letter = letters[optionIndex]
+
+                            return (
+                              <option key={letter} value={letter}>
+                                {letter}. {option}
+                              </option>
+                            )
+                          })}
+                        </select>
+                      </span>
+                    )
+                  }
+
+                  return (
+                    <span key={part.id} className="inline-flex items-center gap-2 mx-1">
+                      <span className="text-xs font-semibold text-gray-400">
+                        ({questionNumber})
+                      </span>
+
+                      <input
+                        value={answers[key] || ''}
+                        onChange={e =>
+                          handleNoteCompletion(
+                            question.id,
+                            paragraph.id,
+                            part.id,
+                            e.target.value
+                          )
+                        }
+                        placeholder="answer"
+                        className="inline-block w-[150px] border border-gray-200 rounded-xl px-3 py-1.5 text-sm outline-none focus:border-purple-400 bg-white"
+                      />
+                    </span>
+                  )
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {question.mode === 'choose' && (
+        <div className="bg-white border border-gray-100 rounded-xl p-4 mt-4">
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
+            Options
+          </p>
+
+          <div className="space-y-2">
+            {question.options?.filter(Boolean).map((option, optionIndex) => (
+              <div
+                key={optionIndex}
+                className="flex gap-2 text-sm text-gray-700 leading-5"
+              >
+                <span className="font-semibold text-gray-500 min-w-6">
+                  {letters[optionIndex]}.
+                </span>
+
+                <span>{option}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
 
   if (!reading) {
     return (
@@ -656,7 +936,7 @@ export default function DoReading() {
                               ? 'bg-blue-50 text-blue-600'
                               : question.type === 'fitb'
                                 ? 'bg-amber-50 text-amber-600'
-                                : (question.type === 'table' || question.type === 'summary')
+                                : (question.type === 'table' || question.type === 'summary' || question.type === 'noteCompletion')
                                   ? 'bg-emerald-50 text-emerald-600'
                                   : 'bg-purple-50 text-purple-600'
                         }`}
@@ -927,7 +1207,11 @@ export default function DoReading() {
                     )}
 
 
-                    {(question.type === 'table' || question.type === 'summary') && (
+                    {question.type === 'noteCompletion' && renderNoteCompletion(question, true)}
+
+                    {question.type === 'noteCompletion' && renderNoteCompletion(question)}
+
+                {(question.type === 'table' || question.type === 'summary') && (
                       <div>
                         <p className="text-sm text-gray-700 mb-4">
                           {question.instruction}
@@ -1022,7 +1306,7 @@ export default function DoReading() {
                       </div>
                     )}
 
-                    {question.type !== 'matching' && question.type !== 'sentenceEndings' && question.type !== 'summaryOptions' && question.type !== 'table' && question.type !== 'summary' && (
+                    {question.type !== 'matching' && question.type !== 'sentenceEndings' && question.type !== 'summaryOptions' && question.type !== 'noteCompletion' && question.type !== 'table' && question.type !== 'summary' && (
                       <div>
                         <p className="text-sm text-gray-800 mb-4">
                           {question.question}
@@ -1196,7 +1480,7 @@ export default function DoReading() {
                           ? 'bg-blue-50 text-blue-600'
                           : question.type === 'fitb'
                             ? 'bg-amber-50 text-amber-600'
-                            : (question.type === 'table' || question.type === 'summary')
+                            : (question.type === 'table' || question.type === 'summary' || question.type === 'noteCompletion')
                               ? 'bg-emerald-50 text-emerald-600'
                               : 'bg-purple-50 text-purple-600'
                     }`}

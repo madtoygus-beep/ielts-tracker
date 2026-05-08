@@ -33,6 +33,10 @@ function tableAnswerKey(questionId, rowId, cellIndex) {
   return `${questionId}_${rowId}_${cellIndex}`
 }
 
+function noteAnswerKey(questionId, paragraphId, partId) {
+  return `${questionId}_${paragraphId}_${partId}`
+}
+
 function mapAnswerKey(questionId, itemId) {
   return `${questionId}_${itemId}`
 }
@@ -137,6 +141,18 @@ function getReadingQuestionCount(question) {
   if (question.type === 'sentenceEndings') return question.items?.length || 0
 
   if (question.type === 'summaryOptions') return question.items?.length || 0
+
+  if (question.type === 'noteCompletion') {
+    let count = 0
+
+    question.paragraphs?.forEach(paragraph => {
+      paragraph.parts?.forEach(part => {
+        if (part.type === 'blank') count++
+      })
+    })
+
+    return count || 1
+  }
 
   if (question.type === 'mcq' && question.mode === 'multi') {
     return question.answers?.length || 2
@@ -367,6 +383,32 @@ function getReadingBlankQuestionNumber(reading, questionId, rowId, cellIndex) {
           if (cell.type !== 'blank') continue
 
           if (row.id === rowId && index === cellIndex) {
+            return number
+          }
+
+          number++
+        }
+      }
+
+      return number
+    }
+
+    number += getReadingQuestionCount(question)
+  }
+
+  return number
+}
+
+function getReadingNoteBlankQuestionNumber(reading, questionId, paragraphId, partId) {
+  let number = 1
+
+  for (const question of reading?.questions || []) {
+    if (question.id === questionId) {
+      for (const paragraph of question.paragraphs || []) {
+        for (const part of paragraph.parts || []) {
+          if (part.type !== 'blank') continue
+
+          if (paragraph.id === paragraphId && part.id === partId) {
             return number
           }
 
@@ -1030,6 +1072,41 @@ export default function DoMockTest() {
     }))
   }
 
+  const handleReadingNoteCompletion = (readingId, questionId, paragraphId, partId, value) => {
+    if (readingLocked) return
+
+    const key = noteAnswerKey(questionId, paragraphId, partId)
+
+    setReadingAnswers(prev => ({
+      ...prev,
+      [readingId]: {
+        ...(prev[readingId] || {}),
+        [key]: value
+      }
+    }))
+  }
+
+  const isReadingNotePartCorrect = (readingId, question, paragraph, part) => {
+    const key = noteAnswerKey(question.id, paragraph.id, part.id)
+    const userAnswer = readingAnswers[readingId]?.[key]
+
+    if (question.mode === 'choose') {
+      return userAnswer?.toString() === part.answer?.toString()
+    }
+
+    return isBlankCorrect(
+      userAnswer,
+      part.answer,
+      part.acceptedAnswers
+    )
+  }
+
+  const getReadingNoteOptionText = (question, letter) => {
+    if (!letter) return 'No answer'
+    const index = letters.indexOf(letter)
+    return question.options?.[index] || `Option ${letter}`
+  }
+
   const isReadingNormalCorrect = (readingId, question) => {
     const value = readingAnswers[readingId]?.[question.id]
 
@@ -1184,6 +1261,22 @@ export default function DoMockTest() {
           if (isReadingSummaryOptionCorrect(reading.id, question, item)) {
             correct++
           }
+        })
+
+        return
+      }
+
+      if (question.type === 'noteCompletion') {
+        question.paragraphs?.forEach(paragraph => {
+          paragraph.parts?.forEach(part => {
+            if (part.type !== 'blank') return
+
+            total++
+
+            if (isReadingNotePartCorrect(reading.id, question, paragraph, part)) {
+              correct++
+            }
+          })
         })
 
         return
@@ -1935,6 +2028,140 @@ export default function DoMockTest() {
     </div>
   )
 
+  const renderReadingNoteCompletion = (reading, question) => (
+    <div>
+      {question.instruction && (
+        <p className="text-sm text-gray-700 mb-4">
+          {question.instruction}
+        </p>
+      )}
+
+      <div className="bg-white border border-gray-100 rounded-xl p-5">
+        {question.title && (
+          <p className="font-semibold text-gray-900 text-center mb-5">
+            {question.title}
+          </p>
+        )}
+
+        <div className="space-y-4">
+          {question.paragraphs?.map(paragraph => (
+            <div key={paragraph.id}>
+              {paragraph.heading && (
+                <p className="text-sm font-bold text-gray-900 mb-1">
+                  {paragraph.heading}
+                </p>
+              )}
+
+              <div className="text-sm md:text-[15px] text-gray-800 leading-8">
+                {paragraph.parts?.map((part, partIndex) => {
+                  if (part.type === 'text') {
+                    return (
+                      <span key={partIndex} className="whitespace-pre-wrap">
+                        {part.content}
+                      </span>
+                    )
+                  }
+
+                  const key = noteAnswerKey(question.id, paragraph.id, part.id)
+                  const questionNumber = getReadingNoteBlankQuestionNumber(
+                    reading,
+                    question.id,
+                    paragraph.id,
+                    part.id
+                  )
+
+                  if (question.mode === 'choose') {
+                    return (
+                      <span key={part.id} className="inline-flex items-center gap-2 mx-1">
+                        <span className="text-xs font-semibold text-gray-400">
+                          ({questionNumber})
+                        </span>
+
+                        <select
+                          value={readingAnswers[reading.id]?.[key] || ''}
+                          onChange={e =>
+                            handleReadingNoteCompletion(
+                              reading.id,
+                              question.id,
+                              paragraph.id,
+                              part.id,
+                              e.target.value
+                            )
+                          }
+                          className="border border-gray-200 rounded-xl px-3 py-1.5 text-sm outline-none focus:border-purple-400 bg-white"
+                        >
+                          <option value="">Choose</option>
+
+                          {question.options?.map((option, optionIndex) => {
+                            if (!option?.trim()) return null
+
+                            const letter = letters[optionIndex]
+
+                            return (
+                              <option key={letter} value={letter}>
+                                {letter}. {option}
+                              </option>
+                            )
+                          })}
+                        </select>
+                      </span>
+                    )
+                  }
+
+                  return (
+                    <span key={part.id} className="inline-flex items-center gap-2 mx-1">
+                      <span className="text-xs font-semibold text-gray-400">
+                        ({questionNumber})
+                      </span>
+
+                      <input
+                        value={readingAnswers[reading.id]?.[key] || ''}
+                        onChange={e =>
+                          handleReadingNoteCompletion(
+                            reading.id,
+                            question.id,
+                            paragraph.id,
+                            part.id,
+                            e.target.value
+                          )
+                        }
+                        placeholder="answer"
+                        className="inline-block w-[150px] border border-gray-200 rounded-xl px-3 py-1.5 text-sm outline-none focus:border-purple-400 bg-white"
+                      />
+                    </span>
+                  )
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {question.mode === 'choose' && (
+        <div className="bg-white border border-gray-100 rounded-xl p-4 mt-4">
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
+            Options
+          </p>
+
+          <div className="space-y-2">
+            {question.options?.filter(Boolean).map((option, optionIndex) => (
+              <div
+                key={optionIndex}
+                className="flex gap-2 text-sm text-gray-700 leading-5"
+              >
+                <span className="font-semibold text-gray-500 min-w-6">
+                  {letters[optionIndex]}.
+                </span>
+
+                <span>{option}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+
   const renderReading = reading => (
     <div className="space-y-6">
       {renderSectionTimerCard()}
@@ -2240,6 +2467,9 @@ export default function DoMockTest() {
                         </div>
                       </div>
                     )}
+
+                    {question.type === 'noteCompletion' &&
+                      renderReadingNoteCompletion(reading, question)}
 
                     {(question.type === 'table' ||
                       question.type === 'summary' ||
