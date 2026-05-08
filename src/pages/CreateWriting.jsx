@@ -111,6 +111,73 @@ export default function CreateWriting() {
     assignTo.includes(student.id)
   )
 
+  const cleanString = value => {
+    if (typeof value === 'string') return value
+    if (value === undefined || value === null) return ''
+    return String(value)
+  }
+
+  const compressImageFile = file => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+
+      reader.onload = () => {
+        const image = new Image()
+
+        image.onload = () => {
+          const maxWidth = 1200
+          const maxHeight = 900
+
+          let { width, height } = image
+
+          if (width > maxWidth || height > maxHeight) {
+            const ratio = Math.min(maxWidth / width, maxHeight / height)
+            width = Math.round(width * ratio)
+            height = Math.round(height * ratio)
+          }
+
+          const canvas = document.createElement('canvas')
+          canvas.width = width
+          canvas.height = height
+
+          const ctx = canvas.getContext('2d')
+          ctx.drawImage(image, 0, 0, width, height)
+
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.78)
+          resolve(dataUrl)
+        }
+
+        image.onerror = () => reject(new Error('Could not read image.'))
+        image.src = reader.result
+      }
+
+      reader.onerror = () => reject(new Error('Could not upload image.'))
+      reader.readAsDataURL(file)
+    })
+  }
+
+  const buildSafePayload = () => ({
+    title: cleanString(title).trim(),
+    dueDate: cleanString(dueDate),
+    assignTo: assignTo.map(id => cleanString(id)).filter(Boolean),
+    timeLimit: 60,
+    task1: {
+      title: cleanString(task1Title).trim() || 'Writing Task 1',
+      prompt: cleanString(task1Prompt),
+      image: cleanString(task1Image),
+      imageName: cleanString(task1ImageName),
+      minimumWords: 150,
+      suggestedMinutes: 20
+    },
+    task2: {
+      title: cleanString(task2Title).trim() || 'Writing Task 2',
+      prompt: cleanString(task2Prompt),
+      minimumWords: 250,
+      suggestedMinutes: 40
+    },
+    updatedAt: new Date().toISOString()
+  })
+
   const toggleStudent = studentId => {
     setAssignTo(prev =>
       prev.includes(studentId)
@@ -129,7 +196,7 @@ export default function CreateWriting() {
     setAssignTo([])
   }
 
-  const handleImageUpload = event => {
+  const handleImageUpload = async event => {
     const file = event.target.files?.[0]
     if (!file) return
 
@@ -138,19 +205,22 @@ export default function CreateWriting() {
       return
     }
 
-    if (file.size > 900 * 1024) {
-      alert('Image is too large. Please upload an image under 900KB for now.')
-      return
-    }
+    try {
+      const compressed = await compressImageFile(file)
 
-    const reader = new FileReader()
+      if (compressed.length > 950000) {
+        alert('Image is still too large after compression. Please upload a smaller image.')
+        event.target.value = ''
+        return
+      }
 
-    reader.onload = () => {
-      setTask1Image(reader.result)
+      setTask1Image(compressed)
       setTask1ImageName(file.name)
+    } catch (error) {
+      console.error(error)
+      alert('Could not upload this image. Please try another image.')
+      event.target.value = ''
     }
-
-    reader.readAsDataURL(file)
   }
 
   const handleSave = async () => {
@@ -181,26 +251,12 @@ export default function CreateWriting() {
 
     setSaving(true)
 
-    const payload = {
-      title: title.trim(),
-      dueDate,
-      assignTo,
-      timeLimit: 60,
-      task1: {
-        title: task1Title.trim() || 'Writing Task 1',
-        prompt: task1Prompt,
-        image: task1Image,
-        imageName: task1ImageName,
-        minimumWords: 150,
-        suggestedMinutes: 20
-      },
-      task2: {
-        title: task2Title.trim() || 'Writing Task 2',
-        prompt: task2Prompt,
-        minimumWords: 250,
-        suggestedMinutes: 40
-      },
-      updatedAt: new Date().toISOString()
+    const payload = buildSafePayload()
+
+    if (!payload.task1.image.startsWith('data:image/')) {
+      alert('Task 1 image is not valid. Please remove it and upload the image again.')
+      setSaving(false)
+      return
     }
 
     try {
@@ -222,7 +278,7 @@ export default function CreateWriting() {
       }, 1000)
     } catch (error) {
       console.error(error)
-      alert('Could not save writing homework.')
+      alert(`Could not save writing homework. ${error?.message || ''}`)
     } finally {
       setSaving(false)
     }
@@ -345,7 +401,7 @@ export default function CreateWriting() {
                 />
 
                 <p className="text-xs text-gray-400 mt-2">
-                  Upload a chart, graph, map, diagram or process image. Max 900KB.
+                  Upload a chart, graph, map, diagram or process image. Images are compressed automatically before saving.
                 </p>
               </div>
 
