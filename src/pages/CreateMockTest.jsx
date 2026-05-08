@@ -25,6 +25,7 @@ export default function CreateMockTest() {
   const [listenings, setListenings] = useState([])
   const [writings, setWritings] = useState([])
   const [students, setStudents] = useState([])
+  const [classes, setClasses] = useState([])
 
   const [listeningIds, setListeningIds] = useState(['', '', '', ''])
   const [readingIds, setReadingIds] = useState(['', '', ''])
@@ -125,10 +126,21 @@ export default function CreateMockTest() {
     const unsubStudents = onSnapshot(studentsQuery, snap => {
       const list = snap.docs
         .map(d => ({ id: d.id, ...d.data() }))
-        .filter(student => student.status === 'approved' || !student.status)
+        .filter(student => student.status === 'approved' && student.deleted !== true)
 
-      list.sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+      list.sort((a, b) =>
+        (a.name || a.email || '').localeCompare(b.name || b.email || '')
+      )
       setStudents(list)
+    })
+
+    const unsubClasses = onSnapshot(collection(db, 'classes'), snap => {
+      const list = snap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .filter(classItem => classItem.archived !== true)
+        .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+
+      setClasses(list)
     })
 
     return () => {
@@ -136,6 +148,7 @@ export default function CreateMockTest() {
       unsubListenings()
       unsubWritings()
       unsubStudents()
+      unsubClasses()
     }
   }, [user])
 
@@ -206,6 +219,42 @@ export default function CreateMockTest() {
 
   const clearAssignments = () => {
     setAssignTo([])
+  }
+
+  const assignClassToMock = classItem => {
+    const classStudentIds = classItem.studentIds || []
+
+    if (classStudentIds.length === 0) {
+      alert('This class has no students yet.')
+      return
+    }
+
+    setAssignTo(prev => Array.from(new Set([...prev, ...classStudentIds])))
+  }
+
+  const removeClassFromMock = classItem => {
+    const classStudentIds = classItem.studentIds || []
+
+    setAssignTo(prev =>
+      prev.filter(studentId => !classStudentIds.includes(studentId))
+    )
+  }
+
+  const isClassFullyAssigned = classItem => {
+    const classStudentIds = classItem.studentIds || []
+    if (classStudentIds.length === 0) return false
+    return classStudentIds.every(studentId => assignTo.includes(studentId))
+  }
+
+  const isClassPartlyAssigned = classItem => {
+    const classStudentIds = classItem.studentIds || []
+    if (classStudentIds.length === 0) return false
+    return classStudentIds.some(studentId => assignTo.includes(studentId))
+  }
+
+  const getStudentName = studentId => {
+    const student = students.find(item => item.id === studentId)
+    return student?.name || student?.email || 'Unknown student'
   }
 
   const handleSave = async () => {
@@ -503,6 +552,79 @@ export default function CreateMockTest() {
             <p className="text-xs text-gray-400 mb-4">
               Selected students will receive this full mock test.
             </p>
+
+            {classes.length > 0 && (
+              <div className="bg-purple-50 border border-purple-100 rounded-2xl p-4 mb-4">
+                <p className="text-sm font-semibold text-purple-800 mb-1">
+                  Assign by Class
+                </p>
+                <p className="text-xs text-purple-500 mb-3">
+                  Add all students from a class in one click.
+                </p>
+
+                <div className="flex flex-col gap-2">
+                  {classes.map(classItem => {
+                    const classStudentIds = classItem.studentIds || []
+                    const fullyAssigned = isClassFullyAssigned(classItem)
+                    const partlyAssigned = isClassPartlyAssigned(classItem)
+
+                    return (
+                      <div
+                        key={classItem.id}
+                        className={`bg-white border rounded-xl p-3 ${
+                          fullyAssigned
+                            ? 'border-purple-300'
+                            : partlyAssigned
+                              ? 'border-amber-200'
+                              : 'border-gray-100'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium text-gray-800 truncate">
+                              {classItem.name}
+                            </p>
+
+                            <p className="text-xs text-gray-400 mt-0.5">
+                              {classStudentIds.length} student{classStudentIds.length === 1 ? '' : 's'}
+                              {partlyAssigned && !fullyAssigned ? ' · partly selected' : ''}
+                              {fullyAssigned ? ' · selected' : ''}
+                            </p>
+
+                            {classStudentIds.length > 0 && (
+                              <p className="text-[11px] text-gray-400 mt-1 truncate">
+                                {classStudentIds.slice(0, 2).map(getStudentName).join(', ')}
+                                {classStudentIds.length > 2
+                                  ? ` +${classStudentIds.length - 2} more`
+                                  : ''}
+                              </p>
+                            )}
+                          </div>
+
+                          {fullyAssigned ? (
+                            <button
+                              type="button"
+                              onClick={() => removeClassFromMock(classItem)}
+                              className="text-xs bg-red-50 text-red-500 px-3 py-1.5 rounded-lg hover:bg-red-100 flex-shrink-0"
+                            >
+                              Remove
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => assignClassToMock(classItem)}
+                              className="text-xs bg-purple-600 text-white px-3 py-1.5 rounded-lg hover:bg-purple-700 flex-shrink-0"
+                            >
+                              Add
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
 
             <input
               value={search}
