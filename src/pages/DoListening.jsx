@@ -49,6 +49,18 @@ function getListeningQuestionCount(question) {
     return count || 1
   }
 
+  if (question.type === 'listeningCompletion') {
+    let count = 0
+
+    question.sections?.forEach(section => {
+      section.parts?.forEach(part => {
+        if (part.type === 'blank') count++
+      })
+    })
+
+    return count || 1
+  }
+
   if (question.type === 'map') {
     return question.mapItems?.length || 0
   }
@@ -111,6 +123,34 @@ function getBlankQuestionNumber(parts, partId, questionId, rowId, cellIndex) {
             if (cell.type !== 'blank') continue
 
             if (part.id === partId && row.id === rowId && index === cellIndex) {
+              return number
+            }
+
+            number++
+          }
+        }
+
+        return number
+      }
+
+      number += getListeningQuestionCount(question)
+    }
+  }
+
+  return number
+}
+
+function getCompletionBlankQuestionNumber(parts, partId, questionId, sectionId, itemId) {
+  let number = 1
+
+  for (const part of parts || []) {
+    for (const question of part.questions || []) {
+      if (question.id === questionId) {
+        for (const section of question.sections || []) {
+          for (const item of section.parts || []) {
+            if (item.type !== 'blank') continue
+
+            if (part.id === partId && section.id === sectionId && item.id === itemId) {
               return number
             }
 
@@ -372,6 +412,9 @@ export default function DoListening() {
     return `${questionId}_${rowId}_${cellIndex}`
   }
 
+  const completionAnswerKey = (questionId, sectionId, itemId) => {
+    return `${questionId}_${sectionId}_${itemId}`
+  }
 
   const mapAnswerKey = (questionId, itemId) => {
     return `${questionId}_${itemId}`
@@ -393,6 +436,15 @@ export default function DoListening() {
     }))
   }
 
+
+  const handleCompletionAnswer = (questionId, sectionId, itemId, value) => {
+    const key = completionAnswerKey(questionId, sectionId, itemId)
+
+    setAnswers(prev => ({
+      ...prev,
+      [key]: value
+    }))
+  }
 
   const handleMapAnswer = (questionId, itemId, value) => {
     const key = mapAnswerKey(questionId, itemId)
@@ -482,6 +534,34 @@ export default function DoListening() {
   }
 
 
+  const isCompletionPartCorrect = (question, section, item) => {
+    const key = completionAnswerKey(question.id, section.id, item.id)
+    const userAnswer = answers[key]
+
+    if (question.completionMode === 'choose') {
+      return userAnswer?.toString().trim() === item.answer?.toString().trim()
+    }
+
+    const acceptedAnswers = [
+      item.answer,
+      ...(item.acceptedAnswers
+        ? item.acceptedAnswers.split(',').map(answer => answer.trim()).filter(Boolean)
+        : [])
+    ].map(normalize)
+
+    if (!normalize(userAnswer)) return false
+    if (acceptedAnswers.length === 0) return false
+    if (!isWithinWordLimit(userAnswer, item.maxWords)) return false
+
+    return acceptedAnswers.includes(normalize(userAnswer))
+  }
+
+  const getCompletionOptionText = (question, letter) => {
+    if (!letter) return 'No answer'
+    const index = letters.indexOf(letter)
+    return question.options?.[index] || `Option ${letter}`
+  }
+
   const isMapItemCorrect = (question, item) => {
     const key = mapAnswerKey(question.id, item.id)
     const userAnswer = normalize(answers[key])
@@ -507,6 +587,22 @@ export default function DoListening() {
               if (isTableCellCorrect(question, row, cellIndex)) {
                 correct++
               }
+            }
+          })
+        })
+
+        return
+      }
+
+      if (question.type === 'listeningCompletion') {
+        question.sections?.forEach(section => {
+          section.parts?.forEach(item => {
+            if (item.type !== 'blank') return
+
+            total++
+
+            if (isCompletionPartCorrect(question, section, item)) {
+              correct++
             }
           })
         })
@@ -580,6 +676,170 @@ export default function DoListening() {
       setSubmitting(false)
     }
   }
+
+  const renderListeningCompletion = (question, partId, reviewMode = false) => (
+    <div>
+      {question.instruction && (
+        <p className="text-sm text-gray-700 mb-4">
+          {question.instruction}
+        </p>
+      )}
+
+      <div className="bg-white border border-gray-100 rounded-xl p-5">
+        {question.completionTitle && (
+          <p className="font-semibold text-gray-900 text-center mb-5">
+            {question.completionTitle}
+          </p>
+        )}
+
+        <div className="space-y-4">
+          {question.sections?.map(section => (
+            <div key={section.id}>
+              {section.heading && (
+                <p className="text-sm font-bold text-gray-900 mb-1">
+                  {section.heading}
+                </p>
+              )}
+
+              <div className="text-sm md:text-[15px] text-gray-800 leading-8">
+                {section.parts?.map((item, itemIndex) => {
+                  if (item.type === 'text') {
+                    return (
+                      <span key={itemIndex} className="whitespace-pre-wrap">
+                        {item.content}
+                      </span>
+                    )
+                  }
+
+                  const key = completionAnswerKey(question.id, section.id, item.id)
+                  const questionNumber = getCompletionBlankQuestionNumber(
+                    parts,
+                    partId,
+                    question.id,
+                    section.id,
+                    item.id
+                  )
+                  const correct = isCompletionPartCorrect(question, section, item)
+
+                  if (reviewMode) {
+                    return (
+                      <span
+                        key={item.id}
+                        className={`inline-flex items-center gap-2 mx-1 px-2 py-1 rounded-xl border ${
+                          correct
+                            ? 'bg-green-50 border-green-100'
+                            : 'bg-red-50 border-red-100'
+                        }`}
+                      >
+                        <span className="text-xs font-semibold text-purple-600">
+                          Q{questionNumber}
+                        </span>
+
+                        <span className="font-medium text-gray-800">
+                          {answers[key] || 'No answer'}
+                        </span>
+
+                        {!correct && (
+                          <span className="text-xs font-semibold text-green-700">
+                            Correct:{' '}
+                            {question.completionMode === 'choose'
+                              ? `${item.answer}. ${getCompletionOptionText(question, item.answer)}`
+                              : [item.answer, item.acceptedAnswers].filter(Boolean).join(', ')}
+                          </span>
+                        )}
+                      </span>
+                    )
+                  }
+
+                  if (question.completionMode === 'choose') {
+                    return (
+                      <span key={item.id} className="inline-flex items-center gap-2 mx-1">
+                        <span className="text-xs font-semibold text-gray-400">
+                          Q{questionNumber}
+                        </span>
+
+                        <select
+                          value={answers[key] || ''}
+                          onChange={e =>
+                            handleCompletionAnswer(
+                              question.id,
+                              section.id,
+                              item.id,
+                              e.target.value
+                            )
+                          }
+                          className="border border-gray-200 rounded-xl px-3 py-1.5 text-sm outline-none focus:border-purple-400 bg-white"
+                        >
+                          <option value="">Choose</option>
+
+                          {question.options?.map((option, optionIndex) => {
+                            if (!option?.trim()) return null
+
+                            const letter = letters[optionIndex]
+
+                            return (
+                              <option key={letter} value={letter}>
+                                {letter}. {option}
+                              </option>
+                            )
+                          })}
+                        </select>
+                      </span>
+                    )
+                  }
+
+                  return (
+                    <span key={item.id} className="inline-flex items-center gap-2 mx-1">
+                      <span className="text-xs font-semibold text-gray-400">
+                        Q{questionNumber}
+                      </span>
+
+                      <input
+                        value={answers[key] || ''}
+                        onChange={e =>
+                          handleCompletionAnswer(
+                            question.id,
+                            section.id,
+                            item.id,
+                            e.target.value
+                          )
+                        }
+                        placeholder="answer"
+                        className="inline-block w-[150px] border border-gray-200 rounded-xl px-3 py-1.5 text-sm outline-none focus:border-purple-400 bg-white"
+                      />
+                    </span>
+                  )
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {question.completionMode === 'choose' && (
+        <div className="bg-white border border-gray-100 rounded-xl p-4 mt-4">
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
+            Options
+          </p>
+
+          <div className="space-y-2">
+            {question.options?.filter(Boolean).map((option, optionIndex) => (
+              <div
+                key={optionIndex}
+                className="flex gap-2 text-sm text-gray-700 leading-5"
+              >
+                <span className="font-semibold text-gray-500 min-w-6">
+                  {letters[optionIndex]}.
+                </span>
+
+                <span>{option}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
 
   if (!listening) {
     return (
@@ -671,7 +931,7 @@ export default function DoListening() {
                             ? 'bg-amber-50 text-amber-600'
                             : question.type === 'map'
                               ? 'bg-indigo-50 text-indigo-600'
-                              : (question.type === 'table' || question.type === 'note')
+                              : (question.type === 'table' || question.type === 'note' || question.type === 'listeningCompletion')
                               ? 'bg-emerald-50 text-emerald-600'
                               : 'bg-purple-50 text-purple-600'
                       }`}
@@ -680,8 +940,8 @@ export default function DoListening() {
                         ? 'T/F/NG'
                         : question.type === 'fitb'
                           ? 'Fill blank'
-                          : (question.type === 'table' || question.type === 'note')
-                            ? question.type === 'note' ? 'Note Completion' : 'Table / Form Completion'
+                          : (question.type === 'table' || question.type === 'note' || question.type === 'listeningCompletion')
+                            ? question.type === 'listeningCompletion' ? 'Note/Summary Completion' : question.type === 'note' ? 'Note Completion' : 'Table / Form Completion'
                             : question.type === 'map'
                               ? 'Map Labeling'
                               : question.mode === 'multi'
@@ -691,7 +951,9 @@ export default function DoListening() {
                   </div>
 
 
-                  {question.type === 'map' ? (
+                  {question.type === 'listeningCompletion' ? (
+                    renderListeningCompletion(question, part.id, true)
+                  ) : question.type === 'map' ? (
                     <div>
                       <p className="text-sm text-gray-700 mb-4">
                         {question.instruction}
@@ -1040,7 +1302,7 @@ export default function DoListening() {
                           ? 'bg-amber-50 text-amber-600'
                           : question.type === 'map'
                             ? 'bg-indigo-50 text-indigo-600'
-                            : (question.type === 'table' || question.type === 'note')
+                            : (question.type === 'table' || question.type === 'note' || question.type === 'listeningCompletion')
                             ? 'bg-emerald-50 text-emerald-600'
                             : 'bg-purple-50 text-purple-600'
                     }`}
@@ -1049,8 +1311,8 @@ export default function DoListening() {
                       ? 'T/F/NG'
                       : question.type === 'fitb'
                         ? 'Fill blank'
-                        : (question.type === 'table' || question.type === 'note')
-                          ? question.type === 'note' ? 'Note Completion' : 'Table / Form Completion'
+                        : (question.type === 'table' || question.type === 'note' || question.type === 'listeningCompletion')
+                          ? question.type === 'listeningCompletion' ? 'Note/Summary Completion' : question.type === 'note' ? 'Note Completion' : 'Table / Form Completion'
                           : question.type === 'map'
                             ? 'Map Labeling'
                             : question.mode === 'multi'
@@ -1058,6 +1320,9 @@ export default function DoListening() {
                             : 'MCQ'}
                   </span>
                 </div>
+
+                {question.type === 'listeningCompletion' &&
+                  renderListeningCompletion(question, activePart?.id)}
 
                 {question.type === 'tfng' && (
                   <div>

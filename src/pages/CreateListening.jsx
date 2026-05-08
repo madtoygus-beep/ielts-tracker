@@ -59,6 +59,39 @@ const emptyTableRow = columns => ({
   }))
 })
 
+const emptyCompletionText = () => ({
+  id: crypto.randomUUID(),
+  type: 'text',
+  content: ''
+})
+
+const emptyCompletionBlank = () => ({
+  id: crypto.randomUUID(),
+  type: 'blank',
+  answer: '',
+  acceptedAnswers: '',
+  maxWords: ''
+})
+
+const emptyCompletionSection = () => ({
+  id: crypto.randomUUID(),
+  heading: '',
+  parts: [emptyCompletionText(), emptyCompletionBlank(), emptyCompletionText()]
+})
+
+const ensureCompletionQuestion = question => ({
+  ...question,
+  type: 'listeningCompletion',
+  completionTitle: question.completionTitle || '',
+  instruction:
+    question.instruction ||
+    'Complete the notes below. Write ONE WORD AND/OR A NUMBER for each answer.',
+  completionMode: question.completionMode || 'type',
+  options: question.options?.length ? question.options : ['', '', '', '', '', '', '', ''],
+  sections: question.sections?.length ? question.sections : [emptyCompletionSection()],
+  question: question.question || ''
+})
+
 const emptyPart = number => ({
   id: crypto.randomUUID(),
   title: `Part ${number}`,
@@ -298,6 +331,18 @@ export default function CreateListening() {
       return count || 1
     }
 
+    if (question.type === 'listeningCompletion') {
+      let count = 0
+
+      question.sections?.forEach(section => {
+        section.parts?.forEach(part => {
+          if (part.type === 'blank') count++
+        })
+      })
+
+      return count || 1
+    }
+
     if (question.type === 'map') {
       return question.mapItems?.length || 0
     }
@@ -318,6 +363,34 @@ export default function CreateListening() {
               if (cell.type !== 'blank') continue
 
               if (part.id === partId && row.id === rowId && index === cellIndex) {
+                return number
+              }
+
+              number++
+            }
+          }
+
+          return number
+        }
+
+        number += getListeningQuestionPointCount(question)
+      }
+    }
+
+    return number
+  }
+
+  const getListeningCompletionBlankNumber = (partId, questionId, sectionId, partItemId) => {
+    let number = 1
+
+    for (const part of parts || []) {
+      for (const question of part.questions || []) {
+        if (question.id === questionId) {
+          for (const section of question.sections || []) {
+            for (const item of section.parts || []) {
+              if (item.type !== 'blank') continue
+
+              if (part.id === partId && section.id === sectionId && item.id === partItemId) {
                 return number
               }
 
@@ -399,6 +472,10 @@ export default function CreateListening() {
                 ? question.mapItems
                 : [{ id: crypto.randomUUID(), prompt: '', answer: '' }]
             }
+          }
+
+          if (value === 'listeningCompletion') {
+            return ensureCompletionQuestion(question)
           }
 
           return {
@@ -579,6 +656,151 @@ export default function CreateListening() {
   }
 
 
+  const updateCompletionOption = (questionId, optionIndex, value) => {
+    setQuestions(prev =>
+      prev.map(question => {
+        if (question.id !== questionId) return question
+
+        const options = [...(question.options || ['', '', '', '', '', '', '', ''])]
+        options[optionIndex] = value
+
+        return {
+          ...question,
+          options
+        }
+      })
+    )
+  }
+
+  const updateCompletionSection = (questionId, sectionId, key, value) => {
+    setQuestions(prev =>
+      prev.map(question => {
+        if (question.id !== questionId) return question
+
+        return {
+          ...question,
+          sections: (question.sections || []).map(section =>
+            section.id === sectionId
+              ? {
+                  ...section,
+                  [key]: value
+                }
+              : section
+          )
+        }
+      })
+    )
+  }
+
+  const addCompletionSection = questionId => {
+    setQuestions(prev =>
+      prev.map(question => {
+        if (question.id !== questionId) return question
+
+        return {
+          ...question,
+          sections: [
+            ...(question.sections || []),
+            emptyCompletionSection()
+          ]
+        }
+      })
+    )
+  }
+
+  const removeCompletionSection = (questionId, sectionId) => {
+    setQuestions(prev =>
+      prev.map(question => {
+        if (question.id !== questionId) return question
+
+        if ((question.sections || []).length <= 1) {
+          alert('Completion question needs at least one section.')
+          return question
+        }
+
+        return {
+          ...question,
+          sections: question.sections.filter(section => section.id !== sectionId)
+        }
+      })
+    )
+  }
+
+  const updateCompletionPart = (questionId, sectionId, partId, key, value) => {
+    setQuestions(prev =>
+      prev.map(question => {
+        if (question.id !== questionId) return question
+
+        return {
+          ...question,
+          sections: (question.sections || []).map(section => {
+            if (section.id !== sectionId) return section
+
+            return {
+              ...section,
+              parts: (section.parts || []).map(part =>
+                part.id === partId
+                  ? {
+                      ...part,
+                      [key]: value
+                    }
+                  : part
+              )
+            }
+          })
+        }
+      })
+    )
+  }
+
+  const addCompletionPart = (questionId, sectionId, type) => {
+    setQuestions(prev =>
+      prev.map(question => {
+        if (question.id !== questionId) return question
+
+        return {
+          ...question,
+          sections: (question.sections || []).map(section => {
+            if (section.id !== sectionId) return section
+
+            return {
+              ...section,
+              parts: [
+                ...(section.parts || []),
+                type === 'blank' ? emptyCompletionBlank() : emptyCompletionText()
+              ]
+            }
+          })
+        }
+      })
+    )
+  }
+
+  const removeCompletionPart = (questionId, sectionId, partId) => {
+    setQuestions(prev =>
+      prev.map(question => {
+        if (question.id !== questionId) return question
+
+        return {
+          ...question,
+          sections: (question.sections || []).map(section => {
+            if (section.id !== sectionId) return section
+
+            if ((section.parts || []).length <= 1) {
+              alert('Section needs at least one item.')
+              return section
+            }
+
+            return {
+              ...section,
+              parts: section.parts.filter(part => part.id !== partId)
+            }
+          })
+        }
+      })
+    )
+  }
+
   const updateMapLocation = (questionId, locationId, key, value) => {
     setQuestions(prev =>
       prev.map(question => {
@@ -693,6 +915,16 @@ export default function CreateListening() {
     clone.rows = clone.rows?.map(row => ({ ...row, id: crypto.randomUUID() })) || []
     clone.mapLocations = clone.mapLocations?.map(location => ({ ...location, id: crypto.randomUUID() })) || []
     clone.mapItems = clone.mapItems?.map(item => ({ ...item, id: crypto.randomUUID() })) || []
+    clone.sections =
+      clone.sections?.map(section => ({
+        ...section,
+        id: crypto.randomUUID(),
+        parts:
+          section.parts?.map(part => ({
+            ...part,
+            id: crypto.randomUUID()
+          })) || []
+      })) || []
 
     setQuestions(prev => [...prev, clone])
   }
@@ -719,7 +951,7 @@ export default function CreateListening() {
       }
 
       for (const question of part.questions) {
-      if (question.type !== 'table' && !question.question.trim()) {
+      if (question.type !== 'table' && question.type !== 'note' && question.type !== 'map' && question.type !== 'listeningCompletion' && !question.question.trim()) {
         alert('Please fill in every question text.')
         return false
       }
@@ -772,6 +1004,42 @@ export default function CreateListening() {
         if (blankCount === 0) {
           alert('Table / form completion needs at least one blank answer cell.')
           return false
+        }
+      }
+
+      if (question.type === 'listeningCompletion') {
+        let blankCount = 0
+
+        for (const section of question.sections || []) {
+          for (const item of section.parts || []) {
+            if (item.type !== 'blank') continue
+
+            blankCount++
+
+            if (question.completionMode === 'choose') {
+              if (!item.answer) {
+                alert('Every listening completion blank needs a correct option.')
+                return false
+              }
+            } else if (!item.answer?.trim()) {
+              alert('Every listening completion blank needs a correct answer.')
+              return false
+            }
+          }
+        }
+
+        if (blankCount === 0) {
+          alert('Listening completion needs at least one blank.')
+          return false
+        }
+
+        if (question.completionMode === 'choose') {
+          const cleanOptions = question.options?.filter(option => option.trim()) || []
+
+          if (cleanOptions.length < 2) {
+            alert('Choose A-H mode needs at least 2 options.')
+            return false
+          }
         }
       }
 
@@ -1136,7 +1404,8 @@ export default function CreateListening() {
                           <option value="fitb">Fill in the Blank</option>
                           <option value="tfng">True / False / Not Given</option>
                           <option value="table">Table / Form Completion</option>
-                          <option value="note">Note Completion</option>
+                          <option value="note">Note Completion Legacy</option>
+                          <option value="listeningCompletion">Note/Summary Completion New</option>
                           <option value="map">Map Labeling</option>
                         </select>
                       </div>
@@ -1157,9 +1426,26 @@ export default function CreateListening() {
                           </select>
                         </div>
                       )}
+
+                      {question.type === 'listeningCompletion' && (
+                        <div>
+                          <label className="text-xs text-gray-400 mb-1 block">
+                            Completion mode
+                          </label>
+
+                          <select
+                            value={question.completionMode || 'type'}
+                            onChange={e => updateQuestion(question.id, 'completionMode', e.target.value)}
+                            className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 bg-white"
+                          >
+                            <option value="type">Type Answer</option>
+                            <option value="choose">Choose A-H</option>
+                          </select>
+                        </div>
+                      )}
                     </div>
 
-                    {question.type !== 'table' && question.type !== 'note' && question.type !== 'map' && (
+                    {question.type !== 'table' && question.type !== 'note' && question.type !== 'map' && question.type !== 'listeningCompletion' && (
                       <div className="mb-4">
                         <label className="text-xs text-gray-400 mb-1 block">
                           Question text
@@ -1272,6 +1558,248 @@ export default function CreateListening() {
                               {option}
                             </button>
                           ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {question.type === 'listeningCompletion' && (
+                      <div>
+                        <div className="mb-4">
+                          <label className="text-xs text-gray-400 mb-1 block">
+                            Instruction
+                          </label>
+
+                          <textarea
+                            rows={3}
+                            value={question.instruction || ''}
+                            onChange={e => updateQuestion(question.id, 'instruction', e.target.value)}
+                            placeholder="Complete the notes below. Write ONE WORD AND/OR A NUMBER for each answer."
+                            className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 resize-none bg-white"
+                          />
+                        </div>
+
+                        <div className="mb-4">
+                          <label className="text-xs text-gray-400 mb-1 block">
+                            Title / optional
+                          </label>
+
+                          <input
+                            value={question.completionTitle || ''}
+                            onChange={e => updateQuestion(question.id, 'completionTitle', e.target.value)}
+                            placeholder="e.g. Notes on library registration"
+                            className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white"
+                          />
+                        </div>
+
+                        {question.completionMode === 'choose' && (
+                          <div className="bg-white border border-gray-100 rounded-2xl p-4 mb-4">
+                            <p className="text-sm font-semibold text-gray-800 mb-3">
+                              Options A-H
+                            </p>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                              {(question.options || ['', '', '', '', '', '', '', '']).map((option, optionIndex) => (
+                                <div key={optionIndex} className="grid grid-cols-[36px_1fr] gap-2 items-center">
+                                  <span className="text-sm font-semibold text-gray-500">
+                                    {letters[optionIndex]}.
+                                  </span>
+
+                                  <input
+                                    value={option}
+                                    onChange={e => updateCompletionOption(question.id, optionIndex, e.target.value)}
+                                    placeholder={`Option ${letters[optionIndex]}`}
+                                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 bg-white"
+                                  />
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="flex items-center justify-between mb-3">
+                          <div>
+                            <p className="text-sm font-semibold text-gray-800">
+                              Sections
+                            </p>
+
+                            <p className="text-xs text-gray-400">
+                              Build the note/summary as text and blanks.
+                            </p>
+                          </div>
+
+                          <button
+                            onClick={() => addCompletionSection(question.id)}
+                            className="text-xs bg-green-50 text-green-600 px-3 py-2 rounded-xl hover:bg-green-100"
+                          >
+                            + Add Section
+                          </button>
+                        </div>
+
+                        <div className="flex flex-col gap-4">
+                          {(question.sections || []).map(section => (
+                            <div key={section.id} className="bg-white border border-gray-100 rounded-2xl p-4">
+                              <div className="grid grid-cols-[1fr_80px] gap-2 mb-3">
+                                <input
+                                  value={section.heading || ''}
+                                  onChange={e => updateCompletionSection(question.id, section.id, 'heading', e.target.value)}
+                                  placeholder="Section heading, e.g. Questions 1-4 / Transport"
+                                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 bg-white"
+                                />
+
+                                <button
+                                  onClick={() => removeCompletionSection(question.id, section.id)}
+                                  className="text-xs bg-red-50 text-red-500 rounded-xl hover:bg-red-100"
+                                >
+                                  Delete
+                                </button>
+                              </div>
+
+                              <div className="flex flex-col gap-2 mb-3">
+                                {(section.parts || []).map(item => (
+                                  <div key={item.id} className="bg-gray-50 border border-gray-100 rounded-xl p-3">
+                                    <div className="flex items-center justify-between mb-2">
+                                      <span className={`text-xs px-2 py-1 rounded-full ${
+                                        item.type === 'blank'
+                                          ? 'bg-purple-50 text-purple-600'
+                                          : 'bg-gray-100 text-gray-500'
+                                      }`}>
+                                        {item.type === 'blank'
+                                          ? `Blank Q${getListeningCompletionBlankNumber(activePart.id, question.id, section.id, item.id)}`
+                                          : 'Text'}
+                                      </span>
+
+                                      <button
+                                        onClick={() => removeCompletionPart(question.id, section.id, item.id)}
+                                        className="text-xs text-red-500"
+                                      >
+                                        Remove
+                                      </button>
+                                    </div>
+
+                                    {item.type === 'text' ? (
+                                      <textarea
+                                        rows={2}
+                                        value={item.content || ''}
+                                        onChange={e => updateCompletionPart(question.id, section.id, item.id, 'content', e.target.value)}
+                                        placeholder="Visible text..."
+                                        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-xs outline-none focus:border-purple-400 bg-white resize-none"
+                                      />
+                                    ) : (
+                                      <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                                        {question.completionMode === 'choose' ? (
+                                          <select
+                                            value={item.answer || ''}
+                                            onChange={e => updateCompletionPart(question.id, section.id, item.id, 'answer', e.target.value)}
+                                            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-xs outline-none focus:border-purple-400 bg-white"
+                                          >
+                                            <option value="">Correct option</option>
+
+                                            {(question.options || []).map((option, optionIndex) => {
+                                              if (!option?.trim()) return null
+
+                                              const letter = letters[optionIndex]
+
+                                              return (
+                                                <option key={letter} value={letter}>
+                                                  {letter}. {option}
+                                                </option>
+                                              )
+                                            })}
+                                          </select>
+                                        ) : (
+                                          <input
+                                            value={item.answer || ''}
+                                            onChange={e => updateCompletionPart(question.id, section.id, item.id, 'answer', e.target.value)}
+                                            placeholder="Correct answer"
+                                            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-xs outline-none focus:border-purple-400 bg-white"
+                                          />
+                                        )}
+
+                                        <input
+                                          value={item.acceptedAnswers || ''}
+                                          onChange={e => updateCompletionPart(question.id, section.id, item.id, 'acceptedAnswers', e.target.value)}
+                                          placeholder="Alternatives, comma separated"
+                                          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-xs outline-none focus:border-purple-400 bg-white"
+                                        />
+
+                                        <select
+                                          value={item.maxWords || ''}
+                                          onChange={e => updateCompletionPart(question.id, section.id, item.id, 'maxWords', e.target.value)}
+                                          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-xs outline-none focus:border-purple-400 bg-white"
+                                        >
+                                          <option value="">No word limit</option>
+                                          <option value="1">ONE WORD / NUMBER</option>
+                                          <option value="2">NO MORE THAN TWO WORDS</option>
+                                          <option value="3">NO MORE THAN THREE WORDS</option>
+                                        </select>
+                                      </div>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+
+                              <div className="flex gap-2">
+                                <button
+                                  onClick={() => addCompletionPart(question.id, section.id, 'text')}
+                                  className="text-xs bg-gray-100 text-gray-600 px-3 py-2 rounded-xl hover:bg-gray-200"
+                                >
+                                  + Text
+                                </button>
+
+                                <button
+                                  onClick={() => addCompletionPart(question.id, section.id, 'blank')}
+                                  className="text-xs bg-purple-50 text-purple-600 px-3 py-2 rounded-xl hover:bg-purple-100"
+                                >
+                                  + Blank
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+
+                        <div className="bg-green-50 border border-green-100 rounded-2xl p-4 mt-4">
+                          <p className="text-xs font-semibold text-green-700 mb-3">
+                            Preview
+                          </p>
+
+                          <div className="bg-white rounded-xl p-5 text-sm text-gray-800 leading-8">
+                            {question.completionTitle && (
+                              <p className="text-center font-semibold text-gray-900 mb-4">
+                                {question.completionTitle}
+                              </p>
+                            )}
+
+                            {(question.sections || []).map(section => (
+                              <div key={section.id} className="mb-3">
+                                {section.heading && (
+                                  <p className="font-bold text-gray-900 mb-1">
+                                    {section.heading}
+                                  </p>
+                                )}
+
+                                <p>
+                                  {(section.parts || []).map(item => {
+                                    if (item.type === 'text') {
+                                      return (
+                                        <span key={item.id} className="whitespace-pre-wrap">
+                                          {item.content}
+                                        </span>
+                                      )
+                                    }
+
+                                    return (
+                                      <span
+                                        key={item.id}
+                                        className="inline-block bg-green-50 border border-green-200 text-green-700 font-semibold rounded-md px-2 py-1 mx-1"
+                                      >
+                                        ({getListeningCompletionBlankNumber(activePart.id, question.id, section.id, item.id)}) ..........
+                                      </span>
+                                    )
+                                  })}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
                         </div>
                       </div>
                     )}
