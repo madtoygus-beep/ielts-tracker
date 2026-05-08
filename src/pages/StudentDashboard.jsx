@@ -441,14 +441,16 @@
       })
     })
 
-    const typeAnalytics = Object.entries(stats).map(([key, value]) => ({
-      key,
-      correct: value.correct,
-      total: value.total,
-      percentage: value.total
-        ? Math.round((value.correct / value.total) * 100)
-        : null
-    }))
+    const typeAnalytics = Object.entries(stats)
+      .map(([key, value]) => ({
+        key,
+        correct: value.correct,
+        total: value.total,
+        percentage: value.total
+          ? Math.round((value.correct / value.total) * 100)
+          : null
+      }))
+      .filter(item => item.total > 0)
 
     const attemptedTypes = typeAnalytics.filter(item => item.total > 0)
 
@@ -708,9 +710,14 @@
             Accuracy by Question Type
           </h3>
 
-          <div className="flex flex-col gap-3">
-            {analytics.typeAnalytics.map(item => (
-              <div key={item.key}>
+          {analytics.typeAnalytics.length === 0 ? (
+            <p className="text-sm text-gray-400">
+              No completed question-type data yet.
+            </p>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {analytics.typeAnalytics.map(item => (
+                <div key={item.key}>
                 <div className="flex justify-between mb-1">
                   <p className="text-xs text-gray-500">
                     {getQuestionTypeLabel(item.key)}
@@ -731,9 +738,10 @@
                 <p className="text-[10px] text-gray-400 mt-1">
                   {item.correct}/{item.total} correct
                 </p>
-              </div>
-            ))}
-          </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     )
