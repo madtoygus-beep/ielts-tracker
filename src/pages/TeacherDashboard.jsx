@@ -956,6 +956,14 @@ Continue permanent delete?`
     return `${questionId}_${rowId}_${cellIndex}`
   }
 
+  const noteAnswerKey = (questionId, paragraphId, partId) => {
+    return `${questionId}_${paragraphId}_${partId}`
+  }
+
+  const listeningCompletionAnswerKey = (questionId, sectionId, itemId) => {
+    return `${questionId}_${sectionId}_${itemId}`
+  }
+
   const getHeadingText = (reading, number) => {
     if (!number) return 'No answer'
     const index = Number(number) - 1
@@ -1042,6 +1050,46 @@ Continue permanent delete?`
     return acceptedAnswers.includes(userAnswer)
   }
 
+  const isNoteCompletionPartCorrect = (submission, question, paragraph, part) => {
+    const key = noteAnswerKey(question.id, paragraph.id, part.id)
+    const userAnswer = submission.answers?.[key]
+
+    if (question.mode === 'choose') {
+      return userAnswer?.toString().trim() === part.answer?.toString().trim()
+    }
+
+    const acceptedAnswers = [
+      part.answer,
+      ...(part.acceptedAnswers
+        ? part.acceptedAnswers.split(',').map(item => item.trim()).filter(Boolean)
+        : [])
+    ].map(normalize)
+
+    if (!isWithinWordLimit(userAnswer, part.maxWords)) return false
+
+    return acceptedAnswers.includes(normalize(userAnswer))
+  }
+
+  const isListeningCompletionPartCorrect = (submission, question, section, item) => {
+    const key = listeningCompletionAnswerKey(question.id, section.id, item.id)
+    const userAnswer = submission.answers?.[key]
+
+    if (question.completionMode === 'choose') {
+      return userAnswer?.toString().trim() === item.answer?.toString().trim()
+    }
+
+    const acceptedAnswers = [
+      item.answer,
+      ...(item.acceptedAnswers
+        ? item.acceptedAnswers.split(',').map(answer => answer.trim()).filter(Boolean)
+        : [])
+    ].map(normalize)
+
+    if (!isWithinWordLimit(userAnswer, item.maxWords)) return false
+
+    return acceptedAnswers.includes(normalize(userAnswer))
+  }
+
   const getStudentAnalytics = studentId => {
     const studentSubs = submissions.filter(sub => sub.uid === studentId)
 
@@ -1053,6 +1101,7 @@ Continue permanent delete?`
       table: { correct: 0, total: 0 },
       summary: { correct: 0, total: 0 },
       note: { correct: 0, total: 0 },
+      noteCompletion: { correct: 0, total: 0 },
       mcq: { correct: 0, total: 0 }
     }
 
@@ -1085,13 +1134,17 @@ Continue permanent delete?`
           return
         }
 
-        if (question.type === 'sentenceEndings') {
-          question.items?.forEach(item => {
-            stats[key].total++
+        if (question.type === 'noteCompletion') {
+          question.paragraphs?.forEach(paragraph => {
+            paragraph.parts?.forEach(part => {
+              if (part.type !== 'blank') return
 
-            if (!isSentenceEndingCorrect(submission, question, item)) {
-              stats[key].wrong++
-            }
+              stats.noteCompletion.total++
+
+              if (isNoteCompletionPartCorrect(sub, question, paragraph, part)) {
+                stats.noteCompletion.correct++
+              }
+            })
           })
 
           return
@@ -1134,6 +1187,7 @@ Continue permanent delete?`
       table: percentage(stats.table),
       summary: percentage(stats.summary),
       note: percentage(stats.note),
+      noteCompletion: percentage(stats.noteCompletion),
       mcq: percentage(stats.mcq)
     }
 
@@ -1154,7 +1208,8 @@ Continue permanent delete?`
     if (type === 'fitb') return 'Fill in the Blank'
     if (type === 'table') return 'Table Completion'
     if (type === 'summary') return 'Summary Completion'
-    if (type === 'note') return 'Note Completion'
+    if (type === 'note') return 'Legacy Note Completion'
+    if (type === 'noteCompletion') return 'Reading Note/Summary Completion'
     if (type === 'mcq') return 'Multiple Choice'
     return 'No data yet'
   }
@@ -1215,6 +1270,22 @@ Continue permanent delete?`
           if (isSentenceEndingCorrect(submission, question, item)) {
             correct++
           }
+        })
+
+        return
+      }
+
+      if (question.type === 'noteCompletion') {
+        question.paragraphs?.forEach(paragraph => {
+          paragraph.parts?.forEach(part => {
+            if (part.type !== 'blank') return
+
+            total++
+
+            if (isNoteCompletionPartCorrect(submission, question, paragraph, part)) {
+              correct++
+            }
+          })
         })
 
         return
@@ -1319,6 +1390,34 @@ Continue permanent delete?`
           return
         }
 
+        if (question.type === 'sentenceEndings') {
+          question.items?.forEach(item => {
+            stats[key].total++
+
+            if (!isSentenceEndingCorrect(submission, question, item)) {
+              stats[key].wrong++
+            }
+          })
+
+          return
+        }
+
+        if (question.type === 'noteCompletion') {
+          question.paragraphs?.forEach(paragraph => {
+            paragraph.parts?.forEach(part => {
+              if (part.type !== 'blank') return
+
+              stats[key].total++
+
+              if (!isNoteCompletionPartCorrect(submission, question, paragraph, part)) {
+                stats[key].wrong++
+              }
+            })
+          })
+
+          return
+        }
+
         if (question.type === 'table' || question.type === 'summary' || question.type === 'note') {
           question.rows?.forEach(row => {
             row.cells?.forEach((cell, cellIndex) => {
@@ -1397,7 +1496,8 @@ Continue permanent delete?`
       tfng: { correct: 0, total: 0 },
       table: { correct: 0, total: 0 },
       summary: { correct: 0, total: 0 },
-      note: { correct: 0, total: 0 }
+      note: { correct: 0, total: 0 },
+      noteCompletion: { correct: 0, total: 0 }
     }
 
     submissions.forEach(submission => {
@@ -1424,6 +1524,22 @@ Continue permanent delete?`
             if (isSentenceEndingCorrect(submission, question, item)) {
               stats.sentenceEndings.correct++
             }
+          })
+
+          return
+        }
+
+        if (question.type === 'noteCompletion') {
+          question.paragraphs?.forEach(paragraph => {
+            paragraph.parts?.forEach(part => {
+              if (part.type !== 'blank') return
+
+              stats.noteCompletion.total++
+
+              if (isNoteCompletionPartCorrect(submission, question, paragraph, part)) {
+                stats.noteCompletion.correct++
+              }
+            })
           })
 
           return
@@ -1461,14 +1577,16 @@ Continue permanent delete?`
       })
     })
 
-    return Object.entries(stats).map(([key, value]) => ({
-      key,
-      correct: value.correct,
-      total: value.total,
-      percentage: value.total
-        ? Math.round((value.correct / value.total) * 100)
-        : null
-    }))
+    return Object.entries(stats)
+      .map(([key, value]) => ({
+        key,
+        correct: value.correct,
+        total: value.total,
+        percentage: value.total
+          ? Math.round((value.correct / value.total) * 100)
+          : null
+      }))
+      .filter(item => item.total > 0)
   }
 
   const getReadingTypeLabel = type => {
@@ -1479,7 +1597,8 @@ Continue permanent delete?`
     if (type === 'tfng') return 'T/F/NG'
     if (type === 'table') return 'Table Completion'
     if (type === 'summary') return 'Summary Completion'
-    if (type === 'note') return 'Note Completion'
+    if (type === 'note') return 'Legacy Note Completion'
+    if (type === 'noteCompletion') return 'Reading Note/Summary Completion'
     return type
   }
 
@@ -1532,6 +1651,22 @@ Continue permanent delete?`
             wrong: 0,
             total: 0
           }
+        }
+
+        if (question.type === 'listeningCompletion') {
+          question.sections?.forEach(section => {
+            section.parts?.forEach(item => {
+              if (item.type !== 'blank') return
+
+              stats[key].total++
+
+              if (!isListeningCompletionPartCorrect(submission, question, section, item)) {
+                stats[key].wrong++
+              }
+            })
+          })
+
+          return
         }
 
         if (question.type === 'table' || question.type === 'summary' || question.type === 'note') {
@@ -1599,7 +1734,8 @@ Continue permanent delete?`
       fitb: { correct: 0, total: 0 },
       tfng: { correct: 0, total: 0 },
       table: { correct: 0, total: 0 },
-      note: { correct: 0, total: 0 }
+      note: { correct: 0, total: 0 },
+      listeningCompletion: { correct: 0, total: 0 }
     }
 
     listeningSubmissions.forEach(submission => {
@@ -1607,6 +1743,22 @@ Continue permanent delete?`
       if (!listening) return
 
       listening.questions?.forEach(question => {
+        if (question.type === 'listeningCompletion') {
+          question.sections?.forEach(section => {
+            section.parts?.forEach(item => {
+              if (item.type !== 'blank') return
+
+              stats.listeningCompletion.total++
+
+              if (isListeningCompletionPartCorrect(submission, question, section, item)) {
+                stats.listeningCompletion.correct++
+              }
+            })
+          })
+
+          return
+        }
+
         if (question.type === 'table' || question.type === 'summary' || question.type === 'note') {
           question.rows?.forEach(row => {
             row.cells?.forEach((cell, cellIndex) => {
@@ -1633,14 +1785,16 @@ Continue permanent delete?`
       })
     })
 
-    return Object.entries(stats).map(([key, value]) => ({
-      key,
-      correct: value.correct,
-      total: value.total,
-      percentage: value.total
-        ? Math.round((value.correct / value.total) * 100)
-        : null
-    }))
+    return Object.entries(stats)
+      .map(([key, value]) => ({
+        key,
+        correct: value.correct,
+        total: value.total,
+        percentage: value.total
+          ? Math.round((value.correct / value.total) * 100)
+          : null
+      }))
+      .filter(item => item.total > 0)
   }
 
   const getListeningTypeLabel = type => {
@@ -1648,7 +1802,8 @@ Continue permanent delete?`
     if (type === 'fitb') return 'Fill Blank'
     if (type === 'tfng') return 'T/F/NG'
     if (type === 'table') return 'Form/Table'
-    if (type === 'note') return 'Note Completion'
+    if (type === 'note') return 'Legacy Note Completion'
+    if (type === 'listeningCompletion') return 'Listening Note/Summary Completion'
     return type
   }
 
@@ -3484,9 +3639,12 @@ Continue permanent delete?`
                             ['TFNG', analytics.tfng],
                             ['Fill Blank', analytics.fitb],
                             ['Table Completion', analytics.table],
-                            ['Note Completion', analytics.note],
+                            ['Legacy Note Completion', analytics.note],
+                            ['Reading Note/Summary Completion', analytics.noteCompletion],
                             ['MCQ', analytics.mcq]
-                          ].map(([label, value]) => (
+                          ]
+                            .filter(([, value]) => value !== null && value !== undefined)
+                            .map(([label, value]) => (
                             <div
                               key={label}
                               className="bg-gray-50 rounded-xl p-4 text-center"
@@ -4166,6 +4324,61 @@ Continue permanent delete?`
                                 </div>
                               )
                             })}
+                          </div>
+                        </div>
+                      ) : question.type === 'noteCompletion' ? (
+                        <div>
+                          {question.instruction && (
+                            <p className="text-sm text-gray-700 mb-4">
+                              {question.instruction}
+                            </p>
+                          )}
+
+                          <div className="space-y-4">
+                            {question.paragraphs?.map(paragraph => (
+                              <div key={paragraph.id} className="bg-gray-50 border border-gray-100 rounded-xl p-4">
+                                <div className="text-sm text-gray-800 leading-8">
+                                  {paragraph.parts?.map(part => {
+                                    if (part.type === 'text') {
+                                      return (
+                                        <span key={part.id} className="whitespace-pre-wrap">
+                                          {part.content}
+                                        </span>
+                                      )
+                                    }
+
+                                    const key = noteAnswerKey(question.id, paragraph.id, part.id)
+                                    const correct = isNoteCompletionPartCorrect(
+                                      selectedReview.submission,
+                                      question,
+                                      paragraph,
+                                      part
+                                    )
+
+                                    return (
+                                      <span
+                                        key={part.id}
+                                        className={`inline-flex items-center gap-2 mx-1 px-2 py-1 rounded-xl border ${
+                                          correct
+                                            ? 'bg-green-50 border-green-100'
+                                            : 'bg-red-50 border-red-100'
+                                        }`}
+                                      >
+                                        <span className="font-medium text-gray-800">
+                                          {selectedReview.submission.answers?.[key] || 'No answer'}
+                                        </span>
+
+                                        {!correct && (
+                                          <span className="text-xs font-semibold text-green-700">
+                                            Correct: {[part.answer, part.acceptedAnswers].filter(Boolean).join(', ')}
+                                          </span>
+                                        )}
+                                      </span>
+                                    )
+                                  })}
+                                </div>
+                              </div>
+                            ))}
                           </div>
                         </div>
                       ) : question.type === 'table' || question.type === 'summary' ? (
