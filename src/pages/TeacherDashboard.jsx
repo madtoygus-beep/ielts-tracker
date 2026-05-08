@@ -17,6 +17,7 @@ const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
 export default function TeacherDashboard() {
   const [students, setStudents] = useState([])
+  const [classes, setClasses] = useState([])
   const [scores, setScores] = useState({})
 
   const [readings, setReadings] = useState([])
@@ -114,9 +115,24 @@ export default function TeacherDashboard() {
       trackSnapshot(
         onSnapshot(studentsQuery, snap => {
           const list = snap.docs
-          .map(d => ({ id: d.id, ...d.data() }))
-          .filter(u => !u.deleted && u.status === 'approved')
+            .map(d => ({ id: d.id, ...d.data() }))
+            .filter(u => !u.deleted && u.status === 'approved')
+            .sort((a, b) =>
+              (a.name || a.email || '').localeCompare(b.name || b.email || '')
+            )
+
           setStudents(list)
+        })
+      )
+
+      trackSnapshot(
+        onSnapshot(collection(db, 'classes'), snap => {
+          const list = snap.docs
+            .map(d => ({ id: d.id, ...d.data() }))
+            .filter(classItem => classItem.archived !== true)
+            .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+
+          setClasses(list)
         })
       )
 
@@ -528,6 +544,44 @@ export default function TeacherDashboard() {
         ? prev.filter(id => id !== studentId)
         : [...prev, studentId]
     )
+  }
+
+  const assignClassToHomework = classItem => {
+    const classStudentIds = classItem.studentIds || []
+
+    if (classStudentIds.length === 0) {
+      alert('This class has no students yet.')
+      return
+    }
+
+    setAssignmentDraft(prev =>
+      Array.from(new Set([...prev, ...classStudentIds]))
+    )
+  }
+
+  const removeClassFromHomework = classItem => {
+    const classStudentIds = classItem.studentIds || []
+
+    setAssignmentDraft(prev =>
+      prev.filter(studentId => !classStudentIds.includes(studentId))
+    )
+  }
+
+  const isClassFullyAssignedToDraft = classItem => {
+    const classStudentIds = classItem.studentIds || []
+    if (classStudentIds.length === 0) return false
+    return classStudentIds.every(studentId => assignmentDraft.includes(studentId))
+  }
+
+  const isClassPartlyAssignedToDraft = classItem => {
+    const classStudentIds = classItem.studentIds || []
+    if (classStudentIds.length === 0) return false
+    return classStudentIds.some(studentId => assignmentDraft.includes(studentId))
+  }
+
+  const getStudentName = studentId => {
+    const student = students.find(item => item.id === studentId)
+    return student?.name || student?.email || 'Unknown student'
   }
 
   const saveAssignments = async () => {
@@ -3688,6 +3742,104 @@ Continue permanent delete?`
               >
                 Close
               </button>
+            </div>
+
+            {classes.length > 0 && (
+              <div className="bg-purple-50 border border-purple-100 rounded-2xl p-4 mb-6">
+                <div className="flex items-start justify-between gap-3 mb-3">
+                  <div>
+                    <p className="text-sm font-semibold text-purple-800">
+                      Assign by Class
+                    </p>
+
+                    <p className="text-xs text-purple-500 mt-1">
+                      Add or remove all students from a class for this homework.
+                    </p>
+                  </div>
+
+                  <span className="text-xs bg-white text-purple-600 px-3 py-1 rounded-full">
+                    {assignmentDraft.length} selected
+                  </span>
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  {classes.map(classItem => {
+                    const classStudentIds = classItem.studentIds || []
+                    const fullyAssigned = isClassFullyAssignedToDraft(classItem)
+                    const partlyAssigned = isClassPartlyAssignedToDraft(classItem)
+
+                    return (
+                      <div
+                        key={classItem.id}
+                        className={`bg-white border rounded-xl p-3 ${
+                          fullyAssigned
+                            ? 'border-purple-300'
+                            : partlyAssigned
+                              ? 'border-amber-200'
+                              : 'border-gray-100'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium text-gray-800 truncate">
+                              {classItem.name}
+                            </p>
+
+                            <p className="text-xs text-gray-400 mt-0.5">
+                              {classStudentIds.length} student{classStudentIds.length === 1 ? '' : 's'}
+                              {partlyAssigned && !fullyAssigned ? ' · partly selected' : ''}
+                              {fullyAssigned ? ' · selected' : ''}
+                            </p>
+
+                            {classStudentIds.length > 0 && (
+                              <p className="text-[11px] text-gray-400 mt-1 truncate">
+                                {classStudentIds.slice(0, 3).map(getStudentName).join(', ')}
+                                {classStudentIds.length > 3
+                                  ? ` +${classStudentIds.length - 3} more`
+                                  : ''}
+                              </p>
+                            )}
+                          </div>
+
+                          {fullyAssigned ? (
+                            <button
+                              type="button"
+                              onClick={() => removeClassFromHomework(classItem)}
+                              className="text-xs bg-red-50 text-red-500 px-3 py-1.5 rounded-lg hover:bg-red-100 flex-shrink-0"
+                            >
+                              Remove
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => assignClassToHomework(classItem)}
+                              className="text-xs bg-purple-600 text-white px-3 py-1.5 rounded-lg hover:bg-purple-700 flex-shrink-0"
+                            >
+                              Add
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            <div className="flex items-center justify-between gap-3 mb-3">
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                Individual Students
+              </p>
+
+              {assignmentDraft.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setAssignmentDraft([])}
+                  className="text-xs bg-gray-100 text-gray-500 px-3 py-1.5 rounded-lg hover:bg-gray-200"
+                >
+                  Clear all
+                </button>
+              )}
             </div>
 
             <div className="flex flex-col gap-3 mb-6">
