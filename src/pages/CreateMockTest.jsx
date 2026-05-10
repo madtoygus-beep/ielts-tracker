@@ -9,7 +9,7 @@ import {
   query,
   where
 } from 'firebase/firestore'
-import { onAuthStateChanged } from 'firebase/auth'
+import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { useNavigate } from 'react-router-dom'
 
 export default function CreateMockTest() {
@@ -58,14 +58,13 @@ export default function CreateMockTest() {
 
         const profile = userSnap.data()
 
-        if (profile.role !== 'teacher' && profile.role !== 'admin') {
+        if (
+          profile.deleted === true ||
+          profile.status !== 'approved' ||
+          (profile.role !== 'teacher' && profile.role !== 'admin')
+        ) {
           alert('You are not allowed to create mock tests.')
-          navigate('/student')
-          return
-        }
-
-        if (profile.status && profile.status !== 'approved') {
-          alert('Your account is not approved yet.')
+          await signOut(auth)
           navigate('/login')
           return
         }
