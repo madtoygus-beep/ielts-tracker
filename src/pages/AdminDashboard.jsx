@@ -501,10 +501,54 @@ export default function AdminDashboard() {
     })
   }
 
+  const normalizeBandInput = value => {
+    if (value === '' || value === null || value === undefined) return null
+
+    const numberValue = Number(value)
+
+    if (Number.isNaN(numberValue)) return null
+
+    return numberValue
+  }
+
+  const roundToIELTSBand = value => {
+    return (Math.round(value * 2) / 2).toFixed(1)
+  }
+
   const handleSaveScore = async () => {
-    const avg = (+editScoreForm.listening + +editScoreForm.reading + +editScoreForm.writing + +editScoreForm.speaking) / 4
-    const overall = (Math.round(avg * 2) / 2).toFixed(1)
-    await updateDoc(doc(db, 'scores', editScore.id), { ...editScoreForm, overall })
+    const scoreFields = ['listening', 'reading', 'writing', 'speaking']
+
+    const normalizedScores = scoreFields.reduce((acc, field) => {
+      const value = normalizeBandInput(editScoreForm[field])
+      acc[field] = value
+      return acc
+    }, {})
+
+    const validScores = Object.values(normalizedScores).filter(
+      value => value !== null
+    )
+
+    if (validScores.length === 0) {
+      alert('Please enter at least one score before saving.')
+      return
+    }
+
+    const invalidScore = validScores.find(value => value < 0 || value > 9)
+
+    if (invalidScore !== undefined) {
+      alert('Scores must be between 0 and 9.')
+      return
+    }
+
+    const avg = validScores.reduce((sum, value) => sum + value, 0) / validScores.length
+    const overall = roundToIELTSBand(avg)
+
+    await updateDoc(doc(db, 'scores', editScore.id), {
+      ...editScoreForm,
+      ...normalizedScores,
+      overall
+    })
+
     setEditScore(null)
   }
 
