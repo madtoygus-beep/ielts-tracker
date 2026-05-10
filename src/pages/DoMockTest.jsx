@@ -1612,42 +1612,55 @@ export default function DoMockTest() {
       }
 
       const result = getMockResult()
+      const submittedAt = new Date().toISOString()
+      const listeningIds = Array.isArray(mock.listeningIds)
+        ? mock.listeningIds.filter(Boolean)
+        : mock.listeningId
+          ? [mock.listeningId]
+          : []
+
+      const readingIds = Array.isArray(mock.readingIds)
+        ? mock.readingIds.filter(Boolean)
+        : mock.readingId
+          ? [mock.readingId]
+          : []
 
       await addDoc(collection(db, 'mockSubmissions'), {
         uid: user.uid,
         mockTestId: mock.id,
-        title: mock.title,
-        listeningId: Array.isArray(mock.listeningIds)
-          ? mock.listeningIds.filter(Boolean)[0] || mock.listeningId || ''
-          : mock.listeningId || '',
-        listeningIds: Array.isArray(mock.listeningIds)
-          ? mock.listeningIds.filter(Boolean)
-          : mock.listeningId
-            ? [mock.listeningId]
-            : [],
-        readingIds: Array.isArray(mock.readingIds) ? mock.readingIds : mock.readingId ? [mock.readingId] : [],
-        writingId: mock.writingId,
-        listeningAnswers,
-        readingAnswers,
-        writingAnswers,
+        title: mock.title || 'Untitled Mock Test',
+        listeningId: listeningIds[0] || '',
+        listeningIds,
+        readingIds,
+        writingId: mock.writingId || '',
+        listeningAnswers: listeningAnswers || {},
+        readingAnswers: readingAnswers || {},
+        writingAnswers: {
+          task1: writingAnswers?.task1 || '',
+          task2: writingAnswers?.task2 || ''
+        },
         result,
         autoSubmitted: auto,
-        submittedAt: new Date().toISOString(),
+        submittedAt,
         status: 'submitted'
       })
 
-      await addDoc(collection(db, 'scores'), {
-        uid: user.uid,
-        date: new Date().toISOString().slice(0, 10),
-        source: 'mock_test',
-        mockTestId: mock.id,
-        listening: result.listening.band,
-        reading: result.reading.band,
-        writing: '',
-        speaking: '',
-        overall: result.overallEstimate,
-        createdAt: new Date().toISOString()
-      })
+      try {
+        await addDoc(collection(db, 'scores'), {
+          uid: user.uid,
+          date: submittedAt.slice(0, 10),
+          source: 'mock_test',
+          mockTestId: mock.id,
+          listening: result.listening?.band || '',
+          reading: result.reading?.band || '',
+          writing: '',
+          speaking: '',
+          overall: result.overallEstimate ?? '',
+          createdAt: submittedAt
+        })
+      } catch (scoreError) {
+        console.warn('Mock test was submitted, but score history could not be created.', scoreError)
+      }
 
       if (storageKey) {
         localStorage.removeItem(storageKey)
@@ -1657,8 +1670,8 @@ export default function DoMockTest() {
       setAlreadySubmitted(true)
       setSectionIndex(sections.length - 1)
     } catch (error) {
-      console.error(error)
-      alert('Could not submit mock test.')
+      console.error('Could not submit mock test.', error)
+      alert(error?.message || 'Could not submit mock test.')
     } finally {
       submittingRef.current = false
       setSubmitting(false)
