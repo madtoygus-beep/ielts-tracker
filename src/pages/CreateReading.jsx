@@ -1697,7 +1697,7 @@ export default function CreateReading() {
   return (
     <div className="min-h-screen bg-[#faf9f6]">
       <nav className="flex justify-between items-center px-8 py-4 bg-white border-b border-gray-100">
-        <img src="/1.png" alt="Maxima" className="h-10 object-contain" />
+        <img src="/1.png" alt="Maxima" className="h-14 object-contain" />
         <button
           onClick={() => navigate('/teacher')}
           className="text-sm text-gray-400 hover:text-gray-600"

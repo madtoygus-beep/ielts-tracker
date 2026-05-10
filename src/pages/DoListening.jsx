@@ -888,7 +888,7 @@ export default function DoListening() {
           <img
             src="/1.png"
             alt="Maxima"
-            className="h-10 object-contain"
+            className="h-14 object-contain"
           />
 
           <button

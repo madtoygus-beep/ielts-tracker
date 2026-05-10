@@ -105,7 +105,7 @@ export default function Login() {
   return (
     <div className="min-h-screen bg-[#faf9f6] flex items-center justify-center px-4">
       <div className="bg-white border border-gray-100 rounded-2xl p-8 w-full max-w-md shadow-sm">
-        <img src="/1.png" alt="Maxima" className="h-16 object-contain mb-1" />
+        <img src="/1.png" alt="Maxima" className="h-20 object-contain mb-1" />
 
         <p className="text-gray-400 text-sm mb-6">
           Welcome back
