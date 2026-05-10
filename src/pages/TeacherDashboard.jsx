@@ -8,6 +8,7 @@ import {
   onSnapshot,
   doc,
   getDoc,
+  getDocs,
   updateDoc,
   deleteDoc
 } from 'firebase/firestore'
@@ -2084,6 +2085,7 @@ Continue permanent delete?`
     const submission = selectedMockWritingReview.submission
     const result = submission.result || {}
     const review = buildWritingReviewPayload()
+    const now = new Date().toISOString()
 
     const listeningBand = Number(result.listening?.band)
     const readingBand = Number(result.reading?.band)
@@ -2104,7 +2106,7 @@ Continue permanent delete?`
     await updateDoc(
       doc(db, 'mockSubmissions', submission.id),
       {
-        reviewedAt: new Date().toISOString(),
+        reviewedAt: now,
         reviewedBy: user.uid,
         writingReview: {
           status: 'reviewed',
@@ -2126,6 +2128,51 @@ Continue permanent delete?`
         }
       }
     )
+
+    const mockScorePayload = {
+      uid: submission.uid,
+      date: (submission.submittedAt || now).slice(0, 10),
+      source: 'mock_test',
+      mockTestId: submission.mockTestId || '',
+      listening: !Number.isNaN(listeningBand) && listeningBand > 0
+        ? roundToHalf(listeningBand)
+        : result.listening?.band || '',
+      reading: !Number.isNaN(readingBand) && readingBand > 0
+        ? roundToHalf(readingBand)
+        : result.reading?.band || '',
+      writing: writingReviewForm.overall,
+      speaking: '',
+      overall: finalOverall,
+      updatedAt: now,
+      updatedBy: user.uid
+    }
+
+    const scoreSnap = await getDocs(
+      query(
+        collection(db, 'scores'),
+        where('uid', '==', submission.uid)
+      )
+    )
+
+    const matchingScoreDocs = scoreSnap.docs.filter(scoreDoc => {
+      const scoreData = scoreDoc.data()
+
+      return (
+        scoreData.mockTestId === submission.mockTestId ||
+        scoreData.mockId === submission.mockTestId
+      )
+    })
+
+    if (matchingScoreDocs.length > 0) {
+      for (const scoreDoc of matchingScoreDocs) {
+        await updateDoc(doc(db, 'scores', scoreDoc.id), mockScorePayload)
+      }
+    } else {
+      await addDoc(collection(db, 'scores'), {
+        ...mockScorePayload,
+        createdAt: now
+      })
+    }
 
     setSelectedMockWritingReview(null)
     resetWritingReviewForm()
