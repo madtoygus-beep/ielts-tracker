@@ -9,7 +9,7 @@ import {
   where,
   getDocs
 } from 'firebase/firestore'
-import { onAuthStateChanged } from 'firebase/auth'
+import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { useNavigate, useParams } from 'react-router-dom'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
@@ -74,6 +74,26 @@ export default function DoReading() {
         return
       }
 
+      const profileSnap = await getDoc(doc(db, 'users', currentUser.uid))
+
+      if (!profileSnap.exists()) {
+        await signOut(auth)
+        navigate('/login')
+        return
+      }
+
+      const profile = profileSnap.data()
+
+      if (
+        profile.deleted === true ||
+        profile.status !== 'approved' ||
+        profile.role !== 'student'
+      ) {
+        await signOut(auth)
+        navigate('/login')
+        return
+      }
+
       setUser(currentUser)
 
       const snap = await getDoc(doc(db, 'readings', id))
@@ -82,6 +102,18 @@ export default function DoReading() {
       const data = {
         id: snap.id,
         ...snap.data()
+      }
+
+      if (!data.assignTo?.includes(currentUser.uid)) {
+        alert('This reading homework is not assigned to you.')
+        navigate('/student')
+        return
+      }
+
+      if (data.hiddenFor?.includes(currentUser.uid) || data.archived === true) {
+        alert('This reading homework is no longer available.')
+        navigate('/student')
+        return
       }
 
       setReading(data)

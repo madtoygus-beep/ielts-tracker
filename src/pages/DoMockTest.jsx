@@ -11,7 +11,7 @@ import {
   orderBy,
   limit
 } from 'firebase/firestore'
-import { onAuthStateChanged } from 'firebase/auth'
+import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { useNavigate, useParams } from 'react-router-dom'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
@@ -549,6 +549,28 @@ export default function DoMockTest() {
       try {
         if (!isActive) return
 
+        const profileSnap = await getDoc(doc(db, 'users', currentUser.uid))
+
+        if (!isActive) return
+
+        if (!profileSnap.exists()) {
+          await signOut(auth)
+          navigate('/login')
+          return
+        }
+
+        const profile = profileSnap.data()
+
+        if (
+          profile.deleted === true ||
+          profile.status !== 'approved' ||
+          profile.role !== 'student'
+        ) {
+          await signOut(auth)
+          navigate('/login')
+          return
+        }
+
         setUser(currentUser)
 
         const mockSnap = await getDoc(doc(db, 'mockTests', id))
@@ -568,6 +590,12 @@ export default function DoMockTest() {
 
         if (!mockData.assignTo?.includes(currentUser.uid)) {
           alert('This mock test is not assigned to you.')
+          navigate('/student')
+          return
+        }
+
+        if (mockData.hiddenFor?.includes(currentUser.uid) || mockData.archived === true) {
+          alert('This mock test is no longer available.')
           navigate('/student')
           return
         }

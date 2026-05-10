@@ -10,7 +10,7 @@ import {
   updateDoc,
   where
 } from 'firebase/firestore'
-import { onAuthStateChanged } from 'firebase/auth'
+import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { useNavigate, useParams } from 'react-router-dom'
 
 export default function CreateWriting() {
@@ -43,16 +43,52 @@ export default function CreateWriting() {
   const [saved, setSaved] = useState(false)
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, currentUser => {
+    let isActive = true
+
+    const unsub = onAuthStateChanged(auth, async currentUser => {
       if (!currentUser) {
         navigate('/login')
         return
       }
 
-      setUser(currentUser)
+      try {
+        const profileSnap = await getDoc(doc(db, 'users', currentUser.uid))
+
+        if (!isActive) return
+
+        if (!profileSnap.exists()) {
+          await signOut(auth)
+          navigate('/login')
+          return
+        }
+
+        const profile = profileSnap.data()
+
+        if (
+          profile.deleted === true ||
+          profile.status !== 'approved' ||
+          (profile.role !== 'teacher' && profile.role !== 'admin')
+        ) {
+          await signOut(auth)
+          navigate('/login')
+          return
+        }
+
+        setUser(currentUser)
+      } catch (error) {
+        console.error(error)
+
+        if (isActive) {
+          await signOut(auth)
+          navigate('/login')
+        }
+      }
     })
 
-    return unsub
+    return () => {
+      isActive = false
+      unsub()
+    }
   }, [navigate])
 
   useEffect(() => {

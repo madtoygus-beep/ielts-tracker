@@ -13,7 +13,7 @@ import {
   arrayUnion,
   arrayRemove
 } from 'firebase/firestore'
-import { signOut, onAuthStateChanged } from 'firebase/auth'
+import { signOut, onAuthStateChanged, sendPasswordResetEmail } from 'firebase/auth'
 import { useNavigate } from 'react-router-dom'
 
 export default function AdminDashboard() {
@@ -432,6 +432,25 @@ export default function AdminDashboard() {
     }
   }
 
+
+  const handleSendPasswordReset = async user => {
+    if (!user?.email) {
+      alert('This user does not have an email address.')
+      return
+    }
+
+    const ok = window.confirm(`Send a password reset email to ${user.email}?`)
+    if (!ok) return
+
+    try {
+      await sendPasswordResetEmail(auth, user.email)
+      alert(`Password reset email sent to ${user.email}.`)
+    } catch (error) {
+      console.error(error)
+      alert('Could not send password reset email. Please check Firebase Auth settings.')
+    }
+  }
+
   const handleEdit = (u) => {
     setEditUser(u)
     setEditName(u.name || '')
@@ -650,6 +669,7 @@ export default function AdminDashboard() {
                 </div>
                 <div className="flex gap-2">
                   <button onClick={() => handleEdit(u)} className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-1.5 rounded-lg">Edit</button>
+                  <button onClick={() => handleSendPasswordReset(u)} className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-600 px-3 py-1.5 rounded-lg">Reset Password</button>
                   <button onClick={() => handleDelete(u.id)} className="text-xs bg-red-50 hover:bg-red-100 text-red-500 px-3 py-1.5 rounded-lg">Delete</button>
                 </div>
               </div>
@@ -684,6 +704,7 @@ export default function AdminDashboard() {
                   </div>
                   <div className="flex gap-2 items-center flex-wrap justify-end">
                     <button onClick={e => { e.stopPropagation(); handleEdit(u) }} className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-1.5 rounded-lg">Edit</button>
+                    <button onClick={e => { e.stopPropagation(); handleSendPasswordReset(u) }} className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-600 px-3 py-1.5 rounded-lg">Reset Password</button>
 
                     <button onClick={e => { e.stopPropagation(); hideStudentRecords(u, 'mock') }} className="text-xs bg-purple-50 hover:bg-purple-100 text-purple-600 px-3 py-1.5 rounded-lg">Hide Mock</button>
                     <button onClick={e => { e.stopPropagation(); restoreStudentRecords(u, 'mock') }} className="text-xs bg-green-50 hover:bg-green-100 text-green-600 px-3 py-1.5 rounded-lg">Restore Mock</button>
