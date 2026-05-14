@@ -742,12 +742,23 @@ export default function DoMockTest() {
     setReadingTimeLeft(saved.readingTimeLeft ?? READING_DURATION)
     setWritingTimeLeft(saved.writingTimeLeft ?? WRITING_DURATION)
 
-    setListeningStarted(Boolean(saved.listeningStarted))
-    setReadingStarted(Boolean(saved.readingStarted))
-    setWritingStarted(Boolean(saved.writingStarted))
+    const restoredListeningStarted = Boolean(saved.listeningStarted)
+    const restoredReadingStarted = Boolean(saved.readingStarted)
+    const restoredWritingStarted = Boolean(saved.writingStarted)
 
-    setListeningLocked(Boolean(saved.listeningLocked))
-    setReadingLocked(Boolean(saved.readingLocked))
+    setListeningStarted(restoredListeningStarted)
+    setReadingStarted(restoredReadingStarted)
+    setWritingStarted(restoredWritingStarted)
+
+    setListeningLocked(
+      Boolean(saved.listeningLocked) ||
+      restoredReadingStarted ||
+      restoredWritingStarted
+    )
+    setReadingLocked(
+      Boolean(saved.readingLocked) ||
+      restoredWritingStarted
+    )
     setWritingLocked(Boolean(saved.writingLocked))
 
     setAudioStarted(Boolean(saved.audioStarted))
@@ -1816,6 +1827,47 @@ export default function DoMockTest() {
     writingLocked
   ])
 
+  const isSectionAccessible = index => {
+    if (index > maxUnlockedSectionIndex) return false
+
+    const targetSection = sections[index]
+    const key = targetSection?.key
+
+    if (!key) return false
+
+    if (key === 'prepare-reading' || key === 'prepare-writing') {
+      return index === sectionIndex
+    }
+
+    if (key.startsWith('listening-') && listeningLocked) {
+      return index === sectionIndex
+    }
+
+    if (key.startsWith('reading-') && readingLocked) {
+      return index === sectionIndex
+    }
+
+    if ((key === 'writing-task1' || key === 'writing-task2') && writingLocked) {
+      return index === sectionIndex
+    }
+
+    return true
+  }
+
+  const lockListeningSection = () => {
+    setListeningLocked(true)
+    setAudioLocked(true)
+    setAudioWarning('Listening section is locked. You cannot return to Listening after starting Reading.')
+
+    if (audioRef.current) {
+      audioRef.current.pause()
+    }
+  }
+
+  const lockReadingSection = () => {
+    setReadingLocked(true)
+  }
+
   const goToSection = nextIndex => {
     const safeIndex = Math.max(0, Math.min(nextIndex, sections.length - 1))
     const targetSection = sections[safeIndex]
@@ -1830,6 +1882,18 @@ export default function DoMockTest() {
   }
 
   const nextSection = () => {
+    if (activeSection.key === 'prepare-reading') {
+      lockListeningSection()
+      goToSection(sectionIndex + 1)
+      return
+    }
+
+    if (activeSection.key === 'prepare-writing') {
+      lockReadingSection()
+      goToSection(sectionIndex + 1)
+      return
+    }
+
     goToSection(sectionIndex + 1)
   }
 
@@ -1837,36 +1901,20 @@ export default function DoMockTest() {
     setSectionIndex(prev => {
       let target = Math.max(prev - 1, 0)
 
-      while (
-        target > 0 &&
-        (
-          sections[target]?.key === 'prepare-reading' ||
-          sections[target]?.key === 'prepare-writing'
-        )
-      ) {
+      while (target > 0 && !isSectionAccessible(target)) {
         target = Math.max(target - 1, 0)
       }
 
-      return target
+      return isSectionAccessible(target) ? target : prev
     })
 
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   const handleSectionTabClick = index => {
-    if (index > maxUnlockedSectionIndex) return
+    if (!isSectionAccessible(index)) return
 
     const targetSection = sections[index]
-
-    if (
-      index < sectionIndex &&
-      (
-        targetSection?.key === 'prepare-reading' ||
-        targetSection?.key === 'prepare-writing'
-      )
-    ) {
-      return
-    }
 
     if (targetSection?.key?.startsWith('listening-')) {
       pendingListeningAutoPlayRef.current = true
@@ -3234,8 +3282,8 @@ export default function DoMockTest() {
       : 'Now prepare for the Writing Part'
 
     const description = isReading
-      ? 'The Listening section is complete. Your Reading timer has not started yet. When you are ready, click Start Reading.'
-      : 'The Reading section is complete. Your Writing timer has not started yet. When you are ready, click Start Writing.'
+      ? 'The Listening section is complete. Your Reading timer has not started yet. When you click Start Reading, the Listening section will be locked.'
+      : 'The Reading section is complete. Your Writing timer has not started yet. When you click Start Writing, the Reading section will be locked.'
 
     const buttonLabel = isReading ? 'Start Reading →' : 'Start Writing →'
 
@@ -3507,7 +3555,7 @@ export default function DoMockTest() {
         <div className="bg-white border border-gray-100 rounded-2xl p-4 mb-6 sticky top-[73px] z-20">
           <div className="flex gap-2 overflow-x-auto">
             {sections.map((section, index) => {
-              const locked = index > maxUnlockedSectionIndex
+              const locked = !isSectionAccessible(index)
 
               return (
                 <button
@@ -3518,11 +3566,13 @@ export default function DoMockTest() {
                   className={`text-xs px-4 py-2 rounded-full whitespace-nowrap ${
                     sectionIndex === index
                       ? 'bg-purple-600 text-white'
-                      : index < sectionIndex || index <= maxUnlockedSectionIndex
-                        ? 'bg-green-50 text-green-600'
-                        : 'bg-gray-100 text-gray-400 cursor-not-allowed opacity-60'
+                      : locked
+                        ? 'bg-gray-100 text-gray-400 cursor-not-allowed opacity-60'
+                        : index < sectionIndex || index <= maxUnlockedSectionIndex
+                          ? 'bg-green-50 text-green-600'
+                          : 'bg-gray-100 text-gray-400 cursor-not-allowed opacity-60'
                   }`}
-                  title={locked ? 'Complete the current section first.' : section.label}
+                  title={locked ? 'This section is locked.' : section.label}
                 >
                   {section.label}
                 </button>
