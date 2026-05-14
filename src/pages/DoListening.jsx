@@ -91,6 +91,15 @@ function getQuestionRangeLabel(parts, partId, questionIndex) {
 
   for (const part of parts || []) {
     if (part.id === partId) {
+      const previousQuestionsTotal = (part.questions || [])
+        .slice(0, questionIndex)
+        .reduce(
+          (sum, item) => sum + getListeningQuestionCount(item),
+          0
+        )
+
+      start += previousQuestionsTotal
+
       const question = part.questions?.[questionIndex]
       const count = getListeningQuestionCount(question)
       const end = start + count - 1
