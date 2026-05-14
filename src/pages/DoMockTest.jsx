@@ -537,6 +537,7 @@ export default function DoMockTest() {
   const readingTickRef = useRef(null)
   const writingTickRef = useRef(null)
   const tabSwitchCountRef = useRef(0)
+  const pendingListeningAutoPlayRef = useRef(false)
 
   const [audioStarted, setAudioStarted] = useState(false)
   const [audioLocked, setAudioLocked] = useState(false)
@@ -880,6 +881,32 @@ export default function DoMockTest() {
       audioRef.current.currentTime = 0
     }
   }, [activeSection.key])
+
+  useEffect(() => {
+    if (!activeSection.key?.startsWith('listening-')) return
+    if (!pendingListeningAutoPlayRef.current) return
+
+    const timeout = setTimeout(() => {
+      if (!audioRef.current || listeningLocked || audioLocked) {
+        pendingListeningAutoPlayRef.current = false
+        return
+      }
+
+      audioRef.current.play()
+        .then(() => {
+          setAudioStarted(true)
+          setAudioWarning('')
+        })
+        .catch(() => {
+          setAudioWarning('Your browser blocked automatic audio playback. Please click Play to start the listening audio.')
+        })
+        .finally(() => {
+          pendingListeningAutoPlayRef.current = false
+        })
+    }, 250)
+
+    return () => clearTimeout(timeout)
+  }, [activeSection.key, listeningLocked, audioLocked])
 
   useEffect(() => {
     if (!listeningStarted || listeningLocked) return
@@ -1791,6 +1818,11 @@ export default function DoMockTest() {
 
   const goToSection = nextIndex => {
     const safeIndex = Math.max(0, Math.min(nextIndex, sections.length - 1))
+    const targetSection = sections[safeIndex]
+
+    if (targetSection?.key?.startsWith('listening-')) {
+      pendingListeningAutoPlayRef.current = true
+    }
 
     setSectionIndex(safeIndex)
     setMaxUnlockedSectionIndex(prev => Math.max(prev, safeIndex))
@@ -1808,6 +1840,13 @@ export default function DoMockTest() {
 
   const handleSectionTabClick = index => {
     if (index > maxUnlockedSectionIndex) return
+
+    const targetSection = sections[index]
+
+    if (targetSection?.key?.startsWith('listening-')) {
+      pendingListeningAutoPlayRef.current = true
+    }
+
     setSectionIndex(index)
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
