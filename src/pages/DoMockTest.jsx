@@ -328,6 +328,10 @@ function getListeningQuestionCount(question) {
     return question.mapItems?.length || 0
   }
 
+  if (question.type === 'mcq' && question.mode === 'multi') {
+    return question.answers?.length || 2
+  }
+
   return 1
 }
 
@@ -1229,6 +1233,25 @@ export default function DoMockTest() {
     }
   }
 
+  const getListeningMultiAnswerScore = question => {
+    const selected = Array.isArray(listeningAnswers[question.id])
+      ? listeningAnswers[question.id].map(item => item?.toString())
+      : []
+
+    const correctAnswers = Array.isArray(question.answers)
+      ? question.answers.map(item => item?.toString())
+      : []
+
+    const correctCount = selected.filter(answer =>
+      correctAnswers.includes(answer)
+    ).length
+
+    return {
+      correct: correctCount,
+      total: correctAnswers.length || 2
+    }
+  }
+
   const isListeningCompletionPartCorrect = (question, section, item) => {
     const key = listeningCompletionAnswerKey(question.id, section.id, item.id)
     const userAnswer = listeningAnswers[key]
@@ -1320,6 +1343,15 @@ export default function DoMockTest() {
             correct++
           }
         })
+
+        return
+      }
+
+      if (question.type === 'mcq' && question.mode === 'multi') {
+        const score = getListeningMultiAnswerScore(question)
+
+        correct += score.correct
+        total += score.total
 
         return
       }

@@ -65,6 +65,10 @@ function getListeningQuestionCount(question) {
     return question.mapItems?.length || 0
   }
 
+  if (question.type === 'mcq' && question.mode === 'multi') {
+    return question.answers?.length || 2
+  }
+
   return 1
 }
 
@@ -552,6 +556,25 @@ export default function DoListening() {
     return userAnswer === correctAnswer
   }
 
+  const getMultiAnswerScore = question => {
+    const selected = Array.isArray(answers[question.id])
+      ? answers[question.id].map(item => item?.toString())
+      : []
+
+    const correctAnswers = Array.isArray(question.answers)
+      ? question.answers.map(item => item?.toString())
+      : []
+
+    const correctCount = selected.filter(answer =>
+      correctAnswers.includes(answer)
+    ).length
+
+    return {
+      correct: correctCount,
+      total: correctAnswers.length || 2
+    }
+  }
+
   const isTableCellCorrect = (question, row, cellIndex) => {
     const key = tableAnswerKey(question.id, row.id, cellIndex)
     const cell = row.cells[cellIndex]
@@ -650,6 +673,15 @@ export default function DoListening() {
             correct++
           }
         })
+
+        return
+      }
+
+      if (question.type === 'mcq' && question.mode === 'multi') {
+        const score = getMultiAnswerScore(question)
+
+        correct += score.correct
+        total += score.total
 
         return
       }
