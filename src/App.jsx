@@ -20,6 +20,9 @@ import DoListening from './pages/DoListening'
 import CreateMockTest from './pages/CreateMockTest'
 import DoMockTest from './pages/DoMockTest'
 
+import CreateVocabulary from './pages/CreateVocabulary'
+import DoVocabulary from './pages/DoVocabulary'
+
 import ManageClasses from './pages/ManageClasses'
 
 function App() {
@@ -49,6 +52,10 @@ function App() {
 
         <Route path="/create-mock" element={<CreateMockTest />} />
         <Route path="/do-mock/:id" element={<DoMockTest />} />
+
+        <Route path="/create-vocabulary" element={<CreateVocabulary />} />
+        <Route path="/edit-vocabulary/:id" element={<CreateVocabulary />} />
+        <Route path="/do-vocabulary/:id" element={<DoVocabulary />} />
 
         <Route path="/teacher/classes" element={<ManageClasses />} />
         <Route path="/admin/classes" element={<ManageClasses />} />

@@ -33,10 +33,14 @@ export default function TeacherDashboard() {
 
   const [mockTests, setMockTests] = useState([])
   const [mockSubmissions, setMockSubmissions] = useState([])
+
+  const [vocabularyTests, setVocabularyTests] = useState([])
+  const [vocabularySubmissions, setVocabularySubmissions] = useState([])
   
   const [readingLibraryFilter, setReadingLibraryFilter] = useState('active')
   const [writingLibraryFilter, setWritingLibraryFilter] = useState('active')
   const [listeningLibraryFilter, setListeningLibraryFilter] = useState('active')
+  const [vocabularyLibraryFilter, setVocabularyLibraryFilter] = useState('active')
 
   const [selected, setSelected] = useState(null)
   const [selectedStudentSection, setSelectedStudentSection] = useState('scores')
@@ -246,6 +250,20 @@ export default function TeacherDashboard() {
             setMockSubmissions(snap.docs.map(d => ({ id: d.id, ...d.data() })))
           })
         )
+
+        trackSnapshot(
+          onSnapshot(query(collection(db, 'vocabularyTests')), snap => {
+            const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+            list.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+            setVocabularyTests(list)
+          })
+        )
+
+        trackSnapshot(
+          onSnapshot(query(collection(db, 'vocabularySubmissions')), snap => {
+            setVocabularySubmissions(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+          })
+        )
       } catch (error) {
         console.error(error)
 
@@ -274,6 +292,9 @@ export default function TeacherDashboard() {
 
   const activeMockTests = mockTests.filter(mock => !mock.archived)
   const archivedMockTests = mockTests.filter(mock => mock.archived)
+
+  const activeVocabularyTests = vocabularyTests.filter(vocabulary => !vocabulary.archived)
+  const archivedVocabularyTests = vocabularyTests.filter(vocabulary => vocabulary.archived)
   
 
   const overall = score => {
@@ -352,6 +373,12 @@ export default function TeacherDashboard() {
     )
   }
 
+  const getVocabularySubmission = (studentId, vocabularyTestId) => {
+    return vocabularySubmissions.find(
+      sub => sub.uid === studentId && sub.vocabularyTestId === vocabularyTestId
+    )
+  }
+
   const getCompletedCount = readingId => {
     return submissions.filter(sub => sub.readingId === readingId).length
   }
@@ -368,6 +395,10 @@ export default function TeacherDashboard() {
 
   const getListeningCompletedCount = listeningId => {
     return listeningSubmissions.filter(sub => sub.listeningId === listeningId).length
+  }
+
+  const getVocabularyCompletedCount = vocabularyTestId => {
+    return vocabularySubmissions.filter(sub => sub.vocabularyTestId === vocabularyTestId).length
   }
 
   const pendingReviewWritings = activeWritings.filter(writing => {
@@ -567,6 +598,13 @@ export default function TeacherDashboard() {
         ? archivedListenings
         : activeListenings
 
+  const filteredVocabularyTests =
+    vocabularyLibraryFilter === 'all'
+      ? vocabularyTests
+      : vocabularyLibraryFilter === 'archived'
+        ? archivedVocabularyTests
+        : activeVocabularyTests
+
   const openAssignmentManager = (homework, type) => {
     setSelectedHomework(homework)
     setSelectedHomeworkType(type)
@@ -629,7 +667,9 @@ export default function TeacherDashboard() {
           ? 'listenings'
           : selectedHomeworkType === 'mock'
             ? 'mockTests'
-            : 'writingHomeworks'
+            : selectedHomeworkType === 'vocabulary'
+              ? 'vocabularyTests'
+              : 'writingHomeworks'
 
     await updateDoc(doc(db, collectionName, selectedHomework.id), {
       assignTo: assignmentDraft,
@@ -879,6 +919,88 @@ Continue permanent delete?`
     await addDoc(collection(db, 'listenings'), {
       ...copyData,
       title: `${listening.title} Copy`,
+      assignTo: [],
+      archived: false,
+      createdBy: user.uid,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    })
+  }
+
+  const archiveVocabularyTest = async vocabularyTest => {
+    const ok = window.confirm(
+      `"${vocabularyTest.title}" will be archived and removed from students' vocabulary homework list. Existing results will stay saved.`
+    )
+
+    if (!ok) return
+
+    await updateDoc(doc(db, 'vocabularyTests', vocabularyTest.id), {
+      archived: true,
+      assignTo: []
+    })
+  }
+
+  const restoreVocabularyTest = async vocabularyTest => {
+    await updateDoc(doc(db, 'vocabularyTests', vocabularyTest.id), {
+      archived: false
+    })
+  }
+
+  const deleteVocabularyTest = async vocabularyTest => {
+    const completedCount = getVocabularyCompletedCount(vocabularyTest.id)
+
+    if (completedCount > 0) {
+      const forceDelete = window.confirm(
+        `"${vocabularyTest.title}" has ${completedCount} student submission(s).
+
+Deleting will permanently remove:
+- Vocabulary test
+- Student answers
+- Results
+
+Continue permanent delete?`
+      )
+
+      if (!forceDelete) return
+
+      const relatedSubs = vocabularySubmissions.filter(
+        sub => sub.vocabularyTestId === vocabularyTest.id
+      )
+
+      for (const sub of relatedSubs) {
+        await deleteDoc(doc(db, 'vocabularySubmissions', sub.id))
+      }
+
+      await deleteDoc(doc(db, 'vocabularyTests', vocabularyTest.id))
+      return
+    }
+
+    const ok = window.confirm(`Delete "${vocabularyTest.title}" permanently?`)
+    if (!ok) return
+
+    await deleteDoc(doc(db, 'vocabularyTests', vocabularyTest.id))
+  }
+
+  const duplicateVocabularyTest = async vocabularyTest => {
+    const ok = window.confirm(
+      `Duplicate "${vocabularyTest.title}"? The copy will not be assigned to any student.`
+    )
+
+    if (!ok) return
+
+    const {
+      id,
+      createdAt,
+      updatedAt,
+      createdBy,
+      assignTo,
+      archived,
+      ...copyData
+    } = vocabularyTest
+
+    await addDoc(collection(db, 'vocabularyTests'), {
+      ...copyData,
+      title: `${vocabularyTest.title} Copy`,
       assignTo: [],
       archived: false,
       createdBy: user.uid,
@@ -2493,6 +2615,83 @@ Continue permanent delete?`
   )
 
 
+  const renderVocabularyHomeworkCard = (vocabularyTest, archived = false) => (
+    <div
+      key={vocabularyTest.id}
+      className={`border rounded-xl p-4 flex items-center justify-between gap-4 ${
+        archived
+          ? 'border-gray-100 bg-gray-50 opacity-80'
+          : 'border-gray-100 bg-gray-50'
+      }`}
+    >
+      <div>
+        <p className="text-sm font-medium text-gray-800">{vocabularyTest.title}</p>
+
+        <p className="text-xs text-gray-400 mt-0.5">
+          Assigned to {vocabularyTest.assignTo?.length || 0} students · Completed by{' '}
+          {getVocabularyCompletedCount(vocabularyTest.id)} students · {vocabularyTest.timeLimit || 20} min · {vocabularyTest.questions?.length || 0} questions
+        </p>
+
+        {archived && (
+          <p className="text-xs text-amber-600 mt-1 font-medium">
+            Archived — hidden from students
+          </p>
+        )}
+      </div>
+
+      <div className="flex gap-2 flex-wrap justify-end">
+        {!archived && (
+          <>
+            <button
+              onClick={() => navigate(`/edit-vocabulary/${vocabularyTest.id}`)}
+              className="text-xs bg-blue-50 text-blue-600 px-3 py-2 rounded-xl hover:bg-blue-100"
+            >
+              Edit
+            </button>
+
+            <button
+              onClick={() => duplicateVocabularyTest(vocabularyTest)}
+              className="text-xs bg-gray-100 text-gray-600 px-3 py-2 rounded-xl hover:bg-gray-200"
+            >
+              Duplicate
+            </button>
+
+            <button
+              onClick={() => openAssignmentManager(vocabularyTest, 'vocabulary')}
+              className="text-xs bg-purple-600 text-white px-3 py-2 rounded-xl hover:bg-purple-700"
+            >
+              Manage
+            </button>
+          </>
+        )}
+
+        {archived ? (
+          <button
+            onClick={() => restoreVocabularyTest(vocabularyTest)}
+            className="text-xs bg-green-50 text-green-600 px-3 py-2 rounded-xl hover:bg-green-100"
+          >
+            Restore
+          </button>
+        ) : (
+          <button
+            onClick={() => archiveVocabularyTest(vocabularyTest)}
+            className="text-xs bg-amber-50 text-amber-600 px-3 py-2 rounded-xl hover:bg-amber-100"
+          >
+            Archive
+          </button>
+        )}
+
+        <button
+          onClick={() => deleteVocabularyTest(vocabularyTest)}
+          className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
+        >
+          Delete
+        </button>
+      </div>
+    </div>
+  )
+
+
   const averageReadingEstimatedBand = getAverageReadingEstimatedBand()
   const readingCompletionStats = getReadingCompletionStats()
   const mostMissedReadingQuestions = getMostMissedReadingQuestions()
@@ -2510,6 +2709,7 @@ Continue permanent delete?`
     ['students', 'Students'],
     ['reading', 'Reading'],
     ['listening', 'Listening'],
+    ['vocabulary', 'Vocabulary'],
     ['writing', 'Writing'],
     ['mock', 'Mock Tests'],
     ['analytics', 'Analytics'],
@@ -2519,7 +2719,7 @@ Continue permanent delete?`
   return (
     <div className="min-h-screen bg-[#faf9f6]">
       <nav className="flex justify-between items-center px-8 py-4 bg-white border-b border-gray-100">
-        <img src="/1.png" alt="Maxima" className="h-14 object-contain" />
+        <img src="/1.png" alt="Maxima" className="h-10 object-contain" />
 
         <div className="flex items-center gap-4">
           <span className="text-sm text-gray-400">{user?.email}</span>
@@ -2572,6 +2772,13 @@ Continue permanent delete?`
             className="bg-purple-600 text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-purple-700"
           >
             🎧 Create Listening Homework
+          </button>
+
+          <button
+            onClick={() => navigate('/create-vocabulary')}
+            className="bg-purple-600 text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-purple-700"
+          >
+            🧩 Create Vocabulary Test
           </button>
 
           <button
@@ -3384,6 +3591,57 @@ Continue permanent delete?`
           </>
         )}
 
+        {activeTab === 'vocabulary' && (
+          <>
+        <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="font-semibold text-gray-800">
+                Vocabulary Test Library
+              </h2>
+
+              <p className="text-xs text-gray-400 mt-1">
+                Create, reuse, assign, archive or delete multiple choice vocabulary tests.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap justify-end">
+              {[
+                ['active', `Active (${activeVocabularyTests.length})`],
+                ['archived', `Archived (${archivedVocabularyTests.length})`],
+                ['all', `All (${vocabularyTests.length})`]
+              ].map(([key, label]) => (
+                <button
+                  key={key}
+                  onClick={() => setVocabularyLibraryFilter(key)}
+                  className={`text-xs px-3 py-1.5 rounded-full ${
+                    vocabularyLibraryFilter === key
+                      ? 'bg-purple-600 text-white'
+                      : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {filteredVocabularyTests.length === 0 ? (
+            <p className="text-sm text-gray-400 bg-gray-50 rounded-xl p-4">
+              No vocabulary tests found for this filter.
+            </p>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {filteredVocabularyTests.map(vocabularyTest =>
+                renderVocabularyHomeworkCard(vocabularyTest, vocabularyTest.archived)
+              )}
+            </div>
+          )}
+        </div>
+
+          </>
+        )}
+
         {activeTab === 'writing' && (
           <>
         <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
@@ -4094,7 +4352,9 @@ Continue permanent delete?`
                               submission.uid === student.id &&
                               submission.mockTestId === selectedHomework.id
                           )
-                        : getWritingSubmission(student.id, selectedHomework.id)
+                        : selectedHomeworkType === 'vocabulary'
+                          ? getVocabularySubmission(student.id, selectedHomework.id)
+                          : getWritingSubmission(student.id, selectedHomework.id)
 
                 return (
                   <label

@@ -1381,6 +1381,164 @@
   }
 
 
+  function VocabularyHomeworkSection({ user }) {
+    const [vocabularyTests, setVocabularyTests] = useState([])
+    const [submissions, setSubmissions] = useState([])
+    const navigate = useNavigate()
+
+    useEffect(() => {
+      if (!user) return
+
+      const q = query(collection(db, 'vocabularyTests'))
+
+      const unsub = onSnapshot(q, snap => {
+        const all = snap.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .filter(item =>
+            !item.archived &&
+            item.assignTo?.includes(user.uid) &&
+            !isHiddenForCurrentUser(item, user.uid)
+          )
+
+        all.sort((a, b) => {
+          if (!a.dueDate) return 1
+          if (!b.dueDate) return -1
+          return new Date(a.dueDate) - new Date(b.dueDate)
+        })
+
+        setVocabularyTests(all)
+      })
+
+      return unsub
+    }, [user])
+
+    useEffect(() => {
+      if (!user) return
+
+      const q = query(
+        collection(db, 'vocabularySubmissions'),
+        where('uid', '==', user.uid)
+      )
+
+      const unsub = onSnapshot(q, snap => {
+        const data = snap.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .filter(item => item.archived !== true)
+
+        setSubmissions(data)
+      })
+
+      return unsub
+    }, [user])
+
+    const isDone = vocabularyTestId =>
+      submissions.some(s => s.vocabularyTestId === vocabularyTestId)
+
+    const getResult = vocabularyTestId =>
+      submissions.find(s => s.vocabularyTestId === vocabularyTestId)?.result
+
+    const todoVocabularyTests = vocabularyTests.filter(item => !isDone(item.id))
+    const completedVocabularyTests = vocabularyTests.filter(item => isDone(item.id))
+
+    if (vocabularyTests.length === 0) return null
+
+    return (
+      <div className="mt-8 mb-8">
+        <h2 className="font-semibold text-gray-800 mb-4">
+          🧩 Vocabulary Tests
+        </h2>
+
+        {todoVocabularyTests.length > 0 && (
+          <div className="mb-6">
+            <p className="text-xs font-semibold text-red-500 uppercase tracking-wider mb-3">
+              To Do
+            </p>
+
+            <div className="flex flex-col gap-3">
+              {todoVocabularyTests.map(item => {
+                const badge = dueLabel(item)
+
+                return (
+                  <div
+                    key={item.id}
+                    className="bg-white border border-red-100 rounded-2xl p-5 flex items-center justify-between shadow-sm"
+                  >
+                    <div>
+                      <p className="text-sm font-medium text-gray-800">
+                        {item.title}
+                      </p>
+
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        ⏱ {item.timeLimit || 20} min · {item.questions?.length || 0} questions
+                      </p>
+
+                      <div className="flex gap-2 mt-2 flex-wrap">
+                        <span className={`text-xs px-3 py-1 rounded-full ${badge.style}`}>
+                          {badge.text}
+                        </span>
+
+                        <span className="text-xs bg-red-50 text-red-500 px-3 py-1 rounded-full">
+                          Not completed
+                        </span>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => navigate(`/do-vocabulary/${item.id}`)}
+                      className="bg-purple-600 text-white px-4 py-2 rounded-xl text-xs font-medium hover:bg-purple-700"
+                    >
+                      Start →
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {completedVocabularyTests.length > 0 && (
+          <div>
+            <p className="text-xs font-semibold text-green-600 uppercase tracking-wider mb-3">
+              Completed
+            </p>
+
+            <div className="flex flex-col gap-3">
+              {completedVocabularyTests.map(item => {
+                const result = getResult(item.id)
+
+                return (
+                  <div
+                    key={item.id}
+                    className="bg-white border border-gray-100 rounded-2xl p-5 flex items-center justify-between"
+                  >
+                    <div>
+                      <p className="text-sm font-medium text-gray-800">
+                        {item.title}
+                      </p>
+
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        ⏱ {item.timeLimit || 20} min · {item.questions?.length || 0} questions
+                      </p>
+
+                      <p className="text-xs text-green-600 mt-1 font-medium">
+                        ✓ Completed — {result?.correct || 0}/{result?.total || 0} correct · {result?.percentage ?? 0}%
+                      </p>
+                    </div>
+
+                    <span className="text-xs bg-green-50 text-green-600 px-3 py-1.5 rounded-full">
+                      Done
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+
   function MockTestSection({ user }) {
     const [mocks, setMocks] = useState([])
     const [submissions, setSubmissions] = useState([])
@@ -2215,11 +2373,13 @@
     const [readings, setReadings] = useState([])
     const [listenings, setListenings] = useState([])
     const [writings, setWritings] = useState([])
+    const [vocabularyTests, setVocabularyTests] = useState([])
     const [mocks, setMocks] = useState([])
 
     const [readingSubmissions, setReadingSubmissions] = useState([])
     const [listeningSubmissions, setListeningSubmissions] = useState([])
     const [writingSubmissions, setWritingSubmissions] = useState([])
+    const [vocabularySubmissions, setVocabularySubmissions] = useState([])
     const [mockSubmissions, setMockSubmissions] = useState([])
 
     const navigate = useNavigate()
@@ -2263,6 +2423,18 @@
         setWritings(data)
       })
 
+      const unsubVocabularyTests = onSnapshot(collection(db, 'vocabularyTests'), snap => {
+        const data = snap.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .filter(item =>
+            !item.archived &&
+            item.assignTo?.includes(user.uid) &&
+            !isHiddenForCurrentUser(item, user.uid)
+          )
+
+        setVocabularyTests(data)
+      })
+
       const unsubMocks = onSnapshot(collection(db, 'mockTests'), snap => {
         const data = snap.docs
           .map(d => ({ id: d.id, ...d.data() }))
@@ -2279,6 +2451,7 @@
         unsubReadings()
         unsubListenings()
         unsubWritings()
+        unsubVocabularyTests()
         unsubMocks()
       }
     }, [user])
@@ -2319,6 +2492,17 @@
         }
       )
 
+      const unsubVocabularySubmissions = onSnapshot(
+        query(collection(db, 'vocabularySubmissions'), where('uid', '==', user.uid)),
+        snap => {
+          setVocabularySubmissions(
+            snap.docs
+              .map(d => ({ id: d.id, ...d.data() }))
+              .filter(item => item.archived !== true)
+          )
+        }
+      )
+
       const unsubMockSubmissions = onSnapshot(
         query(collection(db, 'mockSubmissions'), where('uid', '==', user.uid)),
         snap => {
@@ -2334,6 +2518,7 @@
         unsubReadingSubmissions()
         unsubListeningSubmissions()
         unsubWritingSubmissions()
+        unsubVocabularySubmissions()
         unsubMockSubmissions()
       }
     }, [user])
@@ -2346,6 +2531,9 @@
 
     const hasWritingSubmission = writingId =>
       writingSubmissions.some(submission => submission.writingId === writingId)
+
+    const hasVocabularySubmission = vocabularyTestId =>
+      vocabularySubmissions.some(submission => submission.vocabularyTestId === vocabularyTestId)
 
     const hasMockSubmission = mockId =>
       mockSubmissions.some(submission => submission.mockTestId === mockId)
@@ -2378,6 +2566,15 @@
           path: `/do-writing/${item.id}`,
           color: 'amber'
         })),
+      ...vocabularyTests
+        .filter(item => !hasVocabularySubmission(item.id))
+        .map(item => ({
+          ...item,
+          type: 'Vocabulary',
+          icon: '🧩',
+          path: `/do-vocabulary/${item.id}`,
+          color: 'violet'
+        })),
       ...mocks
         .filter(item => !hasMockSubmission(item.id))
         .map(item => ({
@@ -2403,6 +2600,7 @@
       if (type === 'Reading') return 'bg-blue-50 text-blue-600'
       if (type === 'Listening') return 'bg-purple-50 text-purple-600'
       if (type === 'Writing') return 'bg-amber-50 text-amber-600'
+      if (type === 'Vocabulary') return 'bg-violet-50 text-violet-600'
       return 'bg-green-50 text-green-600'
     }
 
@@ -2441,7 +2639,7 @@
             </p>
 
             <p className="text-xs text-gray-400 mt-2">
-              Reading, listening, writing and mock tests
+              Reading, listening, writing, vocabulary and mock tests
             </p>
           </div>
 
@@ -2672,6 +2870,7 @@
       ['reading', 'Reading'],
       ['listening', 'Listening'],
       ['writing', 'Writing'],
+      ['vocabulary', 'Vocabulary'],
       ['mock', 'Mock Tests'],
       ['analytics', 'Analytics']
     ]
@@ -2994,6 +3193,10 @@
 
           {activeTab === 'writing' && (
             <WritingHomeworkSection user={user} />
+          )}
+
+          {activeTab === 'vocabulary' && (
+            <VocabularyHomeworkSection user={user} />
           )}
 
           {activeTab === 'mock' && (
