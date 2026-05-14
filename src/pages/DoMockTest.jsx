@@ -16,7 +16,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
-const LISTENING_DURATION = 30 * 60
+const LISTENING_DURATION = 35 * 60
 const READING_DURATION = 60 * 60
 const WRITING_DURATION = 60 * 60
 
@@ -504,6 +504,7 @@ export default function DoMockTest() {
   const [alreadySubmitted, setAlreadySubmitted] = useState(false)
 
   const [sectionIndex, setSectionIndex] = useState(0)
+  const [maxUnlockedSectionIndex, setMaxUnlockedSectionIndex] = useState(0)
   const [listeningAnswers, setListeningAnswers] = useState({})
   const [readingAnswers, setReadingAnswers] = useState({})
   const [writingAnswers, setWritingAnswers] = useState({
@@ -729,7 +730,9 @@ export default function DoMockTest() {
       return
     }
 
-    setSectionIndex(saved.sectionIndex ?? 0)
+    const restoredSectionIndex = saved.sectionIndex ?? 0
+    setSectionIndex(restoredSectionIndex)
+    setMaxUnlockedSectionIndex(saved.maxUnlockedSectionIndex ?? restoredSectionIndex)
     setListeningAnswers(saved.listeningAnswers || {})
     setReadingAnswers(saved.readingAnswers || {})
     setWritingAnswers(saved.writingAnswers || { task1: '', task2: '' })
@@ -758,6 +761,7 @@ export default function DoMockTest() {
     const timeout = setTimeout(() => {
       const data = {
         sectionIndex,
+        maxUnlockedSectionIndex,
         listeningAnswers,
         readingAnswers,
         writingAnswers,
@@ -785,6 +789,7 @@ export default function DoMockTest() {
     alreadySubmitted,
     finalResult,
     sectionIndex,
+    maxUnlockedSectionIndex,
     listeningAnswers,
     readingAnswers,
     writingAnswers,
@@ -846,12 +851,14 @@ export default function DoMockTest() {
         listeningPart: part,
         listeningPartIndex: index
       })),
+      { key: 'prepare-reading', label: 'Prepare Reading' },
       ...readings.map((reading, index) => ({
         key: `reading-${index}`,
         label: `Reading ${index + 1}`,
         reading,
         readingIndex: index
       })),
+      { key: 'prepare-writing', label: 'Prepare Writing' },
       { key: 'writing-task1', label: 'Writing T1' },
       { key: 'writing-task2', label: 'Writing T2' },
       { key: 'review', label: 'Review' }
@@ -1782,13 +1789,26 @@ export default function DoMockTest() {
     writingLocked
   ])
 
-  const nextSection = () => {
-    setSectionIndex(prev => Math.min(prev + 1, sections.length - 1))
+  const goToSection = nextIndex => {
+    const safeIndex = Math.max(0, Math.min(nextIndex, sections.length - 1))
+
+    setSectionIndex(safeIndex)
+    setMaxUnlockedSectionIndex(prev => Math.max(prev, safeIndex))
     window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  const nextSection = () => {
+    goToSection(sectionIndex + 1)
   }
 
   const prevSection = () => {
     setSectionIndex(prev => Math.max(prev - 1, 0))
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  const handleSectionTabClick = index => {
+    if (index > maxUnlockedSectionIndex) return
+    setSectionIndex(index)
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
@@ -3143,6 +3163,65 @@ export default function DoMockTest() {
     )
   }
 
+  const renderPrepareSection = ({ type }) => {
+    const isReading = type === 'reading'
+    const title = isReading
+      ? 'Now prepare for the Reading Part'
+      : 'Now prepare for the Writing Part'
+
+    const description = isReading
+      ? 'The Listening section is complete. Your Reading timer has not started yet. When you are ready, click Start Reading.'
+      : 'The Reading section is complete. Your Writing timer has not started yet. When you are ready, click Start Writing.'
+
+    const buttonLabel = isReading ? 'Start Reading →' : 'Start Writing →'
+
+    return (
+      <div className="bg-white border border-gray-100 rounded-2xl p-10 text-center max-w-3xl mx-auto">
+        <p className="text-sm text-purple-600 font-semibold mb-3">
+          Section Transition
+        </p>
+
+        <h1 className="text-3xl font-bold text-gray-900 mb-4">
+          {title}
+        </h1>
+
+        <p className="text-gray-500 text-sm leading-7 mb-8">
+          {description}
+        </p>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-8 text-left">
+          <div className={`rounded-xl p-4 ${isReading ? 'bg-green-50' : 'bg-gray-50'}`}>
+            <p className="text-xs text-gray-500 mb-1">Listening</p>
+            <p className={`text-xl font-bold ${isReading ? 'text-green-600' : 'text-gray-500'}`}>
+              Completed
+            </p>
+          </div>
+
+          <div className={`rounded-xl p-4 ${isReading ? 'bg-blue-50' : 'bg-green-50'}`}>
+            <p className="text-xs text-gray-500 mb-1">Reading</p>
+            <p className={`text-xl font-bold ${isReading ? 'text-blue-600' : 'text-green-600'}`}>
+              {isReading ? 'Ready' : 'Completed'}
+            </p>
+          </div>
+
+          <div className={`rounded-xl p-4 ${isReading ? 'bg-gray-50' : 'bg-amber-50'}`}>
+            <p className="text-xs text-gray-500 mb-1">Writing</p>
+            <p className={`text-xl font-bold ${isReading ? 'text-gray-500' : 'text-amber-600'}`}>
+              {isReading ? 'Locked' : 'Ready'}
+            </p>
+          </div>
+        </div>
+
+        <button
+          onClick={nextSection}
+          className="bg-purple-600 text-white rounded-xl px-8 py-4 text-sm font-medium hover:bg-purple-700"
+        >
+          {buttonLabel}
+        </button>
+      </div>
+    )
+  }
+
   const renderReview = () => {
     const t1Words = countWords(writingAnswers.task1)
     const t2Words = countWords(writingAnswers.task2)
@@ -3363,21 +3442,28 @@ export default function DoMockTest() {
       <div className="max-w-7xl mx-auto px-6 py-8">
         <div className="bg-white border border-gray-100 rounded-2xl p-4 mb-6 sticky top-[73px] z-20">
           <div className="flex gap-2 overflow-x-auto">
-            {sections.map((section, index) => (
-              <button
-                key={section.key}
-                onClick={() => setSectionIndex(index)}
-                className={`text-xs px-4 py-2 rounded-full whitespace-nowrap ${
-                  sectionIndex === index
-                    ? 'bg-purple-600 text-white'
-                    : index < sectionIndex
-                      ? 'bg-green-50 text-green-600'
-                      : 'bg-gray-100 text-gray-500'
-                }`}
-              >
-                {section.label}
-              </button>
-            ))}
+            {sections.map((section, index) => {
+              const locked = index > maxUnlockedSectionIndex
+
+              return (
+                <button
+                  key={section.key}
+                  type="button"
+                  disabled={locked}
+                  onClick={() => handleSectionTabClick(index)}
+                  className={`text-xs px-4 py-2 rounded-full whitespace-nowrap ${
+                    sectionIndex === index
+                      ? 'bg-purple-600 text-white'
+                      : index < sectionIndex || index <= maxUnlockedSectionIndex
+                        ? 'bg-green-50 text-green-600'
+                        : 'bg-gray-100 text-gray-400 cursor-not-allowed opacity-60'
+                  }`}
+                  title={locked ? 'Complete the current section first.' : section.label}
+                >
+                  {section.label}
+                </button>
+              )
+            })}
           </div>
         </div>
 
@@ -3394,13 +3480,13 @@ export default function DoMockTest() {
             </h1>
 
             <p className="text-gray-500 mb-6">
-              This mock test runs in sections: selected Listening part(s) → Reading 1 → Reading 2 → Reading 3 → Writing Task 1 → Writing Task 2 → Review.
+              This mock test runs in order: selected Listening part(s) → Prepare for Reading → Reading section(s) → Prepare for Writing → Writing Task 1 → Writing Task 2 → Review.
             </p>
 
             <div className="grid grid-cols-3 gap-3 mb-8 text-left">
               <div className="bg-purple-50 rounded-xl p-4">
                 <p className="text-xs text-gray-500 mb-1">Listening</p>
-                <p className="text-2xl font-bold text-purple-600">30 min</p>
+                <p className="text-2xl font-bold text-purple-600">35 min</p>
               </div>
 
               <div className="bg-blue-50 rounded-xl p-4">
@@ -3430,8 +3516,14 @@ export default function DoMockTest() {
         {activeSection.key?.startsWith('listening-') &&
           renderListening(activeSection.listeningPart)}
 
+        {activeSection.key === 'prepare-reading' &&
+          renderPrepareSection({ type: 'reading' })}
+
         {activeSection.key?.startsWith('reading-') &&
           renderReading(activeSection.reading)}
+
+        {activeSection.key === 'prepare-writing' &&
+          renderPrepareSection({ type: 'writing' })}
 
         {activeSection.key === 'writing-task1' && renderWritingTask1()}
 
@@ -3439,7 +3531,7 @@ export default function DoMockTest() {
 
         {activeSection.key === 'review' && renderReview()}
 
-        {activeSection.key !== 'intro' && activeSection.key !== 'review' && (
+        {activeSection.key !== 'intro' && activeSection.key !== 'review' && activeSection.key !== 'prepare-reading' && activeSection.key !== 'prepare-writing' && (
           <div className="flex justify-between mt-8">
             <button
               onClick={prevSection}
