@@ -1834,7 +1834,22 @@ export default function DoMockTest() {
   }
 
   const prevSection = () => {
-    setSectionIndex(prev => Math.max(prev - 1, 0))
+    setSectionIndex(prev => {
+      let target = Math.max(prev - 1, 0)
+
+      while (
+        target > 0 &&
+        (
+          sections[target]?.key === 'prepare-reading' ||
+          sections[target]?.key === 'prepare-writing'
+        )
+      ) {
+        target = Math.max(target - 1, 0)
+      }
+
+      return target
+    })
+
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
@@ -1842,6 +1857,16 @@ export default function DoMockTest() {
     if (index > maxUnlockedSectionIndex) return
 
     const targetSection = sections[index]
+
+    if (
+      index < sectionIndex &&
+      (
+        targetSection?.key === 'prepare-reading' ||
+        targetSection?.key === 'prepare-writing'
+      )
+    ) {
+      return
+    }
 
     if (targetSection?.key?.startsWith('listening-')) {
       pendingListeningAutoPlayRef.current = true
