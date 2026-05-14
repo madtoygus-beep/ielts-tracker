@@ -599,6 +599,72 @@ export default function CreateListening() {
     )
   }
 
+  const addOption = questionId => {
+    setQuestions(prev =>
+      prev.map(question => {
+        if (question.id !== questionId) return question
+
+        const options = question.options || []
+
+        if (options.length >= letters.length) {
+          alert('You cannot add more than 26 options.')
+          return question
+        }
+
+        return {
+          ...question,
+          options: [...options, '']
+        }
+      })
+    )
+  }
+
+  const removeOption = (questionId, optionIndex) => {
+    setQuestions(prev =>
+      prev.map(question => {
+        if (question.id !== questionId) return question
+
+        const options = question.options || []
+
+        if (options.length <= 2) {
+          alert('Multiple choice questions need at least 2 options.')
+          return question
+        }
+
+        const removedLetter = letters[optionIndex]
+        const nextOptions = options.filter((_, index) => index !== optionIndex)
+
+        const shiftLetterAfterRemoval = letter => {
+          const index = letters.indexOf(letter)
+
+          if (index === -1) return letter
+          if (index === optionIndex) return ''
+          if (index > optionIndex) return letters[index - 1]
+
+          return letter
+        }
+
+        const nextAnswer =
+          question.answer === removedLetter
+            ? ''
+            : shiftLetterAfterRemoval(question.answer)
+
+        const nextAnswers = Array.isArray(question.answers)
+          ? question.answers
+              .map(shiftLetterAfterRemoval)
+              .filter(Boolean)
+          : []
+
+        return {
+          ...question,
+          options: nextOptions,
+          answer: nextAnswer,
+          answers: nextAnswers
+        }
+      })
+    )
+  }
+
   const toggleCorrectMulti = (questionId, letter) => {
     setQuestions(prev =>
       prev.map(question => {
@@ -1566,7 +1632,7 @@ export default function CreateListening() {
                             return (
                               <div
                                 key={optionIndex}
-                                className={`grid grid-cols-[46px_1fr_110px] gap-2 items-center rounded-xl ${
+                                className={`grid grid-cols-[46px_1fr_110px_70px] gap-2 items-center rounded-xl ${
                                   isCorrect ? 'bg-green-50' : ''
                                 }`}
                               >
@@ -1604,10 +1670,33 @@ export default function CreateListening() {
                                     Correct
                                   </button>
                                 )}
+
+                                <button
+                                  type="button"
+                                  onClick={() => removeOption(question.id, optionIndex)}
+                                  disabled={(question.options || []).length <= 2}
+                                  className="text-xs bg-red-50 text-red-500 rounded-xl py-2 hover:bg-red-100 disabled:opacity-40 disabled:cursor-not-allowed"
+                                >
+                                  Delete
+                                </button>
                               </div>
                             )
                           })}
                         </div>
+
+                        <button
+                          type="button"
+                          onClick={() => addOption(question.id)}
+                          className="mt-3 text-xs bg-purple-50 text-purple-600 px-4 py-2 rounded-xl hover:bg-purple-100"
+                        >
+                          + Add Option
+                        </button>
+
+                        {question.mode === 'multi' && (
+                          <p className="text-xs text-gray-400 mt-2">
+                            Choose TWO correct answers. You can add extra options such as E, F, G and more.
+                          </p>
+                        )}
                       </div>
                     )}
 
