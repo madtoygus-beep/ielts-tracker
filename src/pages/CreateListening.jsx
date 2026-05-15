@@ -80,6 +80,7 @@ const emptyQuestion = () => ({
   type: 'mcq',
   mode: 'single',
   question: '',
+  questionNumber: '',
   options: ['', '', '', ''],
   answer: '',
   answers: [],
@@ -102,7 +103,7 @@ const emptyQuestion = () => ({
     { id: crypto.randomUUID(), label: 'D', text: '' }
   ],
   mapItems: [
-    { id: crypto.randomUUID(), prompt: '', answer: '' }
+    { id: crypto.randomUUID(), questionNumber: '', prompt: '', answer: '' }
   ],
   matchingTitle: '',
   matchingItems: [emptyMatchingItem()]
@@ -512,6 +513,10 @@ export default function CreateListening() {
       return question.matchingItems?.length || 0
     }
 
+    if (question.type === 'mcq' && question.mode === 'multi') {
+      return question.answers?.length || 2
+    }
+
     return 1
   }
 
@@ -601,6 +606,110 @@ export default function CreateListening() {
     }
 
     return number
+  }
+
+  const getListeningSingleQuestionNumber = (partId, questionId) => {
+    let number = 1
+
+    for (const part of parts || []) {
+      for (const question of part.questions || []) {
+        if (question.id === questionId) {
+          return getDisplayQuestionNumber(question.questionNumber, number)
+        }
+
+        number += getListeningQuestionPointCount(question)
+      }
+    }
+
+    return number
+  }
+
+  const getListeningMapQuestionNumber = (partId, questionId, itemId) => {
+    let number = 1
+
+    for (const part of parts || []) {
+      for (const question of part.questions || []) {
+        if (question.id === questionId) {
+          for (const item of question.mapItems || []) {
+            if (part.id === partId && item.id === itemId) {
+              return getDisplayQuestionNumber(item.questionNumber, number)
+            }
+
+            number++
+          }
+
+          return number
+        }
+
+        number += getListeningQuestionPointCount(question)
+      }
+    }
+
+    return number
+  }
+
+  const getQuestionDisplayLabel = (partId, question) => {
+    if (!question) return 'Question'
+
+    if (question.type === 'table' || question.type === 'note') {
+      const numbers = []
+
+      question.rows?.forEach(row => {
+        row.cells?.forEach((cell, cellIndex) => {
+          if (cell.type === 'blank') {
+            numbers.push(getListeningBlankNumber(partId, question.id, row.id, cellIndex))
+          }
+        })
+      })
+
+      if (numbers.length > 1) return `Q${numbers[0]}-${numbers[numbers.length - 1]}`
+      if (numbers.length === 1) return `Q${numbers[0]}`
+    }
+
+    if (question.type === 'listeningCompletion') {
+      const numbers = []
+
+      question.sections?.forEach(section => {
+        section.parts?.forEach(item => {
+          if (item.type === 'blank') {
+            numbers.push(getListeningCompletionBlankNumber(partId, question.id, section.id, item.id))
+          }
+        })
+      })
+
+      if (numbers.length > 1) return `Q${numbers[0]}-${numbers[numbers.length - 1]}`
+      if (numbers.length === 1) return `Q${numbers[0]}`
+    }
+
+    if (question.type === 'matching') {
+      const numbers = (question.matchingItems || []).map(item =>
+        getListeningMatchingQuestionNumber(partId, question.id, item.id)
+      )
+
+      if (numbers.length > 1) return `Q${numbers[0]}-${numbers[numbers.length - 1]}`
+      if (numbers.length === 1) return `Q${numbers[0]}`
+    }
+
+    if (question.type === 'map') {
+      const numbers = (question.mapItems || []).map(item =>
+        getListeningMapQuestionNumber(partId, question.id, item.id)
+      )
+
+      if (numbers.length > 1) return `Q${numbers[0]}-${numbers[numbers.length - 1]}`
+      if (numbers.length === 1) return `Q${numbers[0]}`
+    }
+
+    if (question.type === 'mcq' && question.mode === 'multi') {
+      const first = getListeningSingleQuestionNumber(partId, question.id)
+      const count = question.answers?.length || 2
+      const numericFirst = Number(first)
+
+      if (Number.isFinite(numericFirst) && count > 1) {
+        return `Q${numericFirst}-${numericFirst + count - 1}`
+      }
+    }
+
+    return `Q${getListeningSingleQuestionNumber(partId, question.id)}`
   }
 
   const getPartQuestionCount = part => part.questions?.length || 0
@@ -701,7 +810,7 @@ export default function CreateListening() {
                   ],
               mapItems: question.mapItems?.length
                 ? question.mapItems
-                : [{ id: crypto.randomUUID(), prompt: '', answer: '' }]
+                : [{ id: crypto.randomUUID(), questionNumber: '', prompt: '', answer: '' }]
             }
           }
 
@@ -1310,7 +1419,7 @@ export default function CreateListening() {
           ...question,
           mapItems: [
             ...(question.mapItems || []),
-            { id: crypto.randomUUID(), prompt: '', answer: '' }
+            { id: crypto.randomUUID(), questionNumber: '', prompt: '', answer: '' }
           ]
         }
       })
@@ -1823,7 +1932,7 @@ export default function CreateListening() {
                   >
                     <div className="flex items-center justify-between gap-3 mb-4">
                       <p className="text-sm font-semibold text-gray-800">
-                        {activePart?.title || 'Part'} · Question {index + 1}
+                        {activePart?.title || 'Part'} · {getQuestionDisplayLabel(activePart?.id, question)}
                       </p>
 
                       <div className="flex gap-2">
@@ -1901,18 +2010,33 @@ export default function CreateListening() {
                     </div>
 
                     {question.type !== 'table' && question.type !== 'note' && question.type !== 'map' && question.type !== 'listeningCompletion' && question.type !== 'matching' && (
-                      <div className="mb-4">
-                        <label className="text-xs text-gray-400 mb-1 block">
-                          Question text
-                        </label>
+                      <div className="mb-4 grid grid-cols-1 md:grid-cols-[140px_1fr] gap-3">
+                        <div>
+                          <label className="text-xs text-gray-400 mb-1 block">
+                            Q no. / optional
+                          </label>
 
-                        <textarea
-                          rows={3}
-                          value={question.question}
-                          onChange={e => updateQuestion(question.id, 'question', e.target.value)}
-                          placeholder="Type the question..."
-                          className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 resize-none bg-white"
-                        />
+                          <input
+                            value={question.questionNumber || ''}
+                            onChange={e => updateQuestion(question.id, 'questionNumber', e.target.value)}
+                            placeholder={`Auto ${getListeningSingleQuestionNumber(activePart.id, question.id)}`}
+                            className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="text-xs text-gray-400 mb-1 block">
+                            Question text
+                          </label>
+
+                          <textarea
+                            rows={3}
+                            value={question.question}
+                            onChange={e => updateQuestion(question.id, 'question', e.target.value)}
+                            placeholder="Type the question..."
+                            className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 resize-none bg-white"
+                          />
+                        </div>
                       </div>
                     )}
 
@@ -2581,7 +2705,14 @@ export default function CreateListening() {
 
                           <div className="flex flex-col gap-2">
                             {(question.mapItems || []).map((item, itemIndex) => (
-                              <div key={item.id} className="grid grid-cols-[1fr_130px_70px] gap-2 items-center">
+                              <div key={item.id} className="grid grid-cols-1 md:grid-cols-[120px_1fr_130px_70px] gap-2 items-center">
+                                <input
+                                  value={item.questionNumber || ''}
+                                  onChange={e => updateMapItem(question.id, item.id, 'questionNumber', e.target.value)}
+                                  placeholder={`Q no. auto ${getListeningMapQuestionNumber(activePart.id, question.id, item.id)}`}
+                                  className="border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 bg-white"
+                                />
+
                                 <input
                                   value={item.prompt || ''}
                                   onChange={e => updateMapItem(question.id, item.id, 'prompt', e.target.value)}

@@ -90,31 +90,133 @@ function getTotalListeningQuestionCount(parts) {
   )
 }
 
-function getQuestionRangeLabel(parts, partId, questionIndex) {
-  let start = 1
+function getQuestionDisplayNumbers(parts, partId, targetQuestion) {
+  let number = 1
 
   for (const part of parts || []) {
-    if (part.id === partId) {
-      const previousQuestionsTotal = (part.questions || [])
-        .slice(0, questionIndex)
-        .reduce(
-          (sum, item) => sum + getListeningQuestionCount(item),
-          0
-        )
+    for (const question of part.questions || []) {
+      if (question.id === targetQuestion?.id) {
+        if (question.type === 'table' || question.type === 'note') {
+          const numbers = []
 
-      start += previousQuestionsTotal
+          for (const row of question.rows || []) {
+            for (let index = 0; index < (row.cells || []).length; index++) {
+              const cell = row.cells[index]
+              if (cell.type !== 'blank') continue
+              numbers.push(getManualQuestionNumber(cell) || number)
+              number++
+            }
+          }
 
-      const question = part.questions?.[questionIndex]
-      const count = getListeningQuestionCount(question)
-      const end = start + count - 1
+          return numbers
+        }
 
-      return count > 1 ? `Q${start}-${end}` : `Q${start}`
+        if (question.type === 'listeningCompletion') {
+          const numbers = []
+
+          for (const section of question.sections || []) {
+            for (const item of section.parts || []) {
+              if (item.type !== 'blank') continue
+              numbers.push(getManualQuestionNumber(item) || number)
+              number++
+            }
+          }
+
+          return numbers
+        }
+
+        if (question.type === 'map') {
+          return (question.mapItems || []).map(item => {
+            const displayNumber = getManualQuestionNumber(item) || number
+            number++
+            return displayNumber
+          })
+        }
+
+        if (question.type === 'matching') {
+          return (question.matchingItems || []).map(item => {
+            const displayNumber = getManualQuestionNumber(item) || number
+            number++
+            return displayNumber
+          })
+        }
+
+        if (question.type === 'mcq' && question.mode === 'multi') {
+          const count = question.answers?.length || 2
+          const first = getManualQuestionNumber(question) || number
+          const firstAsNumber = Number(first)
+
+          if (Number.isFinite(firstAsNumber)) {
+            return Array.from({ length: count }, (_, index) => firstAsNumber + index)
+          }
+
+          return [first]
+        }
+
+        return [getManualQuestionNumber(question) || number]
+      }
+
+      number += getListeningQuestionCount(question)
     }
+  }
 
-    start += getPartQuestionTotal(part)
+  return []
+}
+
+function getQuestionRangeLabel(parts, partId, questionIndex) {
+  const part = (parts || []).find(item => item.id === partId)
+  const question = part?.questions?.[questionIndex]
+  const numbers = getQuestionDisplayNumbers(parts, partId, question)
+
+  if (numbers.length > 1) {
+    return `Q${numbers[0]}-${numbers[numbers.length - 1]}`
+  }
+
+  if (numbers.length === 1) {
+    return `Q${numbers[0]}`
   }
 
   return `Q${questionIndex + 1}`
+}
+
+function getSingleQuestionNumber(parts, partId, questionId) {
+  let number = 1
+
+  for (const part of parts || []) {
+    for (const question of part.questions || []) {
+      if (question.id === questionId) {
+        return getManualQuestionNumber(question) || number
+      }
+
+      number += getListeningQuestionCount(question)
+    }
+  }
+
+  return number
+}
+
+function getMapQuestionNumber(parts, partId, questionId, itemId) {
+  let number = 1
+
+  for (const part of parts || []) {
+    for (const question of part.questions || []) {
+      if (question.id === questionId) {
+        for (const item of question.mapItems || []) {
+          if (part.id === partId && item.id === itemId) {
+            return getManualQuestionNumber(item) || number
+          }
+
+          number++
+        }
+
+        return number
+      }
+
+      number += getListeningQuestionCount(question)
+    }
+  }
+
+  return number
 }
 
 function getSavedListeningState(storageKey) {
@@ -1270,7 +1372,7 @@ export default function DoListening() {
                             >
                               <div className="flex items-center justify-between mb-2">
                                 <p className="text-sm font-semibold text-gray-800">
-                                  {itemIndex + 1}. {item.prompt}
+                                  Q{getMapQuestionNumber(parts, part.id, question.id, item.id)}. {item.prompt}
                                 </p>
 
                                 <span className={`text-xs font-semibold ${correct ? 'text-green-600' : 'text-red-600'}`}>
@@ -1681,7 +1783,7 @@ export default function DoListening() {
                         return (
                           <div key={item.id} className="grid grid-cols-[1fr_140px] gap-3 items-center bg-gray-50 border border-gray-100 rounded-xl p-4">
                             <label className="text-sm font-medium text-gray-800">
-                              {itemIndex + 1}. {item.prompt}
+                              Q{getMapQuestionNumber(parts, part.id, question.id, item.id)}. {item.prompt}
                             </label>
 
                             <select
