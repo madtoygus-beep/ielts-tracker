@@ -6,8 +6,6 @@ import {
   doc,
   getDoc,
   getDocs,
-  limit,
-  orderBy,
   query,
   where
 } from 'firebase/firestore'
@@ -112,15 +110,20 @@ export default function DoVocabulary() {
         const existingQuery = query(
           collection(db, 'vocabularySubmissions'),
           where('uid', '==', currentUser.uid),
-          where('vocabularyTestId', '==', id),
-          orderBy('submittedAt', 'desc'),
-          limit(1)
+          where('vocabularyTestId', '==', id)
         )
 
         const existingSnap = await getDocs(existingQuery)
 
         if (!existingSnap.empty) {
-          const submission = existingSnap.docs[0].data()
+          const submissions = existingSnap.docs
+            .map(item => item.data())
+            .sort(
+              (a, b) =>
+                new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0)
+            )
+
+          const submission = submissions[0]
 
           setAlreadyDone(true)
           setAnswers(submission.answers || {})
