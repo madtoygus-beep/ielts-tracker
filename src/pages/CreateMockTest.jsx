@@ -12,10 +12,63 @@ import {
 import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { useNavigate } from 'react-router-dom'
 
+const DEFAULT_SCHOOL_ID = 'maxima'
+
+function getProfileSchoolId(profile) {
+  return profile?.schoolId || DEFAULT_SCHOOL_ID
+}
+
+function isAdminProfile(profile) {
+  return profile?.role === 'admin'
+}
+
+function isAssignedToTeacher(entity, teacherId) {
+  if (!entity || !teacherId) return false
+
+  return (
+    entity.teacherId === teacherId ||
+    entity.createdBy === teacherId ||
+    (Array.isArray(entity.teacherIds) && entity.teacherIds.includes(teacherId))
+  )
+}
+
+function filterStudentsByProfile(students, profile, teacherId) {
+  if (isAdminProfile(profile)) return students
+
+  return students.filter(student =>
+    isAssignedToTeacher(student, teacherId)
+  )
+}
+
+function filterClassesByProfile(classes, profile, teacherId) {
+  if (isAdminProfile(profile)) return classes
+
+  return classes.filter(classItem =>
+    isAssignedToTeacher(classItem, teacherId)
+  )
+}
+
+function filterResourcesByProfile(items, profile, teacherId) {
+  if (isAdminProfile(profile)) return items
+
+  return items.filter(item =>
+    isAssignedToTeacher(item, teacherId)
+  )
+}
+
+function filterClassStudentIds(classItem, visibleStudents) {
+  const visibleStudentIds = new Set(visibleStudents.map(student => student.id))
+
+  return (classItem.studentIds || []).filter(studentId =>
+    visibleStudentIds.has(studentId)
+  )
+}
+
 export default function CreateMockTest() {
   const navigate = useNavigate()
 
   const [user, setUser] = useState(null)
+  const [profile, setProfile] = useState(null)
   const [checkingUser, setCheckingUser] = useState(true)
 
   const [title, setTitle] = useState('')
@@ -70,6 +123,7 @@ export default function CreateMockTest() {
         }
 
         setUser(currentUser)
+        setProfile({ id: currentUser.uid, ...profile })
         setCheckingUser(false)
       } catch (error) {
         console.error(error)
@@ -88,15 +142,21 @@ export default function CreateMockTest() {
   }, [navigate])
 
   useEffect(() => {
-    if (!user) return
+    if (!user || !profile) return
 
     const unsubReadings = onSnapshot(collection(db, 'readings'), snap => {
       const list = snap.docs
         .map(d => ({ id: d.id, ...d.data() }))
         .filter(item => !item.archived)
 
-      list.sort((a, b) => (a.title || '').localeCompare(b.title || ''))
-      setReadings(list)
+      const visibleReadings = filterResourcesByProfile(
+        list,
+        profile,
+        user.uid
+      )
+
+      visibleReadings.sort((a, b) => (a.title || '').localeCompare(b.title || ''))
+      setReadings(visibleReadings)
     })
 
     const unsubListenings = onSnapshot(collection(db, 'listenings'), snap => {
@@ -104,8 +164,14 @@ export default function CreateMockTest() {
         .map(d => ({ id: d.id, ...d.data() }))
         .filter(item => !item.archived)
 
-      list.sort((a, b) => (a.title || '').localeCompare(b.title || ''))
-      setListenings(list)
+      const visibleListenings = filterResourcesByProfile(
+        list,
+        profile,
+        user.uid
+      )
+
+      visibleListenings.sort((a, b) => (a.title || '').localeCompare(b.title || ''))
+      setListenings(visibleListenings)
     })
 
     const unsubWritings = onSnapshot(collection(db, 'writingHomeworks'), snap => {
@@ -113,8 +179,14 @@ export default function CreateMockTest() {
         .map(d => ({ id: d.id, ...d.data() }))
         .filter(item => !item.archived)
 
-      list.sort((a, b) => (a.title || '').localeCompare(b.title || ''))
-      setWritings(list)
+      const visibleWritings = filterResourcesByProfile(
+        list,
+        profile,
+        user.uid
+      )
+
+      visibleWritings.sort((a, b) => (a.title || '').localeCompare(b.title || ''))
+      setWritings(visibleWritings)
     })
 
     const studentsQuery = query(
@@ -127,19 +199,31 @@ export default function CreateMockTest() {
         .map(d => ({ id: d.id, ...d.data() }))
         .filter(student => student.status === 'approved' && student.deleted !== true)
 
-      list.sort((a, b) =>
+      const visibleStudents = filterStudentsByProfile(
+        list,
+        profile,
+        user.uid
+      )
+
+      visibleStudents.sort((a, b) =>
         (a.name || a.email || '').localeCompare(b.name || b.email || '')
       )
-      setStudents(list)
+
+      setStudents(visibleStudents)
     })
 
     const unsubClasses = onSnapshot(collection(db, 'classes'), snap => {
       const list = snap.docs
         .map(d => ({ id: d.id, ...d.data() }))
         .filter(classItem => classItem.archived !== true)
-        .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
 
-      setClasses(list)
+      const visibleClasses = filterClassesByProfile(
+        list,
+        profile,
+        user.uid
+      ).sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+
+      setClasses(visibleClasses)
     })
 
     return () => {
@@ -149,7 +233,7 @@ export default function CreateMockTest() {
       unsubStudents()
       unsubClasses()
     }
-  }, [user])
+  }, [user, profile])
 
   const filteredStudents = useMemo(() => {
     const term = search.trim().toLowerCase()
@@ -167,6 +251,17 @@ export default function CreateMockTest() {
   const selectedStudents = useMemo(() => {
     return students.filter(student => assignTo.includes(student.id))
   }, [students, assignTo])
+
+
+  useEffect(() => {
+    if (!user || !profile || isAdminProfile(profile) || students.length === 0) return
+
+    const visibleStudentIds = new Set(students.map(student => student.id))
+
+    setAssignTo(prev =>
+      prev.filter(studentId => visibleStudentIds.has(studentId))
+    )
+  }, [user, profile, students])
 
   const selectedListeningIds = listeningIds.filter(Boolean)
   const selectedReadingIds = readingIds.filter(Boolean)
@@ -221,7 +316,7 @@ export default function CreateMockTest() {
   }
 
   const assignClassToMock = classItem => {
-    const classStudentIds = classItem.studentIds || []
+    const classStudentIds = filterClassStudentIds(classItem, students)
 
     if (classStudentIds.length === 0) {
       alert('This class has no students yet.')
@@ -232,7 +327,7 @@ export default function CreateMockTest() {
   }
 
   const removeClassFromMock = classItem => {
-    const classStudentIds = classItem.studentIds || []
+    const classStudentIds = filterClassStudentIds(classItem, students)
 
     setAssignTo(prev =>
       prev.filter(studentId => !classStudentIds.includes(studentId))
@@ -240,13 +335,13 @@ export default function CreateMockTest() {
   }
 
   const isClassFullyAssigned = classItem => {
-    const classStudentIds = classItem.studentIds || []
+    const classStudentIds = filterClassStudentIds(classItem, students)
     if (classStudentIds.length === 0) return false
     return classStudentIds.every(studentId => assignTo.includes(studentId))
   }
 
   const isClassPartlyAssigned = classItem => {
-    const classStudentIds = classItem.studentIds || []
+    const classStudentIds = filterClassStudentIds(classItem, students)
     if (classStudentIds.length === 0) return false
     return classStudentIds.some(studentId => assignTo.includes(studentId))
   }
@@ -315,6 +410,7 @@ export default function CreateMockTest() {
         readingIds: cleanReadingIds,
         writingId,
         assignTo,
+        schoolId: getProfileSchoolId(profile),
         mode: 'single-page-flow',
         createdBy: user.uid,
         createdAt: new Date().toISOString(),
@@ -563,7 +659,7 @@ export default function CreateMockTest() {
 
                 <div className="flex flex-col gap-2">
                   {classes.map(classItem => {
-                    const classStudentIds = classItem.studentIds || []
+                    const classStudentIds = filterClassStudentIds(classItem, students)
                     const fullyAssigned = isClassFullyAssigned(classItem)
                     const partlyAssigned = isClassPartlyAssigned(classItem)
 

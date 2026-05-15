@@ -15,6 +15,59 @@ import { useNavigate, useParams } from 'react-router-dom'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
+const DEFAULT_SCHOOL_ID = 'maxima'
+
+function getProfileSchoolId(profile) {
+  return profile?.schoolId || DEFAULT_SCHOOL_ID
+}
+
+function isAdminProfile(profile) {
+  return profile?.role === 'admin'
+}
+
+function isAssignedToTeacher(entity, teacherId) {
+  if (!entity || !teacherId) return false
+
+  return (
+    entity.teacherId === teacherId ||
+    entity.createdBy === teacherId ||
+    (Array.isArray(entity.teacherIds) && entity.teacherIds.includes(teacherId))
+  )
+}
+
+function filterStudentsByProfile(students, profile, teacherId) {
+  if (isAdminProfile(profile)) return students
+
+  return students.filter(student =>
+    isAssignedToTeacher(student, teacherId)
+  )
+}
+
+function filterClassesByProfile(classes, profile, teacherId) {
+  if (isAdminProfile(profile)) return classes
+
+  return classes.filter(classItem =>
+    isAssignedToTeacher(classItem, teacherId)
+  )
+}
+
+function filterResourcesByProfile(items, profile, teacherId) {
+  if (isAdminProfile(profile)) return items
+
+  return items.filter(item =>
+    isAssignedToTeacher(item, teacherId)
+  )
+}
+
+function filterClassStudentIds(classItem, visibleStudents) {
+  const visibleStudentIds = new Set(visibleStudents.map(student => student.id))
+
+  return (classItem.studentIds || []).filter(studentId =>
+    visibleStudentIds.has(studentId)
+  )
+}
+
+
 const LEGACY_TYPES = ['fitb', 'summaryOptions', 'summary']
 
 function isLegacyType(type) {
@@ -26,6 +79,7 @@ export default function CreateReading() {
   const isEditMode = Boolean(id)
 
   const [user, setUser] = useState(null)
+  const [profile, setProfile] = useState(null)
   const [students, setStudents] = useState([])
   const [classes, setClasses] = useState([])
 
@@ -221,6 +275,7 @@ export default function CreateReading() {
         }
 
         setUser(currentUser)
+        setProfile({ id: currentUser.uid, ...profile })
       } catch (error) {
         console.error(error)
 
@@ -238,31 +293,48 @@ export default function CreateReading() {
   }, [navigate])
 
   useEffect(() => {
+    if (!user || !profile) return
+
     const q = query(collection(db, 'users'), where('role', '==', 'student'))
+
     return onSnapshot(q, snap => {
-      setStudents(
-        snap.docs
-          .map(d => ({ id: d.id, ...d.data() }))
-          .filter(student => student.status === 'approved' && student.deleted !== true)
-          .sort((a, b) =>
-            (a.name || a.email || '').localeCompare(b.name || b.email || '')
-          )
+      const list = snap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .filter(student => student.status === 'approved' && student.deleted !== true)
+
+      const visibleStudents = filterStudentsByProfile(
+        list,
+        profile,
+        user.uid
       )
+
+      visibleStudents.sort((a, b) =>
+        (a.name || a.email || '').localeCompare(b.name || b.email || '')
+      )
+
+      setStudents(visibleStudents)
     })
-  }, [])
+  }, [user, profile])
 
   useEffect(() => {
+    if (!user || !profile) return
+
     const q = query(collection(db, 'classes'))
 
     return onSnapshot(q, snap => {
       const list = snap.docs
         .map(d => ({ id: d.id, ...d.data() }))
         .filter(classItem => classItem.archived !== true)
-        .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
 
-      setClasses(list)
+      const visibleClasses = filterClassesByProfile(
+        list,
+        profile,
+        user.uid
+      ).sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+
+      setClasses(visibleClasses)
     })
-  }, [])
+  }, [user, profile])
 
   // ============================================================
   // Load existing reading (edit mode)
@@ -507,7 +579,7 @@ export default function CreateReading() {
   }
 
   const assignClassToReading = classItem => {
-    const classStudentIds = classItem.studentIds || []
+    const classStudentIds = filterClassStudentIds(classItem, students)
 
     if (classStudentIds.length === 0) {
       alert('This class has no students yet.')
@@ -518,7 +590,7 @@ export default function CreateReading() {
   }
 
   const removeClassFromReading = classItem => {
-    const classStudentIds = classItem.studentIds || []
+    const classStudentIds = filterClassStudentIds(classItem, students)
 
     setAssignTo(prev =>
       prev.filter(studentId => !classStudentIds.includes(studentId))
@@ -526,13 +598,13 @@ export default function CreateReading() {
   }
 
   const isClassFullyAssigned = classItem => {
-    const classStudentIds = classItem.studentIds || []
+    const classStudentIds = filterClassStudentIds(classItem, students)
     if (classStudentIds.length === 0) return false
     return classStudentIds.every(studentId => assignTo.includes(studentId))
   }
 
   const isClassPartlyAssigned = classItem => {
-    const classStudentIds = classItem.studentIds || []
+    const classStudentIds = filterClassStudentIds(classItem, students)
     if (classStudentIds.length === 0) return false
     return classStudentIds.some(studentId => assignTo.includes(studentId))
   }
@@ -541,6 +613,17 @@ export default function CreateReading() {
     const student = students.find(item => item.id === studentId)
     return student?.name || student?.email || 'Unknown student'
   }
+
+
+  useEffect(() => {
+    if (!user || !profile || isAdminProfile(profile) || students.length === 0) return
+
+    const visibleStudentIds = new Set(students.map(student => student.id))
+
+    setAssignTo(prev =>
+      prev.filter(studentId => visibleStudentIds.has(studentId))
+    )
+  }, [user, profile, students])
 
   // ============================================================
   // Paragraph helpers
@@ -1658,6 +1741,7 @@ export default function CreateReading() {
       timeLimit,
       dueDate,
       assignTo,
+      schoolId: getProfileSchoolId(profile),
       passageMode,
       passage: fullPassage,
       paragraphs,
@@ -1802,7 +1886,7 @@ export default function CreateReading() {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                 {classes.map(classItem => {
-                  const classStudentIds = classItem.studentIds || []
+                  const classStudentIds = filterClassStudentIds(classItem, students)
                   const fullyAssigned = isClassFullyAssigned(classItem)
                   const partlyAssigned = isClassPartlyAssigned(classItem)
 

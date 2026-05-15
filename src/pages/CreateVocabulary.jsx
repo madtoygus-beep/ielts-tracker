@@ -15,6 +15,59 @@ import { useNavigate, useParams } from 'react-router-dom'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
+const DEFAULT_SCHOOL_ID = 'maxima'
+
+function getProfileSchoolId(profile) {
+  return profile?.schoolId || DEFAULT_SCHOOL_ID
+}
+
+function isAdminProfile(profile) {
+  return profile?.role === 'admin'
+}
+
+function isAssignedToTeacher(entity, teacherId) {
+  if (!entity || !teacherId) return false
+
+  return (
+    entity.teacherId === teacherId ||
+    entity.createdBy === teacherId ||
+    (Array.isArray(entity.teacherIds) && entity.teacherIds.includes(teacherId))
+  )
+}
+
+function filterStudentsByProfile(students, profile, teacherId) {
+  if (isAdminProfile(profile)) return students
+
+  return students.filter(student =>
+    isAssignedToTeacher(student, teacherId)
+  )
+}
+
+function filterClassesByProfile(classes, profile, teacherId) {
+  if (isAdminProfile(profile)) return classes
+
+  return classes.filter(classItem =>
+    isAssignedToTeacher(classItem, teacherId)
+  )
+}
+
+function filterResourcesByProfile(items, profile, teacherId) {
+  if (isAdminProfile(profile)) return items
+
+  return items.filter(item =>
+    isAssignedToTeacher(item, teacherId)
+  )
+}
+
+function filterClassStudentIds(classItem, visibleStudents) {
+  const visibleStudentIds = new Set(visibleStudents.map(student => student.id))
+
+  return (classItem.studentIds || []).filter(studentId =>
+    visibleStudentIds.has(studentId)
+  )
+}
+
+
 const emptyQuestion = () => ({
   id: crypto.randomUUID(),
   question: '',
@@ -28,6 +81,7 @@ export default function CreateVocabulary() {
   const navigate = useNavigate()
 
   const [user, setUser] = useState(null)
+  const [profile, setProfile] = useState(null)
   const [students, setStudents] = useState([])
   const [classes, setClasses] = useState([])
   const [loading, setLoading] = useState(true)
@@ -86,6 +140,7 @@ export default function CreateVocabulary() {
         }
 
         setUser(currentUser)
+        setProfile({ id: currentUser.uid, ...profile })
 
         const studentsQuery = query(
           collection(db, 'users'),
@@ -97,11 +152,18 @@ export default function CreateVocabulary() {
             const list = snap.docs
               .map(d => ({ id: d.id, ...d.data() }))
               .filter(item => !item.deleted && item.status === 'approved')
-              .sort((a, b) =>
-                (a.name || a.email || '').localeCompare(b.name || b.email || '')
-              )
 
-            setStudents(list)
+            const visibleStudents = filterStudentsByProfile(
+              list,
+              profile,
+              currentUser.uid
+            )
+
+            visibleStudents.sort((a, b) =>
+              (a.name || a.email || '').localeCompare(b.name || b.email || '')
+            )
+
+            setStudents(visibleStudents)
           })
         )
 
@@ -110,9 +172,14 @@ export default function CreateVocabulary() {
             const list = snap.docs
               .map(d => ({ id: d.id, ...d.data() }))
               .filter(classItem => classItem.archived !== true)
-              .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
 
-            setClasses(list)
+            const visibleClasses = filterClassesByProfile(
+              list,
+              profile,
+              currentUser.uid
+            ).sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+
+            setClasses(visibleClasses)
           })
         )
 
@@ -163,6 +230,17 @@ export default function CreateVocabulary() {
       clearLiveUnsubscribers()
     }
   }, [id, isEditMode, navigate])
+
+
+  useEffect(() => {
+    if (!user || !profile || isAdminProfile(profile) || students.length === 0) return
+
+    const visibleStudentIds = new Set(students.map(student => student.id))
+
+    setAssignTo(prev =>
+      prev.filter(studentId => visibleStudentIds.has(studentId))
+    )
+  }, [user, profile, students])
 
   const updateQuestion = (questionId, patch) => {
     setQuestions(prev =>
@@ -259,7 +337,7 @@ export default function CreateVocabulary() {
   }
 
   const assignClass = classItem => {
-    const classStudentIds = classItem.studentIds || []
+    const classStudentIds = filterClassStudentIds(classItem, students)
 
     if (classStudentIds.length === 0) {
       alert('This class has no students yet.')
@@ -270,18 +348,18 @@ export default function CreateVocabulary() {
   }
 
   const removeClass = classItem => {
-    const classStudentIds = classItem.studentIds || []
+    const classStudentIds = filterClassStudentIds(classItem, students)
     setAssignTo(prev => prev.filter(studentId => !classStudentIds.includes(studentId)))
   }
 
   const isClassFullyAssigned = classItem => {
-    const classStudentIds = classItem.studentIds || []
+    const classStudentIds = filterClassStudentIds(classItem, students)
     if (classStudentIds.length === 0) return false
     return classStudentIds.every(studentId => assignTo.includes(studentId))
   }
 
   const isClassPartlyAssigned = classItem => {
-    const classStudentIds = classItem.studentIds || []
+    const classStudentIds = filterClassStudentIds(classItem, students)
     if (classStudentIds.length === 0) return false
     return classStudentIds.some(studentId => assignTo.includes(studentId))
   }
@@ -359,6 +437,7 @@ export default function CreateVocabulary() {
         answer: question.answer
       })),
       assignTo,
+      schoolId: getProfileSchoolId(profile),
       archived: false,
       updatedAt: now
     }
@@ -621,7 +700,7 @@ export default function CreateVocabulary() {
 
                 <div className="space-y-2">
                   {classes.map(classItem => {
-                    const classStudentIds = classItem.studentIds || []
+                    const classStudentIds = filterClassStudentIds(classItem, students)
                     const fullyAssigned = isClassFullyAssigned(classItem)
                     const partlyAssigned = isClassPartlyAssigned(classItem)
 

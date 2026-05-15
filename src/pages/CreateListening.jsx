@@ -15,6 +15,59 @@ import { useNavigate, useParams } from 'react-router-dom'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
+const DEFAULT_SCHOOL_ID = 'maxima'
+
+function getProfileSchoolId(profile) {
+  return profile?.schoolId || DEFAULT_SCHOOL_ID
+}
+
+function isAdminProfile(profile) {
+  return profile?.role === 'admin'
+}
+
+function isAssignedToTeacher(entity, teacherId) {
+  if (!entity || !teacherId) return false
+
+  return (
+    entity.teacherId === teacherId ||
+    entity.createdBy === teacherId ||
+    (Array.isArray(entity.teacherIds) && entity.teacherIds.includes(teacherId))
+  )
+}
+
+function filterStudentsByProfile(students, profile, teacherId) {
+  if (isAdminProfile(profile)) return students
+
+  return students.filter(student =>
+    isAssignedToTeacher(student, teacherId)
+  )
+}
+
+function filterClassesByProfile(classes, profile, teacherId) {
+  if (isAdminProfile(profile)) return classes
+
+  return classes.filter(classItem =>
+    isAssignedToTeacher(classItem, teacherId)
+  )
+}
+
+function filterResourcesByProfile(items, profile, teacherId) {
+  if (isAdminProfile(profile)) return items
+
+  return items.filter(item =>
+    isAssignedToTeacher(item, teacherId)
+  )
+}
+
+function filterClassStudentIds(classItem, visibleStudents) {
+  const visibleStudentIds = new Set(visibleStudents.map(student => student.id))
+
+  return (classItem.studentIds || []).filter(studentId =>
+    visibleStudentIds.has(studentId)
+  )
+}
+
+
 const emptyQuestion = () => ({
   id: crypto.randomUUID(),
   type: 'mcq',
@@ -134,6 +187,7 @@ export default function CreateListening() {
   const navigate = useNavigate()
 
   const [user, setUser] = useState(null)
+  const [profile, setProfile] = useState(null)
   const [students, setStudents] = useState([])
   const [classes, setClasses] = useState([])
   const [search, setSearch] = useState('')
@@ -187,6 +241,7 @@ export default function CreateListening() {
         }
 
         setUser(currentUser)
+        setProfile({ id: currentUser.uid, ...profile })
       } catch (error) {
         console.error(error)
 
@@ -204,6 +259,8 @@ export default function CreateListening() {
   }, [navigate])
 
   useEffect(() => {
+    if (!user || !profile) return
+
     const q = query(collection(db, 'users'), where('role', '==', 'student'))
 
     return onSnapshot(q, snap => {
@@ -211,25 +268,39 @@ export default function CreateListening() {
         .map(d => ({ id: d.id, ...d.data() }))
         .filter(student => student.status === 'approved' && student.deleted !== true)
 
-      list.sort((a, b) =>
+      const visibleStudents = filterStudentsByProfile(
+        list,
+        profile,
+        user.uid
+      )
+
+      visibleStudents.sort((a, b) =>
         (a.name || a.email || '').localeCompare(b.name || b.email || '')
       )
-      setStudents(list)
+
+      setStudents(visibleStudents)
     })
-  }, [])
+  }, [user, profile])
 
   useEffect(() => {
+    if (!user || !profile) return
+
     const q = query(collection(db, 'classes'))
 
     return onSnapshot(q, snap => {
       const list = snap.docs
         .map(d => ({ id: d.id, ...d.data() }))
         .filter(classItem => classItem.archived !== true)
-        .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
 
-      setClasses(list)
+      const visibleClasses = filterClassesByProfile(
+        list,
+        profile,
+        user.uid
+      ).sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+
+      setClasses(visibleClasses)
     })
-  }, [])
+  }, [user, profile])
 
   useEffect(() => {
     if (!activePartId && parts.length > 0) {
@@ -282,6 +353,17 @@ export default function CreateListening() {
   const selectedStudents = students.filter(student =>
     assignTo.includes(student.id)
   )
+
+
+  useEffect(() => {
+    if (!user || !profile || isAdminProfile(profile) || students.length === 0) return
+
+    const visibleStudentIds = new Set(students.map(student => student.id))
+
+    setAssignTo(prev =>
+      prev.filter(studentId => visibleStudentIds.has(studentId))
+    )
+  }, [user, profile, students])
 
   const activePart = parts.find(part => part.id === activePartId) || parts[0]
   const questions = activePart?.questions || []
@@ -480,7 +562,7 @@ export default function CreateListening() {
   }
 
   const assignClassToListening = classItem => {
-    const classStudentIds = classItem.studentIds || []
+    const classStudentIds = filterClassStudentIds(classItem, students)
 
     if (classStudentIds.length === 0) {
       alert('This class has no students yet.')
@@ -491,7 +573,7 @@ export default function CreateListening() {
   }
 
   const removeClassFromListening = classItem => {
-    const classStudentIds = classItem.studentIds || []
+    const classStudentIds = filterClassStudentIds(classItem, students)
 
     setAssignTo(prev =>
       prev.filter(studentId => !classStudentIds.includes(studentId))
@@ -499,13 +581,13 @@ export default function CreateListening() {
   }
 
   const isClassFullyAssigned = classItem => {
-    const classStudentIds = classItem.studentIds || []
+    const classStudentIds = filterClassStudentIds(classItem, students)
     if (classStudentIds.length === 0) return false
     return classStudentIds.every(studentId => assignTo.includes(studentId))
   }
 
   const isClassPartlyAssigned = classItem => {
-    const classStudentIds = classItem.studentIds || []
+    const classStudentIds = filterClassStudentIds(classItem, students)
     if (classStudentIds.length === 0) return false
     return classStudentIds.some(studentId => assignTo.includes(studentId))
   }
@@ -1263,6 +1345,7 @@ export default function CreateListening() {
       dueDate,
       timeLimit: Number(timeLimit) || 30,
       assignTo,
+      schoolId: getProfileSchoolId(profile),
       parts: cleanParts,
       questions: cleanParts.flatMap(part =>
         (part.questions || []).map(question => ({
@@ -2310,7 +2393,7 @@ export default function CreateListening() {
 
                 <div className="flex flex-col gap-2">
                   {classes.map(classItem => {
-                    const classStudentIds = classItem.studentIds || []
+                    const classStudentIds = filterClassStudentIds(classItem, students)
                     const fullyAssigned = isClassFullyAssigned(classItem)
                     const partlyAssigned = isClassPartlyAssigned(classItem)
 
