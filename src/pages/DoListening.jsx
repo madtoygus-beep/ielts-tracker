@@ -123,6 +123,18 @@ function getSavedListeningState(storageKey) {
 }
 
 
+function getManualQuestionNumber(item) {
+  const value =
+    item?.questionNumber ||
+    item?.questionNo ||
+    item?.qNumber ||
+    item?.manualQuestionNumber ||
+    item?.displayNumber ||
+    ''
+
+  return value?.toString().trim() || null
+}
+
 function getBlankQuestionNumber(parts, partId, questionId, rowId, cellIndex) {
   let number = 1
 
@@ -136,7 +148,7 @@ function getBlankQuestionNumber(parts, partId, questionId, rowId, cellIndex) {
             if (cell.type !== 'blank') continue
 
             if (part.id === partId && row.id === rowId && index === cellIndex) {
-              return number
+              return getManualQuestionNumber(cell) || number
             }
 
             number++
@@ -164,7 +176,7 @@ function getCompletionBlankQuestionNumber(parts, partId, questionId, sectionId, 
             if (item.type !== 'blank') continue
 
             if (part.id === partId && section.id === sectionId && item.id === itemId) {
-              return number
+              return getManualQuestionNumber(item) || number
             }
 
             number++
