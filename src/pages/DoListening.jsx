@@ -1097,119 +1097,150 @@ export default function DoListening() {
     </div>
   )
 
-  const renderMatchingQuestion = (question, partId, reviewMode = false) => (
-    <div>
-      {question.instruction && (
-        <p className="text-sm text-gray-700 mb-4 whitespace-pre-wrap">
-          {question.instruction}
-        </p>
-      )}
+  const renderMatchingQuestion = (question, partId, reviewMode = false) => {
+    const optionList = (question.options || []).filter(Boolean)
 
-      {question.matchingTitle && (
-        <p className="font-semibold text-gray-900 mb-4">
-          {question.matchingTitle}
-        </p>
-      )}
+    return (
+      <div>
+        {question.instruction && (
+          <p className="text-sm text-gray-700 mb-4 whitespace-pre-wrap">
+            {question.instruction}
+          </p>
+        )}
 
-      <div className="bg-white border border-gray-100 rounded-xl p-4 mb-4">
-        <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
-          Options
-        </p>
+        {question.matchingTitle && (
+          <p className="font-semibold text-gray-900 mb-4">
+            {question.matchingTitle}
+          </p>
+        )}
 
-        <div className="space-y-2">
-          {(question.options || []).filter(Boolean).map((option, optionIndex) => (
-            <div key={optionIndex} className="flex gap-2 text-sm text-gray-700 leading-5">
-              <span className="font-semibold text-gray-500 min-w-6">
-                {letters[optionIndex]}.
-              </span>
+        {reviewMode ? (
+          <div className="bg-white border border-gray-100 rounded-xl p-4 mb-4">
+            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
+              Options
+            </p>
 
-              <span>{option}</span>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-2">
+              {optionList.map((option, optionIndex) => (
+                <div key={optionIndex} className="flex gap-2 text-sm text-gray-700 leading-5">
+                  <span className="font-semibold text-gray-500 min-w-6">
+                    {letters[optionIndex]}.
+                  </span>
+
+                  <span>{option}</span>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-      </div>
+          </div>
+        ) : null}
 
-      <div className="space-y-3">
-        {(question.matchingItems || []).map(item => {
-          const key = matchingAnswerKey(question.id, item.id)
-          const questionNumber = getMatchingQuestionNumber(parts, partId, question.id, item.id)
-          const correct = isMatchingItemCorrect(question, item)
+        <div className={reviewMode ? 'space-y-3' : 'grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_320px] gap-4 md:items-start'}>
+          <div className="space-y-3">
+            {(question.matchingItems || []).map(item => {
+              const key = matchingAnswerKey(question.id, item.id)
+              const questionNumber = getMatchingQuestionNumber(parts, partId, question.id, item.id)
+              const correct = isMatchingItemCorrect(question, item)
 
-          if (reviewMode) {
-            return (
-              <div
-                key={item.id}
-                className={`rounded-xl p-4 border ${
-                  correct
-                    ? 'bg-green-50 border-green-100'
-                    : 'bg-red-50 border-red-100'
-                }`}
-              >
-                <div className="grid grid-cols-1 md:grid-cols-[70px_1fr] gap-3 mb-3">
+              if (reviewMode) {
+                return (
+                  <div
+                    key={item.id}
+                    className={`rounded-xl p-4 border ${
+                      correct
+                        ? 'bg-green-50 border-green-100'
+                        : 'bg-red-50 border-red-100'
+                    }`}
+                  >
+                    <div className="grid grid-cols-1 md:grid-cols-[70px_1fr] gap-3 mb-3">
+                      <span className="text-sm font-bold text-purple-600">
+                        Q{questionNumber}
+                      </span>
+
+                      <p className="text-sm font-medium text-gray-800">
+                        {item.prompt}
+                      </p>
+                    </div>
+
+                    <p className="text-xs text-gray-500 mb-1">Your answer:</p>
+                    <p className="text-sm text-gray-800 mb-2">
+                      {answers[key] ? `${answers[key]}. ${getMatchingOptionText(question, answers[key])}` : 'No answer'}
+                    </p>
+
+                    {!correct && (
+                      <>
+                        <p className="text-xs text-gray-500 mb-1">Correct:</p>
+                        <p className="text-sm font-medium text-green-700">
+                          {item.answer}. {getMatchingOptionText(question, item.answer)}
+                        </p>
+                      </>
+                    )}
+                  </div>
+                )
+              }
+
+              return (
+                <div
+                  key={item.id}
+                  className="grid grid-cols-1 sm:grid-cols-[64px_minmax(0,1fr)_140px] gap-3 items-center bg-gray-50 border border-gray-100 rounded-xl p-4"
+                >
                   <span className="text-sm font-bold text-purple-600">
                     Q{questionNumber}
                   </span>
 
-                  <p className="text-sm font-medium text-gray-800">
+                  <label className="text-sm font-medium text-gray-800">
                     {item.prompt}
-                  </p>
+                  </label>
+
+                  <select
+                    value={answers[key] || ''}
+                    onChange={e => handleMatchingAnswer(question.id, item.id, e.target.value)}
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 bg-white"
+                  >
+                    <option value="">Select letter</option>
+
+                    {(question.options || []).map((option, optionIndex) => {
+                      if (!option?.trim()) return null
+
+                      const letter = letters[optionIndex]
+
+                      return (
+                        <option key={letter} value={letter}>
+                          {letter}
+                        </option>
+                      )
+                    })}
+                  </select>
                 </div>
+              )
+            })}
+          </div>
 
-                <p className="text-xs text-gray-500 mb-1">Your answer:</p>
-                <p className="text-sm text-gray-800 mb-2">
-                  {answers[key] ? `${answers[key]}. ${getMatchingOptionText(question, answers[key])}` : 'No answer'}
-                </p>
+          {!reviewMode && (
+            <div className="bg-white border border-purple-100 rounded-xl p-4 md:sticky md:top-[210px] shadow-sm max-h-[calc(100vh-240px)] overflow-y-auto">
+              <p className="text-xs font-semibold text-purple-600 uppercase tracking-wider mb-3">
+                Options A-{letters[Math.max(optionList.length - 1, 0)] || ''}
+              </p>
 
-                {!correct && (
-                  <>
-                    <p className="text-xs text-gray-500 mb-1">Correct:</p>
-                    <p className="text-sm font-medium text-green-700">
-                      {item.answer}. {getMatchingOptionText(question, item.answer)}
-                    </p>
-                  </>
-                )}
+              <div className="grid grid-cols-1 gap-2">
+                {optionList.map((option, optionIndex) => (
+                  <div
+                    key={optionIndex}
+                    className="flex gap-2 text-sm text-gray-700 leading-5 bg-gray-50 border border-gray-100 rounded-xl px-3 py-2"
+                  >
+                    <span className="font-bold text-purple-600 min-w-6">
+                      {letters[optionIndex]}.
+                    </span>
+
+                    <span>{option}</span>
+                  </div>
+                ))}
               </div>
-            )
-          }
-
-          return (
-            <div
-              key={item.id}
-              className="grid grid-cols-1 md:grid-cols-[70px_1fr_180px] gap-3 items-center bg-gray-50 border border-gray-100 rounded-xl p-4"
-            >
-              <span className="text-sm font-bold text-purple-600">
-                Q{questionNumber}
-              </span>
-
-              <label className="text-sm font-medium text-gray-800">
-                {item.prompt}
-              </label>
-
-              <select
-                value={answers[key] || ''}
-                onChange={e => handleMatchingAnswer(question.id, item.id, e.target.value)}
-                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 bg-white"
-              >
-                <option value="">Select letter</option>
-
-                {(question.options || []).map((option, optionIndex) => {
-                  if (!option?.trim()) return null
-
-                  const letter = letters[optionIndex]
-
-                  return (
-                    <option key={letter} value={letter}>
-                      {letter}
-                    </option>
-                  )
-                })}
-              </select>
             </div>
-          )
-        })}
+          )}
+        </div>
       </div>
-    </div>
-  )
+    )
+  }
 
   if (!listening) {
     return (
@@ -1372,7 +1403,7 @@ export default function DoListening() {
                             >
                               <div className="flex items-center justify-between mb-2">
                                 <p className="text-sm font-semibold text-gray-800">
-                                  Q{getMapQuestionNumber(parts, part.id, question.id, item.id)}. {item.prompt}
+                                  Q{getMapQuestionNumber(parts, activePart?.id, question.id, item.id)}. {item.prompt}
                                 </p>
 
                                 <span className={`text-xs font-semibold ${correct ? 'text-green-600' : 'text-red-600'}`}>
@@ -1783,7 +1814,7 @@ export default function DoListening() {
                         return (
                           <div key={item.id} className="grid grid-cols-[1fr_140px] gap-3 items-center bg-gray-50 border border-gray-100 rounded-xl p-4">
                             <label className="text-sm font-medium text-gray-800">
-                              Q{getMapQuestionNumber(parts, part.id, question.id, item.id)}. {item.prompt}
+                              Q{getMapQuestionNumber(parts, activePart?.id, question.id, item.id)}. {item.prompt}
                             </label>
 
                             <select
