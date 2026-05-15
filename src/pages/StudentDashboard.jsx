@@ -162,6 +162,10 @@
     return `${questionId}_${sectionId}_${itemId}`
   }
 
+  function matchingAnswerKey(questionId, itemId) {
+    return `${questionId}_${itemId}`
+  }
+
   function parseAcceptedAnswers(cell) {
     const main = cell.answer ? [cell.answer] : []
     const alternatives = cell.acceptedAnswers
@@ -265,6 +269,16 @@
     return acceptedAnswers.includes(normalizeAnswer(userAnswer))
   }
 
+  function isListeningMatchingItemCorrect(submission, question, item) {
+    const key = matchingAnswerKey(question.id, item.id)
+    const userAnswer = normalizeAnswer(submission.answers?.[key])
+    const correctAnswer = normalizeAnswer(item.answer)
+
+    if (!userAnswer || !correctAnswer) return false
+
+    return userAnswer === correctAnswer
+  }
+
   function estimateHomeworkBand(correct, total) {
     if (!total) return null
 
@@ -286,6 +300,7 @@
 
   function getQuestionTypeLabel(type) {
     if (type === 'matching') return 'Matching Headings'
+    if (type === 'listeningMatching') return 'Listening Matching'
     if (type === 'sentenceEndings') return 'Sentence Endings'
     if (type === 'mcq') return 'MCQ'
     if (type === 'fitb') return 'Fill Blank'
@@ -330,6 +345,26 @@
       if (!homework) return
 
       homework.questions?.forEach(question => {
+        if (question.type === 'matching' && Array.isArray(question.matchingItems)) {
+          const key = 'listeningMatching'
+
+          if (!stats[key]) {
+            stats[key] = { correct: 0, total: 0 }
+          }
+
+          question.matchingItems.forEach(item => {
+            stats[key].total++
+            totalQuestions++
+
+            if (isListeningMatchingItemCorrect(submission, question, item)) {
+              stats[key].correct++
+              totalCorrect++
+            }
+          })
+
+          return
+        }
+
         if (question.type === 'matching') {
           question.paragraphs?.forEach(paragraph => {
             if (!stats.matching) {
@@ -633,7 +668,7 @@
       listenings,
       listeningSubmissions,
       'listeningId',
-      ['mcq', 'fitb', 'tfng', 'table', 'summary', 'note', 'listeningCompletion']
+      ['mcq', 'fitb', 'tfng', 'table', 'summary', 'note', 'listeningCompletion', 'listeningMatching']
     )
 
     const readingCompletion = {

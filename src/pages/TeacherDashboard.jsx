@@ -1215,6 +1215,10 @@ Continue permanent delete?`
     return `${questionId}_${sectionId}_${itemId}`
   }
 
+  const matchingAnswerKey = (questionId, itemId) => {
+    return `${questionId}_${itemId}`
+  }
+
   const getHeadingText = (reading, number) => {
     if (!number) return 'No answer'
     const index = Number(number) - 1
@@ -1339,6 +1343,16 @@ Continue permanent delete?`
     if (!isWithinWordLimit(userAnswer, item.maxWords)) return false
 
     return acceptedAnswers.includes(normalize(userAnswer))
+  }
+
+  const isListeningMatchingItemCorrect = (submission, question, item) => {
+    const key = matchingAnswerKey(question.id, item.id)
+    const userAnswer = normalize(submission.answers?.[key])
+    const correctAnswer = normalize(item.answer)
+
+    if (!userAnswer || !correctAnswer) return false
+
+    return userAnswer === correctAnswer
   }
 
   const getStudentAnalytics = studentId => {
@@ -1904,6 +1918,18 @@ Continue permanent delete?`
           }
         }
 
+        if (question.type === 'matching' && Array.isArray(question.matchingItems)) {
+          question.matchingItems.forEach(item => {
+            stats[key].total++
+
+            if (!isListeningMatchingItemCorrect(submission, question, item)) {
+              stats[key].wrong++
+            }
+          })
+
+          return
+        }
+
         if (question.type === 'listeningCompletion') {
           question.sections?.forEach(section => {
             section.parts?.forEach(item => {
@@ -1986,7 +2012,8 @@ Continue permanent delete?`
       tfng: { correct: 0, total: 0 },
       table: { correct: 0, total: 0 },
       note: { correct: 0, total: 0 },
-      listeningCompletion: { correct: 0, total: 0 }
+      listeningCompletion: { correct: 0, total: 0 },
+      listeningMatching: { correct: 0, total: 0 }
     }
 
     listeningSubmissions.forEach(submission => {
@@ -1994,6 +2021,18 @@ Continue permanent delete?`
       if (!listening) return
 
       listening.questions?.forEach(question => {
+        if (question.type === 'matching' && Array.isArray(question.matchingItems)) {
+          question.matchingItems.forEach(item => {
+            stats.listeningMatching.total++
+
+            if (isListeningMatchingItemCorrect(submission, question, item)) {
+              stats.listeningMatching.correct++
+            }
+          })
+
+          return
+        }
+
         if (question.type === 'listeningCompletion') {
           question.sections?.forEach(section => {
             section.parts?.forEach(item => {
@@ -2049,6 +2088,7 @@ Continue permanent delete?`
   }
 
   const getListeningTypeLabel = type => {
+    if (type === 'listeningMatching') return 'Listening Matching'
     if (type === 'mcq') return 'MCQ'
     if (type === 'fitb') return 'Fill Blank'
     if (type === 'tfng') return 'T/F/NG'
