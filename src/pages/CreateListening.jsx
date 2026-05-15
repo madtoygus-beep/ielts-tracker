@@ -83,7 +83,7 @@ const emptyQuestion = () => ({
       id: crypto.randomUUID(),
       cells: [
         { type: 'text', text: '' },
-        { type: 'blank', beforeText: '', afterText: '', answer: '', acceptedAnswers: '', maxWords: '' }
+        { type: 'blank', beforeText: '', afterText: '', answer: '', acceptedAnswers: '', maxWords: '', questionNumber: '' }
       ]
     }
   ],
@@ -108,7 +108,8 @@ const emptyTableRow = columns => ({
     afterText: '',
     answer: '',
     acceptedAnswers: '',
-    maxWords: ''
+    maxWords: '',
+    questionNumber: ''
   }))
 })
 
@@ -123,7 +124,8 @@ const emptyCompletionBlank = () => ({
   type: 'blank',
   answer: '',
   acceptedAnswers: '',
-  maxWords: ''
+  maxWords: '',
+  questionNumber: ''
 })
 
 const emptyCompletionSection = () => ({
@@ -484,6 +486,12 @@ export default function CreateListening() {
     return 1
   }
 
+  const getDisplayQuestionNumber = (manualNumber, autoNumber) => {
+    const cleanManual = manualNumber?.toString().trim()
+
+    return cleanManual || autoNumber
+  }
+
   const getListeningBlankNumber = (partId, questionId, rowId, cellIndex) => {
     let number = 1
 
@@ -497,7 +505,7 @@ export default function CreateListening() {
               if (cell.type !== 'blank') continue
 
               if (part.id === partId && row.id === rowId && index === cellIndex) {
-                return number
+                return getDisplayQuestionNumber(cell.questionNumber, number)
               }
 
               number++
@@ -525,7 +533,7 @@ export default function CreateListening() {
               if (item.type !== 'blank') continue
 
               if (part.id === partId && section.id === sectionId && item.id === partItemId) {
-                return number
+                return getDisplayQuestionNumber(item.questionNumber, number)
               }
 
               number++
@@ -793,7 +801,7 @@ export default function CreateListening() {
           ...row,
           cells: [
             ...(row.cells || []),
-            { type: 'blank', text: '', beforeText: '', afterText: '', answer: '', acceptedAnswers: '', maxWords: '' }
+            { type: 'blank', text: '', beforeText: '', afterText: '', answer: '', acceptedAnswers: '', maxWords: '', questionNumber: '' }
           ]
         }))
 
@@ -1945,7 +1953,14 @@ export default function CreateListening() {
                                         className="w-full border border-gray-200 rounded-lg px-3 py-2 text-xs outline-none focus:border-purple-400 bg-white resize-none"
                                       />
                                     ) : (
-                                      <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                                      <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+                                        <input
+                                          value={item.questionNumber || ''}
+                                          onChange={e => updateCompletionPart(question.id, section.id, item.id, 'questionNumber', e.target.value)}
+                                          placeholder={`Q no. auto ${getListeningCompletionBlankNumber(activePart.id, question.id, section.id, item.id)}`}
+                                          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-xs outline-none focus:border-purple-400 bg-white"
+                                        />
+
                                         {question.completionMode === 'choose' ? (
                                           <select
                                             value={item.answer || ''}
@@ -2308,6 +2323,13 @@ export default function CreateListening() {
                                               <span>{cell.afterText || ''}</span>
                                             </div>
                                           </div>
+
+                                          <input
+                                            value={cell.questionNumber || ''}
+                                            onChange={e => updateTableCell(question.id, row.id, cellIndex, 'questionNumber', e.target.value)}
+                                            placeholder={`Q no. auto ${getListeningBlankNumber(activePart.id, question.id, row.id, cellIndex)}`}
+                                            className="w-full border border-gray-200 rounded-lg px-2 py-1 text-xs outline-none focus:border-purple-400 bg-white"
+                                          />
 
                                           <input
                                             value={cell.beforeText || ''}
