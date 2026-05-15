@@ -17,6 +17,12 @@ import { useNavigate } from 'react-router-dom'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
+const DEFAULT_SCHOOL_ID = 'maxima'
+
+function getSchoolId(item) {
+  return item?.schoolId || DEFAULT_SCHOOL_ID
+}
+
 export default function TeacherDashboard() {
   const [students, setStudents] = useState([])
   const [classes, setClasses] = useState([])
@@ -78,6 +84,7 @@ export default function TeacherDashboard() {
   })
 
   const [user, setUser] = useState(null)
+  const [profile, setProfile] = useState(null)
   const [showPasswordModal, setShowPasswordModal] = useState(false)
   const [newPassword, setNewPassword] = useState('')
   const [passwordMsg, setPasswordMsg] = useState('')
@@ -136,17 +143,29 @@ export default function TeacherDashboard() {
         }
 
         setUser(currentUser)
+        setProfile(profile)
 
-        const studentsQuery = query(
-          collection(db, 'users'),
-          where('role', '==', 'student')
-        )
+        const isAdminUser = profile.role === 'admin'
+        const teacherSchoolId = profile.schoolId || DEFAULT_SCHOOL_ID
+
+        const studentsQuery = isAdminUser
+          ? query(collection(db, 'users'), where('role', '==', 'student'))
+          : query(
+              collection(db, 'users'),
+              where('role', '==', 'student'),
+              where('teacherIds', 'array-contains', currentUser.uid)
+            )
 
         trackSnapshot(
           onSnapshot(studentsQuery, snap => {
             const list = snap.docs
               .map(d => ({ id: d.id, ...d.data() }))
-              .filter(u => !u.deleted && u.status === 'approved')
+              .filter(u => {
+                if (u.deleted || u.status !== 'approved') return false
+                if (isAdminUser) return true
+
+                return getSchoolId(u) === teacherSchoolId
+              })
               .sort((a, b) =>
                 (a.name || a.email || '').localeCompare(b.name || b.email || '')
               )
@@ -155,11 +174,23 @@ export default function TeacherDashboard() {
           })
         )
 
+        const classesQuery = isAdminUser
+          ? query(collection(db, 'classes'))
+          : query(
+              collection(db, 'classes'),
+              where('teacherId', '==', currentUser.uid)
+            )
+
         trackSnapshot(
-          onSnapshot(collection(db, 'classes'), snap => {
+          onSnapshot(classesQuery, snap => {
             const list = snap.docs
               .map(d => ({ id: d.id, ...d.data() }))
-              .filter(classItem => classItem.archived !== true)
+              .filter(classItem => {
+                if (classItem.archived === true) return false
+                if (isAdminUser) return true
+
+                return getSchoolId(classItem) === teacherSchoolId
+              })
               .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
 
             setClasses(list)
@@ -177,6 +208,8 @@ export default function TeacherDashboard() {
               }
 
               if (!score.uid) return
+
+              if (!isAdminUser && getSchoolId(score) !== teacherSchoolId) return
 
               if (!groupedScores[score.uid]) {
                 groupedScores[score.uid] = []
@@ -197,7 +230,15 @@ export default function TeacherDashboard() {
 
         trackSnapshot(
           onSnapshot(query(collection(db, 'readings')), snap => {
-            const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+            const list = snap.docs
+              .map(d => ({ id: d.id, ...d.data() }))
+              .filter(item => {
+                if (isAdminUser) return true
+                if (getSchoolId(item) !== teacherSchoolId) return false
+
+                return item.createdBy === currentUser.uid || item.teacherId === currentUser.uid
+              })
+
             list.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
             setReadings(list)
           })
@@ -211,7 +252,15 @@ export default function TeacherDashboard() {
 
         trackSnapshot(
           onSnapshot(query(collection(db, 'writingHomeworks')), snap => {
-            const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+            const list = snap.docs
+              .map(d => ({ id: d.id, ...d.data() }))
+              .filter(item => {
+                if (isAdminUser) return true
+                if (getSchoolId(item) !== teacherSchoolId) return false
+
+                return item.createdBy === currentUser.uid || item.teacherId === currentUser.uid
+              })
+
             list.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
             setWritings(list)
           })
@@ -225,7 +274,15 @@ export default function TeacherDashboard() {
 
         trackSnapshot(
           onSnapshot(query(collection(db, 'listenings')), snap => {
-            const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+            const list = snap.docs
+              .map(d => ({ id: d.id, ...d.data() }))
+              .filter(item => {
+                if (isAdminUser) return true
+                if (getSchoolId(item) !== teacherSchoolId) return false
+
+                return item.createdBy === currentUser.uid || item.teacherId === currentUser.uid
+              })
+
             list.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
             setListenings(list)
           })
@@ -239,7 +296,15 @@ export default function TeacherDashboard() {
 
         trackSnapshot(
           onSnapshot(query(collection(db, 'mockTests')), snap => {
-            const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+            const list = snap.docs
+              .map(d => ({ id: d.id, ...d.data() }))
+              .filter(item => {
+                if (isAdminUser) return true
+                if (getSchoolId(item) !== teacherSchoolId) return false
+
+                return item.createdBy === currentUser.uid || item.teacherId === currentUser.uid
+              })
+
             list.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
             setMockTests(list)
           })
@@ -253,7 +318,15 @@ export default function TeacherDashboard() {
 
         trackSnapshot(
           onSnapshot(query(collection(db, 'vocabularyTests')), snap => {
-            const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+            const list = snap.docs
+              .map(d => ({ id: d.id, ...d.data() }))
+              .filter(item => {
+                if (isAdminUser) return true
+                if (getSchoolId(item) !== teacherSchoolId) return false
+
+                return item.createdBy === currentUser.uid || item.teacherId === currentUser.uid
+              })
+
             list.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
             setVocabularyTests(list)
           })
@@ -323,7 +396,9 @@ export default function TeacherDashboard() {
       ...form,
       uid: selected.id,
       overall: overall(form),
-      addedBy: user.uid
+      addedBy: user.uid,
+      teacherId: profile?.role === 'teacher' ? user.uid : selected.teacherIds?.[0] || '',
+      schoolId: profile?.schoolId || getSchoolId(selected)
     })
 
     setForm({
@@ -671,9 +746,20 @@ export default function TeacherDashboard() {
               ? 'vocabularyTests'
               : 'writingHomeworks'
 
+    const allowedStudentIds = students.map(student => student.id)
+    const safeAssignmentDraft = profile?.role === 'admin'
+      ? assignmentDraft
+      : assignmentDraft.filter(studentId => allowedStudentIds.includes(studentId))
+
     await updateDoc(doc(db, collectionName, selectedHomework.id), {
-      assignTo: assignmentDraft,
-      archived: false
+      assignTo: safeAssignmentDraft,
+      archived: false,
+      schoolId: profile?.schoolId || DEFAULT_SCHOOL_ID,
+      teacherId: profile?.role === 'teacher'
+        ? user.uid
+        : selectedHomework.teacherId || selectedHomework.createdBy || user.uid,
+      updatedBy: user.uid,
+      updatedAt: new Date().toISOString()
     })
 
     setSelectedHomework(null)
@@ -758,6 +844,8 @@ Continue permanent delete?`
       assignTo: [],
       archived: false,
       createdBy: user.uid,
+      teacherId: profile?.role === 'teacher' ? user.uid : reading.teacherId || '',
+      schoolId: profile?.schoolId || getSchoolId(reading),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     })
@@ -840,6 +928,8 @@ Continue permanent delete?`
       assignTo: [],
       archived: false,
       createdBy: user.uid,
+      teacherId: profile?.role === 'teacher' ? user.uid : writing.teacherId || '',
+      schoolId: profile?.schoolId || getSchoolId(writing),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     })
@@ -922,6 +1012,8 @@ Continue permanent delete?`
       assignTo: [],
       archived: false,
       createdBy: user.uid,
+      teacherId: profile?.role === 'teacher' ? user.uid : listening.teacherId || '',
+      schoolId: profile?.schoolId || getSchoolId(listening),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     })
@@ -1004,6 +1096,8 @@ Continue permanent delete?`
       assignTo: [],
       archived: false,
       createdBy: user.uid,
+      teacherId: profile?.role === 'teacher' ? user.uid : vocabularyTest.teacherId || '',
+      schoolId: profile?.schoolId || getSchoolId(vocabularyTest),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     })
@@ -2266,7 +2360,9 @@ Continue permanent delete?`
       speaking: '',
       overall: finalOverall,
       updatedAt: now,
-      updatedBy: user.uid
+      updatedBy: user.uid,
+      teacherId: profile?.role === 'teacher' ? user.uid : submission.teacherId || '',
+      schoolId: profile?.schoolId || DEFAULT_SCHOOL_ID
     }
 
     const scoreSnap = await getDocs(

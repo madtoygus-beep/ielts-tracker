@@ -1,0 +1,221 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ============================================================
+    // HELPER FUNCTIONS
+    // ============================================================
+
+    function isAuth() {
+      return request.auth != null;
+    }
+
+    function userDoc(uid) {
+      return get(/databases/$(database)/documents/users/$(uid));
+    }
+
+    function isApprovedUser() {
+      return isAuth()
+        && userDoc(request.auth.uid).data.status == 'approved'
+        && userDoc(request.auth.uid).data.deleted != true;
+    }
+
+    function isAdmin() {
+      return isApprovedUser()
+        && userDoc(request.auth.uid).data.role == 'admin';
+    }
+
+    function isTeacher() {
+      return isApprovedUser()
+        && userDoc(request.auth.uid).data.role == 'teacher';
+    }
+
+    function isStudent() {
+      return isApprovedUser()
+        && userDoc(request.auth.uid).data.role == 'student';
+    }
+
+    function isOwner(uid) {
+      return isAuth() && request.auth.uid == uid;
+    }
+
+    function schoolIdOf(data) {
+      return data.get('schoolId', 'maxima');
+    }
+
+    function sameSchool(data) {
+      return isApprovedUser()
+        && schoolIdOf(data) == schoolIdOf(userDoc(request.auth.uid).data);
+    }
+
+    function teacherCanReadUser(userId) {
+      return isTeacher()
+        && sameSchool(resource.data)
+        && (
+          resource.data.role == 'teacher' ||
+          resource.data.get('teacherIds', []).hasAny([request.auth.uid])
+        );
+    }
+
+    function teacherCanReadClass() {
+      return isTeacher()
+        && sameSchool(resource.data)
+        && (
+          resource.data.get('teacherId', '') == request.auth.uid ||
+          resource.data.get('createdBy', '') == request.auth.uid
+        );
+    }
+
+    function privilegedFieldsUnchanged() {
+      return request.resource.data.role == resource.data.role
+        && request.resource.data.status == resource.data.status
+        && request.resource.data.get('deleted', false) == resource.data.get('deleted', false)
+        && request.resource.data.get('requestedRole', null) == resource.data.get('requestedRole', null)
+        && request.resource.data.get('approvedAt', null) == resource.data.get('approvedAt', null)
+        && request.resource.data.get('rejectedAt', null) == resource.data.get('rejectedAt', null);
+    }
+
+    // ============================================================
+    // USERS
+    // ============================================================
+
+    match /users/{userId} {
+      allow read: if isAdmin() || isOwner(userId) || teacherCanReadUser(userId);
+
+      allow create: if isOwner(userId)
+        && request.resource.data.status == 'pending'
+        && request.resource.data.get('role', null) == null
+        && request.resource.data.get('deleted', false) == false;
+
+      allow update: if isAdmin()
+        || (isOwner(userId) && privilegedFieldsUnchanged());
+
+      allow delete: if false;
+    }
+
+    // ============================================================
+    // CLASSES
+    // ============================================================
+
+    match /classes/{classId} {
+      allow read: if isAdmin()
+        || teacherCanReadClass()
+        || (isStudent() && resource.data.studentIds.hasAny([request.auth.uid]));
+
+      allow create: if isAdmin()
+        || (
+          isTeacher()
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.get('teacherId', request.auth.uid) == request.auth.uid
+        );
+
+      allow update: if isAdmin() || teacherCanReadClass();
+
+      allow delete: if isAdmin() || teacherCanReadClass();
+    }
+
+    // ============================================================
+    // SCORES
+    // ============================================================
+
+    match /scores/{scoreId} {
+      allow read: if isAdmin()
+        || isTeacher()
+        || (isStudent() && resource.data.uid == request.auth.uid);
+      allow create: if isAdmin() || isTeacher();
+      allow update, delete: if isAdmin() || isTeacher();
+    }
+
+    // ============================================================
+    // READINGS
+    // ============================================================
+
+    match /readings/{id} {
+      allow read: if isApprovedUser();
+      allow create, update, delete: if isAdmin() || isTeacher();
+    }
+
+    match /readingSubmissions/{id} {
+      allow read: if isAdmin()
+        || isTeacher()
+        || (isStudent() && resource.data.uid == request.auth.uid);
+      allow create: if isStudent()
+        && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if isAdmin() || isTeacher();
+    }
+
+    // ============================================================
+    // LISTENINGS
+    // ============================================================
+
+    match /listenings/{id} {
+      allow read: if isApprovedUser();
+      allow create, update, delete: if isAdmin() || isTeacher();
+    }
+
+    match /listeningSubmissions/{id} {
+      allow read: if isAdmin()
+        || isTeacher()
+        || (isStudent() && resource.data.uid == request.auth.uid);
+      allow create: if isStudent()
+        && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if isAdmin() || isTeacher();
+    }
+
+    // ============================================================
+    // WRITING HOMEWORKS
+    // ============================================================
+
+    match /writingHomeworks/{id} {
+      allow read: if isApprovedUser();
+      allow create, update, delete: if isAdmin() || isTeacher();
+    }
+
+    match /writingSubmissions/{id} {
+      allow read: if isAdmin()
+        || isTeacher()
+        || (isStudent() && resource.data.uid == request.auth.uid);
+      allow create: if isStudent()
+        && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if isAdmin() || isTeacher();
+    }
+
+    // ============================================================
+    // MOCK TESTS
+    // ============================================================
+
+    match /mockTests/{id} {
+      allow read: if isAdmin()
+        || isTeacher()
+        || (isStudent() && resource.data.assignTo.hasAny([request.auth.uid]));
+      allow create, update, delete: if isAdmin() || isTeacher();
+    }
+
+    match /mockSubmissions/{id} {
+      allow read: if isAdmin()
+        || isTeacher()
+        || (isStudent() && resource.data.uid == request.auth.uid);
+      allow create: if isStudent()
+        && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if isAdmin() || isTeacher();
+    }
+
+    // ============================================================
+    // VOCABULARY TESTS
+    // ============================================================
+
+    match /vocabularyTests/{id} {
+      allow read: if isApprovedUser();
+      allow create, update, delete: if isAdmin() || isTeacher();
+    }
+
+    match /vocabularySubmissions/{id} {
+      allow read: if isAdmin()
+        || isTeacher()
+        || (isStudent() && resource.data.uid == request.auth.uid);
+      allow create: if isStudent()
+        && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if isAdmin() || isTeacher();
+    }
+  }
+}

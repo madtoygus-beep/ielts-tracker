@@ -16,6 +16,8 @@ import {
 import { signOut, onAuthStateChanged, sendPasswordResetEmail } from 'firebase/auth'
 import { useNavigate } from 'react-router-dom'
 
+const DEFAULT_SCHOOL_ID = 'maxima'
+
 export default function AdminDashboard() {
   const [users, setUsers] = useState([])
   const [scores, setScores] = useState({})
@@ -134,8 +136,11 @@ export default function AdminDashboard() {
     await updateDoc(doc(db, 'users', userId), {
       status: 'approved',
       role: roleType,
+      schoolId: DEFAULT_SCHOOL_ID,
+      teacherIds: roleType === 'student' ? [] : [],
       deleted: false,
-      approvedAt: new Date().toISOString()
+      approvedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
     })
   }
 
@@ -483,8 +488,11 @@ export default function AdminDashboard() {
       name: editName,
       role: editRole,
       targetBand: cleanTargetBand,
+      schoolId: editUser.schoolId || DEFAULT_SCHOOL_ID,
+      teacherIds: editRole === 'student' ? editUser.teacherIds || [] : [],
       status: 'approved',
-      deleted: false
+      deleted: false,
+      updatedAt: new Date().toISOString()
     })
     setEditUser(null)
     setEditTargetBand('')
@@ -585,7 +593,7 @@ export default function AdminDashboard() {
     <div className="min-h-screen bg-[#faf9f6]">
       <nav className="flex justify-between items-center px-8 py-4 bg-white border-b border-gray-100">
         <div className="flex items-center gap-3">
-          <img src="/1.png" alt="Maxima" className="h-14 object-contain" />
+          <img src="/1.png" alt="Maxima" className="h-10 object-contain" />
           <span className="text-xs bg-purple-100 text-purple-600 px-2 py-1 rounded-full font-medium">Admin</span>
         </div>
         <button onClick={handleLogout} className="text-sm text-gray-400 hover:text-gray-600">Logout</button>

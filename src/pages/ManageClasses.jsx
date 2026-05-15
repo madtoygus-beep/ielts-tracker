@@ -9,10 +9,14 @@ import {
   doc,
   updateDoc,
   deleteDoc,
-  getDoc
+  getDoc,
+  arrayUnion,
+  arrayRemove
 } from 'firebase/firestore'
 import { onAuthStateChanged } from 'firebase/auth'
 import { useNavigate } from 'react-router-dom'
+
+const DEFAULT_SCHOOL_ID = 'maxima'
 
 const COLOR_OPTIONS = [
   { id: 'purple', label: 'Purple', bg: 'bg-purple-50', text: 'text-purple-700', border: 'border-purple-200', dot: 'bg-purple-500' },
@@ -32,9 +36,11 @@ function getColorStyle(colorId) {
 export default function ManageClasses() {
   const [user, setUser] = useState(null)
   const [userRole, setUserRole] = useState('')
+  const [userProfile, setUserProfile] = useState(null)
   const [authChecking, setAuthChecking] = useState(true)
   const [classes, setClasses] = useState([])
   const [students, setStudents] = useState([])
+  const [teachers, setTeachers] = useState([])
   const [loading, setLoading] = useState(true)
 
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -44,6 +50,7 @@ export default function ManageClasses() {
   const [formDescription, setFormDescription] = useState('')
   const [formColor, setFormColor] = useState('purple')
   const [formStudentIds, setFormStudentIds] = useState([])
+  const [formTeacherId, setFormTeacherId] = useState('')
   const [formSearch, setFormSearch] = useState('')
   const [saving, setSaving] = useState(false)
 
@@ -84,6 +91,7 @@ export default function ManageClasses() {
 
         setUser(currentUser)
         setUserRole(userData.role)
+        setUserProfile(userData)
         setAuthChecking(false)
       } catch (error) {
         console.error(error)
@@ -101,14 +109,28 @@ export default function ManageClasses() {
   useEffect(() => {
     if (authChecking || !user) return
 
-    const q = query(collection(db, 'classes'))
+    const q = userRole === 'admin'
+      ? query(collection(db, 'classes'))
+      : query(
+          collection(db, 'classes'),
+          where('teacherId', '==', user.uid)
+        )
+    const schoolId = userProfile?.schoolId || DEFAULT_SCHOOL_ID
 
     const unsub = onSnapshot(
       q,
       snap => {
         const list = snap.docs
           .map(d => ({ id: d.id, ...d.data() }))
-          .filter(c => !c.archived)
+          .filter(c => {
+            if (c.archived) return false
+            if (userRole === 'admin') return true
+
+            return (
+              (c.schoolId || DEFAULT_SCHOOL_ID) === schoolId &&
+              (c.teacherId === user.uid || c.createdBy === user.uid)
+            )
+          })
           .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
 
         setClasses(list)
@@ -121,7 +143,7 @@ export default function ManageClasses() {
     )
 
     return unsub
-  }, [authChecking, user])
+  }, [authChecking, user, userRole, userProfile])
 
   // ============================================================
   // Subscribe to students
@@ -129,17 +151,51 @@ export default function ManageClasses() {
   useEffect(() => {
     if (authChecking || !user) return
 
-    const q = query(collection(db, 'users'), where('role', '==', 'student'))
+    const q = userRole === 'admin'
+      ? query(collection(db, 'users'), where('role', '==', 'student'))
+      : query(
+          collection(db, 'users'),
+          where('role', '==', 'student'),
+          where('teacherIds', 'array-contains', user.uid)
+        )
 
     return onSnapshot(q, snap => {
+      const schoolId = userProfile?.schoolId || DEFAULT_SCHOOL_ID
+
       const list = snap.docs
         .map(d => ({ id: d.id, ...d.data() }))
-        .filter(s => s.status === 'approved' && s.deleted !== true)
+        .filter(s => {
+          if (s.status !== 'approved' || s.deleted === true) return false
+          if (userRole === 'admin') return true
+
+          return (s.schoolId || DEFAULT_SCHOOL_ID) === schoolId
+        })
         .sort((a, b) => (a.name || a.email || '').localeCompare(b.name || b.email || ''))
 
       setStudents(list)
     })
-  }, [authChecking, user])
+  }, [authChecking, user, userRole, userProfile])
+
+  // ============================================================
+  // Subscribe to teachers (admin only)
+  // ============================================================
+  useEffect(() => {
+    if (authChecking || !user || userRole !== 'admin') {
+      setTeachers([])
+      return
+    }
+
+    const q = query(collection(db, 'users'), where('role', '==', 'teacher'))
+
+    return onSnapshot(q, snap => {
+      const list = snap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .filter(t => t.status === 'approved' && t.deleted !== true)
+        .sort((a, b) => (a.name || a.email || '').localeCompare(b.name || b.email || ''))
+
+      setTeachers(list)
+    })
+  }, [authChecking, user, userRole])
 
   // ============================================================
   // Form helpers
@@ -150,6 +206,7 @@ export default function ManageClasses() {
     setFormDescription('')
     setFormColor('purple')
     setFormStudentIds([])
+    setFormTeacherId(userRole === 'teacher' ? user?.uid || '' : '')
     setFormSearch('')
     setShowCreateModal(true)
   }
@@ -160,6 +217,7 @@ export default function ManageClasses() {
     setFormDescription(classItem.description || '')
     setFormColor(classItem.color || 'purple')
     setFormStudentIds(classItem.studentIds || [])
+    setFormTeacherId(classItem.teacherId || (userRole === 'teacher' ? user?.uid || '' : ''))
     setFormSearch('')
     setShowCreateModal(true)
   }
@@ -171,6 +229,7 @@ export default function ManageClasses() {
     setFormDescription('')
     setFormColor('purple')
     setFormStudentIds([])
+    setFormTeacherId('')
     setFormSearch('')
   }
 
@@ -193,13 +252,32 @@ export default function ManageClasses() {
     setSaving(true)
 
     try {
+      const now = new Date().toISOString()
+      const schoolId = userProfile?.schoolId || DEFAULT_SCHOOL_ID
+      const teacherId = userRole === 'admin'
+        ? formTeacherId || ''
+        : user.uid
+
+      if (userRole === 'admin' && !teacherId) {
+        alert('Please select a teacher for this class.')
+        setSaving(false)
+        return
+      }
+
+      const previousStudentIds = editingClass?.studentIds || []
+      const removedStudentIds = previousStudentIds.filter(id => !formStudentIds.includes(id))
+      const addedStudentIds = formStudentIds.filter(id => !previousStudentIds.includes(id))
+
       if (editingClass) {
         await updateDoc(doc(db, 'classes', editingClass.id), {
           name: formName.trim(),
           description: formDescription.trim(),
           color: formColor,
           studentIds: formStudentIds,
-          updatedAt: new Date().toISOString()
+          teacherId,
+          schoolId,
+          updatedBy: user.uid,
+          updatedAt: now
         })
       } else {
         await addDoc(collection(db, 'classes'), {
@@ -207,11 +285,30 @@ export default function ManageClasses() {
           description: formDescription.trim(),
           color: formColor,
           studentIds: formStudentIds,
+          teacherId,
+          schoolId,
           createdBy: user.uid,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
+          createdAt: now,
+          updatedAt: now,
           archived: false
         })
+      }
+
+      for (const studentId of addedStudentIds) {
+        await updateDoc(doc(db, 'users', studentId), {
+          teacherIds: arrayUnion(teacherId),
+          schoolId,
+          updatedAt: now
+        })
+      }
+
+      if (editingClass && editingClass.teacherId === teacherId) {
+        for (const studentId of removedStudentIds) {
+          await updateDoc(doc(db, 'users', studentId), {
+            teacherIds: arrayRemove(teacherId),
+            updatedAt: now
+          })
+        }
       }
 
       closeModal()
@@ -231,6 +328,17 @@ export default function ManageClasses() {
     if (!confirmed) return
 
     try {
+      const teacherId = classItem.teacherId || classItem.createdBy || ''
+
+      if (teacherId) {
+        for (const studentId of classItem.studentIds || []) {
+          await updateDoc(doc(db, 'users', studentId), {
+            teacherIds: arrayRemove(teacherId),
+            updatedAt: new Date().toISOString()
+          })
+        }
+      }
+
       await deleteDoc(doc(db, 'classes', classItem.id))
     } catch (error) {
       console.error(error)
@@ -352,6 +460,12 @@ export default function ManageClasses() {
                     </p>
                   )}
 
+                  {userRole === 'admin' && classItem.teacherId && (
+                    <p className="text-xs text-gray-400 mb-4">
+                      Teacher: {teachers.find(t => t.id === classItem.teacherId)?.name || teachers.find(t => t.id === classItem.teacherId)?.email || 'Assigned teacher'}
+                    </p>
+                  )}
+
                   {studentCount > 0 && (
                     <div className="bg-gray-50 rounded-xl p-3 mb-4 max-h-32 overflow-y-auto">
                       <div className="flex flex-col gap-1">
@@ -409,6 +523,32 @@ export default function ManageClasses() {
             </div>
 
             <div className="flex-1 overflow-y-auto px-6 py-5">
+              {userRole === 'admin' && (
+                <div className="mb-4">
+                  <label className="text-xs text-gray-400 mb-1 block">
+                    Teacher *
+                  </label>
+
+                  <select
+                    value={formTeacherId}
+                    onChange={e => setFormTeacherId(e.target.value)}
+                    className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white"
+                  >
+                    <option value="">Select teacher</option>
+
+                    {teachers.map(teacher => (
+                      <option key={teacher.id} value={teacher.id}>
+                        {teacher.name || teacher.email}
+                      </option>
+                    ))}
+                  </select>
+
+                  <p className="text-[11px] text-gray-400 mt-1">
+                    This teacher will be able to see and manage this class.
+                  </p>
+                </div>
+              )}
+
               {/* Name */}
               <div className="mb-4">
                 <label className="text-xs text-gray-400 mb-1 block">
