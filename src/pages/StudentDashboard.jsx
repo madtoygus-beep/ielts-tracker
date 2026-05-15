@@ -108,6 +108,21 @@
   }
 
 
+  function getStudentDisplayName(profile, user) {
+    const rawName = profile?.name || profile?.fullName || user?.displayName || user?.email || 'Student'
+    const cleanName = rawName.toString().trim()
+
+    if (!cleanName) return 'Student'
+    if (cleanName.includes('@')) return cleanName.split('@')[0]
+
+    return cleanName
+  }
+
+  function getFirstName(profile, user) {
+    return getStudentDisplayName(profile, user).split(' ')[0] || 'there'
+  }
+
+
   const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
   const numberWords = {
@@ -2864,16 +2879,26 @@
       }
     ]
 
+    const displayName = getStudentDisplayName(profile, user)
+    const firstName = getFirstName(profile, user)
+    const todayText = new Date().toLocaleDateString(undefined, {
+      weekday: 'long',
+      month: 'short',
+      day: 'numeric'
+    })
+
     const tabs = [
-      ['overview', 'Overview'],
-      ['todo', 'To Do'],
-      ['reading', 'Reading'],
-      ['listening', 'Listening'],
-      ['writing', 'Writing'],
-      ['vocabulary', 'Vocabulary'],
-      ['mock', 'Mock Tests'],
-      ['analytics', 'Analytics']
+      { key: 'overview', label: 'Overview', icon: '🏠' },
+      { key: 'todo', label: 'To Do', icon: '🔔' },
+      { key: 'reading', label: 'Reading', icon: '📖' },
+      { key: 'listening', label: 'Listening', icon: '🎧' },
+      { key: 'writing', label: 'Writing', icon: '✍️' },
+      { key: 'vocabulary', label: 'Vocabulary', icon: '🧩' },
+      { key: 'mock', label: 'Mock Tests', icon: '🧠' },
+      { key: 'analytics', label: 'Analytics', icon: '📊' }
     ]
+
+    const activeTabMeta = tabs.find(tab => tab.key === activeTab) || tabs[0]
 
     const renderOverview = () => (
       <div>
@@ -3121,23 +3146,23 @@
 
     return (
       <div className="min-h-screen bg-[#faf9f6]">
-        <nav className="flex justify-between items-center px-8 py-4 bg-white border-b border-gray-100">
+        <nav className="flex justify-between items-center px-4 sm:px-8 py-4 bg-white border-b border-gray-100 sticky top-0 z-40">
           <img
             src="/1.png"
             alt="Maxima"
-            className="h-14 object-contain"
+            className="h-12 sm:h-14 object-contain"
           />
 
-          <div className="flex items-center gap-4">
-            <span className="text-sm text-gray-400">
+          <div className="flex items-center gap-2 sm:gap-4">
+            <span className="hidden md:inline text-sm text-gray-400">
               {user?.email}
             </span>
 
             <button
               onClick={() => setShowPasswordModal(true)}
-              className="text-sm text-gray-400 hover:text-gray-600"
+              className="text-xs sm:text-sm text-gray-400 hover:text-gray-600 bg-gray-50 px-3 py-2 rounded-xl"
             >
-              Change Password
+              Password
             </button>
 
             <button
@@ -3145,36 +3170,105 @@
                 signOut(auth)
                 navigate('/')
               }}
-              className="text-sm text-gray-400 hover:text-gray-600"
+              className="text-xs sm:text-sm text-gray-400 hover:text-gray-600 bg-gray-50 px-3 py-2 rounded-xl"
             >
               Logout
             </button>
           </div>
         </nav>
 
-        <div className="max-w-3xl mx-auto px-6 py-10">
-          <h1 className="text-2xl font-bold text-gray-900 mb-1">
-            My Dashboard
-          </h1>
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 lg:py-10">
+          <div className="bg-gray-900 text-white rounded-[2rem] p-6 md:p-8 mb-6 overflow-hidden relative">
+            <div className="absolute -right-12 -top-12 w-48 h-48 bg-purple-500/20 rounded-full blur-2xl" />
+            <div className="absolute right-20 bottom-0 w-36 h-36 bg-blue-500/10 rounded-full blur-2xl" />
 
-          <p className="text-gray-400 text-sm mb-8">
-            Your IELTS results, homework and progress
-          </p>
+            <div className="relative grid grid-cols-1 lg:grid-cols-[1.25fr_0.75fr] gap-6 items-end">
+              <div>
+                <p className="text-xs text-purple-200 uppercase tracking-[0.18em] mb-3">
+                  {todayText}
+                </p>
 
-          <div className="bg-white border border-gray-100 rounded-2xl p-2 mb-8 flex gap-2 overflow-x-auto">
-            {tabs.map(([key, label]) => (
-              <button
-                key={key}
-                onClick={() => setActiveTab(key)}
-                className={`whitespace-nowrap px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                  activeTab === key
-                    ? 'bg-purple-600 text-white'
-                    : 'text-gray-500 hover:bg-gray-100'
-                }`}
-              >
-                {label}
-              </button>
-            ))}
+                <h1 className="text-3xl md:text-4xl font-bold tracking-tight mb-3">
+                  Welcome back, {firstName}
+                </h1>
+
+                <p className="text-sm md:text-base text-gray-300 max-w-2xl leading-7">
+                  Your IELTS homework, mock tests, feedback and progress are all here. Start with your To Do list, then check your analytics.
+                </p>
+
+                <div className="flex flex-wrap gap-2 mt-5">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('todo')}
+                    className="bg-white text-gray-900 px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-gray-100"
+                  >
+                    View To Do →
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('mock')}
+                    className="bg-white/10 text-white border border-white/10 px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-white/15"
+                  >
+                    Mock Tests
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('analytics')}
+                    className="bg-white/10 text-white border border-white/10 px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-white/15"
+                  >
+                    Analytics
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-white/10 border border-white/10 rounded-2xl p-4">
+                  <p className="text-[11px] text-gray-300 mb-1">Latest IELTS</p>
+                  <p className="text-2xl font-bold">{latest ? latest.overall : '--'}</p>
+                </div>
+
+                <div className="bg-white/10 border border-white/10 rounded-2xl p-4">
+                  <p className="text-[11px] text-gray-300 mb-1">Latest Mock</p>
+                  <p className="text-2xl font-bold">{latestMockScore ? latestMockScore.overall : '--'}</p>
+                </div>
+
+                <div className="bg-white/10 border border-white/10 rounded-2xl p-4">
+                  <p className="text-[11px] text-gray-300 mb-1">Target</p>
+                  <p className="text-2xl font-bold">{targetBand ? targetBand.toFixed(1) : '--'}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 mb-6">
+            <div>
+              <h2 className="text-xl font-bold text-gray-900">
+                {activeTabMeta.icon} {activeTabMeta.label}
+              </h2>
+
+              <p className="text-sm text-gray-400 mt-1">
+                {displayName} · {user?.email}
+              </p>
+            </div>
+
+            <div className="bg-white border border-gray-100 rounded-2xl p-2 flex gap-2 overflow-x-auto max-w-full shadow-sm">
+              {tabs.map(tab => (
+                <button
+                  key={tab.key}
+                  onClick={() => setActiveTab(tab.key)}
+                  className={`whitespace-nowrap px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                    activeTab === tab.key
+                      ? 'bg-purple-600 text-white shadow-sm'
+                      : 'text-gray-500 hover:bg-gray-100'
+                  }`}
+                >
+                  <span className="mr-1.5">{tab.icon}</span>
+                  {tab.label}
+                </button>
+              ))}
+            </div>
           </div>
 
           {activeTab === 'overview' && renderOverview()}
