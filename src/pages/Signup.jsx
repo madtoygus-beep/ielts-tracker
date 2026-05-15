@@ -18,6 +18,7 @@ export default function Signup() {
   const [name, setName] = useState('')
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
+  const [existingEmail, setExistingEmail] = useState(false)
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
 
@@ -44,6 +45,7 @@ export default function Signup() {
   const handleSignup = async () => {
     setError('')
     setMessage('')
+    setExistingEmail(false)
 
     if (!cleanName || !cleanEmail || !password.trim()) {
       setError('Please fill in all fields.')
@@ -61,8 +63,9 @@ export default function Signup() {
       const signInMethods = await fetchSignInMethodsForEmail(auth, cleanEmail)
 
       if (signInMethods.length > 0) {
+        setExistingEmail(true)
         setError(
-          'This email is already registered. Please login or use password reset.'
+          'This email is already registered. Please login instead of creating a second account.'
         )
         return
       }
@@ -84,7 +87,7 @@ export default function Signup() {
         updatedAt: new Date().toISOString()
       })
 
-      setMessage('Account request created. Please wait for admin approval.')
+      setMessage('Access request created. Please wait for admin approval.')
 
       setTimeout(() => {
         navigate('/login')
@@ -93,8 +96,9 @@ export default function Signup() {
       console.error(err)
 
       if (err.code === 'auth/email-already-in-use') {
+        setExistingEmail(true)
         setError(
-          'This email is already in use. Please login or use password reset.'
+          'This email is already in use. Please login instead of creating a second account.'
         )
         return
       }
@@ -127,23 +131,47 @@ export default function Signup() {
       <div className="bg-white border border-gray-100 rounded-2xl p-8 w-full max-w-md shadow-sm">
         <img src="/1.png" alt="Maxima" className="h-20 object-contain mb-1" />
 
-        <p className="text-gray-400 text-sm mb-6">
-          Create your account
+        <h1 className="text-2xl font-bold text-gray-900 mb-1">
+          Request access
+        </h1>
+
+        <p className="text-gray-400 text-sm mb-5">
+          New students and teachers can request an account here.
         </p>
+
+        <div className="bg-amber-50 border border-amber-100 text-amber-700 rounded-xl p-3 mb-5 text-xs leading-5">
+          Already registered? Please do not create another account. Use the Login page instead.
+          <button
+            type="button"
+            onClick={() => navigate('/login')}
+            className="block mt-2 font-semibold underline"
+          >
+            Go to Login
+          </button>
+        </div>
 
         {error && (
           <div className="bg-red-50 text-red-600 text-sm rounded-xl p-3 mb-4 leading-6">
             {error}
 
-            {(error.toLowerCase().includes('already') ||
-              error.toLowerCase().includes('login')) && (
-              <button
-                type="button"
-                onClick={sendResetEmail}
-                className="block mt-2 text-xs font-medium text-red-700 underline"
-              >
-                Send password reset email
-              </button>
+            {existingEmail && (
+              <div className="flex flex-col gap-2 mt-3">
+                <button
+                  type="button"
+                  onClick={() => navigate('/login')}
+                  className="text-xs font-medium text-red-700 underline text-left"
+                >
+                  Go to Login
+                </button>
+
+                <button
+                  type="button"
+                  onClick={sendResetEmail}
+                  className="text-xs font-medium text-red-700 underline text-left"
+                >
+                  Forgot password? Send password reset email
+                </button>
+              </div>
             )}
           </div>
         )}
@@ -209,7 +237,7 @@ export default function Signup() {
             disabled={loading}
             className="bg-purple-600 text-white rounded-xl py-3 text-sm font-medium hover:bg-purple-700 mt-1 disabled:opacity-60 disabled:cursor-not-allowed"
           >
-            {loading ? 'Creating...' : 'Create account'}
+            {loading ? 'Sending request...' : 'Request account access'}
           </button>
         </div>
 

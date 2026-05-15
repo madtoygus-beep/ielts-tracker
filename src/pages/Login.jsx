@@ -55,7 +55,7 @@ export default function Login() {
       const snap = await getDoc(doc(db, 'users', result.user.uid))
 
       if (!snap.exists()) {
-        setError('User profile not found.')
+        setError('User profile not found. Please contact admin.')
         return
       }
 
@@ -63,19 +63,19 @@ export default function Login() {
 
       if (userData.deleted || userData.status === 'deleted') {
         setError(
-          'This account was removed by admin. Please sign up again or contact admin.'
+          'This account was removed by admin. Please contact admin before creating a new account.'
         )
         return
       }
 
       if (userData.status === 'pending') {
-        setError('Your account is waiting for admin approval.')
+        setError('Your account is waiting for admin approval. Please do not create another account.')
         return
       }
 
       if (userData.status === 'rejected') {
         setError(
-          'Your account request was rejected. You can sign up again or contact admin.'
+          'Your account request was rejected. Please contact admin if you think this is a mistake.'
         )
         return
       }
@@ -87,13 +87,15 @@ export default function Login() {
       } else if (userData.role === 'teacher') {
         navigate('/teacher')
       } else {
-        setError('Your account role is not assigned yet.')
+        setError('Your account role is not assigned yet. Please contact admin.')
       }
     } catch (err) {
       if (err.code === 'auth/user-not-found') {
-        setError('No account found with this email.')
+        setError('No account found with this email. If you are new, please request access.')
       } else if (err.code === 'auth/wrong-password') {
         setError('Wrong password.')
+      } else if (err.code === 'auth/invalid-credential') {
+        setError('Email or password is incorrect.')
       } else {
         setError('Login failed. Please try again.')
       }
@@ -107,15 +109,24 @@ export default function Login() {
       <div className="bg-white border border-gray-100 rounded-2xl p-8 w-full max-w-md shadow-sm">
         <img src="/1.png" alt="Maxima" className="h-20 object-contain mb-1" />
 
+        <h1 className="text-2xl font-bold text-gray-900 mb-1">
+          Login to your account
+        </h1>
+
         <p className="text-gray-400 text-sm mb-6">
-          Welcome back
+          Existing students and teachers should use this page.
         </p>
+
+        <div className="bg-purple-50 border border-purple-100 text-purple-700 rounded-xl p-3 mb-5 text-xs leading-5">
+          If you already have an account, do not request a new one. Use your email and password below.
+        </div>
 
         {error && (
           <div className="bg-red-50 text-red-600 text-sm rounded-xl p-3 mb-4 leading-6">
             {error}
 
             {(error.toLowerCase().includes('password') ||
+              error.toLowerCase().includes('incorrect') ||
               error.toLowerCase().includes('account')) && (
               <button
                 type="button"
@@ -138,6 +149,7 @@ export default function Login() {
           <input
             className="border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400"
             placeholder="Email"
+            type="email"
             value={email}
             onChange={e => setEmail(e.target.value)}
           />
@@ -159,15 +171,19 @@ export default function Login() {
           </button>
         </div>
 
-        <p className="text-center text-sm text-gray-400 mt-4">
-          No account?{' '}
-          <span
+        <div className="border-t border-gray-100 mt-6 pt-5 text-center">
+          <p className="text-sm text-gray-400 mb-3">
+            New student or teacher?
+          </p>
+
+          <button
+            type="button"
             onClick={() => navigate('/signup')}
-            className="text-purple-600 cursor-pointer"
+            className="text-sm font-medium text-purple-600 hover:text-purple-700"
           >
-            Sign up
-          </span>
-        </p>
+            Request access
+          </button>
+        </div>
       </div>
     </div>
   )
