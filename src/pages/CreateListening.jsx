@@ -68,6 +68,13 @@ function filterClassStudentIds(classItem, visibleStudents) {
 }
 
 
+const emptyMatchingItem = () => ({
+  id: crypto.randomUUID(),
+  questionNumber: '',
+  prompt: '',
+  answer: ''
+})
+
 const emptyQuestion = () => ({
   id: crypto.randomUUID(),
   type: 'mcq',
@@ -96,7 +103,9 @@ const emptyQuestion = () => ({
   ],
   mapItems: [
     { id: crypto.randomUUID(), prompt: '', answer: '' }
-  ]
+  ],
+  matchingTitle: '',
+  matchingItems: [emptyMatchingItem()]
 })
 
 const emptyTableRow = columns => ({
@@ -144,6 +153,22 @@ const ensureCompletionQuestion = question => ({
   completionMode: question.completionMode || 'type',
   options: question.options?.length ? question.options : ['', '', '', '', '', '', '', ''],
   sections: question.sections?.length ? question.sections : [emptyCompletionSection()],
+  question: question.question || ''
+})
+
+const ensureMatchingQuestion = question => ({
+  ...question,
+  type: 'matching',
+  instruction:
+    question.instruction ||
+    'Choose the correct letter, A-I, for each question.',
+  matchingTitle: question.matchingTitle || question.question || '',
+  options: question.options?.length
+    ? question.options
+    : ['', '', '', '', '', '', '', '', ''],
+  matchingItems: question.matchingItems?.length
+    ? question.matchingItems
+    : [emptyMatchingItem()],
   question: question.question || ''
 })
 
@@ -483,6 +508,10 @@ export default function CreateListening() {
       return question.mapItems?.length || 0
     }
 
+    if (question.type === 'matching') {
+      return question.matchingItems?.length || 0
+    }
+
     return 1
   }
 
@@ -538,6 +567,30 @@ export default function CreateListening() {
 
               number++
             }
+          }
+
+          return number
+        }
+
+        number += getListeningQuestionPointCount(question)
+      }
+    }
+
+    return number
+  }
+
+  const getListeningMatchingQuestionNumber = (partId, questionId, itemId) => {
+    let number = 1
+
+    for (const part of parts || []) {
+      for (const question of part.questions || []) {
+        if (question.id === questionId) {
+          for (const item of question.matchingItems || []) {
+            if (part.id === partId && item.id === itemId) {
+              return getDisplayQuestionNumber(item.questionNumber, number)
+            }
+
+            number++
           }
 
           return number
@@ -654,6 +707,10 @@ export default function CreateListening() {
 
           if (value === 'listeningCompletion') {
             return ensureCompletionQuestion(question)
+          }
+
+          if (value === 'matching') {
+            return ensureMatchingQuestion(question)
           }
 
           return {
@@ -1045,6 +1102,135 @@ export default function CreateListening() {
     )
   }
 
+  const updateMatchingOption = (questionId, optionIndex, value) => {
+    setQuestions(prev =>
+      prev.map(question => {
+        if (question.id !== questionId) return question
+
+        const options = [...(question.options || ['', '', '', '', '', '', '', '', ''])]
+        options[optionIndex] = value
+
+        return {
+          ...question,
+          options
+        }
+      })
+    )
+  }
+
+  const addMatchingOption = questionId => {
+    setQuestions(prev =>
+      prev.map(question => {
+        if (question.id !== questionId) return question
+
+        const options = question.options || []
+
+        if (options.length >= letters.length) {
+          alert('You cannot add more than 26 options.')
+          return question
+        }
+
+        return {
+          ...question,
+          options: [...options, '']
+        }
+      })
+    )
+  }
+
+  const removeMatchingOption = (questionId, optionIndex) => {
+    setQuestions(prev =>
+      prev.map(question => {
+        if (question.id !== questionId) return question
+
+        const options = question.options || []
+
+        if (options.length <= 2) {
+          alert('Matching questions need at least 2 options.')
+          return question
+        }
+
+        const removedLetter = letters[optionIndex]
+        const nextOptions = options.filter((_, index) => index !== optionIndex)
+
+        const shiftLetterAfterRemoval = letter => {
+          const index = letters.indexOf(letter)
+
+          if (index === -1) return letter
+          if (index === optionIndex) return ''
+          if (index > optionIndex) return letters[index - 1]
+
+          return letter
+        }
+
+        const matchingItems = (question.matchingItems || []).map(item => ({
+          ...item,
+          answer:
+            item.answer === removedLetter
+              ? ''
+              : shiftLetterAfterRemoval(item.answer)
+        }))
+
+        return {
+          ...question,
+          options: nextOptions,
+          matchingItems
+        }
+      })
+    )
+  }
+
+  const updateMatchingItem = (questionId, itemId, key, value) => {
+    setQuestions(prev =>
+      prev.map(question => {
+        if (question.id !== questionId) return question
+
+        return {
+          ...question,
+          matchingItems: (question.matchingItems || []).map(item =>
+            item.id === itemId
+              ? { ...item, [key]: value }
+              : item
+          )
+        }
+      })
+    )
+  }
+
+  const addMatchingItem = questionId => {
+    setQuestions(prev =>
+      prev.map(question => {
+        if (question.id !== questionId) return question
+
+        return {
+          ...question,
+          matchingItems: [
+            ...(question.matchingItems || []),
+            emptyMatchingItem()
+          ]
+        }
+      })
+    )
+  }
+
+  const removeMatchingItem = (questionId, itemId) => {
+    setQuestions(prev =>
+      prev.map(question => {
+        if (question.id !== questionId) return question
+
+        if ((question.matchingItems || []).length <= 1) {
+          alert('Matching needs at least 1 item.')
+          return question
+        }
+
+        return {
+          ...question,
+          matchingItems: question.matchingItems.filter(item => item.id !== itemId)
+        }
+      })
+    )
+  }
+
   const updateMapLocation = (questionId, locationId, key, value) => {
     setQuestions(prev =>
       prev.map(question => {
@@ -1159,6 +1345,7 @@ export default function CreateListening() {
     clone.rows = clone.rows?.map(row => ({ ...row, id: crypto.randomUUID() })) || []
     clone.mapLocations = clone.mapLocations?.map(location => ({ ...location, id: crypto.randomUUID() })) || []
     clone.mapItems = clone.mapItems?.map(item => ({ ...item, id: crypto.randomUUID() })) || []
+    clone.matchingItems = clone.matchingItems?.map(item => ({ ...item, id: crypto.randomUUID() })) || []
     clone.sections =
       clone.sections?.map(section => ({
         ...section,
@@ -1195,7 +1382,7 @@ export default function CreateListening() {
       }
 
       for (const question of part.questions) {
-      if (question.type !== 'table' && question.type !== 'note' && question.type !== 'map' && question.type !== 'listeningCompletion' && !question.question.trim()) {
+      if (question.type !== 'table' && question.type !== 'note' && question.type !== 'map' && question.type !== 'listeningCompletion' && question.type !== 'matching' && !question.question.trim()) {
         alert('Please fill in every question text.')
         return false
       }
@@ -1282,6 +1469,28 @@ export default function CreateListening() {
 
           if (cleanOptions.length < 2) {
             alert('Choose A-H mode needs at least 2 options.')
+            return false
+          }
+        }
+      }
+
+      if (question.type === 'matching') {
+        const cleanOptions = question.options?.filter(option => option.trim()) || []
+        const items = question.matchingItems || []
+
+        if (cleanOptions.length < 2) {
+          alert('Listening Matching needs at least 2 options.')
+          return false
+        }
+
+        if (items.length === 0) {
+          alert('Listening Matching needs at least 1 item.')
+          return false
+        }
+
+        for (const item of items) {
+          if (!item.prompt?.trim() || !item.answer) {
+            alert('Every Listening Matching item needs a prompt and correct letter.')
             return false
           }
         }
@@ -1652,6 +1861,7 @@ export default function CreateListening() {
                           <option value="note">Note Completion Legacy</option>
                           <option value="listeningCompletion">Note/Summary Completion New</option>
                           <option value="map">Map Labeling</option>
+                          <option value="matching">Listening Matching</option>
                         </select>
                       </div>
 
@@ -1690,7 +1900,7 @@ export default function CreateListening() {
                       )}
                     </div>
 
-                    {question.type !== 'table' && question.type !== 'note' && question.type !== 'map' && question.type !== 'listeningCompletion' && (
+                    {question.type !== 'table' && question.type !== 'note' && question.type !== 'map' && question.type !== 'listeningCompletion' && question.type !== 'matching' && (
                       <div className="mb-4">
                         <label className="text-xs text-gray-400 mb-1 block">
                           Question text
@@ -2074,6 +2284,193 @@ export default function CreateListening() {
                                 </p>
                               </div>
                             ))}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {question.type === 'matching' && (
+                      <div>
+                        <div className="mb-4">
+                          <label className="text-xs text-gray-400 mb-1 block">
+                            Instruction
+                          </label>
+
+                          <textarea
+                            rows={3}
+                            value={question.instruction || ''}
+                            onChange={e => updateQuestion(question.id, 'instruction', e.target.value)}
+                            placeholder="Choose the correct letter, A-I, for each question."
+                            className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 resize-none bg-white"
+                          />
+                        </div>
+
+                        <div className="mb-4">
+                          <label className="text-xs text-gray-400 mb-1 block">
+                            Title / optional
+                          </label>
+
+                          <input
+                            value={question.matchingTitle || ''}
+                            onChange={e => updateQuestion(question.id, 'matchingTitle', e.target.value)}
+                            placeholder="e.g. What is the role of the volunteers in each activity?"
+                            className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white"
+                          />
+                        </div>
+
+                        <div className="bg-white border border-gray-100 rounded-2xl p-4 mb-4">
+                          <div className="flex items-center justify-between mb-3">
+                            <div>
+                              <p className="text-sm font-semibold text-gray-800">
+                                Options
+                              </p>
+
+                              <p className="text-xs text-gray-400">
+                                Add answer choices such as A-I or A-J.
+                              </p>
+                            </div>
+
+                            <button
+                              onClick={() => addMatchingOption(question.id)}
+                              className="text-xs bg-gray-100 text-gray-600 px-3 py-2 rounded-xl hover:bg-gray-200"
+                            >
+                              + Option
+                            </button>
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                            {(question.options || ['', '', '', '', '', '', '', '', '']).map((option, optionIndex) => (
+                              <div key={optionIndex} className="grid grid-cols-[36px_1fr_70px] gap-2 items-center">
+                                <span className="text-sm font-semibold text-gray-500">
+                                  {letters[optionIndex]}.
+                                </span>
+
+                                <input
+                                  value={option}
+                                  onChange={e => updateMatchingOption(question.id, optionIndex, e.target.value)}
+                                  placeholder={`Option ${letters[optionIndex]}`}
+                                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 bg-white"
+                                />
+
+                                <button
+                                  onClick={() => removeMatchingOption(question.id, optionIndex)}
+                                  disabled={(question.options || []).length <= 2}
+                                  className="text-xs bg-red-50 text-red-500 px-3 py-2 rounded-xl hover:bg-red-100 disabled:opacity-40 disabled:cursor-not-allowed"
+                                >
+                                  Delete
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="bg-white border border-gray-100 rounded-2xl p-4">
+                          <div className="flex items-center justify-between mb-3">
+                            <div>
+                              <p className="text-sm font-semibold text-gray-800">
+                                Items
+                              </p>
+
+                              <p className="text-xs text-gray-400">
+                                Students choose a letter for each activity/item.
+                              </p>
+                            </div>
+
+                            <button
+                              onClick={() => addMatchingItem(question.id)}
+                              className="text-xs bg-purple-600 text-white px-3 py-2 rounded-xl hover:bg-purple-700"
+                            >
+                              + Matching Item
+                            </button>
+                          </div>
+
+                          <div className="flex flex-col gap-2">
+                            {(question.matchingItems || []).map(item => (
+                              <div key={item.id} className="grid grid-cols-1 md:grid-cols-[120px_1fr_160px_70px] gap-2 items-center bg-gray-50 border border-gray-100 rounded-xl p-3">
+                                <input
+                                  value={item.questionNumber || ''}
+                                  onChange={e => updateMatchingItem(question.id, item.id, 'questionNumber', e.target.value)}
+                                  placeholder={`Q no. auto ${getListeningMatchingQuestionNumber(activePart.id, question.id, item.id)}`}
+                                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 bg-white"
+                                />
+
+                                <input
+                                  value={item.prompt || ''}
+                                  onChange={e => updateMatchingItem(question.id, item.id, 'prompt', e.target.value)}
+                                  placeholder="e.g. walking around the town centre"
+                                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 bg-white"
+                                />
+
+                                <select
+                                  value={item.answer || ''}
+                                  onChange={e => updateMatchingItem(question.id, item.id, 'answer', e.target.value)}
+                                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 bg-white"
+                                >
+                                  <option value="">Correct letter</option>
+
+                                  {(question.options || []).map((option, optionIndex) => {
+                                    if (!option?.trim()) return null
+
+                                    const letter = letters[optionIndex]
+
+                                    return (
+                                      <option key={letter} value={letter}>
+                                        {letter}. {option}
+                                      </option>
+                                    )
+                                  })}
+                                </select>
+
+                                <button
+                                  onClick={() => removeMatchingItem(question.id, item.id)}
+                                  className="text-xs bg-red-50 text-red-500 px-3 py-2 rounded-xl hover:bg-red-100"
+                                >
+                                  Delete
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="bg-green-50 border border-green-100 rounded-2xl p-4 mt-4">
+                          <p className="text-xs font-semibold text-green-700 mb-3">
+                            Preview
+                          </p>
+
+                          <div className="bg-white rounded-xl p-5">
+                            {question.matchingTitle && (
+                              <p className="font-semibold text-gray-900 mb-3">
+                                {question.matchingTitle}
+                              </p>
+                            )}
+
+                            <p className="text-sm text-gray-700 mb-4 whitespace-pre-wrap">
+                              {question.instruction}
+                            </p>
+
+                            <div className="space-y-2 mb-5">
+                              {(question.matchingItems || []).map(item => (
+                                <div key={item.id} className="grid grid-cols-[70px_1fr] gap-3 text-sm text-gray-800">
+                                  <span className="font-semibold text-purple-600">
+                                    Q{getListeningMatchingQuestionNumber(activePart.id, question.id, item.id)}
+                                  </span>
+
+                                  <span>{item.prompt || 'Item prompt...'}</span>
+                                </div>
+                              ))}
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                              {(question.options || []).filter(Boolean).map((option, optionIndex) => (
+                                <div key={optionIndex} className="flex gap-2 text-sm text-gray-700">
+                                  <span className="font-semibold min-w-6">
+                                    {letters[optionIndex]}.
+                                  </span>
+
+                                  <span>{option}</span>
+                                </div>
+                              ))}
+                            </div>
                           </div>
                         </div>
                       </div>

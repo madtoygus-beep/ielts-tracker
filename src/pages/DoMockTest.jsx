@@ -45,6 +45,10 @@ function mapAnswerKey(questionId, itemId) {
   return `${questionId}_${itemId}`
 }
 
+function matchingAnswerKey(questionId, itemId) {
+  return `${questionId}_${itemId}`
+}
+
 function countWords(value) {
   return value
     ?.toString()
@@ -328,6 +332,10 @@ function getListeningQuestionCount(question) {
     return question.mapItems?.length || 0
   }
 
+  if (question.type === 'matching') {
+    return question.matchingItems?.length || 0
+  }
+
   if (question.type === 'mcq' && question.mode === 'multi') {
     return question.answers?.length || 2
   }
@@ -428,6 +436,30 @@ function getListeningCompletionQuestionNumber(parts, partId, questionId, section
 
             number++
           }
+        }
+
+        return number
+      }
+
+      number += getListeningQuestionCount(question)
+    }
+  }
+
+  return number
+}
+
+function getListeningMatchingQuestionNumber(parts, partId, questionId, itemId) {
+  let number = 1
+
+  for (const part of parts || []) {
+    for (const question of part.questions || []) {
+      if (question.id === questionId) {
+        for (const item of question.matchingItems || []) {
+          if (part.id === partId && item.id === itemId) {
+            return getManualQuestionNumber(item) || number
+          }
+
+          number++
         }
 
         return number
@@ -1115,6 +1147,15 @@ export default function DoMockTest() {
     }))
   }
 
+  const handleListeningMatchingAnswer = (questionId, itemId, value) => {
+    if (listeningLocked) return
+
+    setListeningAnswers(prev => ({
+      ...prev,
+      [matchingAnswerKey(questionId, itemId)]: value
+    }))
+  }
+
   const handleReadingAnswer = (readingId, questionId, value) => {
     if (readingLocked) return
 
@@ -1340,6 +1381,19 @@ export default function DoMockTest() {
     return question.options?.[index] || `Option ${letter}`
   }
 
+  const isListeningMatchingItemCorrect = (question, item) => {
+    const key = matchingAnswerKey(question.id, item.id)
+    const userAnswer = listeningAnswers[key]
+
+    return normalize(userAnswer) === normalize(item.answer)
+  }
+
+  const getListeningMatchingOptionText = (question, letter) => {
+    if (!letter) return 'No answer'
+    const index = letters.indexOf(letter)
+    return question.options?.[index] || `Option ${letter}`
+  }
+
   const isListeningNormalCorrect = question => {
     const value = listeningAnswers[question.id]
 
@@ -1406,6 +1460,18 @@ export default function DoMockTest() {
           const userAnswer = listeningAnswers[mapAnswerKey(question.id, item.id)]
 
           if (normalize(userAnswer) === normalize(item.answer)) {
+            correct++
+          }
+        })
+
+        return
+      }
+
+      if (question.type === 'matching') {
+        question.matchingItems?.forEach(item => {
+          total++
+
+          if (isListeningMatchingItemCorrect(question, item)) {
             correct++
           }
         })
@@ -2159,6 +2225,87 @@ export default function DoMockTest() {
     </div>
   )
 
+  const renderListeningMatching = (question, partId) => (
+    <div>
+      {question.instruction && (
+        <p className="text-sm text-gray-700 mb-4 whitespace-pre-wrap">
+          {question.instruction}
+        </p>
+      )}
+
+      {question.matchingTitle && (
+        <p className="font-semibold text-gray-900 mb-4">
+          {question.matchingTitle}
+        </p>
+      )}
+
+      <div className="bg-white border border-gray-100 rounded-xl p-4 mb-4">
+        <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
+          Options
+        </p>
+
+        <div className="space-y-2">
+          {(question.options || []).filter(Boolean).map((option, optionIndex) => (
+            <div key={optionIndex} className="flex gap-2 text-sm text-gray-700 leading-5">
+              <span className="font-semibold text-gray-500 min-w-6">
+                {letters[optionIndex]}.
+              </span>
+
+              <span>{option}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        {(question.matchingItems || []).map(item => {
+          const key = matchingAnswerKey(question.id, item.id)
+          const questionNumber = getListeningMatchingQuestionNumber(
+            listeningParts,
+            partId,
+            question.id,
+            item.id
+          )
+
+          return (
+            <div
+              key={item.id}
+              className="grid grid-cols-1 md:grid-cols-[70px_1fr_180px] gap-3 items-center bg-gray-50 border border-gray-100 rounded-xl p-4"
+            >
+              <span className="text-sm font-bold text-purple-600">
+                Q{questionNumber}
+              </span>
+
+              <label className="text-sm font-medium text-gray-800">
+                {item.prompt}
+              </label>
+
+              <select
+                value={listeningAnswers[key] || ''}
+                onChange={e => handleListeningMatchingAnswer(question.id, item.id, e.target.value)}
+                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 bg-white"
+              >
+                <option value="">Select letter</option>
+
+                {(question.options || []).map((option, optionIndex) => {
+                  if (!option?.trim()) return null
+
+                  const letter = letters[optionIndex]
+
+                  return (
+                    <option key={letter} value={letter}>
+                      {letter}
+                    </option>
+                  )
+                })}
+              </select>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+
   const renderListening = part => (
     <div className="space-y-6">
       {renderSectionTimerCard()}
@@ -2418,6 +2565,9 @@ export default function DoMockTest() {
                 </div>
               </div>
             )}
+
+            {question.type === 'matching' &&
+              renderListeningMatching(question, part?.id)}
 
             {question.type === 'map' && (
               <div>
