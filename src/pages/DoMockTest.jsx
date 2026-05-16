@@ -1400,6 +1400,48 @@ export default function DoMockTest() {
     return question.options?.[index] || `Option ${letter}`
   }
 
+  const isReadingHeadingUsed = (readingId, question, headingValue) => {
+    if (!headingValue) return false
+
+    return Object.values(readingAnswers[readingId]?.[question.id] || {}).some(
+      selected => selected?.toString() === headingValue?.toString()
+    )
+  }
+
+  const isReadingHeadingUsedByOtherParagraph = (
+    readingId,
+    question,
+    currentParagraphLetter,
+    headingValue
+  ) => {
+    if (!headingValue) return false
+
+    return Object.entries(readingAnswers[readingId]?.[question.id] || {}).some(
+      ([paragraphLetter, selected]) =>
+        paragraphLetter !== currentParagraphLetter &&
+        selected?.toString() === headingValue?.toString()
+    )
+  }
+
+  const getReadingHeadingOptionLabel = (
+    readingId,
+    question,
+    currentParagraphLetter,
+    headingValue,
+    heading
+  ) => {
+    const usedByOther = isReadingHeadingUsedByOtherParagraph(
+      readingId,
+      question,
+      currentParagraphLetter,
+      headingValue
+    )
+
+    return usedByOther
+      ? `${headingValue}. ${heading} — Used`
+      : `${headingValue}. ${heading}`
+  }
+
   const isReadingNormalCorrect = (readingId, question) => {
     const value = readingAnswers[readingId]?.[question.id]
 
@@ -2962,15 +3004,40 @@ export default function DoMockTest() {
 
                         <div className="bg-white border border-gray-100 rounded-xl p-4 mb-5">
                           {reading.headings?.filter(Boolean).map((heading, headingIndex) => (
-                            <p
+                            <div
                               key={headingIndex}
-                              className="text-sm text-gray-700 mb-1"
+                              className={`flex gap-2 text-sm leading-5 rounded-lg px-2 py-1 mb-1 ${
+                                isReadingHeadingUsed(reading.id, question, String(headingIndex + 1))
+                                  ? 'bg-green-50 text-gray-400'
+                                  : 'text-gray-700'
+                              }`}
                             >
-                              <span className="font-semibold">
+                              <span
+                                className={`font-semibold min-w-6 ${
+                                  isReadingHeadingUsed(reading.id, question, String(headingIndex + 1))
+                                    ? 'text-green-600'
+                                    : 'text-gray-500'
+                                }`}
+                              >
                                 {headingIndex + 1}.
-                              </span>{' '}
-                              {heading}
-                            </p>
+                              </span>
+
+                              <span
+                                className={
+                                  isReadingHeadingUsed(reading.id, question, String(headingIndex + 1))
+                                    ? 'line-through'
+                                    : ''
+                                }
+                              >
+                                {heading}
+                              </span>
+
+                              {isReadingHeadingUsed(reading.id, question, String(headingIndex + 1)) && (
+                                <span className="ml-auto text-[10px] font-semibold text-green-600 uppercase tracking-wider">
+                                  Used
+                                </span>
+                              )}
+                            </div>
                           ))}
                         </div>
 
@@ -3002,14 +3069,31 @@ export default function DoMockTest() {
                               >
                                 <option value="">Select heading</option>
 
-                                {reading.headings?.filter(Boolean).map((heading, headingIndex) => (
-                                  <option
-                                    key={headingIndex}
-                                    value={String(headingIndex + 1)}
-                                  >
-                                    {headingIndex + 1}. {heading}
-                                  </option>
-                                ))}
+                                {reading.headings?.filter(Boolean).map((heading, headingIndex) => {
+                                  const headingValue = String(headingIndex + 1)
+                                  const usedByOther = isReadingHeadingUsedByOtherParagraph(
+                                    reading.id,
+                                    question,
+                                    paragraph.letter,
+                                    headingValue
+                                  )
+
+                                  return (
+                                    <option
+                                      key={headingIndex}
+                                      value={headingValue}
+                                      disabled={usedByOther}
+                                    >
+                                      {getReadingHeadingOptionLabel(
+                                        reading.id,
+                                        question,
+                                        paragraph.letter,
+                                        headingValue,
+                                        heading
+                                      )}
+                                    </option>
+                                  )
+                                })}
                               </select>
                             </div>
                           ))}

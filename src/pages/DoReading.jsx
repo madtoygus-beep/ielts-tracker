@@ -443,6 +443,36 @@ export default function DoReading() {
     return reading.headings?.[index] || `Heading ${number}`
   }
 
+  const isHeadingUsed = (question, headingValue) => {
+    if (!headingValue) return false
+
+    return Object.values(answers[question.id] || {}).some(
+      selected => selected?.toString() === headingValue?.toString()
+    )
+  }
+
+  const isHeadingUsedByOtherParagraph = (question, currentParagraphLetter, headingValue) => {
+    if (!headingValue) return false
+
+    return Object.entries(answers[question.id] || {}).some(
+      ([paragraphLetter, selected]) =>
+        paragraphLetter !== currentParagraphLetter &&
+        selected?.toString() === headingValue?.toString()
+    )
+  }
+
+  const getHeadingOptionLabel = (question, currentParagraphLetter, headingValue, heading) => {
+    const usedByOther = isHeadingUsedByOtherParagraph(
+      question,
+      currentParagraphLetter,
+      headingValue
+    )
+
+    return usedByOther
+      ? `${headingValue}. ${heading} — Used`
+      : `${headingValue}. ${heading}`
+  }
+
   const getOptionText = (question, letter) => {
     if (!letter) return ''
     const index = letters.indexOf(letter)
@@ -1536,13 +1566,37 @@ export default function DoReading() {
                           .map((heading, headingIndex) => (
                             <div
                               key={headingIndex}
-                              className="flex gap-2 text-sm text-gray-700 leading-5"
+                              className={`flex gap-2 text-sm leading-5 rounded-lg px-2 py-1 ${
+                                isHeadingUsed(question, String(headingIndex + 1))
+                                  ? 'bg-green-50 text-gray-400'
+                                  : 'text-gray-700'
+                              }`}
                             >
-                              <span className="font-semibold text-gray-500 min-w-6">
+                              <span
+                                className={`font-semibold min-w-6 ${
+                                  isHeadingUsed(question, String(headingIndex + 1))
+                                    ? 'text-green-600'
+                                    : 'text-gray-500'
+                                }`}
+                              >
                                 {headingIndex + 1}.
                               </span>
 
-                              <span>{heading}</span>
+                              <span
+                                className={
+                                  isHeadingUsed(question, String(headingIndex + 1))
+                                    ? 'line-through'
+                                    : ''
+                                }
+                              >
+                                {heading}
+                              </span>
+
+                              {isHeadingUsed(question, String(headingIndex + 1)) && (
+                                <span className="ml-auto text-[10px] font-semibold text-green-600 uppercase tracking-wider">
+                                  Used
+                                </span>
+                              )}
                             </div>
                           ))}
                       </div>
@@ -1575,14 +1629,29 @@ export default function DoReading() {
 
                             {reading.headings
                               .filter(Boolean)
-                              .map((heading, headingIndex) => (
-                                <option
-                                  key={headingIndex}
-                                  value={String(headingIndex + 1)}
-                                >
-                                  {headingIndex + 1}. {heading}
-                                </option>
-                              ))}
+                              .map((heading, headingIndex) => {
+                                const headingValue = String(headingIndex + 1)
+                                const usedByOther = isHeadingUsedByOtherParagraph(
+                                  question,
+                                  paragraph.letter,
+                                  headingValue
+                                )
+
+                                return (
+                                  <option
+                                    key={headingIndex}
+                                    value={headingValue}
+                                    disabled={usedByOther}
+                                  >
+                                    {getHeadingOptionLabel(
+                                      question,
+                                      paragraph.letter,
+                                      headingValue,
+                                      heading
+                                    )}
+                                  </option>
+                                )
+                              })}
                           </select>
                         </div>
                       ))}
