@@ -603,7 +603,7 @@ export default function AdminDashboard() {
         <div className="flex items-start justify-between gap-4 mb-6">
           <div>
             <h1 className="text-2xl font-bold text-gray-900 mb-1">Admin Panel</h1>
-            <p className="text-gray-400 text-sm">Manage all accounts, scores and classes</p>
+            <p className="text-gray-400 text-sm">Manage all accounts, mock history and classes</p>
           </div>
 
           <button
@@ -773,26 +773,41 @@ export default function AdminDashboard() {
 
                 {selectedStudent === u.id && (
                   <div className="border-t border-gray-100 px-5 py-4">
-                    <h3 className="text-sm font-semibold text-gray-700 mb-3">Score history</h3>
-                    {!scores[u.id] || scores[u.id].length === 0 ? (
-                      <p className="text-xs text-gray-400">No visible scores yet. Hidden results can be restored with the Restore button.</p>
-                    ) : (
-                      <div className="flex flex-col gap-2">
-                        {scores[u.id].map(s => (
-                          <div key={s.id} className="flex items-center justify-between py-2 border-b border-gray-50 last:border-0">
-                            <div>
-                              <p className="text-sm text-gray-700">{s.date}</p>
-                              <p className="text-xs text-gray-400">L:{s.listening} R:{s.reading} W:{s.writing} S:{s.speaking}</p>
+                    <h3 className="text-sm font-semibold text-gray-700 mb-1">Mock history</h3>
+                    <p className="text-xs text-gray-400 mb-3">
+                      Manual IELTS score logging is no longer used. This area shows mock scores only.
+                    </p>
+                    {(() => {
+                      const mockScores = (scores[u.id] || []).filter(isMockScore)
+
+                      if (mockScores.length === 0) {
+                        return (
+                          <p className="text-xs text-gray-400">
+                            No visible mock scores yet. Hidden results can be restored with the Restore button.
+                          </p>
+                        )
+                      }
+
+                      return (
+                        <div className="flex flex-col gap-2">
+                          {mockScores.map(s => (
+                            <div key={s.id} className="flex items-center justify-between py-2 border-b border-gray-50 last:border-0">
+                              <div>
+                                <p className="text-sm text-gray-700">{s.date || 'No date'}</p>
+                                <p className="text-xs text-gray-400">
+                                  L:{s.listening || '-'} R:{s.reading || '-'} W:{s.writing || 'Pending'} Overall:{s.overall || '-'}
+                                </p>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <p className="text-lg font-bold text-purple-600">{s.overall || '-'}</p>
+                                <button onClick={() => handleEditScore(s)} className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-2 py-1 rounded-lg">Edit</button>
+                                <button onClick={() => handleDeleteScore(s.id)} className="text-xs bg-red-50 hover:bg-red-100 text-red-500 px-2 py-1 rounded-lg">Delete</button>
+                              </div>
                             </div>
-                            <div className="flex items-center gap-2">
-                              <p className="text-lg font-bold text-purple-600">{s.overall}</p>
-                              <button onClick={() => handleEditScore(s)} className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-2 py-1 rounded-lg">Edit</button>
-                              <button onClick={() => handleDeleteScore(s.id)} className="text-xs bg-red-50 hover:bg-red-100 text-red-500 px-2 py-1 rounded-lg">Delete</button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                          ))}
+                        </div>
+                      )
+                    })()}
                   </div>
                 )}
               </div>
@@ -846,7 +861,7 @@ export default function AdminDashboard() {
       {editScore && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 px-4">
           <div className="bg-white rounded-2xl p-6 w-full max-w-sm">
-            <h2 className="font-semibold text-gray-800 mb-4">Edit score</h2>
+            <h2 className="font-semibold text-gray-800 mb-4">Edit mock score</h2>
             <div className="grid grid-cols-2 gap-3 mb-3">
               {['listening', 'reading', 'writing', 'speaking'].map(s => (
                 <div key={s}>

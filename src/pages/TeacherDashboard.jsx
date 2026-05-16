@@ -49,7 +49,7 @@ export default function TeacherDashboard() {
   const [vocabularyLibraryFilter, setVocabularyLibraryFilter] = useState('active')
 
   const [selected, setSelected] = useState(null)
-  const [selectedStudentSection, setSelectedStudentSection] = useState('scores')
+  const [selectedStudentSection, setSelectedStudentSection] = useState('mock')
   const [selectedReview, setSelectedReview] = useState(null)
 
   const [selectedHomework, setSelectedHomework] = useState(null)
@@ -2098,14 +2098,65 @@ Continue permanent delete?`
     return type
   }
 
+  const formatBand = value => {
+    const number = Number(value)
+    return Number.isFinite(number) && number > 0 ? number.toFixed(1) : '-'
+  }
+
+  const getMockOverall = submission => {
+    const result = submission?.result || {}
+
+    return (
+      result.reviewedOverall ||
+      result.finalOverall ||
+      result.overall ||
+      result.overallEstimate ||
+      null
+    )
+  }
+
+  const getMockWritingBand = submission => {
+    const result = submission?.result || {}
+
+    return (
+      result.writing?.band ||
+      result.writingBand ||
+      submission?.writingReview?.overall ||
+      submission?.review?.writingOverall ||
+      null
+    )
+  }
+
+  const getMockWritingStatusLabel = submission => {
+    const band = getMockWritingBand(submission)
+
+    if (band) return `Reviewed · Band ${formatBand(band)}`
+
+    return 'Pending teacher review'
+  }
+
+  const getMockTitle = submission => {
+    const mock = mockTests.find(item => item.id === submission.mockTestId)
+
+    return mock?.title || submission.mockTitle || 'Mock Test'
+  }
+
+  const getStudentMockSubmissions = studentId => {
+    return mockSubmissions
+      .filter(submission => submission.uid === studentId && submission.archived !== true)
+      .sort((a, b) => new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0))
+  }
+
+  const latestMockSubmission = studentId => getStudentMockSubmissions(studentId)[0]
+
   const handlePrint = student => {
-    const studentScores = scores[student.id] || []
+    const studentMocks = getStudentMockSubmissions(student.id)
     const printWindow = window.open('', '_blank')
 
     printWindow.document.write(`
       <html>
         <head>
-          <title>${student.name} - IELTS Scores</title>
+          <title>${student.name} - Mock History</title>
           <style>
             body { font-family: sans-serif; padding: 40px; color: #111; }
             h1 { font-size: 24px; margin-bottom: 4px; }
@@ -2120,32 +2171,33 @@ Continue permanent delete?`
         <body>
           <img src="${window.location.origin}/1.png" />
           <h1>${student.name}</h1>
-          <p>${student.email} — IELTS Score Report</p>
+          <p>${student.email} — Mock History Report</p>
           <table>
             <thead>
               <tr>
                 <th>Date</th>
+                <th>Mock</th>
                 <th>Listening</th>
                 <th>Reading</th>
                 <th>Writing</th>
-                <th>Speaking</th>
                 <th>Overall</th>
               </tr>
             </thead>
             <tbody>
-              ${studentScores
-                .map(
-                  s => `
-                <tr>
-                  <td>${s.date}</td>
-                  <td>${s.listening}</td>
-                  <td>${s.reading}</td>
-                  <td>${s.writing}</td>
-                  <td>${s.speaking}</td>
-                  <td class="overall">${s.overall}</td>
-                </tr>
-              `
-                )
+              ${studentMocks
+                .map(submission => {
+                  const result = submission.result || {}
+                  return `
+                    <tr>
+                      <td>${formatDateShort(submission.submittedAt)}</td>
+                      <td>${getMockTitle(submission)}</td>
+                      <td>${formatBand(result.listening?.band)}</td>
+                      <td>${formatBand(result.reading?.band)}</td>
+                      <td>${getMockWritingBand(submission) ? formatBand(getMockWritingBand(submission)) : 'Pending'}</td>
+                      <td class="overall">${formatBand(getMockOverall(submission))}</td>
+                    </tr>
+                  `
+                })
                 .join('')}
             </tbody>
           </table>
@@ -3915,7 +3967,7 @@ Continue permanent delete?`
                   onClick={() => {
                     const isOpen = selected?.id === student.id
                     setSelected(isOpen ? null : student)
-                    setSelectedStudentSection('scores')
+                    setSelectedStudentSection('mock')
                   }}
                 >
                   <div className="flex items-center gap-3">
@@ -3935,11 +3987,11 @@ Continue permanent delete?`
                   </div>
 
                   <div className="flex items-center gap-4">
-                    {latestScore(student.id) && (
+                    {latestMockSubmission(student.id) && (
                       <div className="text-right">
-                        <p className="text-xs text-gray-400">Latest band</p>
+                        <p className="text-xs text-gray-400">Latest mock</p>
                         <p className="text-lg font-bold text-purple-600">
-                          {latestScore(student.id).overall}
+                          {formatBand(getMockOverall(latestMockSubmission(student.id)))}
                         </p>
                       </div>
                     )}
@@ -3975,7 +4027,7 @@ Continue permanent delete?`
                   <div className="border-t border-gray-100 p-5">
                     <div className="flex flex-wrap gap-2 mb-6">
                       {[
-                        ['scores', '📈 Scores'],
+                        ['mock', '🧠 Mock History'],
                         ['homework', '📚 Homework'],
                         ['reviews', '✍ Writing Reviews']
                       ].map(([key, label]) => (
@@ -3994,108 +4046,101 @@ Continue permanent delete?`
                       ))}
                     </div>
 
-                    {selectedStudentSection === 'scores' && (
+                    {selectedStudentSection === 'mock' && (
                       <>
-                    <div className="mb-8">
-                      <h3 className="text-sm font-semibold text-gray-700 mb-3">
-                        Log a new score for {student.name}
-                      </h3>
-
-                      <div className="grid grid-cols-2 gap-3 mb-3">
-                        {['listening', 'reading', 'writing', 'speaking'].map(
-                          skill => (
-                            <div key={skill}>
-                              <label className="text-xs text-gray-400 capitalize mb-1 block">
-                                {skill}
-                              </label>
-
-                              <input
-                                type="number"
-                                min="0"
-                                max="9"
-                                step="0.5"
-                                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400"
-                                placeholder="e.g. 7.5"
-                                value={form[skill]}
-                                onChange={e =>
-                                  setForm(prev => ({
-                                    ...prev,
-                                    [skill]: e.target.value
-                                  }))
-                                }
-                              />
+                        <div className="mb-8">
+                          <div className="flex items-center justify-between mb-3 gap-3">
+                            <div>
+                              <h3 className="text-sm font-semibold text-gray-700">
+                                Mock History for {student.name}
+                              </h3>
+                              <p className="text-xs text-gray-400 mt-1">
+                                Full mock results are listed here. Manual IELTS score logging was removed.
+                              </p>
                             </div>
-                          )
-                        )}
-                      </div>
 
-                      <div className="mb-3">
-                        <label className="text-xs text-gray-400 mb-1 block">
-                          Test date
-                        </label>
-
-                        <input
-                          type="date"
-                          className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400"
-                          value={form.date}
-                          onChange={e =>
-                            setForm(prev => ({
-                              ...prev,
-                              date: e.target.value
-                            }))
-                          }
-                        />
-                      </div>
-
-                      <button
-                        onClick={handleAddScore}
-                        className="w-full bg-purple-600 text-white rounded-xl py-2.5 text-sm font-medium hover:bg-purple-700"
-                      >
-                        Save score for {student.name}
-                      </button>
-                    </div>
-
-                    {scores[student.id]?.length > 0 && (
-                      <div className="mb-8">
-                        <div className="flex items-center justify-between mb-3">
-                          <h3 className="text-sm font-semibold text-gray-700">
-                            Score history
-                          </h3>
-
-                          <button
-                            onClick={() => handlePrint(student)}
-                            className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-1.5 rounded-lg"
-                          >
-                            🖨️ Print scores
-                          </button>
-                        </div>
-
-                        <div className="flex flex-col gap-2">
-                          {scores[student.id].map(score => (
-                            <div
-                              key={score.id}
-                              className="flex items-center justify-between py-2 border-b border-gray-50 last:border-0"
+                            <button
+                              type="button"
+                              onClick={() => handlePrint(student)}
+                              disabled={getStudentMockSubmissions(student.id).length === 0}
+                              className="text-xs bg-gray-100 hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed text-gray-600 px-3 py-1.5 rounded-lg"
                             >
-                              <div>
-                                <p className="text-sm text-gray-700">
-                                  {score.date}
-                                </p>
+                              🖨️ Print report
+                            </button>
+                          </div>
 
-                                <p className="text-xs text-gray-400">
-                                  L:{score.listening} R:{score.reading} W:
-                                  {score.writing} S:{score.speaking}
-                                </p>
-                              </div>
-
-                              <div className="text-lg font-bold text-purple-600">
-                                {score.overall}
-                              </div>
+                          {getStudentMockSubmissions(student.id).length === 0 ? (
+                            <div className="bg-gray-50 border border-gray-100 rounded-xl p-5 text-sm text-gray-400">
+                              No completed mock test yet.
                             </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
+                          ) : (
+                            <div className="flex flex-col gap-3">
+                              {getStudentMockSubmissions(student.id).map(submission => {
+                                const result = submission.result || {}
+                                const overall = getMockOverall(submission)
 
+                                return (
+                                  <div
+                                    key={submission.id}
+                                    className="border border-gray-100 bg-gray-50 rounded-xl p-4"
+                                  >
+                                    <div className="flex items-start justify-between gap-4 mb-3">
+                                      <div>
+                                        <p className="text-sm font-semibold text-gray-800">
+                                          {getMockTitle(submission)}
+                                        </p>
+
+                                        <p className="text-xs text-gray-400 mt-0.5">
+                                          Submitted {formatDateShort(submission.submittedAt)}
+                                        </p>
+                                      </div>
+
+                                      <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1.5 rounded-full font-semibold">
+                                        Overall {formatBand(overall)}
+                                      </span>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+                                      <div className="bg-white rounded-xl p-3">
+                                        <p className="text-[11px] text-gray-400 mb-1">Listening</p>
+                                        <p className="text-lg font-bold text-purple-600">
+                                          {formatBand(result.listening?.band)}
+                                        </p>
+                                        <p className="text-[10px] text-gray-400 mt-1">
+                                          {result.listening?.correct ?? '-'}/{result.listening?.total ?? '-'} correct
+                                        </p>
+                                      </div>
+
+                                      <div className="bg-white rounded-xl p-3">
+                                        <p className="text-[11px] text-gray-400 mb-1">Reading</p>
+                                        <p className="text-lg font-bold text-blue-600">
+                                          {formatBand(result.reading?.band)}
+                                        </p>
+                                        <p className="text-[10px] text-gray-400 mt-1">
+                                          {result.reading?.correct ?? '-'}/{result.reading?.total ?? '-'} correct
+                                        </p>
+                                      </div>
+
+                                      <div className="bg-white rounded-xl p-3">
+                                        <p className="text-[11px] text-gray-400 mb-1">Writing</p>
+                                        <p className="text-sm font-bold text-amber-700">
+                                          {getMockWritingStatusLabel(submission)}
+                                        </p>
+                                      </div>
+
+                                      <div className="bg-white rounded-xl p-3">
+                                        <p className="text-[11px] text-gray-400 mb-1">Status</p>
+                                        <p className="text-sm font-semibold text-gray-700">
+                                          {getMockWritingStatus(submission) === 'reviewed' ? 'Reviewed' : 'Waiting for writing review'}
+                                        </p>
+                                      </div>
+                                    </div>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          )}
+                        </div>
                       </>
                     )}
 

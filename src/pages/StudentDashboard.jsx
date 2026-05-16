@@ -2868,49 +2868,32 @@
       }
     }, [navigate])
 
-    const manualScores = scores.filter(score => score.source !== 'mock_test')
-    const latest = manualScores[0]
-    const previous = manualScores[1]
-
-    const currentBand = latest ? Number(latest.overall) : 0
-
-    const progress = latest && targetBand
-      ? Math.min(Math.round((currentBand / targetBand) * 100), 100)
-      : 0
-
-    const overallChange =
-      latest && previous
-        ? (Number(latest.overall) - Number(previous.overall)).toFixed(1)
-        : null
-
-    const homeworkScores = scores.filter(score => score.source === 'mock_test')
-    const latestMockScore = homeworkScores[0]
+    const mockScores = scores.filter(score => score.source === 'mock_test')
+    const latestMockScore = mockScores[0]
 
     const overviewCards = [
-      {
-        title: 'Latest IELTS Score',
-        value: latest ? latest.overall : '--',
-        note: latest ? latest.date : 'No manual IELTS score yet',
-        style: 'bg-gray-900 text-white',
-        valueStyle: 'text-white'
-      },
       {
         title: 'Latest Mock Estimate',
         value: latestMockScore ? latestMockScore.overall : '--',
         note: latestMockScore ? latestMockScore.date || 'Mock completed' : 'No mock completed yet',
-        style: 'bg-purple-50 text-gray-900',
-        valueStyle: 'text-purple-600'
+        style: 'bg-gray-900 text-white',
+        valueStyle: 'text-white'
       },
       {
         title: 'Target Band',
         value: targetBand ? targetBand.toFixed(1) : 'Not set',
         note: targetBand
-          ? latest
-            ? `Progress ${progress}%`
-            : 'Progress starts after first score'
+          ? 'Your target band set by admin'
           : 'Ask admin to set your target',
         style: 'bg-blue-50 text-gray-900',
         valueStyle: 'text-blue-600'
+      },
+      {
+        title: 'Mock History',
+        value: mockScores.length,
+        note: mockScores.length === 1 ? '1 mock score saved' : `${mockScores.length} mock scores saved`,
+        style: 'bg-purple-50 text-gray-900',
+        valueStyle: 'text-purple-600'
       }
     ]
 
@@ -2960,164 +2943,27 @@
           ))}
         </div>
 
-        {manualScores.length === 0 ? (
-          <div className="bg-white border border-gray-100 rounded-2xl p-12 text-center mb-8">
-            <div className="text-4xl mb-4">
-              📋
-            </div>
-
-            <p className="text-gray-700 font-medium mb-2">
-              No scores yet
-            </p>
-
-            <p className="text-gray-400 text-sm">
-              Your teacher will log your IELTS scores here.
-            </p>
-          </div>
-        ) : (
-          <>
-            {latest && (
-              <>
-                <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-6">
-                  <div className="flex items-center justify-between mb-4">
-                    <div>
-                      <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">
-                        Target progress
-                      </p>
-
-                      <p className="text-lg font-semibold text-gray-900">
-                        Target Band {targetBand ? targetBand.toFixed(1) : 'Not set'}
-                      </p>
-                    </div>
-
-                    <div className="text-right">
-                      <p className="text-xs text-gray-400 mb-1">
-                        Current
-                      </p>
-
-                      <p className={`text-2xl font-bold ${getBandColor(currentBand)}`}>
-                        {currentBand.toFixed(1)}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="w-full bg-gray-100 rounded-full h-3 overflow-hidden">
-                    <div
-                      className="bg-purple-600 h-3 rounded-full"
-                      style={{ width: `${progress}%` }}
-                    />
-                  </div>
-
-                  <div className="flex justify-between mt-2">
-                    <p className="text-xs text-gray-400">
-                      {targetBand ? `Progress ${progress}%` : 'Target not set'}
-                    </p>
-
-                    {overallChange !== null && (
-                      <p
-                        className={`text-xs font-medium ${
-                          Number(overallChange) >= 0
-                            ? 'text-green-600'
-                            : 'text-red-500'
-                        }`}
-                      >
-                        {Number(overallChange) >= 0 ? '+' : ''}
-                        {overallChange}
-                      </p>
-                    )}
-                  </div>
-                </div>
-
-                <div className="bg-gray-900 text-white rounded-2xl p-6 mb-6">
-                  <div className="flex justify-between items-start mb-4">
-                    <div>
-                      <p className="text-gray-400 text-xs uppercase tracking-wider mb-1">
-                        Latest test
-                      </p>
-
-                      <p className="text-gray-300 text-sm">
-                        {latest.date}
-                      </p>
-                    </div>
-
-                    <div className="text-right">
-                      <p className="text-gray-400 text-xs mb-1">
-                        Overall
-                      </p>
-
-                      <p className="text-4xl font-bold">
-                        {latest.overall}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-4 gap-3">
-                    {['listening', 'reading', 'writing', 'speaking'].map(skill => (
-                      <div
-                        key={skill}
-                        className="bg-white/10 rounded-xl p-3 text-center"
-                      >
-                        <p className="text-gray-400 text-xs capitalize mb-1">
-                          {skill}
-                        </p>
-
-                        <p className="text-xl font-bold">
-                          {latest[skill]}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </>
-            )}
-
-            <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
-              <h2 className="font-semibold text-gray-800 mb-4">
-                Score history
+        <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="font-semibold text-gray-800">
+                🧠 Mock Progress
               </h2>
 
-              <div className="flex flex-col gap-0">
-                {manualScores.map((score, i) => (
-                  <div
-                    key={score.id}
-                    className={`py-4 ${
-                      i !== manualScores.length - 1
-                        ? 'border-b border-gray-50'
-                        : ''
-                    }`}
-                  >
-                    <div className="flex items-center justify-between mb-2">
-                      <p className="text-sm font-medium text-gray-700">
-                        {score.date}
-                      </p>
-
-                      <p className={`text-xl font-bold ${getBandColor(score.overall)}`}>
-                        {score.overall}
-                      </p>
-                    </div>
-
-                    <div className="grid grid-cols-4 gap-2">
-                      {['listening', 'reading', 'writing', 'speaking'].map(skill => (
-                        <div
-                          key={skill}
-                          className={`rounded-lg p-2 text-center ${getBandBg(score[skill])}`}
-                        >
-                          <p className="text-xs text-gray-400 capitalize mb-0.5">
-                            {skill.slice(0, 3)}
-                          </p>
-
-                          <p className={`text-sm font-semibold ${getBandColor(score[skill])}`}>
-                            {score[skill]}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
+              <p className="text-sm text-gray-400 mt-1">
+                Manual IELTS score logging was removed. Your progress is now based on mock tests, homework analytics and writing reviews.
+              </p>
             </div>
-          </>
-        )}
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('mock')}
+              className="bg-purple-600 text-white px-4 py-2 rounded-xl text-xs font-medium hover:bg-purple-700"
+            >
+              View Mock History →
+            </button>
+          </div>
+        </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <button
@@ -3260,13 +3106,13 @@
 
               <div className="grid grid-cols-3 gap-3">
                 <div className="bg-white/10 border border-white/10 rounded-2xl p-4">
-                  <p className="text-[11px] text-gray-300 mb-1">Latest IELTS</p>
-                  <p className="text-2xl font-bold">{latest ? latest.overall : '--'}</p>
+                  <p className="text-[11px] text-gray-300 mb-1">Latest Mock</p>
+                  <p className="text-2xl font-bold">{latestMockScore ? latestMockScore.overall : '--'}</p>
                 </div>
 
                 <div className="bg-white/10 border border-white/10 rounded-2xl p-4">
-                  <p className="text-[11px] text-gray-300 mb-1">Latest Mock</p>
-                  <p className="text-2xl font-bold">{latestMockScore ? latestMockScore.overall : '--'}</p>
+                  <p className="text-[11px] text-gray-300 mb-1">Mock Count</p>
+                  <p className="text-2xl font-bold">{mockScores.length}</p>
                 </div>
 
                 <div className="bg-white/10 border border-white/10 rounded-2xl p-4">
