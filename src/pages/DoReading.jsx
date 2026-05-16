@@ -331,7 +331,7 @@ export default function DoReading() {
   const getQuestionTypeLabel = question => {
     if (question.type === 'matching') return 'Matching Headings'
     if (question.type === 'sentenceEndings') return 'Sentence Endings'
-    if (question.type === 'summaryOptions') return 'Summary Options'
+    if (question.type === 'summaryOptions') return 'Summary Completion with Options'
     if (question.type === 'noteCompletion') {
       return question.mode === 'choose'
         ? 'Note Completion — Choose A-H'

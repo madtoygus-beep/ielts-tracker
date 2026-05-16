@@ -15,60 +15,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
-const DEFAULT_SCHOOL_ID = 'maxima'
-
-function getProfileSchoolId(profile) {
-  return profile?.schoolId || DEFAULT_SCHOOL_ID
-}
-
-function isAdminProfile(profile) {
-  return profile?.role === 'admin'
-}
-
-function isAssignedToTeacher(entity, teacherId) {
-  if (!entity || !teacherId) return false
-
-  return (
-    entity.teacherId === teacherId ||
-    entity.createdBy === teacherId ||
-    (Array.isArray(entity.teacherIds) && entity.teacherIds.includes(teacherId))
-  )
-}
-
-function filterStudentsByProfile(students, profile, teacherId) {
-  if (isAdminProfile(profile)) return students
-
-  return students.filter(student =>
-    isAssignedToTeacher(student, teacherId)
-  )
-}
-
-function filterClassesByProfile(classes, profile, teacherId) {
-  if (isAdminProfile(profile)) return classes
-
-  return classes.filter(classItem =>
-    isAssignedToTeacher(classItem, teacherId)
-  )
-}
-
-function filterResourcesByProfile(items, profile, teacherId) {
-  if (isAdminProfile(profile)) return items
-
-  return items.filter(item =>
-    isAssignedToTeacher(item, teacherId)
-  )
-}
-
-function filterClassStudentIds(classItem, visibleStudents) {
-  const visibleStudentIds = new Set(visibleStudents.map(student => student.id))
-
-  return (classItem.studentIds || []).filter(studentId =>
-    visibleStudentIds.has(studentId)
-  )
-}
-
-
-const LEGACY_TYPES = ['fitb', 'summaryOptions', 'summary']
+const LEGACY_TYPES = ['fitb', 'summary']
 
 function isLegacyType(type) {
   return LEGACY_TYPES.includes(type)
@@ -79,7 +26,6 @@ export default function CreateReading() {
   const isEditMode = Boolean(id)
 
   const [user, setUser] = useState(null)
-  const [profile, setProfile] = useState(null)
   const [students, setStudents] = useState([])
   const [classes, setClasses] = useState([])
 
@@ -219,7 +165,7 @@ export default function CreateReading() {
     if (question.mode === 'multi') return 'Multiple Choice — Choose TWO'
     if (question.type === 'mcq') return 'Multiple Choice'
     // Legacy
-    if (question.type === 'summaryOptions') return 'Summary Options (Legacy)'
+    if (question.type === 'summaryOptions') return 'Summary Completion with Options'
     if (question.type === 'summary') return 'Summary Completion (Legacy)'
     if (question.type === 'fitb') return 'Fill in the Blank (Legacy)'
     return 'Unknown'
@@ -275,7 +221,6 @@ export default function CreateReading() {
         }
 
         setUser(currentUser)
-        setProfile({ id: currentUser.uid, ...profile })
       } catch (error) {
         console.error(error)
 
@@ -293,48 +238,31 @@ export default function CreateReading() {
   }, [navigate])
 
   useEffect(() => {
-    if (!user || !profile) return
-
     const q = query(collection(db, 'users'), where('role', '==', 'student'))
-
     return onSnapshot(q, snap => {
-      const list = snap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
-        .filter(student => student.status === 'approved' && student.deleted !== true)
-
-      const visibleStudents = filterStudentsByProfile(
-        list,
-        profile,
-        user.uid
+      setStudents(
+        snap.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .filter(student => student.status === 'approved' && student.deleted !== true)
+          .sort((a, b) =>
+            (a.name || a.email || '').localeCompare(b.name || b.email || '')
+          )
       )
-
-      visibleStudents.sort((a, b) =>
-        (a.name || a.email || '').localeCompare(b.name || b.email || '')
-      )
-
-      setStudents(visibleStudents)
     })
-  }, [user, profile])
+  }, [])
 
   useEffect(() => {
-    if (!user || !profile) return
-
     const q = query(collection(db, 'classes'))
 
     return onSnapshot(q, snap => {
       const list = snap.docs
         .map(d => ({ id: d.id, ...d.data() }))
         .filter(classItem => classItem.archived !== true)
+        .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
 
-      const visibleClasses = filterClassesByProfile(
-        list,
-        profile,
-        user.uid
-      ).sort((a, b) => (a.name || '').localeCompare(b.name || ''))
-
-      setClasses(visibleClasses)
+      setClasses(list)
     })
-  }, [user, profile])
+  }, [])
 
   // ============================================================
   // Load existing reading (edit mode)
@@ -479,7 +407,7 @@ export default function CreateReading() {
             type: 'summaryOptions',
             instruction:
               question.instruction ||
-              'Complete the summary using the list of phrases, A-H, below.',
+              'Complete the summary using the list of phrases, A–J, below.',
             title: question.title || '',
             startNumber:
               question.startNumber || question.items?.[0]?.number || '',
@@ -579,7 +507,7 @@ export default function CreateReading() {
   }
 
   const assignClassToReading = classItem => {
-    const classStudentIds = filterClassStudentIds(classItem, students)
+    const classStudentIds = classItem.studentIds || []
 
     if (classStudentIds.length === 0) {
       alert('This class has no students yet.')
@@ -590,7 +518,7 @@ export default function CreateReading() {
   }
 
   const removeClassFromReading = classItem => {
-    const classStudentIds = filterClassStudentIds(classItem, students)
+    const classStudentIds = classItem.studentIds || []
 
     setAssignTo(prev =>
       prev.filter(studentId => !classStudentIds.includes(studentId))
@@ -598,13 +526,13 @@ export default function CreateReading() {
   }
 
   const isClassFullyAssigned = classItem => {
-    const classStudentIds = filterClassStudentIds(classItem, students)
+    const classStudentIds = classItem.studentIds || []
     if (classStudentIds.length === 0) return false
     return classStudentIds.every(studentId => assignTo.includes(studentId))
   }
 
   const isClassPartlyAssigned = classItem => {
-    const classStudentIds = filterClassStudentIds(classItem, students)
+    const classStudentIds = classItem.studentIds || []
     if (classStudentIds.length === 0) return false
     return classStudentIds.some(studentId => assignTo.includes(studentId))
   }
@@ -613,17 +541,6 @@ export default function CreateReading() {
     const student = students.find(item => item.id === studentId)
     return student?.name || student?.email || 'Unknown student'
   }
-
-
-  useEffect(() => {
-    if (!user || !profile || isAdminProfile(profile) || students.length === 0) return
-
-    const visibleStudentIds = new Set(students.map(student => student.id))
-
-    setAssignTo(prev =>
-      prev.filter(studentId => visibleStudentIds.has(studentId))
-    )
-  }, [user, profile, students])
 
   // ============================================================
   // Paragraph helpers
@@ -705,7 +622,7 @@ export default function CreateReading() {
           instruction:
             'Choose ONE WORD ONLY from the passage for each answer.',
           title: '',
-          options: ['', '', '', '', '', '', '', ''],
+          options: ['', '', '', '', '', '', '', '', '', ''],
           paragraphs: [
             {
               id: crypto.randomUUID(),
@@ -839,7 +756,7 @@ export default function CreateReading() {
           id: crypto.randomUUID(),
           type: 'summaryOptions',
           instruction:
-            'Complete the summary using the list of phrases, A-H, below.',
+            'Complete the summary using the list of phrases, A–J, below.',
           title: '',
           startNumber: String(
             prev.reduce(
@@ -847,7 +764,7 @@ export default function CreateReading() {
               0
             ) + 1
           ),
-          options: ['', '', '', '', '', '', '', ''],
+          options: ['', '', '', '', '', '', '', '', '', ''],
           items: [
             {
               id: crypto.randomUUID(),
@@ -1108,7 +1025,7 @@ export default function CreateReading() {
   }
 
   // ============================================================
-  // Legacy: Summary Options helpers
+  // Summary Completion with Options helpers
   // ============================================================
   const updateSummaryOptionItem = (questionId, itemId, field, value) => {
     setQuestions(prev =>
@@ -1525,29 +1442,29 @@ export default function CreateReading() {
 
       if (question.type === 'summaryOptions') {
         if (!question.instruction?.trim()) {
-          alert('Please add instructions for Summary Options.')
+          alert('Please add instructions for Summary Completion with Options.')
           return false
         }
 
         if (!question.title?.trim()) {
-          alert('Please add a title for Summary Options.')
+          alert('Please add a title for Summary Completion with Options.')
           return false
         }
 
         if (!question.startNumber?.toString().trim()) {
-          alert('Please add the first question number for Summary Options.')
+          alert('Please add the first question number for Summary Completion with Options.')
           return false
         }
 
         const filledOptions = question.options.filter(option => option.trim())
         if (filledOptions.length < 2) {
-          alert('Summary Options needs at least 2 options.')
+          alert('Summary Completion with Options needs at least 2 options.')
           return false
         }
 
         for (const item of question.items) {
           if (!item.answer) {
-            alert('Every Summary Options blank needs a correct option.')
+            alert('Every Summary Completion with Options blank needs a correct option.')
             return false
           }
         }
@@ -1741,7 +1658,6 @@ export default function CreateReading() {
       timeLimit,
       dueDate,
       assignTo,
-      schoolId: getProfileSchoolId(profile),
       passageMode,
       passage: fullPassage,
       paragraphs,
@@ -1886,7 +1802,7 @@ export default function CreateReading() {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                 {classes.map(classItem => {
-                  const classStudentIds = filterClassStudentIds(classItem, students)
+                  const classStudentIds = classItem.studentIds || []
                   const fullyAssigned = isClassFullyAssigned(classItem)
                   const partlyAssigned = isClassPartlyAssigned(classItem)
 
@@ -2126,6 +2042,12 @@ export default function CreateReading() {
                 + Note/Summary Completion
               </button>
               <button
+                onClick={() => addQuestion('summaryOptions')}
+                className="text-xs bg-fuchsia-50 text-fuchsia-600 px-3 py-2 rounded-lg hover:bg-fuchsia-100 font-semibold"
+              >
+                + Summary Completion with Options
+              </button>
+              <button
                 onClick={() => addQuestion('table')}
                 className="text-xs bg-amber-50 text-amber-600 px-3 py-2 rounded-lg hover:bg-amber-100"
               >
@@ -2140,7 +2062,7 @@ export default function CreateReading() {
               onClick={() => setShowLegacyTypes(!showLegacyTypes)}
               className="text-xs text-gray-500 hover:text-gray-700 underline"
             >
-              {showLegacyTypes ? '▼ Hide' : '▶ Show'} legacy question types (Fill Blank, Summary Options, Summary Completion)
+              {showLegacyTypes ? '▼ Hide' : '▶ Show'} legacy question types (Fill Blank, Summary Completion)
             </button>
 
             {showLegacyTypes && (
@@ -2154,12 +2076,6 @@ export default function CreateReading() {
                     className="text-xs bg-gray-200 text-gray-700 px-3 py-2 rounded-lg hover:bg-gray-300"
                   >
                     + Fill Blank (legacy)
-                  </button>
-                  <button
-                    onClick={() => addQuestion('summaryOptions')}
-                    className="text-xs bg-gray-200 text-gray-700 px-3 py-2 rounded-lg hover:bg-gray-300"
-                  >
-                    + Summary Options (legacy)
                   </button>
                   <button
                     onClick={() => addQuestion('summary')}
@@ -3145,13 +3061,9 @@ export default function CreateReading() {
                   </div>
                 )}
 
-                {/* ============ LEGACY: SUMMARY OPTIONS ============ */}
+                {/* ============ SUMMARY COMPLETION WITH OPTIONS ============ */}
                 {question.type === 'summaryOptions' && (
                   <div>
-                    <p className="text-xs text-amber-700 bg-amber-50 rounded-lg p-2 mb-3">
-                      ⚠ Legacy type. New questions should use "Note/Summary Completion" with "Choose A-H" mode.
-                    </p>
-
                     <label className="text-xs text-gray-400 mb-1 block">Instruction</label>
                     <textarea
                       rows={2}
@@ -3224,12 +3136,12 @@ export default function CreateReading() {
 
                     <div className="bg-gray-50 border border-gray-100 rounded-xl p-4">
                       <div className="flex items-center justify-between mb-3">
-                        <p className="text-sm font-medium text-gray-800">Summary blanks</p>
+                        <p className="text-sm font-medium text-gray-800">Summary blanks / questions</p>
                         <button
                           onClick={() => addSummaryOptionItem(question.id)}
                           className="text-xs bg-fuchsia-50 text-fuchsia-600 px-3 py-1.5 rounded-lg"
                         >
-                          + Add blank
+                          + Add question blank
                         </button>
                       </div>
 

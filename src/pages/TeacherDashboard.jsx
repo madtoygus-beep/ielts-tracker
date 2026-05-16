@@ -1286,6 +1286,16 @@ Continue permanent delete?`
     return userAnswer === correctAnswer
   }
 
+  const isSummaryOptionCorrect = (submission, question, item) => {
+    const userAnswer = submission.answers?.[question.id]?.[item.id]
+      ?.toString()
+      .trim()
+
+    const correctAnswer = item.answer?.toString().trim()
+
+    return userAnswer === correctAnswer
+  }
+
   const getSentenceEndingText = (question, letter) => {
     if (!letter) return 'No answer'
 
@@ -1361,6 +1371,7 @@ Continue permanent delete?`
     const stats = {
       matching: { correct: 0, total: 0 },
       sentenceEndings: { correct: 0, total: 0 },
+      summaryOptions: { correct: 0, total: 0 },
       tfng: { correct: 0, total: 0 },
       fitb: { correct: 0, total: 0 },
       table: { correct: 0, total: 0 },
@@ -1393,6 +1404,18 @@ Continue permanent delete?`
 
             if (isSentenceEndingCorrect(sub, question, item)) {
               stats.sentenceEndings.correct++
+            }
+          })
+
+          return
+        }
+
+        if (question.type === 'summaryOptions') {
+          question.items?.forEach(item => {
+            stats.summaryOptions.total++
+
+            if (isSummaryOptionCorrect(sub, question, item)) {
+              stats.summaryOptions.correct++
             }
           })
 
@@ -1447,6 +1470,7 @@ Continue permanent delete?`
     const data = {
       matching: percentage(stats.matching),
       sentenceEndings: percentage(stats.sentenceEndings),
+      summaryOptions: percentage(stats.summaryOptions),
       tfng: percentage(stats.tfng),
       fitb: percentage(stats.fitb),
       table: percentage(stats.table),
@@ -1469,6 +1493,7 @@ Continue permanent delete?`
   const getWeakestLabel = type => {
     if (type === 'matching') return 'Matching Headings'
     if (type === 'sentenceEndings') return 'Sentence Endings'
+    if (type === 'summaryOptions') return 'Summary Completion with Options'
     if (type === 'tfng') return 'True / False / Not Given'
     if (type === 'fitb') return 'Fill in the Blank'
     if (type === 'table') return 'Table Completion'
@@ -1533,6 +1558,18 @@ Continue permanent delete?`
           total++
 
           if (isSentenceEndingCorrect(submission, question, item)) {
+            correct++
+          }
+        })
+
+        return
+      }
+
+      if (question.type === 'summaryOptions') {
+        question.items?.forEach(item => {
+          total++
+
+          if (isSummaryOptionCorrect(submission, question, item)) {
             correct++
           }
         })
@@ -1667,6 +1704,18 @@ Continue permanent delete?`
           return
         }
 
+        if (question.type === 'summaryOptions') {
+          question.items?.forEach(item => {
+            stats[key].total++
+
+            if (!isSummaryOptionCorrect(submission, question, item)) {
+              stats[key].wrong++
+            }
+          })
+
+          return
+        }
+
         if (question.type === 'noteCompletion') {
           question.paragraphs?.forEach(paragraph => {
             paragraph.parts?.forEach(part => {
@@ -1756,6 +1805,7 @@ Continue permanent delete?`
     const stats = {
       matching: { correct: 0, total: 0 },
       sentenceEndings: { correct: 0, total: 0 },
+      summaryOptions: { correct: 0, total: 0 },
       mcq: { correct: 0, total: 0 },
       fitb: { correct: 0, total: 0 },
       tfng: { correct: 0, total: 0 },
@@ -1788,6 +1838,18 @@ Continue permanent delete?`
 
             if (isSentenceEndingCorrect(submission, question, item)) {
               stats.sentenceEndings.correct++
+            }
+          })
+
+          return
+        }
+
+        if (question.type === 'summaryOptions') {
+          question.items?.forEach(item => {
+            stats.summaryOptions.total++
+
+            if (isSummaryOptionCorrect(submission, question, item)) {
+              stats.summaryOptions.correct++
             }
           })
 
@@ -1857,6 +1919,7 @@ Continue permanent delete?`
   const getReadingTypeLabel = type => {
     if (type === 'matching') return 'Matching Headings'
     if (type === 'sentenceEndings') return 'Sentence Endings'
+    if (type === 'summaryOptions') return 'Summary Completion with Options'
     if (type === 'mcq') return 'MCQ'
     if (type === 'fitb') return 'Fill Blank'
     if (type === 'tfng') return 'T/F/NG'

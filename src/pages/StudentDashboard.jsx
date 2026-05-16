@@ -220,6 +220,16 @@
     return userAnswer === correctAnswer
   }
 
+  function isSummaryOptionCorrect(submission, question, item) {
+    const userAnswer = submission.answers?.[question.id]?.[item.id]
+      ?.toString()
+      .trim()
+
+    const correctAnswer = item.answer?.toString().trim()
+
+    return userAnswer === correctAnswer
+  }
+
   function isTableCellCorrect(submission, question, row, cellIndex) {
     const key = tableAnswerKey(question.id, row.id, cellIndex)
     const cell = row.cells[cellIndex]
@@ -306,6 +316,7 @@
     if (type === 'fitb') return 'Fill Blank'
     if (type === 'tfng') return 'T/F/NG'
     if (type === 'table') return 'Table Completion'
+    if (type === 'summaryOptions') return 'Summary Completion with Options'
     if (type === 'summary') return 'Summary Completion'
     if (type === 'note') return 'Note Completion'
     if (type === 'noteCompletion') return 'Note Completion'
@@ -394,6 +405,24 @@
 
             if (isSentenceEndingCorrect(submission, question, item)) {
               stats.sentenceEndings.correct++
+              totalCorrect++
+            }
+          })
+
+          return
+        }
+
+        if (question.type === 'summaryOptions') {
+          if (!stats.summaryOptions) {
+            stats.summaryOptions = { correct: 0, total: 0 }
+          }
+
+          question.items?.forEach(item => {
+            stats.summaryOptions.total++
+            totalQuestions++
+
+            if (isSummaryOptionCorrect(submission, question, item)) {
+              stats.summaryOptions.correct++
               totalCorrect++
             }
           })
@@ -661,7 +690,7 @@
       readings,
       readingSubmissions,
       'readingId',
-      ['matching', 'sentenceEndings', 'mcq', 'fitb', 'tfng', 'table', 'summary', 'note', 'noteCompletion']
+      ['matching', 'sentenceEndings', 'summaryOptions', 'mcq', 'fitb', 'tfng', 'table', 'summary', 'note', 'noteCompletion']
     )
 
     const listeningAnalytics = calculateSkillAnalytics(
