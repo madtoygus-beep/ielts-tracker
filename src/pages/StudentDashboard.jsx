@@ -107,6 +107,25 @@
     }
   }
 
+  function getAssignedSortTime(item) {
+    const value =
+      item?.assignedAt ||
+      item?.publishedAt ||
+      item?.updatedAt ||
+      item?.createdAt ||
+      item?.dueDate ||
+      ''
+
+    const time = new Date(value).getTime()
+
+    return Number.isNaN(time) ? 0 : time
+  }
+
+  function sortByAssignedDateDesc(a, b) {
+    return getAssignedSortTime(b) - getAssignedSortTime(a)
+  }
+
+
 
   function getStudentDisplayName(profile, user) {
     const rawName = profile?.name || profile?.fullName || user?.displayName || user?.email || 'Student'
@@ -886,11 +905,7 @@
             !isHiddenForCurrentUser(r, user.uid)
           )
 
-        all.sort((a, b) => {
-          if (!a.dueDate) return 1
-          if (!b.dueDate) return -1
-          return new Date(a.dueDate) - new Date(b.dueDate)
-        })
+        all.sort(sortByAssignedDateDesc)
 
         setReadings(all)
       })
@@ -1044,11 +1059,7 @@
             !isHiddenForCurrentUser(l, user.uid)
           )
 
-        all.sort((a, b) => {
-          if (!a.dueDate) return 1
-          if (!b.dueDate) return -1
-          return new Date(a.dueDate) - new Date(b.dueDate)
-        })
+        all.sort(sortByAssignedDateDesc)
 
         setListenings(all)
       })
@@ -1479,11 +1490,7 @@
             !isHiddenForCurrentUser(item, user.uid)
           )
 
-        all.sort((a, b) => {
-          if (!a.dueDate) return 1
-          if (!b.dueDate) return -1
-          return new Date(a.dueDate) - new Date(b.dueDate)
-        })
+        all.sort(sortByAssignedDateDesc)
 
         setVocabularyTests(all)
       })
@@ -1637,11 +1644,7 @@
             !isHiddenForCurrentUser(m, user.uid)
           )
 
-        list.sort((a, b) => {
-          if (!a.dueDate) return 1
-          if (!b.dueDate) return -1
-          return new Date(a.dueDate) - new Date(b.dueDate)
-        })
+        list.sort(sortByAssignedDateDesc)
 
         setMocks(list)
       })
@@ -2136,11 +2139,7 @@
             !isHiddenForCurrentUser(w, user.uid)
           )
 
-        all.sort((a, b) => {
-          if (!a.dueDate) return 1
-          if (!b.dueDate) return -1
-          return new Date(a.dueDate) - new Date(b.dueDate)
-        })
+        all.sort(sortByAssignedDateDesc)
 
         setWritings(all)
       })
@@ -2663,11 +2662,7 @@
           path: `/do-mock/${item.id}`,
           color: 'green'
         }))
-    ].sort((a, b) => {
-      if (!a.dueDate) return 1
-      if (!b.dueDate) return -1
-      return new Date(a.dueDate) - new Date(b.dueDate)
-    })
+    ].sort(sortByAssignedDateDesc)
 
     const overdueCount = todoItems.filter(item => daysUntilDue(item.dueDate) !== null && daysUntilDue(item.dueDate) < 0).length
     const urgentCount = todoItems.filter(item => {
