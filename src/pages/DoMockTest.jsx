@@ -16,7 +16,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
-const LISTENING_DURATION = 35 * 60
+const LISTENING_DURATION = 30 * 60
 const READING_DURATION = 60 * 60
 const WRITING_DURATION = 60 * 60
 
@@ -42,10 +42,6 @@ function noteAnswerKey(questionId, paragraphId, partId) {
 }
 
 function mapAnswerKey(questionId, itemId) {
-  return `${questionId}_${itemId}`
-}
-
-function matchingAnswerKey(questionId, itemId) {
   return `${questionId}_${itemId}`
 }
 
@@ -332,14 +328,6 @@ function getListeningQuestionCount(question) {
     return question.mapItems?.length || 0
   }
 
-  if (question.type === 'matching') {
-    return question.matchingItems?.length || 0
-  }
-
-  if (question.type === 'mcq' && question.mode === 'multi') {
-    return question.answers?.length || 2
-  }
-
   return 1
 }
 
@@ -350,146 +338,24 @@ function getListeningPartQuestionTotal(part) {
   )
 }
 
-function getListeningQuestionDisplayNumbers(parts, partId, targetQuestion) {
-  let number = 1
+function getListeningQuestionRangeLabel(parts, partId, questionIndex) {
+  let start = 1
 
   for (const part of parts || []) {
-    for (const question of part.questions || []) {
-      if (question.id === targetQuestion?.id) {
-        if (question.type === 'table' || question.type === 'note') {
-          const numbers = []
+    if (part.id === partId) {
+      const question = part.questions?.[questionIndex]
+      const count = getListeningQuestionCount(question)
+      const end = start + count - 1
 
-          for (const row of question.rows || []) {
-            for (let index = 0; index < (row.cells || []).length; index++) {
-              const cell = row.cells[index]
-              if (cell.type !== 'blank') continue
-              numbers.push(getManualQuestionNumber(cell) || number)
-              number++
-            }
-          }
-
-          return numbers
-        }
-
-        if (question.type === 'listeningCompletion') {
-          const numbers = []
-
-          for (const section of question.sections || []) {
-            for (const item of section.parts || []) {
-              if (item.type !== 'blank') continue
-              numbers.push(getManualQuestionNumber(item) || number)
-              number++
-            }
-          }
-
-          return numbers
-        }
-
-        if (question.type === 'map') {
-          return (question.mapItems || []).map(item => {
-            const displayNumber = getManualQuestionNumber(item) || number
-            number++
-            return displayNumber
-          })
-        }
-
-        if (question.type === 'matching') {
-          return (question.matchingItems || []).map(item => {
-            const displayNumber = getManualQuestionNumber(item) || number
-            number++
-            return displayNumber
-          })
-        }
-
-        if (question.type === 'mcq' && question.mode === 'multi') {
-          const count = question.answers?.length || 2
-          const first = getManualQuestionNumber(question) || number
-          const firstAsNumber = Number(first)
-
-          if (Number.isFinite(firstAsNumber)) {
-            return Array.from({ length: count }, (_, index) => firstAsNumber + index)
-          }
-
-          return [first]
-        }
-
-        return [getManualQuestionNumber(question) || number]
-      }
-
-      number += getListeningQuestionCount(question)
+      return count > 1 ? `Q${start}-${end}` : `Q${start}`
     }
-  }
 
-  return []
-}
-
-function getListeningQuestionRangeLabel(parts, partId, questionIndex) {
-  const part = (parts || []).find(item => item.id === partId)
-  const question = part?.questions?.[questionIndex]
-  const numbers = getListeningQuestionDisplayNumbers(parts, partId, question)
-
-  if (numbers.length > 1) {
-    return `Q${numbers[0]}-${numbers[numbers.length - 1]}`
-  }
-
-  if (numbers.length === 1) {
-    return `Q${numbers[0]}`
+    start += getListeningPartQuestionTotal(part)
   }
 
   return `Q${questionIndex + 1}`
 }
 
-function getListeningSingleQuestionNumber(parts, partId, questionId) {
-  let number = 1
-
-  for (const part of parts || []) {
-    for (const question of part.questions || []) {
-      if (question.id === questionId) {
-        return getManualQuestionNumber(question) || number
-      }
-
-      number += getListeningQuestionCount(question)
-    }
-  }
-
-  return number
-}
-
-function getListeningMapQuestionNumber(parts, partId, questionId, itemId) {
-  let number = 1
-
-  for (const part of parts || []) {
-    for (const question of part.questions || []) {
-      if (question.id === questionId) {
-        for (const item of question.mapItems || []) {
-          if (part.id === partId && item.id === itemId) {
-            return getManualQuestionNumber(item) || number
-          }
-
-          number++
-        }
-
-        return number
-      }
-
-      number += getListeningQuestionCount(question)
-    }
-  }
-
-  return number
-}
-
-function getManualQuestionNumber(item) {
-  const value =
-    item?.questionNumber ||
-    item?.questionNo ||
-    item?.qNumber ||
-    item?.manualQuestionNumber ||
-    item?.displayNumber ||
-    ''
-
-  return value?.toString().trim() || null
-}
 
 function getListeningBlankQuestionNumber(parts, partId, questionId, rowId, cellIndex) {
   let number = 1
@@ -504,7 +370,7 @@ function getListeningBlankQuestionNumber(parts, partId, questionId, rowId, cellI
             if (cell.type !== 'blank') continue
 
             if (part.id === partId && row.id === rowId && index === cellIndex) {
-              return getManualQuestionNumber(cell) || number
+              return number
             }
 
             number++
@@ -532,35 +398,11 @@ function getListeningCompletionQuestionNumber(parts, partId, questionId, section
             if (item.type !== 'blank') continue
 
             if (part.id === partId && section.id === sectionId && item.id === itemId) {
-              return getManualQuestionNumber(item) || number
+              return number
             }
 
             number++
           }
-        }
-
-        return number
-      }
-
-      number += getListeningQuestionCount(question)
-    }
-  }
-
-  return number
-}
-
-function getListeningMatchingQuestionNumber(parts, partId, questionId, itemId) {
-  let number = 1
-
-  for (const part of parts || []) {
-    for (const question of part.questions || []) {
-      if (question.id === questionId) {
-        for (const item of question.matchingItems || []) {
-          if (part.id === partId && item.id === itemId) {
-            return getManualQuestionNumber(item) || number
-          }
-
-          number++
         }
 
         return number
@@ -649,7 +491,6 @@ export default function DoMockTest() {
   const [alreadySubmitted, setAlreadySubmitted] = useState(false)
 
   const [sectionIndex, setSectionIndex] = useState(0)
-  const [maxUnlockedSectionIndex, setMaxUnlockedSectionIndex] = useState(0)
   const [listeningAnswers, setListeningAnswers] = useState({})
   const [readingAnswers, setReadingAnswers] = useState({})
   const [writingAnswers, setWritingAnswers] = useState({
@@ -682,7 +523,8 @@ export default function DoMockTest() {
   const readingTickRef = useRef(null)
   const writingTickRef = useRef(null)
   const tabSwitchCountRef = useRef(0)
-  const pendingListeningAutoPlayRef = useRef(false)
+  const readingPassageScrollRef = useRef(null)
+  const readingQuestionsScrollRef = useRef(null)
 
   const [audioStarted, setAudioStarted] = useState(false)
   const [audioLocked, setAudioLocked] = useState(false)
@@ -876,9 +718,7 @@ export default function DoMockTest() {
       return
     }
 
-    const restoredSectionIndex = saved.sectionIndex ?? 0
-    setSectionIndex(restoredSectionIndex)
-    setMaxUnlockedSectionIndex(saved.maxUnlockedSectionIndex ?? restoredSectionIndex)
+    setSectionIndex(saved.sectionIndex ?? 0)
     setListeningAnswers(saved.listeningAnswers || {})
     setReadingAnswers(saved.readingAnswers || {})
     setWritingAnswers(saved.writingAnswers || { task1: '', task2: '' })
@@ -887,23 +727,12 @@ export default function DoMockTest() {
     setReadingTimeLeft(saved.readingTimeLeft ?? READING_DURATION)
     setWritingTimeLeft(saved.writingTimeLeft ?? WRITING_DURATION)
 
-    const restoredListeningStarted = Boolean(saved.listeningStarted)
-    const restoredReadingStarted = Boolean(saved.readingStarted)
-    const restoredWritingStarted = Boolean(saved.writingStarted)
+    setListeningStarted(Boolean(saved.listeningStarted))
+    setReadingStarted(Boolean(saved.readingStarted))
+    setWritingStarted(Boolean(saved.writingStarted))
 
-    setListeningStarted(restoredListeningStarted)
-    setReadingStarted(restoredReadingStarted)
-    setWritingStarted(restoredWritingStarted)
-
-    setListeningLocked(
-      Boolean(saved.listeningLocked) ||
-      restoredReadingStarted ||
-      restoredWritingStarted
-    )
-    setReadingLocked(
-      Boolean(saved.readingLocked) ||
-      restoredWritingStarted
-    )
+    setListeningLocked(Boolean(saved.listeningLocked))
+    setReadingLocked(Boolean(saved.readingLocked))
     setWritingLocked(Boolean(saved.writingLocked))
 
     setAudioStarted(Boolean(saved.audioStarted))
@@ -918,7 +747,6 @@ export default function DoMockTest() {
     const timeout = setTimeout(() => {
       const data = {
         sectionIndex,
-        maxUnlockedSectionIndex,
         listeningAnswers,
         readingAnswers,
         writingAnswers,
@@ -946,7 +774,6 @@ export default function DoMockTest() {
     alreadySubmitted,
     finalResult,
     sectionIndex,
-    maxUnlockedSectionIndex,
     listeningAnswers,
     readingAnswers,
     writingAnswers,
@@ -1008,14 +835,12 @@ export default function DoMockTest() {
         listeningPart: part,
         listeningPartIndex: index
       })),
-      { key: 'prepare-reading', label: 'Prepare Reading' },
       ...readings.map((reading, index) => ({
         key: `reading-${index}`,
         label: `Reading ${index + 1}`,
         reading,
         readingIndex: index
       })),
-      { key: 'prepare-writing', label: 'Prepare Writing' },
       { key: 'writing-task1', label: 'Writing T1' },
       { key: 'writing-task2', label: 'Writing T2' },
       { key: 'review', label: 'Review' }
@@ -1023,6 +848,24 @@ export default function DoMockTest() {
   }, [readings, listeningParts])
 
   const activeSection = sections[sectionIndex] || sections[0]
+
+  useEffect(() => {
+    const resetScroll = () => {
+      window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
+
+      if (readingPassageScrollRef.current) {
+        readingPassageScrollRef.current.scrollTo({ top: 0, left: 0, behavior: 'auto' })
+      }
+
+      if (readingQuestionsScrollRef.current) {
+        readingQuestionsScrollRef.current.scrollTo({ top: 0, left: 0, behavior: 'auto' })
+      }
+    }
+
+    const frame = window.requestAnimationFrame(resetScroll)
+
+    return () => window.cancelAnimationFrame(frame)
+  }, [activeSection.key])
 
   useEffect(() => {
     if (!activeSection.key?.startsWith('listening-')) return
@@ -1037,32 +880,6 @@ export default function DoMockTest() {
       audioRef.current.currentTime = 0
     }
   }, [activeSection.key])
-
-  useEffect(() => {
-    if (!activeSection.key?.startsWith('listening-')) return
-    if (!pendingListeningAutoPlayRef.current) return
-
-    const timeout = setTimeout(() => {
-      if (!audioRef.current || listeningLocked || audioLocked) {
-        pendingListeningAutoPlayRef.current = false
-        return
-      }
-
-      audioRef.current.play()
-        .then(() => {
-          setAudioStarted(true)
-          setAudioWarning('')
-        })
-        .catch(() => {
-          setAudioWarning('Your browser blocked automatic audio playback. Please click Play to start the listening audio.')
-        })
-        .finally(() => {
-          pendingListeningAutoPlayRef.current = false
-        })
-    }, 250)
-
-    return () => clearTimeout(timeout)
-  }, [activeSection.key, listeningLocked, audioLocked])
 
   useEffect(() => {
     if (!listeningStarted || listeningLocked) return
@@ -1248,15 +1065,6 @@ export default function DoMockTest() {
     }))
   }
 
-  const handleListeningMatchingAnswer = (questionId, itemId, value) => {
-    if (listeningLocked) return
-
-    setListeningAnswers(prev => ({
-      ...prev,
-      [matchingAnswerKey(questionId, itemId)]: value
-    }))
-  }
-
   const handleReadingAnswer = (readingId, questionId, value) => {
     if (readingLocked) return
 
@@ -1400,48 +1208,6 @@ export default function DoMockTest() {
     return question.options?.[index] || `Option ${letter}`
   }
 
-  const isReadingHeadingUsed = (readingId, question, headingValue) => {
-    if (!headingValue) return false
-
-    return Object.values(readingAnswers[readingId]?.[question.id] || {}).some(
-      selected => selected?.toString() === headingValue?.toString()
-    )
-  }
-
-  const isReadingHeadingUsedByOtherParagraph = (
-    readingId,
-    question,
-    currentParagraphLetter,
-    headingValue
-  ) => {
-    if (!headingValue) return false
-
-    return Object.entries(readingAnswers[readingId]?.[question.id] || {}).some(
-      ([paragraphLetter, selected]) =>
-        paragraphLetter !== currentParagraphLetter &&
-        selected?.toString() === headingValue?.toString()
-    )
-  }
-
-  const getReadingHeadingOptionLabel = (
-    readingId,
-    question,
-    currentParagraphLetter,
-    headingValue,
-    heading
-  ) => {
-    const usedByOther = isReadingHeadingUsedByOtherParagraph(
-      readingId,
-      question,
-      currentParagraphLetter,
-      headingValue
-    )
-
-    return usedByOther
-      ? `${headingValue}. ${heading} — Used`
-      : `${headingValue}. ${heading}`
-  }
-
   const isReadingNormalCorrect = (readingId, question) => {
     const value = readingAnswers[readingId]?.[question.id]
 
@@ -1483,25 +1249,6 @@ export default function DoMockTest() {
     }
   }
 
-  const getListeningMultiAnswerScore = question => {
-    const selected = Array.isArray(listeningAnswers[question.id])
-      ? listeningAnswers[question.id].map(item => item?.toString())
-      : []
-
-    const correctAnswers = Array.isArray(question.answers)
-      ? question.answers.map(item => item?.toString())
-      : []
-
-    const correctCount = selected.filter(answer =>
-      correctAnswers.includes(answer)
-    ).length
-
-    return {
-      correct: correctCount,
-      total: correctAnswers.length || 2
-    }
-  }
-
   const isListeningCompletionPartCorrect = (question, section, item) => {
     const key = listeningCompletionAnswerKey(question.id, section.id, item.id)
     const userAnswer = listeningAnswers[key]
@@ -1519,19 +1266,6 @@ export default function DoMockTest() {
   }
 
   const getListeningCompletionOptionText = (question, letter) => {
-    if (!letter) return 'No answer'
-    const index = letters.indexOf(letter)
-    return question.options?.[index] || `Option ${letter}`
-  }
-
-  const isListeningMatchingItemCorrect = (question, item) => {
-    const key = matchingAnswerKey(question.id, item.id)
-    const userAnswer = listeningAnswers[key]
-
-    return normalize(userAnswer) === normalize(item.answer)
-  }
-
-  const getListeningMatchingOptionText = (question, letter) => {
     if (!letter) return 'No answer'
     const index = letters.indexOf(letter)
     return question.options?.[index] || `Option ${letter}`
@@ -1606,27 +1340,6 @@ export default function DoMockTest() {
             correct++
           }
         })
-
-        return
-      }
-
-      if (question.type === 'matching') {
-        question.matchingItems?.forEach(item => {
-          total++
-
-          if (isListeningMatchingItemCorrect(question, item)) {
-            correct++
-          }
-        })
-
-        return
-      }
-
-      if (question.type === 'mcq' && question.mode === 'multi') {
-        const score = getListeningMultiAnswerScore(question)
-
-        correct += score.correct
-        total += score.total
 
         return
       }
@@ -2048,100 +1761,13 @@ export default function DoMockTest() {
     writingLocked
   ])
 
-  const isSectionAccessible = index => {
-    if (index > maxUnlockedSectionIndex) return false
-
-    const targetSection = sections[index]
-    const key = targetSection?.key
-
-    if (!key) return false
-
-    if (key === 'prepare-reading' || key === 'prepare-writing') {
-      return index === sectionIndex
-    }
-
-    if (key.startsWith('listening-') && listeningLocked) {
-      return index === sectionIndex
-    }
-
-    if (key.startsWith('reading-') && readingLocked) {
-      return index === sectionIndex
-    }
-
-    if ((key === 'writing-task1' || key === 'writing-task2') && writingLocked) {
-      return index === sectionIndex
-    }
-
-    return true
-  }
-
-  const lockListeningSection = () => {
-    setListeningLocked(true)
-    setAudioLocked(true)
-    setAudioWarning('Listening section is locked. You cannot return to Listening after starting Reading.')
-
-    if (audioRef.current) {
-      audioRef.current.pause()
-    }
-  }
-
-  const lockReadingSection = () => {
-    setReadingLocked(true)
-  }
-
-  const goToSection = nextIndex => {
-    const safeIndex = Math.max(0, Math.min(nextIndex, sections.length - 1))
-    const targetSection = sections[safeIndex]
-
-    if (targetSection?.key?.startsWith('listening-')) {
-      pendingListeningAutoPlayRef.current = true
-    }
-
-    setSectionIndex(safeIndex)
-    setMaxUnlockedSectionIndex(prev => Math.max(prev, safeIndex))
-    window.scrollTo({ top: 0, behavior: 'smooth' })
-  }
-
   const nextSection = () => {
-    if (activeSection.key === 'prepare-reading') {
-      lockListeningSection()
-      goToSection(sectionIndex + 1)
-      return
-    }
-
-    if (activeSection.key === 'prepare-writing') {
-      lockReadingSection()
-      goToSection(sectionIndex + 1)
-      return
-    }
-
-    goToSection(sectionIndex + 1)
+    setSectionIndex(prev => Math.min(prev + 1, sections.length - 1))
+    window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   const prevSection = () => {
-    setSectionIndex(prev => {
-      let target = Math.max(prev - 1, 0)
-
-      while (target > 0 && !isSectionAccessible(target)) {
-        target = Math.max(target - 1, 0)
-      }
-
-      return isSectionAccessible(target) ? target : prev
-    })
-
-    window.scrollTo({ top: 0, behavior: 'smooth' })
-  }
-
-  const handleSectionTabClick = index => {
-    if (!isSectionAccessible(index)) return
-
-    const targetSection = sections[index]
-
-    if (targetSection?.key?.startsWith('listening-')) {
-      pendingListeningAutoPlayRef.current = true
-    }
-
-    setSectionIndex(index)
+    setSectionIndex(prev => Math.max(prev - 1, 0))
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
@@ -2367,96 +1993,6 @@ export default function DoMockTest() {
       )}
     </div>
   )
-
-  const renderListeningMatching = (question, partId) => {
-    const optionList = (question.options || []).filter(Boolean)
-
-    return (
-      <div>
-        {question.instruction && (
-          <p className="text-sm text-gray-700 mb-4 whitespace-pre-wrap">
-            {question.instruction}
-          </p>
-        )}
-
-        {question.matchingTitle && (
-          <p className="font-semibold text-gray-900 mb-4">
-            {question.matchingTitle}
-          </p>
-        )}
-
-        <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_320px] gap-4 md:items-start">
-          <div className="space-y-3">
-            {(question.matchingItems || []).map(item => {
-              const key = matchingAnswerKey(question.id, item.id)
-              const questionNumber = getListeningMatchingQuestionNumber(
-                listeningParts,
-                partId,
-                question.id,
-                item.id
-              )
-
-              return (
-                <div
-                  key={item.id}
-                  className="grid grid-cols-1 sm:grid-cols-[64px_minmax(0,1fr)_140px] gap-3 items-center bg-gray-50 border border-gray-100 rounded-xl p-4"
-                >
-                  <span className="text-sm font-bold text-purple-600">
-                    Q{questionNumber}
-                  </span>
-
-                  <label className="text-sm font-medium text-gray-800">
-                    {item.prompt}
-                  </label>
-
-                  <select
-                    value={listeningAnswers[key] || ''}
-                    onChange={e => handleListeningMatchingAnswer(question.id, item.id, e.target.value)}
-                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 bg-white"
-                  >
-                    <option value="">Select letter</option>
-
-                    {(question.options || []).map((option, optionIndex) => {
-                      if (!option?.trim()) return null
-
-                      const letter = letters[optionIndex]
-
-                      return (
-                        <option key={letter} value={letter}>
-                          {letter}
-                        </option>
-                      )
-                    })}
-                  </select>
-                </div>
-              )
-            })}
-          </div>
-
-          <div className="bg-white border border-purple-100 rounded-xl p-4 md:sticky md:top-[210px] shadow-sm max-h-[calc(100vh-240px)] overflow-y-auto">
-            <p className="text-xs font-semibold text-purple-600 uppercase tracking-wider mb-3">
-              Options A-{letters[Math.max(optionList.length - 1, 0)] || ''}
-            </p>
-
-            <div className="grid grid-cols-1 gap-2">
-              {optionList.map((option, optionIndex) => (
-                <div
-                  key={optionIndex}
-                  className="flex gap-2 text-sm text-gray-700 leading-5 bg-gray-50 border border-gray-100 rounded-xl px-3 py-2"
-                >
-                  <span className="font-bold text-purple-600 min-w-6">
-                    {letters[optionIndex]}.
-                  </span>
-
-                  <span>{option}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
-    )
-  }
 
   const renderListening = part => (
     <div className="space-y-6">
@@ -2718,9 +2254,6 @@ export default function DoMockTest() {
               </div>
             )}
 
-            {question.type === 'matching' &&
-              renderListeningMatching(question, part?.id)}
-
             {question.type === 'map' && (
               <div>
                 <p className="text-sm text-gray-700 mb-4">
@@ -2756,7 +2289,7 @@ export default function DoMockTest() {
                       key={item.id}
                       className="grid grid-cols-[1fr_130px] gap-3 items-center"
                     >
-                      <p className="text-sm text-gray-800"><span className="font-bold text-purple-600 mr-2">Q{getListeningMapQuestionNumber(listeningParts, part?.id, question.id, item.id)}</span>{item.prompt}</p>
+                      <p className="text-sm text-gray-800">{item.prompt}</p>
 
                       <select
                         value={listeningAnswers[mapAnswerKey(question.id, item.id)] || ''}
@@ -2951,7 +2484,10 @@ export default function DoMockTest() {
               </span>
             </div>
 
-            <div className="p-5 md:p-7 overflow-y-auto h-[65vh] lg:h-[calc(100vh-16rem)]">
+            <div
+              ref={readingPassageScrollRef}
+              className="p-5 md:p-7 overflow-y-auto h-[65vh] lg:h-[calc(100vh-16rem)]"
+            >
               {reading.passageMode === 'sections' ? (
                 <div className="space-y-8">
                   {reading.paragraphs?.map(paragraph => (
@@ -2985,7 +2521,10 @@ export default function DoMockTest() {
               </span>
             </div>
 
-            <div className="p-5 md:p-7 overflow-y-auto h-[65vh] lg:h-[calc(100vh-16rem)]">
+            <div
+              ref={readingQuestionsScrollRef}
+              className="p-5 md:p-7 overflow-y-auto h-[65vh] lg:h-[calc(100vh-16rem)]"
+            >
               <div className="space-y-5">
                 {reading.questions?.map((question, index) => (
                   <div
@@ -3004,40 +2543,15 @@ export default function DoMockTest() {
 
                         <div className="bg-white border border-gray-100 rounded-xl p-4 mb-5">
                           {reading.headings?.filter(Boolean).map((heading, headingIndex) => (
-                            <div
+                            <p
                               key={headingIndex}
-                              className={`flex gap-2 text-sm leading-5 rounded-lg px-2 py-1 mb-1 ${
-                                isReadingHeadingUsed(reading.id, question, String(headingIndex + 1))
-                                  ? 'bg-green-50 text-gray-400'
-                                  : 'text-gray-700'
-                              }`}
+                              className="text-sm text-gray-700 mb-1"
                             >
-                              <span
-                                className={`font-semibold min-w-6 ${
-                                  isReadingHeadingUsed(reading.id, question, String(headingIndex + 1))
-                                    ? 'text-green-600'
-                                    : 'text-gray-500'
-                                }`}
-                              >
+                              <span className="font-semibold">
                                 {headingIndex + 1}.
-                              </span>
-
-                              <span
-                                className={
-                                  isReadingHeadingUsed(reading.id, question, String(headingIndex + 1))
-                                    ? 'line-through'
-                                    : ''
-                                }
-                              >
-                                {heading}
-                              </span>
-
-                              {isReadingHeadingUsed(reading.id, question, String(headingIndex + 1)) && (
-                                <span className="ml-auto text-[10px] font-semibold text-green-600 uppercase tracking-wider">
-                                  Used
-                                </span>
-                              )}
-                            </div>
+                              </span>{' '}
+                              {heading}
+                            </p>
                           ))}
                         </div>
 
@@ -3069,31 +2583,14 @@ export default function DoMockTest() {
                               >
                                 <option value="">Select heading</option>
 
-                                {reading.headings?.filter(Boolean).map((heading, headingIndex) => {
-                                  const headingValue = String(headingIndex + 1)
-                                  const usedByOther = isReadingHeadingUsedByOtherParagraph(
-                                    reading.id,
-                                    question,
-                                    paragraph.letter,
-                                    headingValue
-                                  )
-
-                                  return (
-                                    <option
-                                      key={headingIndex}
-                                      value={headingValue}
-                                      disabled={usedByOther}
-                                    >
-                                      {getReadingHeadingOptionLabel(
-                                        reading.id,
-                                        question,
-                                        paragraph.letter,
-                                        headingValue,
-                                        heading
-                                      )}
-                                    </option>
-                                  )
-                                })}
+                                {reading.headings?.filter(Boolean).map((heading, headingIndex) => (
+                                  <option
+                                    key={headingIndex}
+                                    value={String(headingIndex + 1)}
+                                  >
+                                    {headingIndex + 1}. {heading}
+                                  </option>
+                                ))}
                               </select>
                             </div>
                           ))}
@@ -3631,65 +3128,6 @@ export default function DoMockTest() {
     )
   }
 
-  const renderPrepareSection = ({ type }) => {
-    const isReading = type === 'reading'
-    const title = isReading
-      ? 'Now prepare for the Reading Part'
-      : 'Now prepare for the Writing Part'
-
-    const description = isReading
-      ? 'The Listening section is complete. Your Reading timer has not started yet. When you click Start Reading, the Listening section will be locked.'
-      : 'The Reading section is complete. Your Writing timer has not started yet. When you click Start Writing, the Reading section will be locked.'
-
-    const buttonLabel = isReading ? 'Start Reading →' : 'Start Writing →'
-
-    return (
-      <div className="bg-white border border-gray-100 rounded-2xl p-10 text-center max-w-3xl mx-auto">
-        <p className="text-sm text-purple-600 font-semibold mb-3">
-          Section Transition
-        </p>
-
-        <h1 className="text-3xl font-bold text-gray-900 mb-4">
-          {title}
-        </h1>
-
-        <p className="text-gray-500 text-sm leading-7 mb-8">
-          {description}
-        </p>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-8 text-left">
-          <div className={`rounded-xl p-4 ${isReading ? 'bg-green-50' : 'bg-gray-50'}`}>
-            <p className="text-xs text-gray-500 mb-1">Listening</p>
-            <p className={`text-xl font-bold ${isReading ? 'text-green-600' : 'text-gray-500'}`}>
-              Completed
-            </p>
-          </div>
-
-          <div className={`rounded-xl p-4 ${isReading ? 'bg-blue-50' : 'bg-green-50'}`}>
-            <p className="text-xs text-gray-500 mb-1">Reading</p>
-            <p className={`text-xl font-bold ${isReading ? 'text-blue-600' : 'text-green-600'}`}>
-              {isReading ? 'Ready' : 'Completed'}
-            </p>
-          </div>
-
-          <div className={`rounded-xl p-4 ${isReading ? 'bg-gray-50' : 'bg-amber-50'}`}>
-            <p className="text-xs text-gray-500 mb-1">Writing</p>
-            <p className={`text-xl font-bold ${isReading ? 'text-gray-500' : 'text-amber-600'}`}>
-              {isReading ? 'Locked' : 'Ready'}
-            </p>
-          </div>
-        </div>
-
-        <button
-          onClick={nextSection}
-          className="bg-purple-600 text-white rounded-xl px-8 py-4 text-sm font-medium hover:bg-purple-700"
-        >
-          {buttonLabel}
-        </button>
-      </div>
-    )
-  }
-
   const renderReview = () => {
     const t1Words = countWords(writingAnswers.task1)
     const t2Words = countWords(writingAnswers.task2)
@@ -3910,30 +3348,21 @@ export default function DoMockTest() {
       <div className="max-w-7xl mx-auto px-6 py-8">
         <div className="bg-white border border-gray-100 rounded-2xl p-4 mb-6 sticky top-[73px] z-20">
           <div className="flex gap-2 overflow-x-auto">
-            {sections.map((section, index) => {
-              const locked = !isSectionAccessible(index)
-
-              return (
-                <button
-                  key={section.key}
-                  type="button"
-                  disabled={locked}
-                  onClick={() => handleSectionTabClick(index)}
-                  className={`text-xs px-4 py-2 rounded-full whitespace-nowrap ${
-                    sectionIndex === index
-                      ? 'bg-purple-600 text-white'
-                      : locked
-                        ? 'bg-gray-100 text-gray-400 cursor-not-allowed opacity-60'
-                        : index < sectionIndex || index <= maxUnlockedSectionIndex
-                          ? 'bg-green-50 text-green-600'
-                          : 'bg-gray-100 text-gray-400 cursor-not-allowed opacity-60'
-                  }`}
-                  title={locked ? 'This section is locked.' : section.label}
-                >
-                  {section.label}
-                </button>
-              )
-            })}
+            {sections.map((section, index) => (
+              <button
+                key={section.key}
+                onClick={() => setSectionIndex(index)}
+                className={`text-xs px-4 py-2 rounded-full whitespace-nowrap ${
+                  sectionIndex === index
+                    ? 'bg-purple-600 text-white'
+                    : index < sectionIndex
+                      ? 'bg-green-50 text-green-600'
+                      : 'bg-gray-100 text-gray-500'
+                }`}
+              >
+                {section.label}
+              </button>
+            ))}
           </div>
         </div>
 
@@ -3950,13 +3379,13 @@ export default function DoMockTest() {
             </h1>
 
             <p className="text-gray-500 mb-6">
-              This mock test runs in order: selected Listening part(s) → Prepare for Reading → Reading section(s) → Prepare for Writing → Writing Task 1 → Writing Task 2 → Review.
+              This mock test runs in sections: selected Listening part(s) → Reading 1 → Reading 2 → Reading 3 → Writing Task 1 → Writing Task 2 → Review.
             </p>
 
             <div className="grid grid-cols-3 gap-3 mb-8 text-left">
               <div className="bg-purple-50 rounded-xl p-4">
                 <p className="text-xs text-gray-500 mb-1">Listening</p>
-                <p className="text-2xl font-bold text-purple-600">35 min</p>
+                <p className="text-2xl font-bold text-purple-600">30 min</p>
               </div>
 
               <div className="bg-blue-50 rounded-xl p-4">
@@ -3986,14 +3415,8 @@ export default function DoMockTest() {
         {activeSection.key?.startsWith('listening-') &&
           renderListening(activeSection.listeningPart)}
 
-        {activeSection.key === 'prepare-reading' &&
-          renderPrepareSection({ type: 'reading' })}
-
         {activeSection.key?.startsWith('reading-') &&
           renderReading(activeSection.reading)}
-
-        {activeSection.key === 'prepare-writing' &&
-          renderPrepareSection({ type: 'writing' })}
 
         {activeSection.key === 'writing-task1' && renderWritingTask1()}
 
@@ -4001,7 +3424,7 @@ export default function DoMockTest() {
 
         {activeSection.key === 'review' && renderReview()}
 
-        {activeSection.key !== 'intro' && activeSection.key !== 'review' && activeSection.key !== 'prepare-reading' && activeSection.key !== 'prepare-writing' && (
+        {activeSection.key !== 'intro' && activeSection.key !== 'review' && (
           <div className="flex justify-between mt-8">
             <button
               onClick={prevSection}
