@@ -1028,27 +1028,19 @@ export default function DoMockTest() {
 
   useEffect(() => {
     const timeout = setTimeout(() => {
-      window.scrollTo({
-        top: 0,
-        left: 0,
-        behavior: 'auto'
-      })
+      window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
 
-      readingPassageScrollRef.current?.scrollTo({
-        top: 0,
-        left: 0,
-        behavior: 'auto'
-      })
+      if (readingPassageScrollRef.current) {
+        readingPassageScrollRef.current.scrollTop = 0
+      }
 
-      readingQuestionsScrollRef.current?.scrollTo({
-        top: 0,
-        left: 0,
-        behavior: 'auto'
-      })
+      if (readingQuestionsScrollRef.current) {
+        readingQuestionsScrollRef.current.scrollTop = 0
+      }
     }, 0)
 
     return () => clearTimeout(timeout)
-  }, [sectionIndex, activeSection?.key])
+  }, [sectionIndex])
 
   useEffect(() => {
     if (!activeSection.key?.startsWith('listening-')) return
@@ -2753,58 +2745,75 @@ export default function DoMockTest() {
                   {question.instruction}
                 </p>
 
-                {question.mapImage && (
-                  <img
-                    src={question.mapImage}
-                    alt="Map"
-                    className="w-full max-h-[460px] object-contain rounded-xl bg-gray-50 border border-gray-100 mb-4"
-                  />
-                )}
+                <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)] gap-5 lg:items-start">
+                  <div className="space-y-4 lg:sticky lg:top-[210px]">
+                    {question.mapImage && (
+                      <div className="bg-white border border-gray-100 rounded-2xl p-4">
+                        <img
+                          src={question.mapImage}
+                          alt="Map"
+                          className="w-full max-h-[520px] object-contain rounded-xl bg-gray-50"
+                        />
+                      </div>
+                    )}
 
-                <div className="bg-gray-50 rounded-xl p-4 mb-4">
-                  <p className="text-xs font-semibold text-gray-400 mb-2">
-                    Map letters
-                  </p>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    {question.mapLocations?.map(location => (
-                      <p key={location.id} className="text-xs text-gray-600">
-                        <span className="font-bold">{location.label}</span>{' '}
-                        {location.text}
+                    <div className="bg-gray-50 border border-gray-100 rounded-2xl p-4">
+                      <p className="text-xs font-semibold text-gray-400 mb-3">
+                        Map letters
                       </p>
-                    ))}
-                  </div>
-                </div>
 
-                <div className="flex flex-col gap-3">
-                  {question.mapItems?.map(item => (
-                    <div
-                      key={item.id}
-                      className="grid grid-cols-[1fr_130px] gap-3 items-center"
-                    >
-                      <p className="text-sm text-gray-800"><span className="font-bold text-purple-600 mr-2">Q{getListeningMapQuestionNumber(listeningParts, part?.id, question.id, item.id)}</span>{item.prompt}</p>
-
-                      <select
-                        value={listeningAnswers[mapAnswerKey(question.id, item.id)] || ''}
-                        onChange={e =>
-                          handleListeningMapAnswer(
-                            question.id,
-                            item.id,
-                            e.target.value
-                          )
-                        }
-                        className="border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 bg-white"
-                      >
-                        <option value="">Choose</option>
-
+                      <div className="grid grid-cols-2 gap-2">
                         {question.mapLocations?.map(location => (
-                          <option key={location.id} value={location.label}>
-                            {location.label}
-                          </option>
+                          <p key={location.id} className="text-xs text-gray-600">
+                            <span className="font-bold">{location.label}</span>{' '}
+                            {location.text}
+                          </p>
                         ))}
-                      </select>
+                      </div>
                     </div>
-                  ))}
+                  </div>
+
+                  <div className="bg-white border border-gray-100 rounded-2xl p-4">
+                    <p className="text-xs font-semibold text-purple-600 uppercase tracking-wider mb-3">
+                      Questions
+                    </p>
+
+                    <div className="flex flex-col gap-3">
+                      {question.mapItems?.map(item => (
+                        <div
+                          key={item.id}
+                          className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_140px] gap-3 items-center bg-gray-50 border border-gray-100 rounded-xl p-4"
+                        >
+                          <p className="text-sm text-gray-800">
+                            <span className="font-bold text-purple-600 mr-2">
+                              Q{getListeningMapQuestionNumber(listeningParts, part?.id, question.id, item.id)}
+                            </span>
+                            {item.prompt}
+                          </p>
+
+                          <select
+                            value={listeningAnswers[mapAnswerKey(question.id, item.id)] || ''}
+                            onChange={e =>
+                              handleListeningMapAnswer(
+                                question.id,
+                                item.id,
+                                e.target.value
+                              )
+                            }
+                            className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 bg-white"
+                          >
+                            <option value="">Choose</option>
+
+                            {question.mapLocations?.map(location => (
+                              <option key={location.id} value={location.label}>
+                                {location.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               </div>
             )}
