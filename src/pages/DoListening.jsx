@@ -1366,63 +1366,76 @@ export default function DoListening() {
                         {question.instruction}
                       </p>
 
-                      {question.mapImage && (
-                        <div className="bg-gray-50 border border-gray-100 rounded-2xl p-4 mb-4">
-                          <img
-                            src={question.mapImage}
-                            alt="Map"
-                            className="w-full max-h-[420px] object-contain rounded-xl bg-white"
-                          />
-                        </div>
-                      )}
-
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4">
-                        {(question.mapLocations || []).map(location => (
-                          <div key={location.id} className="bg-gray-50 border border-gray-100 rounded-xl p-3">
-                            <p className="text-sm font-bold text-gray-800">{location.label}</p>
-                            {location.text && (
-                              <p className="text-xs text-gray-500 mt-1">{location.text}</p>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-
-                      <div className="flex flex-col gap-3">
-                        {(question.mapItems || []).map((item, itemIndex) => {
-                          const key = mapAnswerKey(question.id, item.id)
-                          const correct = isMapItemCorrect(question, item)
-
-                          return (
-                            <div
-                              key={item.id}
-                              className={`rounded-xl p-4 border ${
-                                correct
-                                  ? 'bg-green-50 border-green-100'
-                                  : 'bg-red-50 border-red-100'
-                              }`}
-                            >
-                              <div className="flex items-center justify-between mb-2">
-                                <p className="text-sm font-semibold text-gray-800">
-                                  Q{getMapQuestionNumber(parts, activePart?.id, question.id, item.id)}. {item.prompt}
-                                </p>
-
-                                <span className={`text-xs font-semibold ${correct ? 'text-green-600' : 'text-red-600'}`}>
-                                  {correct ? 'Correct' : 'Wrong'}
-                                </span>
-                              </div>
-
-                              <p className="text-xs text-gray-500 mb-1">Your answer:</p>
-                              <p className="text-sm text-gray-800 mb-2">{answers[key] || 'No answer'}</p>
-
-                              {!correct && (
-                                <>
-                                  <p className="text-xs text-gray-500 mb-1">Correct:</p>
-                                  <p className="text-sm font-medium text-green-700">{item.answer}</p>
-                                </>
-                              )}
+                      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)] gap-5 lg:items-start">
+                        <div className="space-y-4">
+                          {question.mapImage && (
+                            <div className="bg-gray-50 border border-gray-100 rounded-2xl p-4">
+                              <img
+                                src={question.mapImage}
+                                alt="Map"
+                                className="w-full max-h-[520px] object-contain rounded-xl bg-white"
+                              />
                             </div>
-                          )
-                        })}
+                          )}
+
+                          <div className="bg-gray-50 border border-gray-100 rounded-2xl p-4">
+                            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
+                              Map letters
+                            </p>
+
+                            <div className="grid grid-cols-2 gap-2">
+                              {(question.mapLocations || []).map(location => (
+                                <div key={location.id} className="bg-white border border-gray-100 rounded-xl p-3">
+                                  <p className="text-sm font-bold text-gray-800">{location.label}</p>
+                                  {location.text && (
+                                    <p className="text-xs text-gray-500 mt-1">{location.text}</p>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="space-y-3">
+                          {(question.mapItems || []).map(item => {
+                            const key = mapAnswerKey(question.id, item.id)
+                            const correct = isMapItemCorrect(question, item)
+
+                            return (
+                              <div
+                                key={item.id}
+                                className={`rounded-xl p-4 border ${
+                                  correct
+                                    ? 'bg-green-50 border-green-100'
+                                    : 'bg-red-50 border-red-100'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between gap-3 mb-2">
+                                  <p className="text-sm font-semibold text-gray-800">
+                                    <span className="font-bold text-purple-600 mr-2">
+                                      Q{getMapQuestionNumber(parts, part.id, question.id, item.id)}
+                                    </span>
+                                    {item.prompt}
+                                  </p>
+
+                                  <span className={`text-xs font-semibold ${correct ? 'text-green-600' : 'text-red-600'}`}>
+                                    {correct ? 'Correct' : 'Wrong'}
+                                  </span>
+                                </div>
+
+                                <p className="text-xs text-gray-500 mb-1">Your answer:</p>
+                                <p className="text-sm text-gray-800 mb-2">{answers[key] || 'No answer'}</p>
+
+                                {!correct && (
+                                  <>
+                                    <p className="text-xs text-gray-500 mb-1">Correct:</p>
+                                    <p className="text-sm font-medium text-green-700">{item.answer}</p>
+                                  </>
+                                )}
+                              </div>
+                            )
+                          })}
+                        </div>
                       </div>
                     </div>
                   ) : (question.type === 'table' || question.type === 'note') ? (
@@ -1786,52 +1799,65 @@ export default function DoListening() {
                       {question.instruction}
                     </p>
 
-                    {question.mapImage && (
-                      <div className="bg-gray-50 border border-gray-100 rounded-2xl p-4 mb-4">
-                        <img
-                          src={question.mapImage}
-                          alt="Map"
-                          className="w-full max-h-[420px] object-contain rounded-xl bg-white"
-                        />
-                      </div>
-                    )}
-
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4">
-                      {(question.mapLocations || []).map(location => (
-                        <div key={location.id} className="bg-gray-50 border border-gray-100 rounded-xl p-3">
-                          <p className="text-sm font-bold text-gray-800">{location.label}</p>
-                          {location.text && (
-                            <p className="text-xs text-gray-500 mt-1">{location.text}</p>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-
-                    <div className="flex flex-col gap-3">
-                      {(question.mapItems || []).map((item, itemIndex) => {
-                        const key = mapAnswerKey(question.id, item.id)
-
-                        return (
-                          <div key={item.id} className="grid grid-cols-[1fr_140px] gap-3 items-center bg-gray-50 border border-gray-100 rounded-xl p-4">
-                            <label className="text-sm font-medium text-gray-800">
-                              Q{getMapQuestionNumber(parts, activePart?.id, question.id, item.id)}. {item.prompt}
-                            </label>
-
-                            <select
-                              value={answers[key] || ''}
-                              onChange={e => handleMapAnswer(question.id, item.id, e.target.value)}
-                              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 bg-white"
-                            >
-                              <option value="">Select letter</option>
-                              {(question.mapLocations || []).map(location => (
-                                <option key={location.id} value={location.label}>
-                                  {location.label}
-                                </option>
-                              ))}
-                            </select>
+                    <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)] gap-5 lg:items-start">
+                      <div className="lg:sticky lg:top-[220px] space-y-4">
+                        {question.mapImage && (
+                          <div className="bg-gray-50 border border-gray-100 rounded-2xl p-4">
+                            <img
+                              src={question.mapImage}
+                              alt="Map"
+                              className="w-full max-h-[520px] object-contain rounded-xl bg-white"
+                            />
                           </div>
-                        )
-                      })}
+                        )}
+
+                        <div className="bg-gray-50 border border-gray-100 rounded-2xl p-4">
+                          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
+                            Map letters
+                          </p>
+
+                          <div className="grid grid-cols-2 gap-2">
+                            {(question.mapLocations || []).map(location => (
+                              <div key={location.id} className="bg-white border border-gray-100 rounded-xl p-3">
+                                <p className="text-sm font-bold text-gray-800">{location.label}</p>
+                                {location.text && (
+                                  <p className="text-xs text-gray-500 mt-1">{location.text}</p>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="space-y-3">
+                        {(question.mapItems || []).map(item => {
+                          const key = mapAnswerKey(question.id, item.id)
+
+                          return (
+                            <div key={item.id} className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_150px] gap-3 items-center bg-gray-50 border border-gray-100 rounded-xl p-4">
+                              <label className="text-sm font-medium text-gray-800">
+                                <span className="font-bold text-purple-600 mr-2">
+                                  Q{getMapQuestionNumber(parts, activePart?.id, question.id, item.id)}
+                                </span>
+                                {item.prompt}
+                              </label>
+
+                              <select
+                                value={answers[key] || ''}
+                                onChange={e => handleMapAnswer(question.id, item.id, e.target.value)}
+                                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 bg-white"
+                              >
+                                <option value="">Select letter</option>
+                                {(question.mapLocations || []).map(location => (
+                                  <option key={location.id} value={location.label}>
+                                    {location.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          )
+                        })}
+                      </div>
                     </div>
                   </div>
                 )}
