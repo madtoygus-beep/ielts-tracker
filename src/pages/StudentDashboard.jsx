@@ -662,7 +662,10 @@
     useEffect(() => {
       if (!user) return
 
-      const q = query(collection(db, 'readings'))
+      const q = query(
+        collection(db, 'readings'),
+        where('assignTo', 'array-contains', user.uid)
+      )
 
       const unsub = onSnapshot(q, snap => {
         const data = snap.docs
@@ -701,7 +704,10 @@
     useEffect(() => {
       if (!user) return
 
-      const q = query(collection(db, 'listenings'))
+      const q = query(
+        collection(db, 'listenings'),
+        where('assignTo', 'array-contains', user.uid)
+      )
 
       const unsub = onSnapshot(q, snap => {
         const data = snap.docs
@@ -926,7 +932,10 @@
     useEffect(() => {
       if (!user) return
 
-      const q = query(collection(db, 'readings'))
+      const q = query(
+        collection(db, 'readings'),
+        where('assignTo', 'array-contains', user.uid)
+      )
 
       const unsub = onSnapshot(q, snap => {
         const all = snap.docs
@@ -1080,7 +1089,10 @@
     useEffect(() => {
       if (!user) return
 
-      const q = query(collection(db, 'listenings'))
+      const q = query(
+        collection(db, 'listenings'),
+        where('assignTo', 'array-contains', user.uid)
+      )
 
       const unsub = onSnapshot(q, snap => {
         const all = snap.docs
@@ -1257,7 +1269,10 @@
     useEffect(() => {
       if (!user) return
 
-      const q = query(collection(db, 'mockTests'))
+      const q = query(
+        collection(db, 'mockTests'),
+        where('assignTo', 'array-contains', user.uid)
+      )
 
       const unsub = onSnapshot(q, snap => {
         const map = {}
@@ -1511,7 +1526,10 @@
     useEffect(() => {
       if (!user) return
 
-      const q = query(collection(db, 'vocabularyTests'))
+      const q = query(
+        collection(db, 'vocabularyTests'),
+        where('assignTo', 'array-contains', user.uid)
+      )
 
       const unsub = onSnapshot(q, snap => {
         const all = snap.docs
@@ -1665,7 +1683,10 @@
     useEffect(() => {
       if (!user) return
 
-      const q = query(collection(db, 'mockTests'))
+      const q = query(
+        collection(db, 'mockTests'),
+        where('assignTo', 'array-contains', user.uid)
+      )
 
       const unsub = onSnapshot(q, snap => {
         const list = snap.docs
@@ -1849,7 +1870,10 @@
     useEffect(() => {
       if (!user) return
 
-      const q = query(collection(db, 'writingHomeworks'))
+      const q = query(
+        collection(db, 'writingHomeworks'),
+        where('assignTo', 'array-contains', user.uid)
+      )
 
       const unsub = onSnapshot(q, snap => {
         const map = {}
@@ -2160,7 +2184,10 @@
     useEffect(() => {
       if (!user) return
 
-      const q = query(collection(db, 'writingHomeworks'))
+      const q = query(
+        collection(db, 'writingHomeworks'),
+        where('assignTo', 'array-contains', user.uid)
+      )
 
       const unsub = onSnapshot(q, snap => {
         const all = snap.docs
@@ -2497,7 +2524,12 @@
     useEffect(() => {
       if (!user) return
 
-      const unsubReadings = onSnapshot(collection(db, 'readings'), snap => {
+      const unsubReadings = onSnapshot(
+        query(
+          collection(db, 'readings'),
+          where('assignTo', 'array-contains', user.uid)
+        ),
+        snap => {
         const data = snap.docs
           .map(d => ({ id: d.id, ...d.data() }))
           .filter(item =>
@@ -2509,7 +2541,12 @@
         setReadings(data)
       })
 
-      const unsubListenings = onSnapshot(collection(db, 'listenings'), snap => {
+      const unsubListenings = onSnapshot(
+        query(
+          collection(db, 'listenings'),
+          where('assignTo', 'array-contains', user.uid)
+        ),
+        snap => {
         const data = snap.docs
           .map(d => ({ id: d.id, ...d.data() }))
           .filter(item =>
@@ -2521,7 +2558,12 @@
         setListenings(data)
       })
 
-      const unsubWritings = onSnapshot(collection(db, 'writingHomeworks'), snap => {
+      const unsubWritings = onSnapshot(
+        query(
+          collection(db, 'writingHomeworks'),
+          where('assignTo', 'array-contains', user.uid)
+        ),
+        snap => {
         const data = snap.docs
           .map(d => ({ id: d.id, ...d.data() }))
           .filter(item =>
@@ -2533,7 +2575,12 @@
         setWritings(data)
       })
 
-      const unsubVocabularyTests = onSnapshot(collection(db, 'vocabularyTests'), snap => {
+      const unsubVocabularyTests = onSnapshot(
+        query(
+          collection(db, 'vocabularyTests'),
+          where('assignTo', 'array-contains', user.uid)
+        ),
+        snap => {
         const data = snap.docs
           .map(d => ({ id: d.id, ...d.data() }))
           .filter(item =>
@@ -2545,7 +2592,12 @@
         setVocabularyTests(data)
       })
 
-      const unsubMocks = onSnapshot(collection(db, 'mockTests'), snap => {
+      const unsubMocks = onSnapshot(
+        query(
+          collection(db, 'mockTests'),
+          where('assignTo', 'array-contains', user.uid)
+        ),
+        snap => {
         const data = snap.docs
           .map(d => ({ id: d.id, ...d.data() }))
           .filter(item =>
