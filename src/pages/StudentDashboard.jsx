@@ -7,6 +7,38 @@
   const isHiddenForCurrentUser = (item, uid) =>
     Array.isArray(item.hiddenFor) && item.hiddenFor.includes(uid)
 
+  function normalizeId(value) {
+    return value === undefined || value === null
+      ? ''
+      : value.toString().trim().toLowerCase()
+  }
+
+  function getAssignmentValues(item) {
+    return [
+      ...(Array.isArray(item?.assignTo) ? item.assignTo : []),
+      ...(Array.isArray(item?.assignedTo) ? item.assignedTo : []),
+      ...(Array.isArray(item?.studentIds) ? item.studentIds : []),
+      ...(Array.isArray(item?.assignedStudentIds) ? item.assignedStudentIds : []),
+      ...(Array.isArray(item?.assignedEmails) ? item.assignedEmails : [])
+    ]
+  }
+
+  function isAssignedToCurrentUser(item, user, profile) {
+    const assignedValues = getAssignmentValues(item).map(normalizeId)
+
+    const currentUserValues = [
+      user?.uid,
+      user?.email,
+      profile?.uid,
+      profile?.id,
+      profile?.email
+    ]
+      .map(normalizeId)
+      .filter(Boolean)
+
+    return currentUserValues.some(value => assignedValues.includes(value))
+  }
+
 
   function getBandColor(value) {
     const band = Number(value)
@@ -621,7 +653,7 @@
   }
 
 
-  function StudentSkillAnalytics({ user }) {
+  function StudentSkillAnalytics({ user, profile }) {
     const [readings, setReadings] = useState([])
     const [readingSubmissions, setReadingSubmissions] = useState([])
     const [listenings, setListenings] = useState([])
@@ -637,7 +669,7 @@
           .map(d => ({ id: d.id, ...d.data() }))
           .filter(item =>
             !item.archived &&
-            item.assignTo?.includes(user.uid) &&
+            isAssignedToCurrentUser(item, user, profile) &&
             !isHiddenForCurrentUser(item, user.uid)
           )
 
@@ -676,7 +708,7 @@
           .map(d => ({ id: d.id, ...d.data() }))
           .filter(item =>
             !item.archived &&
-            item.assignTo?.includes(user.uid) &&
+            isAssignedToCurrentUser(item, user, profile) &&
             !isHiddenForCurrentUser(item, user.uid)
           )
 
@@ -886,7 +918,7 @@
   }
 
 
-  function ReadingHomeworkSection({ user }) {
+  function ReadingHomeworkSection({ user, profile }) {
     const [readings, setReadings] = useState([])
     const [submissions, setSubmissions] = useState([])
     const navigate = useNavigate()
@@ -901,7 +933,7 @@
           .map(d => ({ id: d.id, ...d.data() }))
           .filter(r =>
             !r.archived &&
-            r.assignTo?.includes(user.uid) &&
+            isAssignedToCurrentUser(r, user, profile) &&
             !isHiddenForCurrentUser(r, user.uid)
           )
 
@@ -1040,7 +1072,7 @@
   }
 
 
-  function ListeningHomeworkSection({ user }) {
+  function ListeningHomeworkSection({ user, profile }) {
     const [listenings, setListenings] = useState([])
     const [submissions, setSubmissions] = useState([])
     const navigate = useNavigate()
@@ -1055,7 +1087,7 @@
           .map(d => ({ id: d.id, ...d.data() }))
           .filter(l =>
             !l.archived &&
-            l.assignTo?.includes(user.uid) &&
+            isAssignedToCurrentUser(l, user, profile) &&
             !isHiddenForCurrentUser(l, user.uid)
           )
 
@@ -1471,7 +1503,7 @@
   }
 
 
-  function VocabularyHomeworkSection({ user }) {
+  function VocabularyHomeworkSection({ user, profile }) {
     const [vocabularyTests, setVocabularyTests] = useState([])
     const [submissions, setSubmissions] = useState([])
     const navigate = useNavigate()
@@ -1486,7 +1518,7 @@
           .map(d => ({ id: d.id, ...d.data() }))
           .filter(item =>
             !item.archived &&
-            item.assignTo?.includes(user.uid) &&
+            isAssignedToCurrentUser(item, user, profile) &&
             !isHiddenForCurrentUser(item, user.uid)
           )
 
@@ -1625,7 +1657,7 @@
   }
 
 
-  function MockTestSection({ user }) {
+  function MockTestSection({ user, profile }) {
     const [mocks, setMocks] = useState([])
     const [submissions, setSubmissions] = useState([])
     const navigate = useNavigate()
@@ -1640,7 +1672,7 @@
           .map(d => ({ id: d.id, ...d.data() }))
           .filter(m =>
             !m.archived &&
-            m.assignTo?.includes(user.uid) &&
+            isAssignedToCurrentUser(m, user, profile) &&
             !isHiddenForCurrentUser(m, user.uid)
           )
 
@@ -1791,7 +1823,7 @@
   }
 
 
-  function WritingProgressAnalytics({ user }) {
+  function WritingProgressAnalytics({ user, profile }) {
     const [submissions, setSubmissions] = useState([])
     const [writingMap, setWritingMap] = useState({})
 
@@ -2119,7 +2151,7 @@
     )
   }
 
-  function WritingHomeworkSection({ user }) {
+  function WritingHomeworkSection({ user, profile }) {
     const [writings, setWritings] = useState([])
     const [submissions, setSubmissions] = useState([])
     const [selectedReview, setSelectedReview] = useState(null)
@@ -2135,7 +2167,7 @@
           .map(d => ({ id: d.id, ...d.data() }))
           .filter(w =>
             !w.archived &&
-            w.assignTo?.includes(user.uid) &&
+            isAssignedToCurrentUser(w, user, profile) &&
             !isHiddenForCurrentUser(w, user.uid)
           )
 
@@ -2447,7 +2479,7 @@
   }
 
 
-  function StudentTodoSummary({ user }) {
+  function StudentTodoSummary({ user, profile }) {
     const [readings, setReadings] = useState([])
     const [listenings, setListenings] = useState([])
     const [writings, setWritings] = useState([])
@@ -2470,7 +2502,7 @@
           .map(d => ({ id: d.id, ...d.data() }))
           .filter(item =>
             !item.archived &&
-            item.assignTo?.includes(user.uid) &&
+            isAssignedToCurrentUser(item, user, profile) &&
             !isHiddenForCurrentUser(item, user.uid)
           )
 
@@ -2482,7 +2514,7 @@
           .map(d => ({ id: d.id, ...d.data() }))
           .filter(item =>
             !item.archived &&
-            item.assignTo?.includes(user.uid) &&
+            isAssignedToCurrentUser(item, user, profile) &&
             !isHiddenForCurrentUser(item, user.uid)
           )
 
@@ -2494,7 +2526,7 @@
           .map(d => ({ id: d.id, ...d.data() }))
           .filter(item =>
             !item.archived &&
-            item.assignTo?.includes(user.uid) &&
+            isAssignedToCurrentUser(item, user, profile) &&
             !isHiddenForCurrentUser(item, user.uid)
           )
 
@@ -2506,7 +2538,7 @@
           .map(d => ({ id: d.id, ...d.data() }))
           .filter(item =>
             !item.archived &&
-            item.assignTo?.includes(user.uid) &&
+            isAssignedToCurrentUser(item, user, profile) &&
             !isHiddenForCurrentUser(item, user.uid)
           )
 
@@ -2518,7 +2550,7 @@
           .map(d => ({ id: d.id, ...d.data() }))
           .filter(item =>
             !item.archived &&
-            item.assignTo?.includes(user.uid) &&
+            isAssignedToCurrentUser(item, user, profile) &&
             !isHiddenForCurrentUser(item, user.uid)
           )
 
@@ -2944,7 +2976,7 @@
 
     const renderOverview = () => (
       <div>
-        <StudentTodoSummary user={user} />
+        <StudentTodoSummary user={user} profile={profile} />
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
           {overviewCards.map(card => (
@@ -3179,38 +3211,38 @@
           {activeTab === 'overview' && renderOverview()}
 
           {activeTab === 'todo' && (
-            <StudentTodoSummary user={user} />
+            <StudentTodoSummary user={user} profile={profile} />
           )}
 
           {activeTab === 'reading' && (
-            <ReadingHomeworkSection user={user} />
+            <ReadingHomeworkSection user={user} profile={profile} />
           )}
 
           {activeTab === 'listening' && (
-            <ListeningHomeworkSection user={user} />
+            <ListeningHomeworkSection user={user} profile={profile} />
           )}
 
           {activeTab === 'writing' && (
-            <WritingHomeworkSection user={user} />
+            <WritingHomeworkSection user={user} profile={profile} />
           )}
 
           {activeTab === 'vocabulary' && (
-            <VocabularyHomeworkSection user={user} />
+            <VocabularyHomeworkSection user={user} profile={profile} />
           )}
 
           {activeTab === 'mock' && (
             <>
-              <MockAnalysis user={user} />
+              <MockAnalysis user={user} profile={profile} />
 
-              <MockTestSection user={user} />
+              <MockTestSection user={user} profile={profile} />
             </>
           )}
 
           {activeTab === 'analytics' && (
             <>
-              <StudentSkillAnalytics user={user} />
+              <StudentSkillAnalytics user={user} profile={profile} />
 
-              <WritingProgressAnalytics user={user} />
+              <WritingProgressAnalytics user={user} profile={profile} />
             </>
           )}
         </div>
