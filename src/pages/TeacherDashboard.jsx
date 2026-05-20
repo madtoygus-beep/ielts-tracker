@@ -381,6 +381,73 @@ export default function TeacherDashboard() {
     return (Math.round(avg * 2) / 2).toFixed(1)
   }
 
+  const normalizeAssignmentId = value =>
+    value === undefined || value === null
+      ? ''
+      : value.toString().trim().toLowerCase()
+
+  const uniqueCleanValues = values =>
+    Array.from(
+      new Set(
+        values
+          .filter(value => value !== undefined && value !== null)
+          .map(value => value.toString().trim())
+          .filter(Boolean)
+      )
+    )
+
+  const getStudentPrimaryAssignmentId = student =>
+    student?.uid || student?.authUid || student?.id || ''
+
+  const getStudentAssignmentValues = student =>
+    uniqueCleanValues([
+      student?.id,
+      student?.uid,
+      student?.authUid,
+      student?.email,
+      student?.email?.toLowerCase()
+    ])
+
+  const getHomeworkAssignmentValues = homework =>
+    uniqueCleanValues([
+      ...(Array.isArray(homework?.assignTo) ? homework.assignTo : []),
+      ...(Array.isArray(homework?.assignedTo) ? homework.assignedTo : []),
+      ...(Array.isArray(homework?.studentIds) ? homework.studentIds : []),
+      ...(Array.isArray(homework?.assignedStudentIds) ? homework.assignedStudentIds : []),
+      ...(Array.isArray(homework?.assignedEmails) ? homework.assignedEmails : [])
+    ])
+
+  const isHomeworkAssignedToStudent = (homework, student) => {
+    if (!homework || !student) return false
+
+    const homeworkValues = getHomeworkAssignmentValues(homework).map(normalizeAssignmentId)
+    const studentValues = getStudentAssignmentValues(student).map(normalizeAssignmentId)
+
+    return studentValues.some(value => homeworkValues.includes(value))
+  }
+
+  const mapHomeworkAssignmentsToStudentIds = homework =>
+    students
+      .filter(student => isHomeworkAssignedToStudent(homework, student))
+      .map(student => student.id)
+
+  const getStudentByAnyId = studentId => {
+    const normalized = normalizeAssignmentId(studentId)
+
+    return students.find(student =>
+      getStudentAssignmentValues(student)
+        .map(normalizeAssignmentId)
+        .includes(normalized)
+    )
+  }
+
+  const submissionBelongsToStudent = (submission, student) => {
+    if (!submission || !student) return false
+
+    const studentValues = getStudentAssignmentValues(student).map(normalizeAssignmentId)
+    return studentValues.includes(normalizeAssignmentId(submission.uid))
+  }
+
   const handleAddScore = async () => {
     if (
       !form.listening ||
@@ -394,7 +461,7 @@ export default function TeacherDashboard() {
 
     await addDoc(collection(db, 'scores'), {
       ...form,
-      uid: selected.id,
+      uid: getStudentPrimaryAssignmentId(selected),
       overall: overall(form),
       addedBy: user.uid,
       teacherId: profile?.role === 'teacher' ? user.uid : selected.teacherIds?.[0] || '',
@@ -410,7 +477,12 @@ export default function TeacherDashboard() {
     })
   }
 
-  const latestScore = studentId => scores[studentId]?.[0]
+  const latestScore = studentId => {
+    const student = getStudentByAnyId(studentId)
+    const scoreKey = getStudentPrimaryAssignmentId(student) || studentId
+
+    return scores[scoreKey]?.[0] || scores[studentId]?.[0]
+  }
 
   const getStudentReadings = studentId => {
     const student = getStudentByAnyId(studentId)
@@ -434,26 +506,34 @@ export default function TeacherDashboard() {
   }
 
   const getSubmission = (studentId, readingId) => {
+    const student = getStudentByAnyId(studentId)
+
     return submissions.find(
-      sub => sub.uid === studentId && sub.readingId === readingId
+      sub => submissionBelongsToStudent(sub, student) && sub.readingId === readingId
     )
   }
 
   const getWritingSubmission = (studentId, writingId) => {
+    const student = getStudentByAnyId(studentId)
+
     return writingSubmissions.find(
-      sub => sub.uid === studentId && sub.writingId === writingId
+      sub => submissionBelongsToStudent(sub, student) && sub.writingId === writingId
     )
   }
 
   const getListeningSubmission = (studentId, listeningId) => {
+    const student = getStudentByAnyId(studentId)
+
     return listeningSubmissions.find(
-      sub => sub.uid === studentId && sub.listeningId === listeningId
+      sub => submissionBelongsToStudent(sub, student) && sub.listeningId === listeningId
     )
   }
 
   const getVocabularySubmission = (studentId, vocabularyTestId) => {
+    const student = getStudentByAnyId(studentId)
+
     return vocabularySubmissions.find(
-      sub => sub.uid === studentId && sub.vocabularyTestId === vocabularyTestId
+      sub => submissionBelongsToStudent(sub, student) && sub.vocabularyTestId === vocabularyTestId
     )
   }
 
@@ -489,7 +569,7 @@ export default function TeacherDashboard() {
   const pendingWritingReviews = writingSubmissions
     .filter(submission => !submission.reviewed)
     .map(submission => {
-      const student = students.find(item => item.id === submission.uid)
+      const student = getStudentByAnyId(submission.uid)
       const writing = writings.find(item => item.id === submission.writingId)
 
       if (!student || !writing) return null
@@ -509,7 +589,7 @@ export default function TeacherDashboard() {
   const reviewedWritingReviews = writingSubmissions
     .filter(submission => submission.reviewed)
     .map(submission => {
-      const student = students.find(item => item.id === submission.uid)
+      const student = getStudentByAnyId(submission.uid)
       const writing = writings.find(item => item.id === submission.writingId)
 
       if (!student || !writing) return null
@@ -583,7 +663,7 @@ export default function TeacherDashboard() {
       return getMockWritingStatus(submission) !== 'reviewed'
     })
     .map(submission => {
-      const student = students.find(item => item.id === submission.uid)
+      const student = getStudentByAnyId(submission.uid)
       const mock = mockTests.find(item => item.id === submission.mockTestId)
 
       if (!student) return null
@@ -608,7 +688,7 @@ export default function TeacherDashboard() {
       return getMockWritingStatus(submission) === 'reviewed'
     })
     .map(submission => {
-      const student = students.find(item => item.id === submission.uid)
+      const student = getStudentByAnyId(submission.uid)
       const mock = mockTests.find(item => item.id === submission.mockTestId)
 
       if (!student) return null
@@ -682,66 +762,6 @@ export default function TeacherDashboard() {
       : vocabularyLibraryFilter === 'archived'
         ? archivedVocabularyTests
         : activeVocabularyTests
-
-  const normalizeAssignmentId = value =>
-    value === undefined || value === null
-      ? ''
-      : value.toString().trim().toLowerCase()
-
-  const uniqueCleanValues = values =>
-    Array.from(
-      new Set(
-        values
-          .filter(value => value !== undefined && value !== null)
-          .map(value => value.toString().trim())
-          .filter(Boolean)
-      )
-    )
-
-  const getStudentPrimaryAssignmentId = student =>
-    student?.uid || student?.authUid || student?.id || ''
-
-  const getStudentAssignmentValues = student =>
-    uniqueCleanValues([
-      student?.id,
-      student?.uid,
-      student?.authUid,
-      student?.email,
-      student?.email?.toLowerCase()
-    ])
-
-  const getHomeworkAssignmentValues = homework =>
-    uniqueCleanValues([
-      ...(Array.isArray(homework?.assignTo) ? homework.assignTo : []),
-      ...(Array.isArray(homework?.assignedTo) ? homework.assignedTo : []),
-      ...(Array.isArray(homework?.studentIds) ? homework.studentIds : []),
-      ...(Array.isArray(homework?.assignedStudentIds) ? homework.assignedStudentIds : []),
-      ...(Array.isArray(homework?.assignedEmails) ? homework.assignedEmails : [])
-    ])
-
-  const isHomeworkAssignedToStudent = (homework, student) => {
-    if (!homework || !student) return false
-
-    const homeworkValues = getHomeworkAssignmentValues(homework).map(normalizeAssignmentId)
-    const studentValues = getStudentAssignmentValues(student).map(normalizeAssignmentId)
-
-    return studentValues.some(value => homeworkValues.includes(value))
-  }
-
-  const mapHomeworkAssignmentsToStudentIds = homework =>
-    students
-      .filter(student => isHomeworkAssignedToStudent(homework, student))
-      .map(student => student.id)
-
-  const getStudentByAnyId = studentId => {
-    const normalized = normalizeAssignmentId(studentId)
-
-    return students.find(student =>
-      getStudentAssignmentValues(student)
-        .map(normalizeAssignmentId)
-        .includes(normalized)
-    )
-  }
 
   const openAssignmentManager = (homework, type) => {
     setSelectedHomework(homework)
@@ -1472,7 +1492,8 @@ Continue permanent delete?`
   }
 
   const getStudentAnalytics = studentId => {
-    const studentSubs = submissions.filter(sub => sub.uid === studentId)
+    const student = getStudentByAnyId(studentId)
+    const studentSubs = submissions.filter(sub => submissionBelongsToStudent(sub, student))
 
     const stats = {
       matching: { correct: 0, total: 0 },
@@ -1876,7 +1897,7 @@ Continue permanent delete?`
     return students
       .map(student => {
         const studentSubs = submissions
-          .filter(sub => sub.uid === student.id)
+          .filter(sub => submissionBelongsToStudent(sub, student))
           .sort(
             (a, b) =>
               new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0)
@@ -2153,7 +2174,7 @@ Continue permanent delete?`
     return students
       .map(student => {
         const studentSubs = listeningSubmissions
-          .filter(sub => sub.uid === student.id && sub.result?.band)
+          .filter(sub => submissionBelongsToStudent(sub, student) && sub.result?.band)
           .sort(
             (a, b) =>
               new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0)
@@ -2311,8 +2332,10 @@ Continue permanent delete?`
   }
 
   const getStudentMockSubmissions = studentId => {
+    const student = getStudentByAnyId(studentId)
+
     return mockSubmissions
-      .filter(submission => submission.uid === studentId && submission.archived !== true)
+      .filter(submission => submissionBelongsToStudent(submission, student) && submission.archived !== true)
       .sort((a, b) => new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0))
   }
 
@@ -4699,7 +4722,7 @@ Continue permanent delete?`
                       : selectedHomeworkType === 'mock'
                         ? mockSubmissions.find(
                             submission =>
-                              submission.uid === student.id &&
+                              submissionBelongsToStudent(submission, student) &&
                               submission.mockTestId === selectedHomework.id
                           )
                         : selectedHomeworkType === 'vocabulary'
