@@ -413,20 +413,23 @@ export default function TeacherDashboard() {
   const latestScore = studentId => scores[studentId]?.[0]
 
   const getStudentReadings = studentId => {
+    const student = getStudentByAnyId(studentId)
     return activeReadings.filter(reading =>
-      reading.assignTo?.includes(studentId)
+      isHomeworkAssignedToStudent(reading, student)
     )
   }
 
   const getStudentWritings = studentId => {
+    const student = getStudentByAnyId(studentId)
     return activeWritings.filter(writing =>
-      writing.assignTo?.includes(studentId)
+      isHomeworkAssignedToStudent(writing, student)
     )
   }
 
   const getStudentListenings = studentId => {
+    const student = getStudentByAnyId(studentId)
     return activeListenings.filter(listening =>
-      listening.assignTo?.includes(studentId)
+      isHomeworkAssignedToStudent(listening, student)
     )
   }
 
@@ -680,10 +683,70 @@ export default function TeacherDashboard() {
         ? archivedVocabularyTests
         : activeVocabularyTests
 
+  const normalizeAssignmentId = value =>
+    value === undefined || value === null
+      ? ''
+      : value.toString().trim().toLowerCase()
+
+  const uniqueCleanValues = values =>
+    Array.from(
+      new Set(
+        values
+          .filter(value => value !== undefined && value !== null)
+          .map(value => value.toString().trim())
+          .filter(Boolean)
+      )
+    )
+
+  const getStudentPrimaryAssignmentId = student =>
+    student?.uid || student?.authUid || student?.id || ''
+
+  const getStudentAssignmentValues = student =>
+    uniqueCleanValues([
+      student?.id,
+      student?.uid,
+      student?.authUid,
+      student?.email,
+      student?.email?.toLowerCase()
+    ])
+
+  const getHomeworkAssignmentValues = homework =>
+    uniqueCleanValues([
+      ...(Array.isArray(homework?.assignTo) ? homework.assignTo : []),
+      ...(Array.isArray(homework?.assignedTo) ? homework.assignedTo : []),
+      ...(Array.isArray(homework?.studentIds) ? homework.studentIds : []),
+      ...(Array.isArray(homework?.assignedStudentIds) ? homework.assignedStudentIds : []),
+      ...(Array.isArray(homework?.assignedEmails) ? homework.assignedEmails : [])
+    ])
+
+  const isHomeworkAssignedToStudent = (homework, student) => {
+    if (!homework || !student) return false
+
+    const homeworkValues = getHomeworkAssignmentValues(homework).map(normalizeAssignmentId)
+    const studentValues = getStudentAssignmentValues(student).map(normalizeAssignmentId)
+
+    return studentValues.some(value => homeworkValues.includes(value))
+  }
+
+  const mapHomeworkAssignmentsToStudentIds = homework =>
+    students
+      .filter(student => isHomeworkAssignedToStudent(homework, student))
+      .map(student => student.id)
+
+  const getStudentByAnyId = studentId => {
+    const normalized = normalizeAssignmentId(studentId)
+
+    return students.find(student =>
+      getStudentAssignmentValues(student)
+        .map(normalizeAssignmentId)
+        .includes(normalized)
+    )
+  }
+
   const openAssignmentManager = (homework, type) => {
     setSelectedHomework(homework)
     setSelectedHomeworkType(type)
-    setAssignmentDraft(homework.assignTo || [])
+    setAssignmentDraft(mapHomeworkAssignmentsToStudentIds(homework))
   }
 
   const toggleAssignment = studentId => {
@@ -728,7 +791,7 @@ export default function TeacherDashboard() {
   }
 
   const getStudentName = studentId => {
-    const student = students.find(item => item.id === studentId)
+    const student = getStudentByAnyId(studentId)
     return student?.name || student?.email || 'Unknown student'
   }
 
@@ -746,13 +809,46 @@ export default function TeacherDashboard() {
               ? 'vocabularyTests'
               : 'writingHomeworks'
 
-    const allowedStudentIds = students.map(student => student.id)
-    const safeAssignmentDraft = profile?.role === 'admin'
+    const allowedStudentIds = new Set(students.map(student => student.id))
+    const allowedDraftIds = profile?.role === 'admin'
       ? assignmentDraft
-      : assignmentDraft.filter(studentId => allowedStudentIds.includes(studentId))
+      : assignmentDraft.filter(studentId => allowedStudentIds.has(studentId))
+
+    const selectedStudents = allowedDraftIds
+      .map(studentId => students.find(student => student.id === studentId))
+      .filter(Boolean)
+
+    const finalAssignment = uniqueCleanValues(
+      selectedStudents.map(student => getStudentPrimaryAssignmentId(student))
+    )
+
+    const assignedStudentIds = uniqueCleanValues(
+      selectedStudents.map(student => student.id)
+    )
+
+    const assignedEmails = uniqueCleanValues(
+      selectedStudents
+        .map(student => student.email?.toLowerCase())
+        .filter(Boolean)
+    )
+
+    const selectedVisibilityValues = new Set(
+      selectedStudents
+        .flatMap(student => getStudentAssignmentValues(student))
+        .map(normalizeAssignmentId)
+    )
+
+    const hiddenFor = Array.isArray(selectedHomework.hiddenFor)
+      ? selectedHomework.hiddenFor.filter(value =>
+          !selectedVisibilityValues.has(normalizeAssignmentId(value))
+        )
+      : []
 
     await updateDoc(doc(db, collectionName, selectedHomework.id), {
-      assignTo: safeAssignmentDraft,
+      assignTo: finalAssignment,
+      assignedStudentIds,
+      assignedEmails,
+      hiddenFor,
       archived: false,
       schoolId: profile?.schoolId || DEFAULT_SCHOOL_ID,
       teacherId: profile?.role === 'teacher'
@@ -776,7 +872,9 @@ export default function TeacherDashboard() {
 
     await updateDoc(doc(db, 'readings', reading.id), {
       archived: true,
-      assignTo: []
+      assignTo: [],
+      assignedStudentIds: [],
+      assignedEmails: []
     })
   }
 
@@ -860,7 +958,9 @@ Continue permanent delete?`
 
     await updateDoc(doc(db, 'writingHomeworks', writing.id), {
       archived: true,
-      assignTo: []
+      assignTo: [],
+      assignedStudentIds: [],
+      assignedEmails: []
     })
   }
 
@@ -944,7 +1044,9 @@ Continue permanent delete?`
 
     await updateDoc(doc(db, 'listenings', listening.id), {
       archived: true,
-      assignTo: []
+      assignTo: [],
+      assignedStudentIds: [],
+      assignedEmails: []
     })
   }
 
@@ -1028,7 +1130,9 @@ Continue permanent delete?`
 
     await updateDoc(doc(db, 'vocabularyTests', vocabularyTest.id), {
       archived: true,
-      assignTo: []
+      assignTo: [],
+      assignedStudentIds: [],
+      assignedEmails: []
     })
   }
 
@@ -1112,7 +1216,9 @@ Continue permanent delete?`
 
     await updateDoc(doc(db, 'mockTests', mockTest.id), {
       archived: true,
-      assignTo: []
+      assignTo: [],
+      assignedStudentIds: [],
+      assignedEmails: []
     })
   }
 
