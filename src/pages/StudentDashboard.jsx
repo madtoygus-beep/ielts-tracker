@@ -4,8 +4,51 @@
   import { signOut, onAuthStateChanged, updatePassword } from 'firebase/auth'
   import { useNavigate } from 'react-router-dom'
 
-  const isHiddenForCurrentUser = (item, uid) =>
-    Array.isArray(item.hiddenFor) && item.hiddenFor.includes(uid)
+  function uniqueCleanValues(values) {
+    return Array.from(
+      new Set(
+        values
+          .filter(value => value !== undefined && value !== null)
+          .map(value => value.toString().trim())
+          .filter(Boolean)
+      )
+    )
+  }
+
+  function getCurrentUserAssignmentValues(userOrUid, profile) {
+    if (!userOrUid) return []
+
+    if (typeof userOrUid === 'string') {
+      return uniqueCleanValues([
+        userOrUid,
+        profile?.uid,
+        profile?.id,
+        profile?.email,
+        profile?.email?.toLowerCase()
+      ])
+    }
+
+    return uniqueCleanValues([
+      userOrUid?.uid,
+      userOrUid?.email,
+      userOrUid?.email?.toLowerCase(),
+      profile?.uid,
+      profile?.id,
+      profile?.email,
+      profile?.email?.toLowerCase()
+    ])
+  }
+
+  const isHiddenForCurrentUser = (item, userOrUid, profile) => {
+    if (!Array.isArray(item?.hiddenFor)) return false
+
+    const hiddenValues = item.hiddenFor.map(normalizeId)
+    const currentUserValues = getCurrentUserAssignmentValues(userOrUid, profile)
+      .map(normalizeId)
+      .filter(Boolean)
+
+    return currentUserValues.some(value => hiddenValues.includes(value))
+  }
 
   function normalizeId(value) {
     return value === undefined || value === null
@@ -26,17 +69,120 @@
   function isAssignedToCurrentUser(item, user, profile) {
     const assignedValues = getAssignmentValues(item).map(normalizeId)
 
-    const currentUserValues = [
-      user?.uid,
-      user?.email,
-      profile?.uid,
-      profile?.id,
-      profile?.email
-    ]
+    const currentUserValues = getCurrentUserAssignmentValues(user, profile)
       .map(normalizeId)
       .filter(Boolean)
 
     return currentUserValues.some(value => assignedValues.includes(value))
+  }
+
+  function listenAssignedCollection(collectionName, user, profile, onItems, options = {}) {
+    if (!user) return () => {}
+
+    const uidValues = uniqueCleanValues([
+      user.uid,
+      profile?.uid,
+      profile?.id
+    ])
+
+    const emailValues = uniqueCleanValues([
+      user.email,
+      user.email?.toLowerCase(),
+      profile?.email,
+      profile?.email?.toLowerCase()
+    ])
+
+    const allAssignmentValues = uniqueCleanValues([
+      ...uidValues,
+      ...emailValues
+    ])
+
+    const querySpecs = [
+      ['assignTo', allAssignmentValues],
+      ['assignedTo', allAssignmentValues],
+      ['studentIds', uidValues],
+      ['assignedStudentIds', uidValues],
+      ['assignedEmails', emailValues]
+    ]
+
+    const queryTargets = []
+    const seenTargets = new Set()
+
+    querySpecs.forEach(([fieldName, values]) => {
+      values.forEach(value => {
+        const key = `${fieldName}:${normalizeId(value)}`
+
+        if (!value || seenTargets.has(key)) return
+
+        seenTargets.add(key)
+        queryTargets.push({ fieldName, value })
+      })
+    })
+
+    if (queryTargets.length === 0) {
+      onItems([])
+      return () => {}
+    }
+
+    let active = true
+    const resultBuckets = {}
+
+    const emit = () => {
+      if (!active) return
+
+      const mergedMap = new Map()
+
+      Object.values(resultBuckets).forEach(items => {
+        items.forEach(item => {
+          mergedMap.set(item.id, item)
+        })
+      })
+
+      let merged = Array.from(mergedMap.values()).filter(item =>
+        isAssignedToCurrentUser(item, user, profile) &&
+        !isHiddenForCurrentUser(item, user, profile)
+      )
+
+      if (typeof options.filter === 'function') {
+        merged = merged.filter(options.filter)
+      }
+
+      if (typeof options.sort === 'function') {
+        merged = [...merged].sort(options.sort)
+      }
+
+      onItems(merged)
+    }
+
+    const unsubscribers = queryTargets.map(({ fieldName, value }) => {
+      const key = `${fieldName}:${normalizeId(value)}`
+      const q = query(
+        collection(db, collectionName),
+        where(fieldName, 'array-contains', value)
+      )
+
+      return onSnapshot(
+        q,
+        snap => {
+          resultBuckets[key] = snap.docs.map(d => ({
+            id: d.id,
+            ...d.data()
+          }))
+
+          emit()
+        },
+        error => {
+          console.warn(`Assignment query failed for ${collectionName}.${fieldName}`, error)
+          resultBuckets[key] = []
+          emit()
+        }
+      )
+    })
+
+    return () => {
+      active = false
+      unsubscribers.forEach(unsubscribe => unsubscribe())
+    }
   }
 
 
@@ -662,25 +808,17 @@
     useEffect(() => {
       if (!user) return
 
-      const q = query(
-        collection(db, 'readings'),
-        where('assignTo', 'array-contains', user.uid)
+      return listenAssignedCollection(
+        'readings',
+        user,
+        profile,
+        setReadings,
+        {
+          filter: item => !item.archived,
+          sort: sortByAssignedDateDesc
+        }
       )
-
-      const unsub = onSnapshot(q, snap => {
-        const data = snap.docs
-          .map(d => ({ id: d.id, ...d.data() }))
-          .filter(item =>
-            !item.archived &&
-            isAssignedToCurrentUser(item, user, profile) &&
-            !isHiddenForCurrentUser(item, user.uid)
-          )
-
-        setReadings(data)
-      })
-
-      return unsub
-    }, [user])
+    }, [user, profile])
 
     useEffect(() => {
       if (!user) return
@@ -704,25 +842,17 @@
     useEffect(() => {
       if (!user) return
 
-      const q = query(
-        collection(db, 'listenings'),
-        where('assignTo', 'array-contains', user.uid)
+      return listenAssignedCollection(
+        'listenings',
+        user,
+        profile,
+        setListenings,
+        {
+          filter: item => !item.archived,
+          sort: sortByAssignedDateDesc
+        }
       )
-
-      const unsub = onSnapshot(q, snap => {
-        const data = snap.docs
-          .map(d => ({ id: d.id, ...d.data() }))
-          .filter(item =>
-            !item.archived &&
-            isAssignedToCurrentUser(item, user, profile) &&
-            !isHiddenForCurrentUser(item, user.uid)
-          )
-
-        setListenings(data)
-      })
-
-      return unsub
-    }, [user])
+    }, [user, profile])
 
     useEffect(() => {
       if (!user) return
@@ -932,27 +1062,17 @@
     useEffect(() => {
       if (!user) return
 
-      const q = query(
-        collection(db, 'readings'),
-        where('assignTo', 'array-contains', user.uid)
+      return listenAssignedCollection(
+        'readings',
+        user,
+        profile,
+        setReadings,
+        {
+          filter: item => !item.archived,
+          sort: sortByAssignedDateDesc
+        }
       )
-
-      const unsub = onSnapshot(q, snap => {
-        const all = snap.docs
-          .map(d => ({ id: d.id, ...d.data() }))
-          .filter(r =>
-            !r.archived &&
-            isAssignedToCurrentUser(r, user, profile) &&
-            !isHiddenForCurrentUser(r, user.uid)
-          )
-
-        all.sort(sortByAssignedDateDesc)
-
-        setReadings(all)
-      })
-
-      return unsub
-    }, [user])
+    }, [user, profile])
 
     useEffect(() => {
       if (!user) return
@@ -1089,27 +1209,17 @@
     useEffect(() => {
       if (!user) return
 
-      const q = query(
-        collection(db, 'listenings'),
-        where('assignTo', 'array-contains', user.uid)
+      return listenAssignedCollection(
+        'listenings',
+        user,
+        profile,
+        setListenings,
+        {
+          filter: item => !item.archived,
+          sort: sortByAssignedDateDesc
+        }
       )
-
-      const unsub = onSnapshot(q, snap => {
-        const all = snap.docs
-          .map(d => ({ id: d.id, ...d.data() }))
-          .filter(l =>
-            !l.archived &&
-            isAssignedToCurrentUser(l, user, profile) &&
-            !isHiddenForCurrentUser(l, user.uid)
-          )
-
-        all.sort(sortByAssignedDateDesc)
-
-        setListenings(all)
-      })
-
-      return unsub
-    }, [user])
+    }, [user, profile])
 
     useEffect(() => {
       if (!user) return
@@ -1239,7 +1349,7 @@
 
 
 
-  function MockAnalysis({ user }) {
+  function MockAnalysis({ user, profile }) {
     const [mockSubmissions, setMockSubmissions] = useState([])
     const [mockMap, setMockMap] = useState({})
 
@@ -1269,30 +1379,24 @@
     useEffect(() => {
       if (!user) return
 
-      const q = query(
-        collection(db, 'mockTests'),
-        where('assignTo', 'array-contains', user.uid)
-      )
-
-      const unsub = onSnapshot(q, snap => {
+      return listenAssignedCollection(
+        'mockTests',
+        user,
+        profile,
+        items => {
         const map = {}
 
-        snap.docs.forEach(d => {
-          const item = {
-            id: d.id,
-            ...d.data()
-          }
-
-          if (isHiddenForCurrentUser(item, user.uid)) return
-
-          map[d.id] = item
+        items.forEach(item => {
+          map[item.id] = item
         })
 
         setMockMap(map)
-      })
-
-      return unsub
-    }, [user])
+      },
+        {
+          filter: item => !item.archived
+        }
+      )
+    }, [user, profile])
 
     const completed = mockSubmissions.length
     const latest = mockSubmissions[0]
@@ -1526,27 +1630,17 @@
     useEffect(() => {
       if (!user) return
 
-      const q = query(
-        collection(db, 'vocabularyTests'),
-        where('assignTo', 'array-contains', user.uid)
+      return listenAssignedCollection(
+        'vocabularyTests',
+        user,
+        profile,
+        setVocabularyTests,
+        {
+          filter: item => !item.archived,
+          sort: sortByAssignedDateDesc
+        }
       )
-
-      const unsub = onSnapshot(q, snap => {
-        const all = snap.docs
-          .map(d => ({ id: d.id, ...d.data() }))
-          .filter(item =>
-            !item.archived &&
-            isAssignedToCurrentUser(item, user, profile) &&
-            !isHiddenForCurrentUser(item, user.uid)
-          )
-
-        all.sort(sortByAssignedDateDesc)
-
-        setVocabularyTests(all)
-      })
-
-      return unsub
-    }, [user])
+    }, [user, profile])
 
     useEffect(() => {
       if (!user) return
@@ -1683,27 +1777,17 @@
     useEffect(() => {
       if (!user) return
 
-      const q = query(
-        collection(db, 'mockTests'),
-        where('assignTo', 'array-contains', user.uid)
+      return listenAssignedCollection(
+        'mockTests',
+        user,
+        profile,
+        setMocks,
+        {
+          filter: item => !item.archived,
+          sort: sortByAssignedDateDesc
+        }
       )
-
-      const unsub = onSnapshot(q, snap => {
-        const list = snap.docs
-          .map(d => ({ id: d.id, ...d.data() }))
-          .filter(m =>
-            !m.archived &&
-            isAssignedToCurrentUser(m, user, profile) &&
-            !isHiddenForCurrentUser(m, user.uid)
-          )
-
-        list.sort(sortByAssignedDateDesc)
-
-        setMocks(list)
-      })
-
-      return unsub
-    }, [user])
+    }, [user, profile])
 
     useEffect(() => {
       if (!user) return
@@ -1870,30 +1954,24 @@
     useEffect(() => {
       if (!user) return
 
-      const q = query(
-        collection(db, 'writingHomeworks'),
-        where('assignTo', 'array-contains', user.uid)
-      )
-
-      const unsub = onSnapshot(q, snap => {
+      return listenAssignedCollection(
+        'writingHomeworks',
+        user,
+        profile,
+        items => {
         const map = {}
 
-        snap.docs.forEach(d => {
-          const item = {
-            id: d.id,
-            ...d.data()
-          }
-
-          if (isHiddenForCurrentUser(item, user.uid)) return
-
-          map[d.id] = item
+        items.forEach(item => {
+          map[item.id] = item
         })
 
         setWritingMap(map)
-      })
-
-      return unsub
-    }, [user])
+      },
+        {
+          filter: item => !item.archived
+        }
+      )
+    }, [user, profile])
 
     const reviewed = submissions
       .filter(sub => sub.reviewed && sub.review?.overall)
@@ -2184,27 +2262,17 @@
     useEffect(() => {
       if (!user) return
 
-      const q = query(
-        collection(db, 'writingHomeworks'),
-        where('assignTo', 'array-contains', user.uid)
+      return listenAssignedCollection(
+        'writingHomeworks',
+        user,
+        profile,
+        setWritings,
+        {
+          filter: item => !item.archived,
+          sort: sortByAssignedDateDesc
+        }
       )
-
-      const unsub = onSnapshot(q, snap => {
-        const all = snap.docs
-          .map(d => ({ id: d.id, ...d.data() }))
-          .filter(w =>
-            !w.archived &&
-            isAssignedToCurrentUser(w, user, profile) &&
-            !isHiddenForCurrentUser(w, user.uid)
-          )
-
-        all.sort(sortByAssignedDateDesc)
-
-        setWritings(all)
-      })
-
-      return unsub
-    }, [user])
+    }, [user, profile])
 
     useEffect(() => {
       if (!user) return
@@ -2524,90 +2592,60 @@
     useEffect(() => {
       if (!user) return
 
-      const unsubReadings = onSnapshot(
-        query(
-          collection(db, 'readings'),
-          where('assignTo', 'array-contains', user.uid)
-        ),
-        snap => {
-        const data = snap.docs
-          .map(d => ({ id: d.id, ...d.data() }))
-          .filter(item =>
-            !item.archived &&
-            isAssignedToCurrentUser(item, user, profile) &&
-            !isHiddenForCurrentUser(item, user.uid)
-          )
+      const unsubReadings = listenAssignedCollection(
+        'readings',
+        user,
+        profile,
+        setReadings,
+        {
+          filter: item => !item.archived,
+          sort: sortByAssignedDateDesc
+        }
+      )
 
-        setReadings(data)
-      })
+      const unsubListenings = listenAssignedCollection(
+        'listenings',
+        user,
+        profile,
+        setListenings,
+        {
+          filter: item => !item.archived,
+          sort: sortByAssignedDateDesc
+        }
+      )
 
-      const unsubListenings = onSnapshot(
-        query(
-          collection(db, 'listenings'),
-          where('assignTo', 'array-contains', user.uid)
-        ),
-        snap => {
-        const data = snap.docs
-          .map(d => ({ id: d.id, ...d.data() }))
-          .filter(item =>
-            !item.archived &&
-            isAssignedToCurrentUser(item, user, profile) &&
-            !isHiddenForCurrentUser(item, user.uid)
-          )
+      const unsubWritings = listenAssignedCollection(
+        'writingHomeworks',
+        user,
+        profile,
+        setWritings,
+        {
+          filter: item => !item.archived,
+          sort: sortByAssignedDateDesc
+        }
+      )
 
-        setListenings(data)
-      })
+      const unsubVocabularyTests = listenAssignedCollection(
+        'vocabularyTests',
+        user,
+        profile,
+        setVocabularyTests,
+        {
+          filter: item => !item.archived,
+          sort: sortByAssignedDateDesc
+        }
+      )
 
-      const unsubWritings = onSnapshot(
-        query(
-          collection(db, 'writingHomeworks'),
-          where('assignTo', 'array-contains', user.uid)
-        ),
-        snap => {
-        const data = snap.docs
-          .map(d => ({ id: d.id, ...d.data() }))
-          .filter(item =>
-            !item.archived &&
-            isAssignedToCurrentUser(item, user, profile) &&
-            !isHiddenForCurrentUser(item, user.uid)
-          )
-
-        setWritings(data)
-      })
-
-      const unsubVocabularyTests = onSnapshot(
-        query(
-          collection(db, 'vocabularyTests'),
-          where('assignTo', 'array-contains', user.uid)
-        ),
-        snap => {
-        const data = snap.docs
-          .map(d => ({ id: d.id, ...d.data() }))
-          .filter(item =>
-            !item.archived &&
-            isAssignedToCurrentUser(item, user, profile) &&
-            !isHiddenForCurrentUser(item, user.uid)
-          )
-
-        setVocabularyTests(data)
-      })
-
-      const unsubMocks = onSnapshot(
-        query(
-          collection(db, 'mockTests'),
-          where('assignTo', 'array-contains', user.uid)
-        ),
-        snap => {
-        const data = snap.docs
-          .map(d => ({ id: d.id, ...d.data() }))
-          .filter(item =>
-            !item.archived &&
-            isAssignedToCurrentUser(item, user, profile) &&
-            !isHiddenForCurrentUser(item, user.uid)
-          )
-
-        setMocks(data)
-      })
+      const unsubMocks = listenAssignedCollection(
+        'mockTests',
+        user,
+        profile,
+        setMocks,
+        {
+          filter: item => !item.archived,
+          sort: sortByAssignedDateDesc
+        }
+      )
 
       return () => {
         unsubReadings()
@@ -2616,7 +2654,7 @@
         unsubVocabularyTests()
         unsubMocks()
       }
-    }, [user])
+    }, [user, profile])
 
     useEffect(() => {
       if (!user) return
