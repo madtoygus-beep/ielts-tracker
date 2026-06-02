@@ -574,6 +574,8 @@ export default function CreateVocabulary() {
                   <label className="text-xs text-gray-400 mb-1 block">Content type</label>
                   <select value={contentType} onChange={e => setContentType(e.target.value)} className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-purple-400 bg-white">
                     <option value="vocabulary_quiz">Vocabulary Quiz</option>
+                    <option value="word_set">Word Set</option>
+                    <option value="mixed_practice">Mixed Practice</option>
                     <option value="topic_vocabulary">Topic Vocabulary</option>
                     <option value="academic_vocabulary">Academic Vocabulary</option>
                   </select>

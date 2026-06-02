@@ -514,10 +514,10 @@ export default function CreateWriting() {
                   <label className="text-xs text-gray-400 mb-1 block">Content type</label>
                   <select value={contentType} onChange={e => setContentType(e.target.value)} className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white">
                     <option value="full_writing">Full Writing</option>
-                    <option value="task1_only" disabled>Task 1 Only / next sprint</option>
-                    <option value="task2_only" disabled>Task 2 Only / next sprint</option>
+                    <option value="task1_only">Task 1 Practice</option>
+                    <option value="task2_only">Task 2 Practice</option>
                   </select>
-                  <p className="text-xs text-gray-400 mt-1">Task 1/Task 2 only screens will be enabled with DoWriting support in the next sprint.</p>
+                  <p className="text-xs text-gray-400 mt-1">This label is used for library filtering and organisation.</p>
                 </div>
               </div>
 

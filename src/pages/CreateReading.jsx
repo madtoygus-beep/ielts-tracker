@@ -17,6 +17,12 @@ const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
 const LEGACY_TYPES = ['fitb', 'summaryOptions', 'summary']
 
+const DEFAULT_SCHOOL_ID = 'maxima'
+
+function getProfileSchoolId(profile) {
+  return profile?.schoolId || DEFAULT_SCHOOL_ID
+}
+
 function isLegacyType(type) {
   return LEGACY_TYPES.includes(type)
 }
@@ -1745,6 +1751,35 @@ export default function CreateReading() {
         {/* Reading Details */}
         <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-5">
           <h2 className="font-semibold text-gray-800 mb-4">Reading Details</h2>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+            <div>
+              <label className="text-xs text-gray-400 mb-1 block">Library visibility</label>
+              <select
+                value={visibility}
+                onChange={e => setVisibility(e.target.value)}
+                className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white"
+              >
+                <option value="private">My Library</option>
+                <option value="school">School Library</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="text-xs text-gray-400 mb-1 block">Reading type</label>
+              <select
+                value={contentType}
+                onChange={e => setContentType(e.target.value)}
+                className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white"
+              >
+                <option value="full_reading">Full Reading</option>
+                <option value="short_reading">Short Reading</option>
+                <option value="mini_reading">Mini Reading</option>
+                <option value="passage_practice">Passage Practice</option>
+                <option value="reading_skill">Skill Practice</option>
+              </select>
+            </div>
+          </div>
 
           <div className="mb-4">
             <label className="text-xs text-gray-400 mb-1 block">Title</label>

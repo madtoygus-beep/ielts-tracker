@@ -353,7 +353,7 @@ export default function CreateListening() {
       const data = snap.data()
 
       setTitle(data.title || '')
-      setContentType(data.contentType || 'full_listening')
+      setContentType(data.contentType || data.listeningType || 'full_listening')
       setVisibility(data.visibility || data.libraryVisibility || 'private')
       setAudioUrl(data.audioUrl || '')
       setInstructions(data.instructions || '')
@@ -1672,6 +1672,7 @@ export default function CreateListening() {
       title: title.trim(),
       module: 'listening',
       contentType,
+      listeningType: contentType,
       visibility,
       audioUrl: audioUrl.trim(),
       instructions,
@@ -1764,7 +1765,11 @@ export default function CreateListening() {
                   <label className="text-xs text-gray-400 mb-1 block">Content type</label>
                   <select value={contentType} onChange={e => setContentType(e.target.value)} className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white">
                     <option value="full_listening">Full Listening</option>
-                    <option value="listening_part">Part Practice</option>
+                    <option value="part_1">Part 1</option>
+                    <option value="part_2">Part 2</option>
+                    <option value="part_3">Part 3</option>
+                    <option value="part_4">Part 4</option>
+                    <option value="mini_listening">Mini Listening</option>
                     <option value="short_listening">Short Practice</option>
                     <option value="listening_skill">Skill Practice</option>
                   </select>

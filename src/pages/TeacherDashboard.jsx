@@ -54,6 +54,8 @@ export default function TeacherDashboard() {
   const [vocabularyVisibilityFilter, setVocabularyVisibilityFilter] = useState('all')
   const [mockVisibilityFilter, setMockVisibilityFilter] = useState('all')
 
+  const [mockContentTypeFilter, setMockContentTypeFilter] = useState('all')
+
   const [readingContentTypeFilter, setReadingContentTypeFilter] = useState('all')
   const [writingContentTypeFilter, setWritingContentTypeFilter] = useState('all')
   const [listeningContentTypeFilter, setListeningContentTypeFilter] = useState('all')
@@ -777,19 +779,31 @@ export default function TeacherDashboard() {
   const getContentTypeLabel = value => {
     const labels = {
       full_reading: 'Full Reading',
-      short_reading: 'Short Practice',
+      short_reading: 'Short Reading',
+      mini_reading: 'Mini Reading',
+      passage_practice: 'Passage Practice',
       reading_skill: 'Skill Practice',
       full_listening: 'Full Listening',
       listening_part: 'Part Practice',
+      part_1: 'Part 1',
+      part_2: 'Part 2',
+      part_3: 'Part 3',
+      part_4: 'Part 4',
+      mini_listening: 'Mini Listening',
       short_listening: 'Short Practice',
       listening_skill: 'Skill Practice',
       full_writing: 'Full Writing',
       task1_only: 'Task 1 Only',
       task2_only: 'Task 2 Only',
       vocabulary_quiz: 'Vocabulary Quiz',
+      word_set: 'Word Set',
+      mixed_practice: 'Mixed Practice',
       topic_vocabulary: 'Topic Vocabulary',
       academic_vocabulary: 'Academic Vocabulary',
-      full_mock: 'Full Mock Test'
+      full_mock: 'Full Mock',
+      reading_mock: 'Reading Mock',
+      listening_mock: 'Listening Mock',
+      writing_mock: 'Writing Mock'
     }
 
     return labels[value] || 'Practice'
@@ -864,8 +878,16 @@ export default function TeacherDashboard() {
     'vocabulary_quiz'
   )
 
-  const filteredActiveMockTests = filterByVisibility(activeMockTests, mockVisibilityFilter)
-  const filteredArchivedMockTests = filterByVisibility(archivedMockTests, mockVisibilityFilter)
+  const filteredActiveMockTests = filterByContentType(
+    filterByVisibility(activeMockTests, mockVisibilityFilter),
+    mockContentTypeFilter,
+    'full_mock'
+  )
+  const filteredArchivedMockTests = filterByContentType(
+    filterByVisibility(archivedMockTests, mockVisibilityFilter),
+    mockContentTypeFilter,
+    'full_mock'
+  )
 
   const openAssignmentManager = (homework, type) => {
     setSelectedHomework(homework)
@@ -4126,7 +4148,9 @@ Continue permanent delete?`
             >
               <option value="all">All Reading Types</option>
               <option value="full_reading">Full Reading</option>
-              <option value="short_reading">Short Practice</option>
+              <option value="short_reading">Short Reading</option>
+              <option value="mini_reading">Mini Reading</option>
+              <option value="passage_practice">Passage Practice</option>
               <option value="reading_skill">Skill Practice</option>
             </select>
           </div>
@@ -4201,7 +4225,11 @@ Continue permanent delete?`
             >
               <option value="all">All Listening Types</option>
               <option value="full_listening">Full Listening</option>
-              <option value="listening_part">Part Practice</option>
+              <option value="part_1">Part 1</option>
+              <option value="part_2">Part 2</option>
+              <option value="part_3">Part 3</option>
+              <option value="part_4">Part 4</option>
+              <option value="mini_listening">Mini Listening</option>
               <option value="short_listening">Short Practice</option>
               <option value="listening_skill">Skill Practice</option>
             </select>
@@ -4276,6 +4304,8 @@ Continue permanent delete?`
             >
               <option value="all">All Vocabulary Types</option>
               <option value="vocabulary_quiz">Vocabulary Quiz</option>
+              <option value="word_set">Word Set</option>
+              <option value="mixed_practice">Mixed Practice</option>
               <option value="topic_vocabulary">Topic Vocabulary</option>
               <option value="academic_vocabulary">Academic Vocabulary</option>
             </select>
@@ -4395,6 +4425,18 @@ Continue permanent delete?`
                   <option value="all">All Libraries</option>
                   <option value="private">My Library</option>
                   <option value="school">School Library</option>
+                </select>
+
+                <select
+                  value={mockContentTypeFilter}
+                  onChange={e => setMockContentTypeFilter(e.target.value)}
+                  className={librarySelectClass}
+                >
+                  <option value="all">All Mock Types</option>
+                  <option value="full_mock">Full Mock</option>
+                  <option value="reading_mock">Reading Mock</option>
+                  <option value="listening_mock">Listening Mock</option>
+                  <option value="writing_mock">Writing Mock</option>
                 </select>
 
                 <button

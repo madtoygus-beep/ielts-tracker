@@ -73,6 +73,7 @@ export default function CreateMockTest() {
 
   const [title, setTitle] = useState('')
   const [visibility, setVisibility] = useState('private')
+  const [contentType, setContentType] = useState('full_mock')
   const [dueDate, setDueDate] = useState('')
 
   const [readings, setReadings] = useState([])
@@ -406,7 +407,8 @@ export default function CreateMockTest() {
       await addDoc(collection(db, 'mockTests'), {
         title: cleanTitle,
         module: 'mock',
-        contentType: 'full_mock',
+        contentType,
+        mockType: contentType,
         visibility,
         dueDate,
         listeningId: cleanListeningIds[0] || '',
@@ -500,12 +502,24 @@ export default function CreateMockTest() {
               </div>
 
 
-              <div className="mb-4">
-                <label className="text-xs text-gray-400 mb-1 block">Library visibility</label>
-                <select value={visibility} onChange={e => setVisibility(e.target.value)} className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white">
-                  <option value="private">My Library</option>
-                  <option value="school">School Library</option>
-                </select>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                <div>
+                  <label className="text-xs text-gray-400 mb-1 block">Library visibility</label>
+                  <select value={visibility} onChange={e => setVisibility(e.target.value)} className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white">
+                    <option value="private">My Library</option>
+                    <option value="school">School Library</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-xs text-gray-400 mb-1 block">Mock type</label>
+                  <select value={contentType} onChange={e => setContentType(e.target.value)} className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white">
+                    <option value="full_mock">Full Mock</option>
+                    <option value="reading_mock">Reading Mock</option>
+                    <option value="listening_mock">Listening Mock</option>
+                    <option value="writing_mock">Writing Mock</option>
+                  </select>
+                </div>
               </div>
 
               <div>
