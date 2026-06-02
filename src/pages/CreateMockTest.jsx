@@ -72,6 +72,7 @@ export default function CreateMockTest() {
   const [checkingUser, setCheckingUser] = useState(true)
 
   const [title, setTitle] = useState('')
+  const [visibility, setVisibility] = useState('private')
   const [dueDate, setDueDate] = useState('')
 
   const [readings, setReadings] = useState([])
@@ -404,12 +405,17 @@ export default function CreateMockTest() {
     try {
       await addDoc(collection(db, 'mockTests'), {
         title: cleanTitle,
+        module: 'mock',
+        contentType: 'full_mock',
+        visibility,
         dueDate,
         listeningId: cleanListeningIds[0] || '',
         listeningIds: cleanListeningIds,
         readingIds: cleanReadingIds,
         writingId,
         assignTo,
+        assignedStudentIds: selectedStudents.map(student => student.id),
+        assignedEmails: selectedStudents.map(student => student.email?.toLowerCase()).filter(Boolean),
         schoolId: getProfileSchoolId(profile),
         mode: 'single-page-flow',
         createdBy: user.uid,
@@ -491,6 +497,15 @@ export default function CreateMockTest() {
                   placeholder="e.g. Full IELTS Mock Test 01"
                   className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400"
                 />
+              </div>
+
+
+              <div className="mb-4">
+                <label className="text-xs text-gray-400 mb-1 block">Library visibility</label>
+                <select value={visibility} onChange={e => setVisibility(e.target.value)} className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white">
+                  <option value="private">My Library</option>
+                  <option value="school">School Library</option>
+                </select>
               </div>
 
               <div>

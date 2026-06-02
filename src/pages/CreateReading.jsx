@@ -15,7 +15,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
-const LEGACY_TYPES = ['fitb', 'summary']
+const LEGACY_TYPES = ['fitb', 'summaryOptions', 'summary']
 
 function isLegacyType(type) {
   return LEGACY_TYPES.includes(type)
@@ -26,10 +26,13 @@ export default function CreateReading() {
   const isEditMode = Boolean(id)
 
   const [user, setUser] = useState(null)
+  const [profile, setProfile] = useState(null)
   const [students, setStudents] = useState([])
   const [classes, setClasses] = useState([])
 
   const [title, setTitle] = useState('')
+  const [contentType, setContentType] = useState('full_reading')
+  const [visibility, setVisibility] = useState('private')
   const [timeLimit, setTimeLimit] = useState(60)
   const [dueDate, setDueDate] = useState('')
   const [assignTo, setAssignTo] = useState([])
@@ -165,7 +168,7 @@ export default function CreateReading() {
     if (question.mode === 'multi') return 'Multiple Choice — Choose TWO'
     if (question.type === 'mcq') return 'Multiple Choice'
     // Legacy
-    if (question.type === 'summaryOptions') return 'Summary Completion with Options'
+    if (question.type === 'summaryOptions') return 'Summary Options (Legacy)'
     if (question.type === 'summary') return 'Summary Completion (Legacy)'
     if (question.type === 'fitb') return 'Fill in the Blank (Legacy)'
     return 'Unknown'
@@ -221,6 +224,7 @@ export default function CreateReading() {
         }
 
         setUser(currentUser)
+        setProfile({ id: currentUser.uid, ...profile })
       } catch (error) {
         console.error(error)
 
@@ -284,6 +288,8 @@ export default function CreateReading() {
       const data = snap.data()
 
       setTitle(data.title || '')
+      setContentType(data.contentType || 'full_reading')
+      setVisibility(data.visibility || data.libraryVisibility || 'private')
       setTimeLimit(data.timeLimit || 60)
       setDueDate(data.dueDate || '')
       setAssignTo(data.assignTo || [])
@@ -407,7 +413,7 @@ export default function CreateReading() {
             type: 'summaryOptions',
             instruction:
               question.instruction ||
-              'Complete the summary using the list of phrases, A–J, below.',
+              'Complete the summary using the list of phrases, A-H, below.',
             title: question.title || '',
             startNumber:
               question.startNumber || question.items?.[0]?.number || '',
@@ -622,7 +628,7 @@ export default function CreateReading() {
           instruction:
             'Choose ONE WORD ONLY from the passage for each answer.',
           title: '',
-          options: ['', '', '', '', '', '', '', '', '', ''],
+          options: ['', '', '', '', '', '', '', ''],
           paragraphs: [
             {
               id: crypto.randomUUID(),
@@ -756,7 +762,7 @@ export default function CreateReading() {
           id: crypto.randomUUID(),
           type: 'summaryOptions',
           instruction:
-            'Complete the summary using the list of phrases, A–J, below.',
+            'Complete the summary using the list of phrases, A-H, below.',
           title: '',
           startNumber: String(
             prev.reduce(
@@ -764,7 +770,7 @@ export default function CreateReading() {
               0
             ) + 1
           ),
-          options: ['', '', '', '', '', '', '', '', '', ''],
+          options: ['', '', '', '', '', '', '', ''],
           items: [
             {
               id: crypto.randomUUID(),
@@ -1025,7 +1031,7 @@ export default function CreateReading() {
   }
 
   // ============================================================
-  // Summary Completion with Options helpers
+  // Legacy: Summary Options helpers
   // ============================================================
   const updateSummaryOptionItem = (questionId, itemId, field, value) => {
     setQuestions(prev =>
@@ -1442,29 +1448,29 @@ export default function CreateReading() {
 
       if (question.type === 'summaryOptions') {
         if (!question.instruction?.trim()) {
-          alert('Please add instructions for Summary Completion with Options.')
+          alert('Please add instructions for Summary Options.')
           return false
         }
 
         if (!question.title?.trim()) {
-          alert('Please add a title for Summary Completion with Options.')
+          alert('Please add a title for Summary Options.')
           return false
         }
 
         if (!question.startNumber?.toString().trim()) {
-          alert('Please add the first question number for Summary Completion with Options.')
+          alert('Please add the first question number for Summary Options.')
           return false
         }
 
         const filledOptions = question.options.filter(option => option.trim())
         if (filledOptions.length < 2) {
-          alert('Summary Completion with Options needs at least 2 options.')
+          alert('Summary Options needs at least 2 options.')
           return false
         }
 
         for (const item of question.items) {
           if (!item.answer) {
-            alert('Every Summary Completion with Options blank needs a correct option.')
+            alert('Every Summary Options blank needs a correct option.')
             return false
           }
         }
@@ -1655,9 +1661,15 @@ export default function CreateReading() {
 
     const payload = removeUndefined({
       title,
+      module: 'reading',
+      contentType,
+      visibility,
       timeLimit,
       dueDate,
       assignTo,
+      assignedStudentIds: students.filter(student => assignTo.includes(student.id)).map(student => student.id),
+      assignedEmails: students.filter(student => assignTo.includes(student.id)).map(student => student.email?.toLowerCase()).filter(Boolean),
+      schoolId: getProfileSchoolId(profile),
       passageMode,
       passage: fullPassage,
       paragraphs,
@@ -2042,12 +2054,6 @@ export default function CreateReading() {
                 + Note/Summary Completion
               </button>
               <button
-                onClick={() => addQuestion('summaryOptions')}
-                className="text-xs bg-fuchsia-50 text-fuchsia-600 px-3 py-2 rounded-lg hover:bg-fuchsia-100 font-semibold"
-              >
-                + Summary Completion with Options
-              </button>
-              <button
                 onClick={() => addQuestion('table')}
                 className="text-xs bg-amber-50 text-amber-600 px-3 py-2 rounded-lg hover:bg-amber-100"
               >
@@ -2062,7 +2068,7 @@ export default function CreateReading() {
               onClick={() => setShowLegacyTypes(!showLegacyTypes)}
               className="text-xs text-gray-500 hover:text-gray-700 underline"
             >
-              {showLegacyTypes ? '▼ Hide' : '▶ Show'} legacy question types (Fill Blank, Summary Completion)
+              {showLegacyTypes ? '▼ Hide' : '▶ Show'} legacy question types (Fill Blank, Summary Options, Summary Completion)
             </button>
 
             {showLegacyTypes && (
@@ -2076,6 +2082,12 @@ export default function CreateReading() {
                     className="text-xs bg-gray-200 text-gray-700 px-3 py-2 rounded-lg hover:bg-gray-300"
                   >
                     + Fill Blank (legacy)
+                  </button>
+                  <button
+                    onClick={() => addQuestion('summaryOptions')}
+                    className="text-xs bg-gray-200 text-gray-700 px-3 py-2 rounded-lg hover:bg-gray-300"
+                  >
+                    + Summary Options (legacy)
                   </button>
                   <button
                     onClick={() => addQuestion('summary')}
@@ -3061,9 +3073,13 @@ export default function CreateReading() {
                   </div>
                 )}
 
-                {/* ============ SUMMARY COMPLETION WITH OPTIONS ============ */}
+                {/* ============ LEGACY: SUMMARY OPTIONS ============ */}
                 {question.type === 'summaryOptions' && (
                   <div>
+                    <p className="text-xs text-amber-700 bg-amber-50 rounded-lg p-2 mb-3">
+                      ⚠ Legacy type. New questions should use "Note/Summary Completion" with "Choose A-H" mode.
+                    </p>
+
                     <label className="text-xs text-gray-400 mb-1 block">Instruction</label>
                     <textarea
                       rows={2}
@@ -3136,12 +3152,12 @@ export default function CreateReading() {
 
                     <div className="bg-gray-50 border border-gray-100 rounded-xl p-4">
                       <div className="flex items-center justify-between mb-3">
-                        <p className="text-sm font-medium text-gray-800">Summary blanks / questions</p>
+                        <p className="text-sm font-medium text-gray-800">Summary blanks</p>
                         <button
                           onClick={() => addSummaryOptionItem(question.id)}
                           className="text-xs bg-fuchsia-50 text-fuchsia-600 px-3 py-1.5 rounded-lg"
                         >
-                          + Add question blank
+                          + Add blank
                         </button>
                       </div>
 

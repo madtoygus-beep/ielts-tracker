@@ -221,6 +221,8 @@ export default function CreateListening() {
   const [search, setSearch] = useState('')
 
   const [title, setTitle] = useState('')
+  const [contentType, setContentType] = useState('full_listening')
+  const [visibility, setVisibility] = useState('private')
   const [audioUrl, setAudioUrl] = useState('')
   const [instructions, setInstructions] = useState('')
   const [dueDate, setDueDate] = useState('')
@@ -351,6 +353,8 @@ export default function CreateListening() {
       const data = snap.data()
 
       setTitle(data.title || '')
+      setContentType(data.contentType || 'full_listening')
+      setVisibility(data.visibility || data.libraryVisibility || 'private')
       setAudioUrl(data.audioUrl || '')
       setInstructions(data.instructions || '')
       setDueDate(data.dueDate || '')
@@ -1666,11 +1670,16 @@ export default function CreateListening() {
 
     const payload = {
       title: title.trim(),
+      module: 'listening',
+      contentType,
+      visibility,
       audioUrl: audioUrl.trim(),
       instructions,
       dueDate,
       timeLimit: Number(timeLimit) || 30,
       assignTo,
+      assignedStudentIds: selectedStudents.map(student => student.id),
+      assignedEmails: selectedStudents.map(student => student.email?.toLowerCase()).filter(Boolean),
       schoolId: getProfileSchoolId(profile),
       parts: cleanParts,
       questions: cleanParts.flatMap(part =>
@@ -1742,6 +1751,25 @@ export default function CreateListening() {
               <h2 className="font-semibold text-gray-800 mb-4">
                 Listening Details
               </h2>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                <div>
+                  <label className="text-xs text-gray-400 mb-1 block">Library visibility</label>
+                  <select value={visibility} onChange={e => setVisibility(e.target.value)} className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white">
+                    <option value="private">My Library</option>
+                    <option value="school">School Library</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs text-gray-400 mb-1 block">Content type</label>
+                  <select value={contentType} onChange={e => setContentType(e.target.value)} className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white">
+                    <option value="full_listening">Full Listening</option>
+                    <option value="listening_part">Part Practice</option>
+                    <option value="short_listening">Short Practice</option>
+                    <option value="listening_skill">Skill Practice</option>
+                  </select>
+                </div>
+              </div>
 
               <div className="mb-4">
                 <label className="text-xs text-gray-400 mb-1 block">

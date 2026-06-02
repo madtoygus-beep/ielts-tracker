@@ -77,6 +77,8 @@ export default function CreateWriting() {
   const [search, setSearch] = useState('')
 
   const [title, setTitle] = useState('')
+  const [contentType, setContentType] = useState('full_writing')
+  const [visibility, setVisibility] = useState('private')
   const [dueDate, setDueDate] = useState('')
   const [assignTo, setAssignTo] = useState([])
 
@@ -204,6 +206,8 @@ export default function CreateWriting() {
       const data = snap.data()
 
       setTitle(data.title || '')
+      setContentType(data.contentType || data.writingMode || 'full_writing')
+      setVisibility(data.visibility || data.libraryVisibility || 'private')
       setDueDate(data.dueDate || '')
       setAssignTo(data.assignTo || [])
 
@@ -294,8 +298,14 @@ export default function CreateWriting() {
 
   const buildSafePayload = () => ({
     title: cleanString(title).trim(),
+    module: 'writing',
+    contentType,
+    writingMode: contentType,
+    visibility,
     dueDate: cleanString(dueDate),
     assignTo: assignTo.map(id => cleanString(id)).filter(Boolean),
+    assignedStudentIds: students.filter(student => assignTo.includes(student.id)).map(student => student.id),
+    assignedEmails: students.filter(student => assignTo.includes(student.id)).map(student => student.email?.toLowerCase()).filter(Boolean),
     schoolId: getProfileSchoolId(profile),
     timeLimit: 60,
     task1: {
@@ -491,6 +501,25 @@ export default function CreateWriting() {
               <h2 className="font-semibold text-gray-800 mb-4">
                 Homework Details
               </h2>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                <div>
+                  <label className="text-xs text-gray-400 mb-1 block">Library visibility</label>
+                  <select value={visibility} onChange={e => setVisibility(e.target.value)} className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white">
+                    <option value="private">My Library</option>
+                    <option value="school">School Library</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs text-gray-400 mb-1 block">Content type</label>
+                  <select value={contentType} onChange={e => setContentType(e.target.value)} className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white">
+                    <option value="full_writing">Full Writing</option>
+                    <option value="task1_only" disabled>Task 1 Only / next sprint</option>
+                    <option value="task2_only" disabled>Task 2 Only / next sprint</option>
+                  </select>
+                  <p className="text-xs text-gray-400 mt-1">Task 1/Task 2 only screens will be enabled with DoWriting support in the next sprint.</p>
+                </div>
+              </div>
 
               <div className="mb-4">
                 <label className="text-xs text-gray-400 mb-1 block">

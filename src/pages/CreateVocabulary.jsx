@@ -88,6 +88,8 @@ export default function CreateVocabulary() {
   const [saving, setSaving] = useState(false)
 
   const [title, setTitle] = useState('')
+  const [contentType, setContentType] = useState('vocabulary_quiz')
+  const [visibility, setVisibility] = useState('private')
   const [instructions, setInstructions] = useState('')
   const [timeLimit, setTimeLimit] = useState(20)
   const [dueDate, setDueDate] = useState('')
@@ -197,6 +199,8 @@ export default function CreateVocabulary() {
           const data = vocabSnap.data()
 
           setTitle(data.title || '')
+          setContentType(data.contentType || 'vocabulary_quiz')
+          setVisibility(data.visibility || data.libraryVisibility || 'private')
           setInstructions(data.instructions || '')
           setTimeLimit(data.timeLimit || 20)
           setDueDate(data.dueDate || '')
@@ -425,6 +429,9 @@ export default function CreateVocabulary() {
 
     const payload = {
       title: title.trim(),
+      module: 'vocabulary',
+      contentType,
+      visibility,
       instructions: instructions.trim(),
       timeLimit: Number(timeLimit) || 20,
       dueDate,
@@ -437,6 +444,8 @@ export default function CreateVocabulary() {
         answer: question.answer
       })),
       assignTo,
+      assignedStudentIds: students.filter(student => assignTo.includes(student.id)).map(student => student.id),
+      assignedEmails: students.filter(student => assignTo.includes(student.id)).map(student => student.email?.toLowerCase()).filter(Boolean),
       schoolId: getProfileSchoolId(profile),
       archived: false,
       updatedAt: now
@@ -550,6 +559,24 @@ export default function CreateVocabulary() {
                     onChange={e => setDueDate(e.target.value)}
                     className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-purple-400"
                   />
+                </div>
+
+
+                <div>
+                  <label className="text-xs text-gray-400 mb-1 block">Library visibility</label>
+                  <select value={visibility} onChange={e => setVisibility(e.target.value)} className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-purple-400 bg-white">
+                    <option value="private">My Library</option>
+                    <option value="school">School Library</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-xs text-gray-400 mb-1 block">Content type</label>
+                  <select value={contentType} onChange={e => setContentType(e.target.value)} className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-purple-400 bg-white">
+                    <option value="vocabulary_quiz">Vocabulary Quiz</option>
+                    <option value="topic_vocabulary">Topic Vocabulary</option>
+                    <option value="academic_vocabulary">Academic Vocabulary</option>
+                  </select>
                 </div>
 
                 <div className="md:col-span-2">

@@ -48,6 +48,17 @@ export default function TeacherDashboard() {
   const [listeningLibraryFilter, setListeningLibraryFilter] = useState('active')
   const [vocabularyLibraryFilter, setVocabularyLibraryFilter] = useState('active')
 
+  const [readingVisibilityFilter, setReadingVisibilityFilter] = useState('all')
+  const [writingVisibilityFilter, setWritingVisibilityFilter] = useState('all')
+  const [listeningVisibilityFilter, setListeningVisibilityFilter] = useState('all')
+  const [vocabularyVisibilityFilter, setVocabularyVisibilityFilter] = useState('all')
+  const [mockVisibilityFilter, setMockVisibilityFilter] = useState('all')
+
+  const [readingContentTypeFilter, setReadingContentTypeFilter] = useState('all')
+  const [writingContentTypeFilter, setWritingContentTypeFilter] = useState('all')
+  const [listeningContentTypeFilter, setListeningContentTypeFilter] = useState('all')
+  const [vocabularyContentTypeFilter, setVocabularyContentTypeFilter] = useState('all')
+
   const [selected, setSelected] = useState(null)
   const [selectedStudentSection, setSelectedStudentSection] = useState('mock')
   const [selectedReview, setSelectedReview] = useState(null)
@@ -236,7 +247,10 @@ export default function TeacherDashboard() {
                 if (isAdminUser) return true
                 if (getSchoolId(item) !== teacherSchoolId) return false
 
-                return item.createdBy === currentUser.uid || item.teacherId === currentUser.uid
+                const itemVisibility = item.visibility || item.libraryVisibility || 'private'
+                const isOwnedByTeacher = item.createdBy === currentUser.uid || item.teacherId === currentUser.uid
+
+                return isOwnedByTeacher || itemVisibility === 'school'
               })
 
             list.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
@@ -258,7 +272,10 @@ export default function TeacherDashboard() {
                 if (isAdminUser) return true
                 if (getSchoolId(item) !== teacherSchoolId) return false
 
-                return item.createdBy === currentUser.uid || item.teacherId === currentUser.uid
+                const itemVisibility = item.visibility || item.libraryVisibility || 'private'
+                const isOwnedByTeacher = item.createdBy === currentUser.uid || item.teacherId === currentUser.uid
+
+                return isOwnedByTeacher || itemVisibility === 'school'
               })
 
             list.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
@@ -280,7 +297,10 @@ export default function TeacherDashboard() {
                 if (isAdminUser) return true
                 if (getSchoolId(item) !== teacherSchoolId) return false
 
-                return item.createdBy === currentUser.uid || item.teacherId === currentUser.uid
+                const itemVisibility = item.visibility || item.libraryVisibility || 'private'
+                const isOwnedByTeacher = item.createdBy === currentUser.uid || item.teacherId === currentUser.uid
+
+                return isOwnedByTeacher || itemVisibility === 'school'
               })
 
             list.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
@@ -302,7 +322,10 @@ export default function TeacherDashboard() {
                 if (isAdminUser) return true
                 if (getSchoolId(item) !== teacherSchoolId) return false
 
-                return item.createdBy === currentUser.uid || item.teacherId === currentUser.uid
+                const itemVisibility = item.visibility || item.libraryVisibility || 'private'
+                const isOwnedByTeacher = item.createdBy === currentUser.uid || item.teacherId === currentUser.uid
+
+                return isOwnedByTeacher || itemVisibility === 'school'
               })
 
             list.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
@@ -324,7 +347,10 @@ export default function TeacherDashboard() {
                 if (isAdminUser) return true
                 if (getSchoolId(item) !== teacherSchoolId) return false
 
-                return item.createdBy === currentUser.uid || item.teacherId === currentUser.uid
+                const itemVisibility = item.visibility || item.libraryVisibility || 'private'
+                const isOwnedByTeacher = item.createdBy === currentUser.uid || item.teacherId === currentUser.uid
+
+                return isOwnedByTeacher || itemVisibility === 'school'
               })
 
             list.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
@@ -733,35 +759,113 @@ export default function TeacherDashboard() {
     }
   }
 
-  const filteredReadings =
+
+  const getLibraryVisibility = item =>
+    item?.visibility || item?.libraryVisibility || 'private'
+
+  const isSchoolLibraryItem = item => getLibraryVisibility(item) === 'school'
+
+  const isOwnedByCurrentTeacher = item =>
+    profile?.role === 'admin' || item?.createdBy === user?.uid || item?.teacherId === user?.uid
+
+  const getLibraryContentType = (item, fallback = 'full') =>
+    item?.contentType || item?.practiceType || fallback
+
+  const getLibraryVisibilityLabel = item =>
+    isSchoolLibraryItem(item) ? 'School Library' : 'My Library'
+
+  const getContentTypeLabel = value => {
+    const labels = {
+      full_reading: 'Full Reading',
+      short_reading: 'Short Practice',
+      reading_skill: 'Skill Practice',
+      full_listening: 'Full Listening',
+      listening_part: 'Part Practice',
+      short_listening: 'Short Practice',
+      listening_skill: 'Skill Practice',
+      full_writing: 'Full Writing',
+      task1_only: 'Task 1 Only',
+      task2_only: 'Task 2 Only',
+      vocabulary_quiz: 'Vocabulary Quiz',
+      topic_vocabulary: 'Topic Vocabulary',
+      academic_vocabulary: 'Academic Vocabulary',
+      full_mock: 'Full Mock Test'
+    }
+
+    return labels[value] || 'Practice'
+  }
+
+  const filterByVisibility = (items, visibilityFilter) => {
+    if (visibilityFilter === 'school') return items.filter(isSchoolLibraryItem)
+    if (visibilityFilter === 'private') return items.filter(item => !isSchoolLibraryItem(item))
+    return items
+  }
+
+  const filterByContentType = (items, contentTypeFilter, fallback) => {
+    if (contentTypeFilter === 'all') return items
+
+    return items.filter(item =>
+      getLibraryContentType(item, fallback) === contentTypeFilter
+    )
+  }
+
+  const applyLibraryFilters = (items, visibilityFilter, contentTypeFilter, fallback) =>
+    filterByContentType(
+      filterByVisibility(items, visibilityFilter),
+      contentTypeFilter,
+      fallback
+    )
+
+  const librarySelectClass = 'border border-gray-200 rounded-xl px-3 py-2 text-xs bg-white text-gray-600 outline-none focus:border-purple-400'
+
+  const filteredReadings = applyLibraryFilters(
     readingLibraryFilter === 'all'
       ? readings
       : readingLibraryFilter === 'archived'
         ? archivedReadings
-        : activeReadings
+        : activeReadings,
+    readingVisibilityFilter,
+    readingContentTypeFilter,
+    'full_reading'
+  )
 
-  const filteredWritings =
+  const filteredWritings = applyLibraryFilters(
     writingLibraryFilter === 'all'
       ? writings
       : writingLibraryFilter === 'archived'
         ? archivedWritings
         : writingLibraryFilter === 'pending'
           ? pendingReviewWritings
-          : activeWritings
+          : activeWritings,
+    writingVisibilityFilter,
+    writingContentTypeFilter,
+    'full_writing'
+  )
 
-  const filteredListenings =
+  const filteredListenings = applyLibraryFilters(
     listeningLibraryFilter === 'all'
       ? listenings
       : listeningLibraryFilter === 'archived'
         ? archivedListenings
-        : activeListenings
+        : activeListenings,
+    listeningVisibilityFilter,
+    listeningContentTypeFilter,
+    'full_listening'
+  )
 
-  const filteredVocabularyTests =
+  const filteredVocabularyTests = applyLibraryFilters(
     vocabularyLibraryFilter === 'all'
       ? vocabularyTests
       : vocabularyLibraryFilter === 'archived'
         ? archivedVocabularyTests
-        : activeVocabularyTests
+        : activeVocabularyTests,
+    vocabularyVisibilityFilter,
+    vocabularyContentTypeFilter,
+    'vocabulary_quiz'
+  )
+
+  const filteredActiveMockTests = filterByVisibility(activeMockTests, mockVisibilityFilter)
+  const filteredArchivedMockTests = filterByVisibility(archivedMockTests, mockVisibilityFilter)
 
   const openAssignmentManager = (homework, type) => {
     setSelectedHomework(homework)
@@ -952,6 +1056,9 @@ Continue permanent delete?`
       updatedAt,
       createdBy,
       assignTo,
+      assignedStudentIds,
+      assignedEmails,
+      hiddenFor,
       archived,
       ...copyData
     } = reading
@@ -960,6 +1067,10 @@ Continue permanent delete?`
       ...copyData,
       title: `${reading.title} Copy`,
       assignTo: [],
+      assignedStudentIds: [],
+      assignedEmails: [],
+      hiddenFor: [],
+      visibility: 'private',
       archived: false,
       createdBy: user.uid,
       teacherId: profile?.role === 'teacher' ? user.uid : reading.teacherId || '',
@@ -1038,6 +1149,9 @@ Continue permanent delete?`
       updatedAt,
       createdBy,
       assignTo,
+      assignedStudentIds,
+      assignedEmails,
+      hiddenFor,
       archived,
       ...copyData
     } = writing
@@ -1046,6 +1160,10 @@ Continue permanent delete?`
       ...copyData,
       title: `${writing.title} Copy`,
       assignTo: [],
+      assignedStudentIds: [],
+      assignedEmails: [],
+      hiddenFor: [],
+      visibility: 'private',
       archived: false,
       createdBy: user.uid,
       teacherId: profile?.role === 'teacher' ? user.uid : writing.teacherId || '',
@@ -1124,6 +1242,9 @@ Continue permanent delete?`
       updatedAt,
       createdBy,
       assignTo,
+      assignedStudentIds,
+      assignedEmails,
+      hiddenFor,
       archived,
       ...copyData
     } = listening
@@ -1132,6 +1253,10 @@ Continue permanent delete?`
       ...copyData,
       title: `${listening.title} Copy`,
       assignTo: [],
+      assignedStudentIds: [],
+      assignedEmails: [],
+      hiddenFor: [],
+      visibility: 'private',
       archived: false,
       createdBy: user.uid,
       teacherId: profile?.role === 'teacher' ? user.uid : listening.teacherId || '',
@@ -1210,6 +1335,9 @@ Continue permanent delete?`
       updatedAt,
       createdBy,
       assignTo,
+      assignedStudentIds,
+      assignedEmails,
+      hiddenFor,
       archived,
       ...copyData
     } = vocabularyTest
@@ -1218,6 +1346,10 @@ Continue permanent delete?`
       ...copyData,
       title: `${vocabularyTest.title} Copy`,
       assignTo: [],
+      assignedStudentIds: [],
+      assignedEmails: [],
+      hiddenFor: [],
+      visibility: 'private',
       archived: false,
       createdBy: user.uid,
       teacherId: profile?.role === 'teacher' ? user.uid : vocabularyTest.teacherId || '',
@@ -2703,6 +2835,15 @@ Continue permanent delete?`
           {mockTest.title || 'Untitled Mock Test'}
         </p>
 
+        <div className="flex gap-2 mt-2 mb-1 flex-wrap">
+          <span className="text-[11px] bg-green-50 text-green-600 px-2.5 py-1 rounded-full">
+            {getContentTypeLabel(getLibraryContentType(mockTest, 'full_mock'))}
+          </span>
+          <span className="text-[11px] bg-gray-100 text-gray-500 px-2.5 py-1 rounded-full">
+            {getLibraryVisibilityLabel(mockTest)}
+          </span>
+        </div>
+
         <p className="text-xs text-gray-400 mt-0.5">
           Assigned to {getMockAssignedCount(mockTest)} students · Submitted by {getMockSubmittedCount(mockTest)} students
         </p>
@@ -2728,28 +2869,32 @@ Continue permanent delete?`
           </button>
         )}
 
-        {archived ? (
-          <button
-            onClick={() => restoreMockTest(mockTest)}
-            className="text-xs bg-green-50 text-green-600 px-3 py-2 rounded-xl hover:bg-green-100"
-          >
-            Restore
-          </button>
-        ) : (
-          <button
-            onClick={() => archiveMockTest(mockTest)}
-            className="text-xs bg-amber-50 text-amber-600 px-3 py-2 rounded-xl hover:bg-amber-100"
-          >
-            Archive
-          </button>
-        )}
+        {isOwnedByCurrentTeacher(mockTest) && (
+          <>
+            {archived ? (
+              <button
+                onClick={() => restoreMockTest(mockTest)}
+                className="text-xs bg-green-50 text-green-600 px-3 py-2 rounded-xl hover:bg-green-100"
+              >
+                Restore
+              </button>
+            ) : (
+              <button
+                onClick={() => archiveMockTest(mockTest)}
+                className="text-xs bg-amber-50 text-amber-600 px-3 py-2 rounded-xl hover:bg-amber-100"
+              >
+                Archive
+              </button>
+            )}
 
-        <button
-          onClick={() => deleteMockTest(mockTest)}
-          className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
-        >
-          Delete
-        </button>
+            <button
+              onClick={() => deleteMockTest(mockTest)}
+              className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
+            >
+              Delete
+            </button>
+          </>
+        )}
       </div>
     </div>
   )
@@ -2766,6 +2911,15 @@ Continue permanent delete?`
       <div>
         <p className="text-sm font-medium text-gray-800">{reading.title}</p>
 
+        <div className="flex gap-2 mt-2 mb-1 flex-wrap">
+          <span className="text-[11px] bg-purple-50 text-purple-600 px-2.5 py-1 rounded-full">
+            {getContentTypeLabel(getLibraryContentType(reading, 'full_reading'))}
+          </span>
+          <span className="text-[11px] bg-gray-100 text-gray-500 px-2.5 py-1 rounded-full">
+            {getLibraryVisibilityLabel(reading)}
+          </span>
+        </div>
+
         <p className="text-xs text-gray-400 mt-0.5">
           Assigned to {reading.assignTo?.length || 0} students · Completed by{' '}
           {getCompletedCount(reading.id)} students · {reading.timeLimit} min
@@ -2781,12 +2935,14 @@ Continue permanent delete?`
       <div className="flex gap-2 flex-wrap justify-end">
         {!archived && (
           <>
+            {isOwnedByCurrentTeacher(reading) && (
             <button
               onClick={() => navigate(`/edit-reading/${reading.id}`)}
               className="text-xs bg-blue-50 text-blue-600 px-3 py-2 rounded-xl hover:bg-blue-100"
             >
               Edit
             </button>
+            )}
 
             <button
               onClick={() => duplicateReadingHomework(reading)}
@@ -2804,28 +2960,32 @@ Continue permanent delete?`
           </>
         )}
 
-        {archived ? (
-          <button
-            onClick={() => restoreReadingHomework(reading)}
-            className="text-xs bg-green-50 text-green-600 px-3 py-2 rounded-xl hover:bg-green-100"
-          >
-            Restore
-          </button>
-        ) : (
-          <button
-            onClick={() => archiveReadingHomework(reading)}
-            className="text-xs bg-amber-50 text-amber-600 px-3 py-2 rounded-xl hover:bg-amber-100"
-          >
-            Archive
-          </button>
-        )}
+        {isOwnedByCurrentTeacher(reading) && (
+          <>
+            {archived ? (
+              <button
+                onClick={() => restoreReadingHomework(reading)}
+                className="text-xs bg-green-50 text-green-600 px-3 py-2 rounded-xl hover:bg-green-100"
+              >
+                Restore
+              </button>
+            ) : (
+              <button
+                onClick={() => archiveReadingHomework(reading)}
+                className="text-xs bg-amber-50 text-amber-600 px-3 py-2 rounded-xl hover:bg-amber-100"
+              >
+                Archive
+              </button>
+            )}
 
-        <button
-          onClick={() => deleteReadingHomework(reading)}
-          className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
-        >
-          Delete
-        </button>
+            <button
+              onClick={() => deleteReadingHomework(reading)}
+              className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
+            >
+              Delete
+            </button>
+          </>
+        )}
       </div>
     </div>
   )
@@ -2845,6 +3005,15 @@ Continue permanent delete?`
       >
         <div>
           <p className="text-sm font-medium text-gray-800">{writing.title}</p>
+
+          <div className="flex gap-2 mt-2 mb-1 flex-wrap">
+            <span className="text-[11px] bg-purple-50 text-purple-600 px-2.5 py-1 rounded-full">
+              {getContentTypeLabel(getLibraryContentType(writing, 'full_writing'))}
+            </span>
+            <span className="text-[11px] bg-gray-100 text-gray-500 px-2.5 py-1 rounded-full">
+              {getLibraryVisibilityLabel(writing)}
+            </span>
+          </div>
 
           <p className="text-xs text-gray-400 mt-0.5">
             Assigned to {writing.assignTo?.length || 0} students · Submitted by{' '}
@@ -2868,12 +3037,14 @@ Continue permanent delete?`
         <div className="flex gap-2 flex-wrap justify-end">
           {!archived && (
             <>
+              {isOwnedByCurrentTeacher(writing) && (
               <button
                 onClick={() => navigate(`/edit-writing/${writing.id}`)}
                 className="text-xs bg-blue-50 text-blue-600 px-3 py-2 rounded-xl hover:bg-blue-100"
               >
                 Edit
-              </button>
+                </button>
+            )}
 
               <button
                 onClick={() => duplicateWritingHomework(writing)}
@@ -2891,28 +3062,32 @@ Continue permanent delete?`
             </>
           )}
 
-          {archived ? (
-            <button
-              onClick={() => restoreWritingHomework(writing)}
-              className="text-xs bg-green-50 text-green-600 px-3 py-2 rounded-xl hover:bg-green-100"
-            >
-              Restore
-            </button>
-          ) : (
-            <button
-              onClick={() => archiveWritingHomework(writing)}
-              className="text-xs bg-amber-50 text-amber-600 px-3 py-2 rounded-xl hover:bg-amber-100"
-            >
-              Archive
-            </button>
-          )}
+          {isOwnedByCurrentTeacher(writing) && (
+            <>
+              {archived ? (
+                <button
+                  onClick={() => restoreWritingHomework(writing)}
+                  className="text-xs bg-green-50 text-green-600 px-3 py-2 rounded-xl hover:bg-green-100"
+                >
+                  Restore
+                </button>
+              ) : (
+                <button
+                  onClick={() => archiveWritingHomework(writing)}
+                  className="text-xs bg-amber-50 text-amber-600 px-3 py-2 rounded-xl hover:bg-amber-100"
+                >
+                  Archive
+                </button>
+              )}
 
-          <button
-            onClick={() => deleteWritingHomework(writing)}
-            className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
-          >
-            Delete
-          </button>
+              <button
+                onClick={() => deleteWritingHomework(writing)}
+                className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
+              >
+                Delete
+              </button>
+            </>
+          )}
         </div>
       </div>
     )
@@ -2930,6 +3105,15 @@ Continue permanent delete?`
       <div>
         <p className="text-sm font-medium text-gray-800">{listening.title}</p>
 
+        <div className="flex gap-2 mt-2 mb-1 flex-wrap">
+          <span className="text-[11px] bg-purple-50 text-purple-600 px-2.5 py-1 rounded-full">
+            {getContentTypeLabel(getLibraryContentType(listening, 'full_listening'))}
+          </span>
+          <span className="text-[11px] bg-gray-100 text-gray-500 px-2.5 py-1 rounded-full">
+            {getLibraryVisibilityLabel(listening)}
+          </span>
+        </div>
+
         <p className="text-xs text-gray-400 mt-0.5">
           Assigned to {listening.assignTo?.length || 0} students · Completed by{' '}
           {getListeningCompletedCount(listening.id)} students · {listening.timeLimit || 30} min
@@ -2945,12 +3129,14 @@ Continue permanent delete?`
       <div className="flex gap-2 flex-wrap justify-end">
         {!archived && (
           <>
+            {isOwnedByCurrentTeacher(listening) && (
             <button
               onClick={() => navigate(`/edit-listening/${listening.id}`)}
               className="text-xs bg-blue-50 text-blue-600 px-3 py-2 rounded-xl hover:bg-blue-100"
             >
               Edit
             </button>
+            )}
 
             <button
               onClick={() => duplicateListeningHomework(listening)}
@@ -2968,28 +3154,32 @@ Continue permanent delete?`
           </>
         )}
 
-        {archived ? (
-          <button
-            onClick={() => restoreListeningHomework(listening)}
-            className="text-xs bg-green-50 text-green-600 px-3 py-2 rounded-xl hover:bg-green-100"
-          >
-            Restore
-          </button>
-        ) : (
-          <button
-            onClick={() => archiveListeningHomework(listening)}
-            className="text-xs bg-amber-50 text-amber-600 px-3 py-2 rounded-xl hover:bg-amber-100"
-          >
-            Archive
-          </button>
-        )}
+        {isOwnedByCurrentTeacher(listening) && (
+          <>
+            {archived ? (
+              <button
+                onClick={() => restoreListeningHomework(listening)}
+                className="text-xs bg-green-50 text-green-600 px-3 py-2 rounded-xl hover:bg-green-100"
+              >
+                Restore
+              </button>
+            ) : (
+              <button
+                onClick={() => archiveListeningHomework(listening)}
+                className="text-xs bg-amber-50 text-amber-600 px-3 py-2 rounded-xl hover:bg-amber-100"
+              >
+                Archive
+              </button>
+            )}
 
-        <button
-          onClick={() => deleteListeningHomework(listening)}
-          className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
-        >
-          Delete
-        </button>
+            <button
+              onClick={() => deleteListeningHomework(listening)}
+              className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
+            >
+              Delete
+            </button>
+          </>
+        )}
       </div>
     </div>
   )
@@ -3007,6 +3197,15 @@ Continue permanent delete?`
       <div>
         <p className="text-sm font-medium text-gray-800">{vocabularyTest.title}</p>
 
+        <div className="flex gap-2 mt-2 mb-1 flex-wrap">
+          <span className="text-[11px] bg-purple-50 text-purple-600 px-2.5 py-1 rounded-full">
+            {getContentTypeLabel(getLibraryContentType(vocabularyTest, 'vocabulary_quiz'))}
+          </span>
+          <span className="text-[11px] bg-gray-100 text-gray-500 px-2.5 py-1 rounded-full">
+            {getLibraryVisibilityLabel(vocabularyTest)}
+          </span>
+        </div>
+
         <p className="text-xs text-gray-400 mt-0.5">
           Assigned to {vocabularyTest.assignTo?.length || 0} students · Completed by{' '}
           {getVocabularyCompletedCount(vocabularyTest.id)} students · {vocabularyTest.timeLimit || 20} min · {vocabularyTest.questions?.length || 0} questions
@@ -3022,12 +3221,14 @@ Continue permanent delete?`
       <div className="flex gap-2 flex-wrap justify-end">
         {!archived && (
           <>
+            {isOwnedByCurrentTeacher(vocabularyTest) && (
             <button
               onClick={() => navigate(`/edit-vocabulary/${vocabularyTest.id}`)}
               className="text-xs bg-blue-50 text-blue-600 px-3 py-2 rounded-xl hover:bg-blue-100"
             >
               Edit
             </button>
+            )}
 
             <button
               onClick={() => duplicateVocabularyTest(vocabularyTest)}
@@ -3045,28 +3246,32 @@ Continue permanent delete?`
           </>
         )}
 
-        {archived ? (
-          <button
-            onClick={() => restoreVocabularyTest(vocabularyTest)}
-            className="text-xs bg-green-50 text-green-600 px-3 py-2 rounded-xl hover:bg-green-100"
-          >
-            Restore
-          </button>
-        ) : (
-          <button
-            onClick={() => archiveVocabularyTest(vocabularyTest)}
-            className="text-xs bg-amber-50 text-amber-600 px-3 py-2 rounded-xl hover:bg-amber-100"
-          >
-            Archive
-          </button>
-        )}
+        {isOwnedByCurrentTeacher(vocabularyTest) && (
+          <>
+            {archived ? (
+              <button
+                onClick={() => restoreVocabularyTest(vocabularyTest)}
+                className="text-xs bg-green-50 text-green-600 px-3 py-2 rounded-xl hover:bg-green-100"
+              >
+                Restore
+              </button>
+            ) : (
+              <button
+                onClick={() => archiveVocabularyTest(vocabularyTest)}
+                className="text-xs bg-amber-50 text-amber-600 px-3 py-2 rounded-xl hover:bg-amber-100"
+              >
+                Archive
+              </button>
+            )}
 
-        <button
-          onClick={() => deleteVocabularyTest(vocabularyTest)}
-          className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
-        >
-          Delete
-        </button>
+            <button
+              onClick={() => deleteVocabularyTest(vocabularyTest)}
+              className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
+            >
+              Delete
+            </button>
+          </>
+        )}
       </div>
     </div>
   )
@@ -3903,6 +4108,29 @@ Continue permanent delete?`
             </div>
           </div>
 
+          <div className="flex flex-wrap gap-3 mb-4">
+            <select
+              value={readingVisibilityFilter}
+              onChange={e => setReadingVisibilityFilter(e.target.value)}
+              className={librarySelectClass}
+            >
+              <option value="all">All Libraries</option>
+              <option value="private">My Library</option>
+              <option value="school">School Library</option>
+            </select>
+
+            <select
+              value={readingContentTypeFilter}
+              onChange={e => setReadingContentTypeFilter(e.target.value)}
+              className={librarySelectClass}
+            >
+              <option value="all">All Reading Types</option>
+              <option value="full_reading">Full Reading</option>
+              <option value="short_reading">Short Practice</option>
+              <option value="reading_skill">Skill Practice</option>
+            </select>
+          </div>
+
           {filteredReadings.length === 0 ? (
             <p className="text-sm text-gray-400 bg-gray-50 rounded-xl p-4">
               No reading homework found for this filter.
@@ -3955,6 +4183,30 @@ Continue permanent delete?`
             </div>
           </div>
 
+          <div className="flex flex-wrap gap-3 mb-4">
+            <select
+              value={listeningVisibilityFilter}
+              onChange={e => setListeningVisibilityFilter(e.target.value)}
+              className={librarySelectClass}
+            >
+              <option value="all">All Libraries</option>
+              <option value="private">My Library</option>
+              <option value="school">School Library</option>
+            </select>
+
+            <select
+              value={listeningContentTypeFilter}
+              onChange={e => setListeningContentTypeFilter(e.target.value)}
+              className={librarySelectClass}
+            >
+              <option value="all">All Listening Types</option>
+              <option value="full_listening">Full Listening</option>
+              <option value="listening_part">Part Practice</option>
+              <option value="short_listening">Short Practice</option>
+              <option value="listening_skill">Skill Practice</option>
+            </select>
+          </div>
+
           {filteredListenings.length === 0 ? (
             <p className="text-sm text-gray-400 bg-gray-50 rounded-xl p-4">
               No listening homework found for this filter.
@@ -4004,6 +4256,29 @@ Continue permanent delete?`
                 </button>
               ))}
             </div>
+          </div>
+
+          <div className="flex flex-wrap gap-3 mb-4">
+            <select
+              value={vocabularyVisibilityFilter}
+              onChange={e => setVocabularyVisibilityFilter(e.target.value)}
+              className={librarySelectClass}
+            >
+              <option value="all">All Libraries</option>
+              <option value="private">My Library</option>
+              <option value="school">School Library</option>
+            </select>
+
+            <select
+              value={vocabularyContentTypeFilter}
+              onChange={e => setVocabularyContentTypeFilter(e.target.value)}
+              className={librarySelectClass}
+            >
+              <option value="all">All Vocabulary Types</option>
+              <option value="vocabulary_quiz">Vocabulary Quiz</option>
+              <option value="topic_vocabulary">Topic Vocabulary</option>
+              <option value="academic_vocabulary">Academic Vocabulary</option>
+            </select>
           </div>
 
           {filteredVocabularyTests.length === 0 ? (
@@ -4058,6 +4333,29 @@ Continue permanent delete?`
             </div>
           </div>
 
+          <div className="flex flex-wrap gap-3 mb-4">
+            <select
+              value={writingVisibilityFilter}
+              onChange={e => setWritingVisibilityFilter(e.target.value)}
+              className={librarySelectClass}
+            >
+              <option value="all">All Libraries</option>
+              <option value="private">My Library</option>
+              <option value="school">School Library</option>
+            </select>
+
+            <select
+              value={writingContentTypeFilter}
+              onChange={e => setWritingContentTypeFilter(e.target.value)}
+              className={librarySelectClass}
+            >
+              <option value="all">All Writing Types</option>
+              <option value="full_writing">Full Writing</option>
+              <option value="task1_only">Task 1 Only</option>
+              <option value="task2_only">Task 2 Only</option>
+            </select>
+          </div>
+
           {filteredWritings.length === 0 ? (
             <p className="text-sm text-gray-400 bg-gray-50 rounded-xl p-4">
               No writing homework found for this filter.
@@ -4089,6 +4387,16 @@ Continue permanent delete?`
                   </p>
                 </div>
 
+                <select
+                  value={mockVisibilityFilter}
+                  onChange={e => setMockVisibilityFilter(e.target.value)}
+                  className={librarySelectClass}
+                >
+                  <option value="all">All Libraries</option>
+                  <option value="private">My Library</option>
+                  <option value="school">School Library</option>
+                </select>
+
                 <button
                   onClick={() => navigate('/create-mock')}
                   className="text-xs bg-green-600 text-white px-4 py-2 rounded-xl hover:bg-green-700"
@@ -4097,24 +4405,24 @@ Continue permanent delete?`
                 </button>
               </div>
 
-              {activeMockTests.length === 0 ? (
+              {filteredActiveMockTests.length === 0 ? (
                 <p className="text-sm text-gray-400 bg-gray-50 rounded-xl p-4">
                   No active mock tests found yet.
                 </p>
               ) : (
                 <div className="flex flex-col gap-3">
-                  {activeMockTests.map(mockTest => renderMockTestCard(mockTest, false))}
+                  {filteredActiveMockTests.map(mockTest => renderMockTestCard(mockTest, false))}
                 </div>
               )}
 
-              {archivedMockTests.length > 0 && (
+              {filteredArchivedMockTests.length > 0 && (
                 <div className="mt-8">
                   <h3 className="text-sm font-semibold text-gray-700 mb-3">
                     Archived Mock Tests
                   </h3>
 
                   <div className="flex flex-col gap-3">
-                    {archivedMockTests.map(mockTest => renderMockTestCard(mockTest, true))}
+                    {filteredArchivedMockTests.map(mockTest => renderMockTestCard(mockTest, true))}
                   </div>
                 </div>
               )}
