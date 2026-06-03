@@ -2843,7 +2843,7 @@ Continue permanent delete?`
     return mockTest.assignTo?.length || 0
   }
 
-  const renderMockTestCard = (mockTest, archived = false) => (
+  const renderMockTestCard = (mockTest, archived = false, index = null) => (
     <div
       key={mockTest.id}
       className={`border rounded-xl p-4 flex items-center justify-between gap-4 ${
@@ -2854,7 +2854,7 @@ Continue permanent delete?`
     >
       <div>
         <p className="text-sm font-medium text-gray-800">
-          {mockTest.title || 'Untitled Mock Test'}
+          {index !== null ? `${index + 1}. ` : ''}{mockTest.title || 'Untitled Mock Test'}
         </p>
 
         <div className="flex gap-2 mt-2 mb-1 flex-wrap">
@@ -2921,7 +2921,7 @@ Continue permanent delete?`
     </div>
   )
 
-  const renderReadingHomeworkCard = (reading, archived = false) => (
+  const renderReadingHomeworkCard = (reading, archived = false, index = null) => (
     <div
       key={reading.id}
       className={`border rounded-xl p-4 flex items-center justify-between gap-4 ${
@@ -2931,7 +2931,9 @@ Continue permanent delete?`
       }`}
     >
       <div>
-        <p className="text-sm font-medium text-gray-800">{reading.title}</p>
+        <p className="text-sm font-medium text-gray-800">
+          {index !== null ? `${index + 1}. ` : ''}{reading.title}
+        </p>
 
         <div className="flex gap-2 mt-2 mb-1 flex-wrap">
           <span className="text-[11px] bg-purple-50 text-purple-600 px-2.5 py-1 rounded-full">
@@ -3012,7 +3014,7 @@ Continue permanent delete?`
     </div>
   )
 
-  const renderWritingHomeworkCard = (writing, archived = false) => {
+  const renderWritingHomeworkCard = (writing, archived = false, index = null) => {
     const submitted = getWritingSubmittedCount(writing.id)
     const reviewed = getWritingReviewedCount(writing.id)
 
@@ -3026,7 +3028,9 @@ Continue permanent delete?`
         }`}
       >
         <div>
-          <p className="text-sm font-medium text-gray-800">{writing.title}</p>
+          <p className="text-sm font-medium text-gray-800">
+            {index !== null ? `${index + 1}. ` : ''}{writing.title}
+          </p>
 
           <div className="flex gap-2 mt-2 mb-1 flex-wrap">
             <span className="text-[11px] bg-purple-50 text-purple-600 px-2.5 py-1 rounded-full">
@@ -3115,7 +3119,7 @@ Continue permanent delete?`
     )
   }
 
-  const renderListeningHomeworkCard = (listening, archived = false) => (
+  const renderListeningHomeworkCard = (listening, archived = false, index = null) => (
     <div
       key={listening.id}
       className={`border rounded-xl p-4 flex items-center justify-between gap-4 ${
@@ -3125,7 +3129,9 @@ Continue permanent delete?`
       }`}
     >
       <div>
-        <p className="text-sm font-medium text-gray-800">{listening.title}</p>
+        <p className="text-sm font-medium text-gray-800">
+          {index !== null ? `${index + 1}. ` : ''}{listening.title}
+        </p>
 
         <div className="flex gap-2 mt-2 mb-1 flex-wrap">
           <span className="text-[11px] bg-purple-50 text-purple-600 px-2.5 py-1 rounded-full">
@@ -3207,7 +3213,7 @@ Continue permanent delete?`
   )
 
 
-  const renderVocabularyHomeworkCard = (vocabularyTest, archived = false) => (
+  const renderVocabularyHomeworkCard = (vocabularyTest, archived = false, index = null) => (
     <div
       key={vocabularyTest.id}
       className={`border rounded-xl p-4 flex items-center justify-between gap-4 ${
@@ -3217,7 +3223,9 @@ Continue permanent delete?`
       }`}
     >
       <div>
-        <p className="text-sm font-medium text-gray-800">{vocabularyTest.title}</p>
+        <p className="text-sm font-medium text-gray-800">
+          {index !== null ? `${index + 1}. ` : ''}{vocabularyTest.title}
+        </p>
 
         <div className="flex gap-2 mt-2 mb-1 flex-wrap">
           <span className="text-[11px] bg-purple-50 text-purple-600 px-2.5 py-1 rounded-full">
@@ -4161,8 +4169,8 @@ Continue permanent delete?`
             </p>
           ) : (
             <div className="flex flex-col gap-3">
-              {filteredReadings.map(reading =>
-                renderReadingHomeworkCard(reading, reading.archived)
+              {filteredReadings.map((reading, index) =>
+                renderReadingHomeworkCard(reading, reading.archived, index)
               )}
             </div>
           )}
@@ -4241,8 +4249,8 @@ Continue permanent delete?`
             </p>
           ) : (
             <div className="flex flex-col gap-3">
-              {filteredListenings.map(listening =>
-                renderListeningHomeworkCard(listening, listening.archived)
+              {filteredListenings.map((listening, index) =>
+                renderListeningHomeworkCard(listening, listening.archived, index)
               )}
             </div>
           )}
@@ -4317,8 +4325,8 @@ Continue permanent delete?`
             </p>
           ) : (
             <div className="flex flex-col gap-3">
-              {filteredVocabularyTests.map(vocabularyTest =>
-                renderVocabularyHomeworkCard(vocabularyTest, vocabularyTest.archived)
+              {filteredVocabularyTests.map((vocabularyTest, index) =>
+                renderVocabularyHomeworkCard(vocabularyTest, vocabularyTest.archived, index)
               )}
             </div>
           )}
@@ -4392,8 +4400,8 @@ Continue permanent delete?`
             </p>
           ) : (
             <div className="flex flex-col gap-3">
-              {filteredWritings.map(writing =>
-                renderWritingHomeworkCard(writing, writing.archived)
+              {filteredWritings.map((writing, index) =>
+                renderWritingHomeworkCard(writing, writing.archived, index)
               )}
             </div>
           )}
@@ -4453,7 +4461,7 @@ Continue permanent delete?`
                 </p>
               ) : (
                 <div className="flex flex-col gap-3">
-                  {filteredActiveMockTests.map(mockTest => renderMockTestCard(mockTest, false))}
+                  {filteredActiveMockTests.map((mockTest, index) => renderMockTestCard(mockTest, false, index))}
                 </div>
               )}
 
@@ -4464,7 +4472,7 @@ Continue permanent delete?`
                   </h3>
 
                   <div className="flex flex-col gap-3">
-                    {filteredArchivedMockTests.map(mockTest => renderMockTestCard(mockTest, true))}
+                    {filteredArchivedMockTests.map((mockTest, index) => renderMockTestCard(mockTest, true, index))}
                   </div>
                 </div>
               )}

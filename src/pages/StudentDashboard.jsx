@@ -1117,7 +1117,7 @@
             </p>
 
             <div className="flex flex-col gap-3">
-              {todoReadings.map(r => {
+              {todoReadings.map((r, index) => {
                 const badge = dueLabel(r)
 
                 return (
@@ -1127,7 +1127,7 @@
                   >
                     <div>
                       <p className="text-sm font-medium text-gray-800">
-                        {r.title}
+                        {index + 1}. {r.title}
                       </p>
 
                       <p className="text-xs text-gray-400 mt-0.5">
@@ -1165,7 +1165,7 @@
             </p>
 
             <div className="flex flex-col gap-3">
-              {completedReadings.map(r => {
+              {completedReadings.map((r, index) => {
                 const result = getResult(r.id)
 
                 return (
@@ -1175,7 +1175,7 @@
                   >
                     <div>
                       <p className="text-sm font-medium text-gray-800">
-                        {r.title}
+                        {index + 1}. {r.title}
                       </p>
 
                       <p className="text-xs text-gray-400 mt-0.5">
@@ -1264,7 +1264,7 @@
             </p>
 
             <div className="flex flex-col gap-3">
-              {todoListenings.map(l => {
+              {todoListenings.map((l, index) => {
                 const badge = dueLabel(l)
 
                 return (
@@ -1274,7 +1274,7 @@
                   >
                     <div>
                       <p className="text-sm font-medium text-gray-800">
-                        {l.title}
+                        {index + 1}. {l.title}
                       </p>
 
                       <p className="text-xs text-gray-400 mt-0.5">
@@ -1312,7 +1312,7 @@
             </p>
 
             <div className="flex flex-col gap-3">
-              {completedListenings.map(l => {
+              {completedListenings.map((l, index) => {
                 const result = getResult(l.id)
 
                 return (
@@ -1322,7 +1322,7 @@
                   >
                     <div>
                       <p className="text-sm font-medium text-gray-800">
-                        {l.title}
+                        {index + 1}. {l.title}
                       </p>
 
                       <p className="text-xs text-gray-400 mt-0.5">
@@ -1685,7 +1685,7 @@
             </p>
 
             <div className="flex flex-col gap-3">
-              {todoVocabularyTests.map(item => {
+              {todoVocabularyTests.map((item, index) => {
                 const badge = dueLabel(item)
 
                 return (
@@ -1695,7 +1695,7 @@
                   >
                     <div>
                       <p className="text-sm font-medium text-gray-800">
-                        {item.title}
+                        {index + 1}. {item.title}
                       </p>
 
                       <p className="text-xs text-gray-400 mt-0.5">
@@ -1733,7 +1733,7 @@
             </p>
 
             <div className="flex flex-col gap-3">
-              {completedVocabularyTests.map(item => {
+              {completedVocabularyTests.map((item, index) => {
                 const result = getResult(item.id)
 
                 return (
@@ -1743,7 +1743,7 @@
                   >
                     <div>
                       <p className="text-sm font-medium text-gray-800">
-                        {item.title}
+                        {index + 1}. {item.title}
                       </p>
 
                       <p className="text-xs text-gray-400 mt-0.5">
@@ -1829,7 +1829,7 @@
             </p>
 
             <div className="flex flex-col gap-3">
-              {todoMocks.map(mock => {
+              {todoMocks.map((mock, index) => {
                 const badge = dueLabel(mock)
 
                 return (
@@ -1839,7 +1839,7 @@
                   >
                     <div>
                       <p className="text-sm font-medium text-gray-800">
-                        {mock.title}
+                        {index + 1}. {mock.title}
                       </p>
 
                       <p className="text-xs text-gray-400 mt-0.5">
@@ -1881,7 +1881,7 @@
             </p>
 
             <div className="flex flex-col gap-3">
-              {completedMocks.map(mock => {
+              {completedMocks.map((mock, index) => {
                 const submission = getSubmission(mock.id)
                 const result = submission?.result
 
@@ -1892,7 +1892,7 @@
                   >
                     <div>
                       <p className="text-sm font-medium text-gray-800">
-                        {mock.title}
+                        {index + 1}. {mock.title}
                       </p>
 
                       <p className="text-xs text-gray-400 mt-0.5">
@@ -2316,7 +2316,7 @@
             </p>
 
             <div className="flex flex-col gap-3">
-              {todoWritings.map(w => {
+              {todoWritings.map((w, index) => {
                 const badge = dueLabel(w)
 
                 return (
@@ -2326,7 +2326,7 @@
                   >
                     <div>
                       <p className="text-sm font-medium text-gray-800">
-                        {w.title}
+                        {index + 1}. {w.title}
                       </p>
 
                       <p className="text-xs text-gray-400 mt-0.5">
@@ -2368,7 +2368,7 @@
             </p>
 
             <div className="flex flex-col gap-3">
-              {completedWritings.map(w => {
+              {completedWritings.map((w, index) => {
                 const submission = getSubmission(w.id)
                 const reviewed = Boolean(submission?.reviewed)
 
@@ -2379,7 +2379,7 @@
                   >
                     <div>
                       <p className="text-sm font-medium text-gray-800">
-                        {w.title}
+                        {index + 1}. {w.title}
                       </p>
 
                       <p className="text-xs text-gray-400 mt-0.5">
@@ -2874,7 +2874,7 @@
           </div>
         ) : (
           <div className="flex flex-col gap-3">
-            {todoItems.map(item => {
+            {todoItems.map((item, index) => {
               const badge = dueLabel(item)
 
               return (
@@ -2894,7 +2894,7 @@
                     </div>
 
                     <p className="text-sm font-medium text-gray-800">
-                      {item.title || 'Untitled homework'}
+                      {index + 1}. {item.title || 'Untitled homework'}
                     </p>
 
                     <p className="text-xs text-gray-400 mt-0.5">
