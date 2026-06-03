@@ -64,6 +64,7 @@ export default function TeacherDashboard() {
   const [selected, setSelected] = useState(null)
   const [selectedStudentSection, setSelectedStudentSection] = useState('mock')
   const [selectedReview, setSelectedReview] = useState(null)
+  const [selectedVocabularyReview, setSelectedVocabularyReview] = useState(null)
 
   const [selectedHomework, setSelectedHomework] = useState(null)
   const [selectedHomeworkType, setSelectedHomeworkType] = useState(null)
@@ -4927,6 +4928,19 @@ Continue permanent delete?`
                                         </p>
                                       </div>
 
+                                      <button
+                                        onClick={() =>
+                                          setSelectedVocabularyReview({
+                                            student,
+                                            vocabularyTest,
+                                            submission
+                                          })
+                                        }
+                                        className="text-xs bg-purple-600 text-white px-3 py-2 rounded-xl hover:bg-purple-700"
+                                      >
+                                        Review
+                                      </button>
+
                                       <span className="text-xs bg-green-50 text-green-600 px-3 py-1.5 rounded-full">
                                         Completed
                                       </span>
@@ -5746,6 +5760,152 @@ Continue permanent delete?`
           </div>
         </div>
       )}
+
+      {selectedVocabularyReview && (() => {
+        const vocabularyTest = selectedVocabularyReview.vocabularyTest
+        const submission = selectedVocabularyReview.submission
+        const result = submission.result || {}
+
+        return (
+          <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center px-4">
+            <div className="bg-white rounded-2xl w-full max-w-5xl max-h-[90vh] overflow-y-auto p-6">
+              <div className="flex items-start justify-between mb-6">
+                <div>
+                  <h2 className="text-xl font-bold text-gray-900">
+                    Vocabulary Review
+                  </h2>
+
+                  <p className="text-sm text-gray-400">
+                    {selectedVocabularyReview.student.name} — {vocabularyTest.title}
+                  </p>
+
+                  <p className="text-sm text-purple-600 font-semibold mt-1">
+                    {result.correct || 0}/{result.total || 0} correct · {result.percentage ?? 0}%
+                  </p>
+                </div>
+
+                <button
+                  onClick={() => setSelectedVocabularyReview(null)}
+                  className="text-sm text-gray-400 hover:text-gray-600"
+                >
+                  Close
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-6">
+                <div className="bg-purple-50 rounded-xl p-4 text-center">
+                  <p className="text-xs text-gray-500 mb-1">Score</p>
+                  <p className="text-2xl font-bold text-purple-600">
+                    {result.correct || 0}/{result.total || 0}
+                  </p>
+                </div>
+
+                <div className="bg-green-50 rounded-xl p-4 text-center">
+                  <p className="text-xs text-gray-500 mb-1">Accuracy</p>
+                  <p className="text-2xl font-bold text-green-600">
+                    {result.percentage ?? 0}%
+                  </p>
+                </div>
+
+                <div className="bg-amber-50 rounded-xl p-4 text-center">
+                  <p className="text-xs text-gray-500 mb-1">Submitted</p>
+                  <p className="text-sm font-bold text-amber-700">
+                    {formatDateShort(submission.submittedAt)}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-4">
+                {vocabularyTest.questions?.map((question, index) => {
+                  const selectedAnswer = submission.answers?.[question.id]
+                  const correctAnswer = question.answer
+                  const isCorrect = selectedAnswer === correctAnswer
+
+                  return (
+                    <div
+                      key={question.id}
+                      className={`border rounded-xl p-5 ${
+                        isCorrect
+                          ? 'bg-green-50 border-green-100'
+                          : 'bg-red-50 border-red-100'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-3 mb-3">
+                        <p className="text-xs font-semibold text-gray-400">
+                          Question {index + 1}
+                        </p>
+
+                        <span className={`text-xs font-semibold ${isCorrect ? 'text-green-600' : 'text-red-600'}`}>
+                          {isCorrect ? 'Correct' : 'Wrong'}
+                        </span>
+                      </div>
+
+                      <p className="text-sm font-medium text-gray-800 mb-4">
+                        {question.question}
+                      </p>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+                        <div className="bg-white/70 rounded-xl p-4">
+                          <p className="text-xs text-gray-500 mb-1">
+                            Student answer
+                          </p>
+
+                          <p className="text-sm text-gray-800">
+                            {selectedAnswer
+                              ? `${selectedAnswer}. ${getOptionText(question, selectedAnswer)}`
+                              : 'No answer'}
+                          </p>
+                        </div>
+
+                        <div className="bg-white/70 rounded-xl p-4">
+                          <p className="text-xs text-gray-500 mb-1">
+                            Correct answer
+                          </p>
+
+                          <p className="text-sm font-medium text-green-700">
+                            {correctAnswer
+                              ? `${correctAnswer}. ${getOptionText(question, correctAnswer)}`
+                              : 'No answer key'}
+                          </p>
+                        </div>
+                      </div>
+
+                      {Array.isArray(question.options) && question.options.length > 0 && (
+                        <div className="bg-white/60 rounded-xl p-4">
+                          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">
+                            Options
+                          </p>
+
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                            {question.options.map((option, optionIndex) => {
+                              const letter = letters[optionIndex]
+
+                              return (
+                                <p
+                                  key={optionIndex}
+                                  className={`text-xs rounded-lg px-3 py-2 ${
+                                    letter === correctAnswer
+                                      ? 'bg-green-100 text-green-700 font-semibold'
+                                      : letter === selectedAnswer && !isCorrect
+                                        ? 'bg-red-100 text-red-700 font-semibold'
+                                        : 'bg-gray-50 text-gray-600'
+                                  }`}
+                                >
+                                  <span className="font-semibold">{letter}.</span> {option}
+                                </p>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {(selectedWritingReview || selectedMockWritingReview) && (() => {
         const reviewTarget = selectedWritingReview || selectedMockWritingReview
