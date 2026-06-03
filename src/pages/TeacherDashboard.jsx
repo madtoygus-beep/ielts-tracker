@@ -533,6 +533,26 @@ export default function TeacherDashboard() {
     )
   }
 
+  const getStudentVocabularyTests = studentId => {
+    const student = getStudentByAnyId(studentId)
+    return activeVocabularyTests.filter(vocabularyTest =>
+      isHomeworkAssignedToStudent(vocabularyTest, student)
+    )
+  }
+
+  const isVocabularySubmissionForTest = (submission, vocabularyTestId) => {
+    if (!submission || !vocabularyTestId) return false
+
+    return [
+      submission.vocabularyTestId,
+      submission.vocabularyId,
+      submission.testId,
+      submission.homeworkId
+    ]
+      .map(normalizeAssignmentId)
+      .includes(normalizeAssignmentId(vocabularyTestId))
+  }
+
   const getSubmission = (studentId, readingId) => {
     const student = getStudentByAnyId(studentId)
 
@@ -561,7 +581,9 @@ export default function TeacherDashboard() {
     const student = getStudentByAnyId(studentId)
 
     return vocabularySubmissions.find(
-      sub => submissionBelongsToStudent(sub, student) && sub.vocabularyTestId === vocabularyTestId
+      sub =>
+        submissionBelongsToStudent(sub, student) &&
+        isVocabularySubmissionForTest(sub, vocabularyTestId)
     )
   }
 
@@ -584,7 +606,9 @@ export default function TeacherDashboard() {
   }
 
   const getVocabularyCompletedCount = vocabularyTestId => {
-    return vocabularySubmissions.filter(sub => sub.vocabularyTestId === vocabularyTestId).length
+    return vocabularySubmissions.filter(sub =>
+      isVocabularySubmissionForTest(sub, vocabularyTestId)
+    ).length
   }
 
   const pendingReviewWritings = activeWritings.filter(writing => {
@@ -1326,8 +1350,8 @@ Continue permanent delete?`
 
       if (!forceDelete) return
 
-      const relatedSubs = vocabularySubmissions.filter(
-        sub => sub.vocabularyTestId === vocabularyTest.id
+      const relatedSubs = vocabularySubmissions.filter(sub =>
+        isVocabularySubmissionForTest(sub, vocabularyTest.id)
       )
 
       for (const sub of relatedSubs) {
@@ -4493,6 +4517,7 @@ Continue permanent delete?`
             const studentReadings = getStudentReadings(student.id)
             const studentWritings = getStudentWritings(student.id)
             const studentListenings = getStudentListenings(student.id)
+            const studentVocabularyTests = getStudentVocabularyTests(student.id)
             const analytics = getStudentAnalytics(student.id)
 
             const completedReadingCount = studentReadings.filter(reading =>
@@ -4505,6 +4530,10 @@ Continue permanent delete?`
 
             const completedListeningCount = studentListenings.filter(listening =>
               getListeningSubmission(student.id, listening.id)
+            ).length
+
+            const completedVocabularyCount = studentVocabularyTests.filter(vocabularyTest =>
+              getVocabularySubmission(student.id, vocabularyTest.id)
             ).length
 
             return (
@@ -4557,6 +4586,13 @@ Continue permanent delete?`
                       <p className="text-xs text-gray-400">Listening done</p>
                       <p className="text-sm font-semibold text-gray-700">
                         {completedListeningCount}/{studentListenings.length}
+                      </p>
+                    </div>
+
+                    <div className="text-right">
+                      <p className="text-xs text-gray-400">Vocabulary done</p>
+                      <p className="text-sm font-semibold text-gray-700">
+                        {completedVocabularyCount}/{studentVocabularyTests.length}
                       </p>
                     </div>
 
@@ -4815,6 +4851,85 @@ Continue permanent delete?`
                                       >
                                         Review
                                       </button>
+                                    </div>
+                                  ) : (
+                                    <span className="text-xs bg-amber-50 text-amber-600 px-3 py-1.5 rounded-full">
+                                      Not done
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="mb-8">
+                      <h3 className="text-sm font-semibold text-gray-700 mb-3">
+                        Vocabulary test results
+                      </h3>
+
+                      {studentVocabularyTests.length === 0 ? (
+                        <p className="text-sm text-gray-400 bg-gray-50 rounded-xl p-4">
+                          No active vocabulary test assigned to this student.
+                        </p>
+                      ) : (
+                        <div className="flex flex-col gap-3">
+                          {studentVocabularyTests.map(vocabularyTest => {
+                            const submission = getVocabularySubmission(
+                              student.id,
+                              vocabularyTest.id
+                            )
+
+                            return (
+                              <div
+                                key={vocabularyTest.id}
+                                className="border border-gray-100 rounded-xl p-4 bg-gray-50"
+                              >
+                                <div className="flex items-center justify-between gap-3">
+                                  <div>
+                                    <p className="text-sm font-medium text-gray-800">
+                                      {vocabularyTest.title}
+                                    </p>
+
+                                    <p className="text-xs text-gray-400">
+                                      {vocabularyTest.questions?.length || 0} questions · {vocabularyTest.timeLimit || 20} min
+                                    </p>
+
+                                    {submission && (
+                                      <p className="text-xs text-green-600 mt-1 font-medium">
+                                        Submitted {formatDateShort(submission.submittedAt)}
+                                      </p>
+                                    )}
+                                  </div>
+
+                                  {submission ? (
+                                    <div className="flex items-center gap-3">
+                                      <div className="text-right">
+                                        <p className="text-xs text-gray-400">
+                                          Score
+                                        </p>
+
+                                        <p className="text-sm font-semibold text-gray-700">
+                                          {submission.result?.correct || 0}/
+                                          {submission.result?.total || 0}
+                                        </p>
+                                      </div>
+
+                                      <div className="text-right">
+                                        <p className="text-xs text-gray-400">
+                                          Accuracy
+                                        </p>
+
+                                        <p className="text-lg font-bold text-purple-600">
+                                          {submission.result?.percentage ?? 0}%
+                                        </p>
+                                      </div>
+
+                                      <span className="text-xs bg-green-50 text-green-600 px-3 py-1.5 rounded-full">
+                                        Completed
+                                      </span>
                                     </div>
                                   ) : (
                                     <span className="text-xs bg-amber-50 text-amber-600 px-3 py-1.5 rounded-full">

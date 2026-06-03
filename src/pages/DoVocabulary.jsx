@@ -33,11 +33,71 @@ function getVocabularyBand(correct, total) {
   return 4
 }
 
+function normalizeValue(value) {
+  return value === undefined || value === null
+    ? ''
+    : value.toString().trim().toLowerCase()
+}
+
+function getAssignmentValues(item) {
+  return [
+    ...(Array.isArray(item?.assignTo) ? item.assignTo : []),
+    ...(Array.isArray(item?.assignedTo) ? item.assignedTo : []),
+    ...(Array.isArray(item?.studentIds) ? item.studentIds : []),
+    ...(Array.isArray(item?.assignedStudentIds) ? item.assignedStudentIds : []),
+    ...(Array.isArray(item?.assignedEmails) ? item.assignedEmails : [])
+  ]
+}
+
+function getCurrentUserValues(user, profile) {
+  return [
+    user?.uid,
+    user?.email,
+    user?.email?.toLowerCase(),
+    profile?.uid,
+    profile?.id,
+    profile?.email,
+    profile?.email?.toLowerCase()
+  ]
+    .map(normalizeValue)
+    .filter(Boolean)
+}
+
+function isAssignedToCurrentUser(item, user, profile) {
+  const assignmentValues = getAssignmentValues(item).map(normalizeValue)
+  const currentValues = getCurrentUserValues(user, profile)
+
+  return currentValues.some(value => assignmentValues.includes(value))
+}
+
+function isHiddenForCurrentUser(item, user, profile) {
+  if (!Array.isArray(item?.hiddenFor)) return false
+
+  const hiddenValues = item.hiddenFor.map(normalizeValue)
+  const currentValues = getCurrentUserValues(user, profile)
+
+  return currentValues.some(value => hiddenValues.includes(value))
+}
+
+function isSubmissionForVocabularyTest(submission, vocabularyTestId) {
+  const target = normalizeValue(vocabularyTestId)
+
+  return [
+    submission?.vocabularyTestId,
+    submission?.vocabularyId,
+    submission?.testId,
+    submission?.homeworkId
+  ]
+    .map(normalizeValue)
+    .includes(target)
+}
+
 export default function DoVocabulary() {
   const { id } = useParams()
   const navigate = useNavigate()
 
   const [user, setUser] = useState(null)
+  const [profile, setProfile] = useState(null)
   const [test, setTest] = useState(null)
   const [answers, setAnswers] = useState({})
   const [timeLeft, setTimeLeft] = useState(null)
@@ -78,6 +138,7 @@ export default function DoVocabulary() {
         }
 
         setUser(currentUser)
+        setProfile(profile)
 
         const testSnap = await getDoc(doc(db, 'vocabularyTests', id))
 
@@ -92,13 +153,13 @@ export default function DoVocabulary() {
           ...testSnap.data()
         }
 
-        if (!data.assignTo?.includes(currentUser.uid)) {
+        if (!isAssignedToCurrentUser(data, currentUser, profile)) {
           alert('This vocabulary test is not assigned to you.')
           navigate('/student')
           return
         }
 
-        if (data.hiddenFor?.includes(currentUser.uid) || data.archived === true) {
+        if (isHiddenForCurrentUser(data, currentUser, profile) || data.archived === true) {
           alert('This vocabulary test is no longer available.')
           navigate('/student')
           return
@@ -109,19 +170,20 @@ export default function DoVocabulary() {
 
         const existingQuery = query(
           collection(db, 'vocabularySubmissions'),
-          where('uid', '==', currentUser.uid),
-          where('vocabularyTestId', '==', id)
+          where('uid', '==', currentUser.uid)
         )
 
         const existingSnap = await getDocs(existingQuery)
 
-        if (!existingSnap.empty) {
-          const submissions = existingSnap.docs
-            .map(item => item.data())
-            .sort(
-              (a, b) =>
-                new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0)
-            )
+        const submissions = existingSnap.docs
+          .map(item => item.data())
+          .filter(submission => isSubmissionForVocabularyTest(submission, id))
+          .sort(
+            (a, b) =>
+              new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0)
+          )
+
+        if (submissions.length > 0) {
 
           const submission = submissions[0]
 
@@ -210,10 +272,19 @@ export default function DoVocabulary() {
     try {
       await addDoc(collection(db, 'vocabularySubmissions'), {
         uid: user.uid,
+        studentEmail: user.email || profile?.email || '',
+        studentName: profile?.name || profile?.fullName || user.email || '',
         vocabularyTestId: id,
+        vocabularyId: id,
+        testId: id,
+        homeworkId: id,
+        vocabularyTitle: test.title || '',
+        teacherId: test.teacherId || test.createdBy || '',
+        schoolId: test.schoolId || profile?.schoolId || 'maxima',
         answers,
         result: res,
         submittedAt: new Date().toISOString(),
+        archived: false,
         finishedLate: timeLeft <= 0,
         autoSubmitted: autoSubmit
       })
