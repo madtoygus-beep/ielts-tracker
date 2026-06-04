@@ -54,6 +54,16 @@ export default function DoWriting() {
 
   const draftKey = user ? `writingDraft_${id}_${user.uid}` : null
 
+  const writingMode = writing?.contentType || writing?.writingMode || 'full_writing'
+  const hasTask1 = writingMode !== 'task2_only'
+  const hasTask2 = writingMode !== 'task1_only'
+  const isFullWriting = hasTask1 && hasTask2
+  const activeTaskLabel = hasTask1 && !hasTask2
+    ? 'Task 1'
+    : hasTask2 && !hasTask1
+      ? 'Task 2'
+      : `Task ${currentTask}`
+
   const showDraftStatus = message => {
     setDraftStatus(message)
 
@@ -144,8 +154,16 @@ export default function DoWriting() {
         return
       }
 
+      const mode = data.contentType || data.writingMode || 'full_writing'
+      const defaultMinutes = mode === 'task1_only'
+        ? 20
+        : mode === 'task2_only'
+          ? 40
+          : 60
+
       setWriting(data)
-      setTimeLeft((data.timeLimit || 60) * 60)
+      setCurrentTask(mode === 'task2_only' ? 2 : 1)
+      setTimeLeft((data.timeLimit || defaultMinutes) * 60)
 
       const q = query(
         collection(db, 'writingSubmissions'),
@@ -171,7 +189,7 @@ export default function DoWriting() {
   }, [id, navigate])
 
   useEffect(() => {
-    if (!draftKey || submitted || alreadyDone || draftLoaded) return
+    if (!draftKey || loading || submitted || alreadyDone || draftLoaded) return
 
     const savedDraft = localStorage.getItem(draftKey)
 
@@ -191,7 +209,14 @@ export default function DoWriting() {
           if (restore) {
             setTask1Answer(draft.task1Answer || '')
             setTask2Answer(draft.task2Answer || '')
-            setCurrentTask(draft.currentTask || 1)
+            const restoredTask = draft.currentTask || 1
+            setCurrentTask(
+              writingMode === 'task2_only'
+                ? 2
+                : writingMode === 'task1_only'
+                  ? 1
+                  : restoredTask
+            )
 
             if (typeof draft.timeLeft === 'number' && draft.timeLeft > 0) {
               setTimeLeft(draft.timeLeft)
@@ -206,7 +231,7 @@ export default function DoWriting() {
     }
 
     setDraftLoaded(true)
-  }, [draftKey, submitted, alreadyDone, draftLoaded])
+  }, [draftKey, loading, submitted, alreadyDone, draftLoaded, writingMode])
 
   useEffect(() => {
     if (loading || submitted || timeLeft <= 0) return
@@ -336,13 +361,13 @@ export default function DoWriting() {
     if (submittingRef.current || submitted) return
 
     if (!autoSubmit) {
-      if (!task1Answer.trim()) {
+      if (hasTask1 && !task1Answer.trim()) {
         alert('Please write your Task 1 answer.')
         setCurrentTask(1)
         return
       }
 
-      if (!task2Answer.trim()) {
+      if (hasTask2 && !task2Answer.trim()) {
         alert('Please write your Task 2 answer.')
         setCurrentTask(2)
         return
@@ -368,10 +393,14 @@ export default function DoWriting() {
       await addDoc(collection(db, 'writingSubmissions'), {
         uid: user.uid,
         writingId: id,
-        task1Answer,
-        task2Answer,
-        task1WordCount: countWords(task1Answer),
-        task2WordCount: countWords(task2Answer),
+        contentType: writingMode,
+        writingMode,
+        task1Enabled: hasTask1,
+        task2Enabled: hasTask2,
+        task1Answer: hasTask1 ? task1Answer : '',
+        task2Answer: hasTask2 ? task2Answer : '',
+        task1WordCount: hasTask1 ? countWords(task1Answer) : 0,
+        task2WordCount: hasTask2 ? countWords(task2Answer) : 0,
         submittedAt: new Date().toISOString(),
         finishedLate: timeLeft <= 0,
         autoSubmitted: autoSubmit,
@@ -420,7 +449,7 @@ export default function DoWriting() {
             </h1>
 
             <p className="text-gray-500 text-sm mb-6">
-              Your teacher will review your Task 1 and Task 2 answers.
+              Your teacher will review your writing answer.
             </p>
 
             {alreadyDone && (
@@ -429,20 +458,24 @@ export default function DoWriting() {
               </p>
             )}
 
-            <div className="grid grid-cols-2 gap-3 mb-6">
-              <div className="bg-gray-50 rounded-xl p-4">
-                <p className="text-xs text-gray-400 mb-1">Task 1 words</p>
-                <p className="text-xl font-bold text-purple-600">
-                  {countWords(task1Answer)}
-                </p>
-              </div>
+            <div className={`grid ${isFullWriting ? 'grid-cols-2' : 'grid-cols-1'} gap-3 mb-6`}>
+              {hasTask1 && (
+                <div className="bg-gray-50 rounded-xl p-4">
+                  <p className="text-xs text-gray-400 mb-1">Task 1 words</p>
+                  <p className="text-xl font-bold text-purple-600">
+                    {countWords(task1Answer)}
+                  </p>
+                </div>
+              )}
 
-              <div className="bg-gray-50 rounded-xl p-4">
-                <p className="text-xs text-gray-400 mb-1">Task 2 words</p>
-                <p className="text-xl font-bold text-purple-600">
-                  {countWords(task2Answer)}
-                </p>
-              </div>
+              {hasTask2 && (
+                <div className="bg-gray-50 rounded-xl p-4">
+                  <p className="text-xs text-gray-400 mb-1">Task 2 words</p>
+                  <p className="text-xl font-bold text-purple-600">
+                    {countWords(task2Answer)}
+                  </p>
+                </div>
+              )}
             </div>
 
             <button
@@ -503,37 +536,45 @@ export default function DoWriting() {
         </div>
       </nav>
 
-      <div className="flex border-b border-gray-100 bg-white sticky top-[73px] z-10">
-        <button
-          onClick={() => setCurrentTask(1)}
-          className={`flex-1 py-4 text-sm font-semibold ${
-            currentTask === 1
-              ? 'text-purple-600 border-b-2 border-purple-600'
-              : 'text-gray-400'
-          }`}
-        >
-          Task 1
-          <span className="ml-2 text-xs font-normal">
-            {task1Words} words
-          </span>
-        </button>
+      {isFullWriting ? (
+        <div className="flex border-b border-gray-100 bg-white sticky top-[73px] z-10">
+          <button
+            onClick={() => setCurrentTask(1)}
+            className={`flex-1 py-4 text-sm font-semibold ${
+              currentTask === 1
+                ? 'text-purple-600 border-b-2 border-purple-600'
+                : 'text-gray-400'
+            }`}
+          >
+            Task 1
+            <span className="ml-2 text-xs font-normal">
+              {task1Words} words
+            </span>
+          </button>
 
-        <button
-          onClick={() => setCurrentTask(2)}
-          className={`flex-1 py-4 text-sm font-semibold ${
-            currentTask === 2
-              ? 'text-purple-600 border-b-2 border-purple-600'
-              : 'text-gray-400'
-          }`}
-        >
-          Task 2
-          <span className="ml-2 text-xs font-normal">
-            {task2Words} words
+          <button
+            onClick={() => setCurrentTask(2)}
+            className={`flex-1 py-4 text-sm font-semibold ${
+              currentTask === 2
+                ? 'text-purple-600 border-b-2 border-purple-600'
+                : 'text-gray-400'
+            }`}
+          >
+            Task 2
+            <span className="ml-2 text-xs font-normal">
+              {task2Words} words
+            </span>
+          </button>
+        </div>
+      ) : (
+        <div className="border-b border-gray-100 bg-white sticky top-[73px] z-10 px-8 py-3">
+          <span className="inline-flex items-center gap-2 text-sm font-semibold text-purple-600 bg-purple-50 px-4 py-2 rounded-xl">
+            {activeTaskLabel} only · {hasTask1 ? task1Words : task2Words} words
           </span>
-        </button>
-      </div>
+        </div>
+      )}
 
-      {currentTask === 1 && (
+      {hasTask1 && currentTask === 1 && (
         <div className="grid grid-cols-1 lg:grid-cols-2 flex-1 overflow-hidden">
           <div className="overflow-y-auto p-8 border-r border-gray-100">
             <div className="bg-white border border-gray-100 rounded-2xl p-6">
@@ -608,18 +649,28 @@ export default function DoWriting() {
                 className="w-full min-h-[520px] border border-gray-200 rounded-xl px-4 py-4 text-sm leading-7 outline-none focus:border-purple-400 resize-none"
               />
 
-              <button
-                onClick={() => setCurrentTask(2)}
-                className="w-full bg-purple-600 text-white rounded-xl py-4 text-sm font-medium hover:bg-purple-700 mt-5"
-              >
-                Next → Task 2
-              </button>
+              {hasTask2 ? (
+                <button
+                  onClick={() => setCurrentTask(2)}
+                  className="w-full bg-purple-600 text-white rounded-xl py-4 text-sm font-medium hover:bg-purple-700 mt-5"
+                >
+                  Next → Task 2
+                </button>
+              ) : (
+                <button
+                  onClick={() => handleSubmit(false)}
+                  disabled={submitting}
+                  className="w-full bg-purple-600 text-white rounded-xl py-4 text-sm font-medium hover:bg-purple-700 mt-5 disabled:opacity-60"
+                >
+                  {submitting ? 'Submitting...' : 'Submit Task 1'}
+                </button>
+              )}
             </div>
           </div>
         </div>
       )}
 
-      {currentTask === 2 && (
+      {hasTask2 && currentTask === 2 && (
         <div className="grid grid-cols-1 lg:grid-cols-2 flex-1 overflow-hidden">
           <div className="overflow-y-auto p-8 border-r border-gray-100">
             <div className="bg-white border border-gray-100 rounded-2xl p-6">
@@ -664,20 +715,22 @@ export default function DoWriting() {
                 className="w-full min-h-[520px] border border-gray-200 rounded-xl px-4 py-4 text-sm leading-7 outline-none focus:border-purple-400 resize-none"
               />
 
-              <div className="grid grid-cols-2 gap-3 mt-5">
-                <button
-                  onClick={() => setCurrentTask(1)}
-                  className="w-full bg-gray-100 text-gray-600 rounded-xl py-4 text-sm font-medium hover:bg-gray-200"
-                >
-                  ← Back to Task 1
-                </button>
+              <div className={`${hasTask1 ? 'grid grid-cols-2' : 'grid grid-cols-1'} gap-3 mt-5`}>
+                {hasTask1 && (
+                  <button
+                    onClick={() => setCurrentTask(1)}
+                    className="w-full bg-gray-100 text-gray-600 rounded-xl py-4 text-sm font-medium hover:bg-gray-200"
+                  >
+                    ← Back to Task 1
+                  </button>
+                )}
 
                 <button
                   onClick={() => handleSubmit(false)}
                   disabled={submitting}
                   className="w-full bg-purple-600 text-white rounded-xl py-4 text-sm font-medium hover:bg-purple-700 disabled:opacity-60"
                 >
-                  {submitting ? 'Submitting...' : 'Submit Writing'}
+                  {submitting ? 'Submitting...' : hasTask1 ? 'Submit Writing' : 'Submit Task 2'}
                 </button>
               </div>
             </div>
@@ -685,7 +738,7 @@ export default function DoWriting() {
         </div>
       )}
 
-      {imageZoomOpen && writing.task1?.image && (
+      {hasTask1 && imageZoomOpen && writing.task1?.image && (
         <div className="fixed inset-0 z-50 bg-black/80 flex flex-col">
           <div className="flex items-center justify-between px-6 py-4 bg-black/40 text-white">
             <div>

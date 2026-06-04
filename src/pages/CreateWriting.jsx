@@ -240,6 +240,13 @@ export default function CreateWriting() {
     assignTo.includes(student.id)
   )
 
+  const hasTask1 = contentType !== 'task2_only'
+  const hasTask2 = contentType !== 'task1_only'
+  const writingTimeLimit = contentType === 'task1_only'
+    ? 20
+    : contentType === 'task2_only'
+      ? 40
+      : 60
 
   useEffect(() => {
     if (!user || !profile || isAdminProfile(profile) || students.length === 0) return
@@ -307,7 +314,9 @@ export default function CreateWriting() {
     assignedStudentIds: students.filter(student => assignTo.includes(student.id)).map(student => student.id),
     assignedEmails: students.filter(student => assignTo.includes(student.id)).map(student => student.email?.toLowerCase()).filter(Boolean),
     schoolId: getProfileSchoolId(profile),
-    timeLimit: 60,
+    timeLimit: writingTimeLimit,
+    task1Enabled: hasTask1,
+    task2Enabled: hasTask2,
     task1: {
       title: cleanString(task1Title).trim() || 'Writing Task 1',
       prompt: cleanString(task1Prompt),
@@ -412,17 +421,17 @@ export default function CreateWriting() {
       return
     }
 
-    if (!task1Prompt.trim()) {
+    if (hasTask1 && !task1Prompt.trim()) {
       alert('Please add Task 1 prompt.')
       return
     }
 
-    if (!task1Image) {
+    if (hasTask1 && !task1Image) {
       alert('Please upload Task 1 image.')
       return
     }
 
-    if (!task2Prompt.trim()) {
+    if (hasTask2 && !task2Prompt.trim()) {
       alert('Please add Task 2 prompt.')
       return
     }
@@ -436,7 +445,7 @@ export default function CreateWriting() {
 
     const payload = buildSafePayload()
 
-    if (!payload.task1.image.startsWith('data:image/')) {
+    if (hasTask1 && !payload.task1.image.startsWith('data:image/')) {
       alert('Task 1 image is not valid. Please remove it and upload the image again.')
       setSaving(false)
       return
@@ -486,7 +495,7 @@ export default function CreateWriting() {
         </h1>
 
         <p className="text-gray-500 mb-8">
-          IELTS Writing Task 1 + Task 2. Total time: 60 minutes.
+          Create Full Writing, Task 1 only or Task 2 only homework.
         </p>
 
         {saved && (
@@ -514,10 +523,16 @@ export default function CreateWriting() {
                   <label className="text-xs text-gray-400 mb-1 block">Content type</label>
                   <select value={contentType} onChange={e => setContentType(e.target.value)} className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white">
                     <option value="full_writing">Full Writing</option>
-                    <option value="task1_only">Task 1 Practice</option>
-                    <option value="task2_only">Task 2 Practice</option>
+                    <option value="task1_only">Task 1 Only</option>
+                    <option value="task2_only">Task 2 Only</option>
                   </select>
-                  <p className="text-xs text-gray-400 mt-1">This label is used for library filtering and organisation.</p>
+                  <p className="text-xs text-gray-400 mt-1">
+                    {contentType === 'task1_only'
+                      ? 'Students will only see and submit Task 1.'
+                      : contentType === 'task2_only'
+                        ? 'Students will only see and submit Task 2.'
+                        : 'Students will see and submit both Task 1 and Task 2.'}
+                  </p>
                 </div>
               </div>
 
@@ -546,8 +561,16 @@ export default function CreateWriting() {
                   className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400"
                 />
               </div>
+
+              <div className="mt-4 bg-purple-50 border border-purple-100 rounded-xl p-4">
+                <p className="text-xs text-purple-500 mb-1">Student timer</p>
+                <p className="text-sm font-semibold text-purple-700">
+                  {writingTimeLimit} minutes
+                </p>
+              </div>
             </div>
 
+            {hasTask1 && (
             <div className="bg-white border border-gray-100 rounded-2xl p-6">
               <div className="flex items-center justify-between mb-4">
                 <div>
@@ -634,6 +657,9 @@ export default function CreateWriting() {
               )}
             </div>
 
+            )}
+
+            {hasTask2 && (
             <div className="bg-white border border-gray-100 rounded-2xl p-6">
               <div className="flex items-center justify-between mb-4">
                 <div>
@@ -677,6 +703,8 @@ export default function CreateWriting() {
                 />
               </div>
             </div>
+            )}
+
           </div>
 
           <div className="bg-white border border-gray-100 rounded-2xl p-6 h-fit sticky top-6">
