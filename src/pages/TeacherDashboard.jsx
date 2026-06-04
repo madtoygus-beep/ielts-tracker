@@ -1034,6 +1034,67 @@ export default function TeacherDashboard() {
     setAssignmentDraft([])
   }
 
+  const removeHomeworkFromStudent = async (homework, type, student) => {
+    if (!homework || !student || !type) return
+
+    const typeLabel =
+      type === 'reading'
+        ? 'reading homework'
+        : type === 'listening'
+          ? 'listening homework'
+          : type === 'vocabulary'
+            ? 'vocabulary test'
+            : type === 'mock'
+              ? 'mock test'
+              : 'writing homework'
+
+    const confirmed = window.confirm(
+      `Remove "${homework.title || 'this homework'}" from ${student.name || student.email}?\n\nThis will only remove the ${typeLabel} from this student. Existing submissions, answers and results will stay saved.`
+    )
+
+    if (!confirmed) return
+
+    const collectionName =
+      type === 'reading'
+        ? 'readings'
+        : type === 'listening'
+          ? 'listenings'
+          : type === 'mock'
+            ? 'mockTests'
+            : type === 'vocabulary'
+              ? 'vocabularyTests'
+              : 'writingHomeworks'
+
+    const studentValues = getStudentAssignmentValues(student)
+    const normalizedStudentValues = new Set(
+      studentValues.map(normalizeAssignmentId)
+    )
+
+    const removeStudentValues = values =>
+      Array.isArray(values)
+        ? values.filter(value => !normalizedStudentValues.has(normalizeAssignmentId(value)))
+        : []
+
+    try {
+      await updateDoc(doc(db, collectionName, homework.id), {
+        assignTo: removeStudentValues(homework.assignTo),
+        assignedTo: removeStudentValues(homework.assignedTo),
+        studentIds: removeStudentValues(homework.studentIds),
+        assignedStudentIds: removeStudentValues(homework.assignedStudentIds),
+        assignedEmails: removeStudentValues(homework.assignedEmails),
+        hiddenFor: uniqueCleanValues([
+          ...(Array.isArray(homework.hiddenFor) ? homework.hiddenFor : []),
+          ...studentValues
+        ]),
+        updatedBy: user.uid,
+        updatedAt: new Date().toISOString()
+      })
+    } catch (error) {
+      console.error('Could not remove homework from student:', error)
+      alert('Could not remove homework from this student. Please check permissions and try again.')
+    }
+  }
+
   const archiveReadingHomework = async reading => {
     const ok = window.confirm(
       `"${reading.title}" will be archived and removed from students' homework list. Existing results will stay saved.`
@@ -4852,11 +4913,122 @@ Continue permanent delete?`
                                       >
                                         Review
                                       </button>
+
+                                      <button
+                                        onClick={() => removeHomeworkFromStudent(reading, 'reading', student)}
+                                        className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
+                                      >
+                                        Remove
+                                      </button>
                                     </div>
                                   ) : (
-                                    <span className="text-xs bg-amber-50 text-amber-600 px-3 py-1.5 rounded-full">
-                                      Not done
-                                    </span>
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-xs bg-amber-50 text-amber-600 px-3 py-1.5 rounded-full">
+                                        Not done
+                                      </span>
+
+                                      <button
+                                        onClick={() => removeHomeworkFromStudent(reading, 'reading', student)}
+                                        className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
+                                      >
+                                        Remove
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="mb-8">
+                      <h3 className="text-sm font-semibold text-gray-700 mb-3">
+                        Listening homework results
+                      </h3>
+
+                      {studentListenings.length === 0 ? (
+                        <p className="text-sm text-gray-400 bg-gray-50 rounded-xl p-4">
+                          No active listening homework assigned to this student.
+                        </p>
+                      ) : (
+                        <div className="flex flex-col gap-3">
+                          {studentListenings.map(listening => {
+                            const submission = getListeningSubmission(
+                              student.id,
+                              listening.id
+                            )
+
+                            return (
+                              <div
+                                key={listening.id}
+                                className="border border-gray-100 rounded-xl p-4 bg-gray-50"
+                              >
+                                <div className="flex items-center justify-between gap-3">
+                                  <div>
+                                    <p className="text-sm font-medium text-gray-800">
+                                      {listening.title}
+                                    </p>
+
+                                    <p className="text-xs text-gray-400">
+                                      {listening.questions?.length || 0} question sets · {listening.timeLimit || 30} min
+                                    </p>
+
+                                    {submission && (
+                                      <p className="text-xs text-green-600 mt-1 font-medium">
+                                        Submitted {formatDateShort(submission.submittedAt)}
+                                      </p>
+                                    )}
+                                  </div>
+
+                                  {submission ? (
+                                    <div className="flex items-center gap-3">
+                                      <div className="text-right">
+                                        <p className="text-xs text-gray-400">
+                                          Band
+                                        </p>
+
+                                        <p className="text-lg font-bold text-purple-600">
+                                          {submission.result?.band || '-'}
+                                        </p>
+                                      </div>
+
+                                      <div className="text-right">
+                                        <p className="text-xs text-gray-400">
+                                          Score
+                                        </p>
+
+                                        <p className="text-sm font-semibold text-gray-700">
+                                          {submission.result?.correct ?? 0}/
+                                          {submission.result?.total ?? 0}
+                                        </p>
+                                      </div>
+
+                                      <span className="text-xs bg-green-50 text-green-600 px-3 py-1.5 rounded-full">
+                                        Completed
+                                      </span>
+
+                                      <button
+                                        onClick={() => removeHomeworkFromStudent(listening, 'listening', student)}
+                                        className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
+                                      >
+                                        Remove
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-xs bg-amber-50 text-amber-600 px-3 py-1.5 rounded-full">
+                                        Not done
+                                      </span>
+
+                                      <button
+                                        onClick={() => removeHomeworkFromStudent(listening, 'listening', student)}
+                                        className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
+                                      >
+                                        Remove
+                                      </button>
+                                    </div>
                                   )}
                                 </div>
                               </div>
@@ -4944,11 +5116,27 @@ Continue permanent delete?`
                                       <span className="text-xs bg-green-50 text-green-600 px-3 py-1.5 rounded-full">
                                         Completed
                                       </span>
+
+                                      <button
+                                        onClick={() => removeHomeworkFromStudent(vocabularyTest, 'vocabulary', student)}
+                                        className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
+                                      >
+                                        Remove
+                                      </button>
                                     </div>
                                   ) : (
-                                    <span className="text-xs bg-amber-50 text-amber-600 px-3 py-1.5 rounded-full">
-                                      Not done
-                                    </span>
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-xs bg-amber-50 text-amber-600 px-3 py-1.5 rounded-full">
+                                        Not done
+                                      </span>
+
+                                      <button
+                                        onClick={() => removeHomeworkFromStudent(vocabularyTest, 'vocabulary', student)}
+                                        className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
+                                      >
+                                        Remove
+                                      </button>
+                                    </div>
                                   )}
                                 </div>
                               </div>
@@ -5048,11 +5236,27 @@ Continue permanent delete?`
                                       >
                                         {submission.reviewed ? 'Edit Review' : 'Grade'}
                                       </button>
+
+                                      <button
+                                        onClick={() => removeHomeworkFromStudent(writing, 'writing', student)}
+                                        className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
+                                      >
+                                        Remove
+                                      </button>
                                     </div>
                                   ) : (
-                                    <span className="text-xs bg-amber-50 text-amber-600 px-3 py-1.5 rounded-full">
-                                      Not done
-                                    </span>
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-xs bg-amber-50 text-amber-600 px-3 py-1.5 rounded-full">
+                                        Not done
+                                      </span>
+
+                                      <button
+                                        onClick={() => removeHomeworkFromStudent(writing, 'writing', student)}
+                                        className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
+                                      >
+                                        Remove
+                                      </button>
+                                    </div>
                                   )}
                                 </div>
                               </div>
