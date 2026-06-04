@@ -103,6 +103,7 @@ export default function TeacherDashboard() {
   const [newPassword, setNewPassword] = useState('')
   const [passwordMsg, setPasswordMsg] = useState('')
   const [activeTab, setActiveTab] = useState('overview')
+  const [analyticsStudentId, setAnalyticsStudentId] = useState('all')
 
   const navigate = useNavigate()
 
@@ -2283,6 +2284,266 @@ Continue permanent delete?`
       .filter(item => item.total > 0)
   }
 
+
+  const getStudentReadingSubmissions = studentId => {
+    const student = getStudentByAnyId(studentId)
+
+    return submissions
+      .filter(submission => submissionBelongsToStudent(submission, student))
+      .sort((a, b) => new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0))
+  }
+
+  const getAverageReadingEstimatedBandFromSubmissions = targetSubmissions => {
+    const bands = targetSubmissions
+      .map(submission => {
+        if (submission.result?.band) return Number(submission.result.band)
+        if (submission.result?.estimatedBand) return Number(submission.result.estimatedBand)
+
+        const result = getReadingSubmissionResult(submission)
+        return result?.estimatedBand
+      })
+      .filter(value => !Number.isNaN(value) && value > 0)
+
+    if (bands.length === 0) return null
+
+    const avg = bands.reduce((sum, value) => sum + value, 0) / bands.length
+    return (Math.round(avg * 10) / 10).toFixed(1)
+  }
+
+  const getReadingCompletionStatsForStudent = studentId => {
+    const assignedReadings = getStudentReadings(studentId)
+    const completed = assignedReadings.filter(reading =>
+      getSubmission(studentId, reading.id)
+    ).length
+
+    return {
+      assigned: assignedReadings.length,
+      completed,
+      rate: assignedReadings.length
+        ? Math.round((completed / assignedReadings.length) * 100)
+        : 0
+    }
+  }
+
+  const getReadingTypeAnalyticsForSubmissions = targetSubmissions => {
+    const stats = {
+      matching: { correct: 0, total: 0 },
+      sentenceEndings: { correct: 0, total: 0 },
+      summaryOptions: { correct: 0, total: 0 },
+      mcq: { correct: 0, total: 0 },
+      fitb: { correct: 0, total: 0 },
+      tfng: { correct: 0, total: 0 },
+      table: { correct: 0, total: 0 },
+      summary: { correct: 0, total: 0 },
+      note: { correct: 0, total: 0 },
+      noteCompletion: { correct: 0, total: 0 }
+    }
+
+    targetSubmissions.forEach(submission => {
+      const reading = readings.find(item => item.id === submission.readingId)
+      if (!reading) return
+
+      reading.questions?.forEach(question => {
+        if (question.type === 'matching') {
+          question.paragraphs?.forEach(paragraph => {
+            stats.matching.total++
+
+            if (isMatchingCorrect(submission, question, paragraph)) {
+              stats.matching.correct++
+            }
+          })
+
+          return
+        }
+
+        if (question.type === 'sentenceEndings') {
+          question.items?.forEach(item => {
+            stats.sentenceEndings.total++
+
+            if (isSentenceEndingCorrect(submission, question, item)) {
+              stats.sentenceEndings.correct++
+            }
+          })
+
+          return
+        }
+
+        if (question.type === 'summaryOptions') {
+          question.items?.forEach(item => {
+            stats.summaryOptions.total++
+
+            if (isSummaryOptionCorrect(submission, question, item)) {
+              stats.summaryOptions.correct++
+            }
+          })
+
+          return
+        }
+
+        if (question.type === 'noteCompletion') {
+          question.paragraphs?.forEach(paragraph => {
+            paragraph.parts?.forEach(part => {
+              if (part.type !== 'blank') return
+
+              stats.noteCompletion.total++
+
+              if (isNoteCompletionPartCorrect(submission, question, paragraph, part)) {
+                stats.noteCompletion.correct++
+              }
+            })
+          })
+
+          return
+        }
+
+        if (question.type === 'table' || question.type === 'summary' || question.type === 'note') {
+          const key = question.type === 'summary'
+            ? 'summary'
+            : question.type === 'note'
+              ? 'note'
+              : 'table'
+
+          question.rows?.forEach(row => {
+            row.cells?.forEach((cell, cellIndex) => {
+              if (cell.type === 'blank') {
+                stats[key].total++
+
+                if (isTableCellCorrect(submission, question, row, cellIndex)) {
+                  stats[key].correct++
+                }
+              }
+            })
+          })
+
+          return
+        }
+
+        if (!stats[question.type]) return
+
+        stats[question.type].total++
+
+        if (isNormalCorrect(submission, question)) {
+          stats[question.type].correct++
+        }
+      })
+    })
+
+    return Object.entries(stats)
+      .map(([key, value]) => ({
+        key,
+        correct: value.correct,
+        total: value.total,
+        percentage: value.total
+          ? Math.round((value.correct / value.total) * 100)
+          : null
+      }))
+      .filter(item => item.total > 0)
+  }
+
+  const getMostMissedReadingQuestionsForSubmissions = targetSubmissions => {
+    const stats = {}
+
+    targetSubmissions.forEach(submission => {
+      const reading = readings.find(item => item.id === submission.readingId)
+      if (!reading) return
+
+      reading.questions?.forEach((question, questionIndex) => {
+        const key = `${reading.title} — Q${questionIndex + 1}`
+
+        if (!stats[key]) {
+          stats[key] = {
+            label: key,
+            wrong: 0,
+            total: 0
+          }
+        }
+
+        if (question.type === 'matching') {
+          question.paragraphs?.forEach(paragraph => {
+            stats[key].total++
+
+            if (!isMatchingCorrect(submission, question, paragraph)) {
+              stats[key].wrong++
+            }
+          })
+
+          return
+        }
+
+        if (question.type === 'sentenceEndings') {
+          question.items?.forEach(item => {
+            stats[key].total++
+
+            if (!isSentenceEndingCorrect(submission, question, item)) {
+              stats[key].wrong++
+            }
+          })
+
+          return
+        }
+
+        if (question.type === 'summaryOptions') {
+          question.items?.forEach(item => {
+            stats[key].total++
+
+            if (!isSummaryOptionCorrect(submission, question, item)) {
+              stats[key].wrong++
+            }
+          })
+
+          return
+        }
+
+        if (question.type === 'noteCompletion') {
+          question.paragraphs?.forEach(paragraph => {
+            paragraph.parts?.forEach(part => {
+              if (part.type !== 'blank') return
+
+              stats[key].total++
+
+              if (!isNoteCompletionPartCorrect(submission, question, paragraph, part)) {
+                stats[key].wrong++
+              }
+            })
+          })
+
+          return
+        }
+
+        if (question.type === 'table' || question.type === 'summary' || question.type === 'note') {
+          question.rows?.forEach(row => {
+            row.cells?.forEach((cell, cellIndex) => {
+              if (cell.type === 'blank') {
+                stats[key].total++
+
+                if (!isTableCellCorrect(submission, question, row, cellIndex)) {
+                  stats[key].wrong++
+                }
+              }
+            })
+          })
+
+          return
+        }
+
+        stats[key].total++
+
+        if (!isNormalCorrect(submission, question)) {
+          stats[key].wrong++
+        }
+      })
+    })
+
+    return Object.values(stats)
+      .filter(item => item.total > 0)
+      .map(item => ({
+        ...item,
+        wrongRate: Math.round((item.wrong / item.total) * 100)
+      }))
+      .sort((a, b) => b.wrongRate - a.wrongRate)
+      .slice(0, 5)
+  }
+
   const getReadingTypeLabel = type => {
     if (type === 'matching') return 'Matching Headings'
     if (type === 'sentenceEndings') return 'Sentence Endings'
@@ -3479,6 +3740,27 @@ Continue permanent delete?`
   const mostMissedReadingQuestions = getMostMissedReadingQuestions()
   const atRiskReadingStudents = getAtRiskReadingStudents()
   const readingTypeAnalytics = getReadingTypeAnalytics()
+  const selectedAnalyticsStudent = analyticsStudentId === 'all'
+    ? null
+    : getStudentByAnyId(analyticsStudentId)
+  const selectedAnalyticsStudentSubmissions = selectedAnalyticsStudent
+    ? getStudentReadingSubmissions(selectedAnalyticsStudent.id)
+    : []
+  const selectedAnalyticsReadingStats = selectedAnalyticsStudent
+    ? getReadingCompletionStatsForStudent(selectedAnalyticsStudent.id)
+    : null
+  const selectedAnalyticsAverageBand = selectedAnalyticsStudent
+    ? getAverageReadingEstimatedBandFromSubmissions(selectedAnalyticsStudentSubmissions)
+    : null
+  const selectedAnalyticsReadingTypeAnalytics = selectedAnalyticsStudent
+    ? getReadingTypeAnalyticsForSubmissions(selectedAnalyticsStudentSubmissions)
+    : []
+  const selectedAnalyticsMostMissedQuestions = selectedAnalyticsStudent
+    ? getMostMissedReadingQuestionsForSubmissions(selectedAnalyticsStudentSubmissions)
+    : []
+  const selectedAnalyticsWeakestArea = selectedAnalyticsReadingTypeAnalytics
+    .filter(item => item.percentage !== null && item.percentage !== undefined)
+    .sort((a, b) => a.percentage - b.percentage)[0]
 
   const averageListeningBand = getAverageListeningBand()
   const listeningCompletionStats = getListeningCompletionStats()
@@ -3828,6 +4110,179 @@ Continue permanent delete?`
               )}
             </div>
           </div>
+        </div>
+
+        <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
+          <div className="flex items-start justify-between gap-4 mb-5">
+            <div>
+              <h2 className="font-semibold text-gray-800">
+                👤 Student Reading Analytics
+              </h2>
+
+              <p className="text-xs text-gray-400 mt-1">
+                Select a student to see individual reading accuracy, weak question types and missed questions.
+              </p>
+            </div>
+
+            <select
+              value={analyticsStudentId}
+              onChange={e => setAnalyticsStudentId(e.target.value)}
+              className="border border-gray-200 rounded-xl px-3 py-2 text-xs bg-white text-gray-600 outline-none focus:border-purple-400 min-w-[260px]"
+            >
+              <option value="all">Select student</option>
+              {students.map(student => (
+                <option key={student.id} value={student.id}>
+                  {student.name || student.email}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {!selectedAnalyticsStudent ? (
+            <div className="bg-gray-50 border border-gray-100 rounded-xl p-5 text-sm text-gray-400">
+              Choose a student from the list to view individual reading analytics.
+            </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                <div className="bg-gray-900 text-white rounded-2xl p-5">
+                  <p className="text-xs text-gray-400 mb-1">
+                    Student
+                  </p>
+
+                  <p className="text-lg font-bold truncate">
+                    {selectedAnalyticsStudent.name || selectedAnalyticsStudent.email}
+                  </p>
+
+                  <p className="text-xs text-gray-400 mt-2 truncate">
+                    {selectedAnalyticsStudent.email}
+                  </p>
+                </div>
+
+                <div className="bg-blue-50 rounded-2xl p-5">
+                  <p className="text-xs text-gray-500 mb-1">
+                    Reading Completion
+                  </p>
+
+                  <p className="text-3xl font-bold text-blue-600">
+                    {selectedAnalyticsReadingStats?.rate || 0}%
+                  </p>
+
+                  <p className="text-xs text-gray-500 mt-2">
+                    {selectedAnalyticsReadingStats?.completed || 0}/{selectedAnalyticsReadingStats?.assigned || 0} assigned reading completed
+                  </p>
+                </div>
+
+                <div className="bg-purple-50 rounded-2xl p-5">
+                  <p className="text-xs text-gray-500 mb-1">
+                    Average Estimate
+                  </p>
+
+                  <p className="text-3xl font-bold text-purple-600">
+                    {selectedAnalyticsAverageBand || '--'}
+                  </p>
+
+                  <p className="text-xs text-gray-500 mt-2">
+                    Based on this student's reading submissions
+                  </p>
+                </div>
+
+                <div className="bg-amber-50 rounded-2xl p-5">
+                  <p className="text-xs text-gray-500 mb-1">
+                    Weakest Area
+                  </p>
+
+                  <p className="text-lg font-bold text-amber-700 truncate">
+                    {selectedAnalyticsWeakestArea
+                      ? getReadingTypeLabel(selectedAnalyticsWeakestArea.key)
+                      : '--'}
+                  </p>
+
+                  <p className="text-xs text-gray-500 mt-2">
+                    {selectedAnalyticsWeakestArea
+                      ? `${selectedAnalyticsWeakestArea.percentage}% accuracy`
+                      : 'No enough data yet'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div className="bg-gray-50 rounded-2xl p-5">
+                  <h3 className="text-sm font-semibold text-gray-700 mb-3">
+                    Student Accuracy by Question Type
+                  </h3>
+
+                  {selectedAnalyticsReadingTypeAnalytics.length === 0 ? (
+                    <p className="text-sm text-gray-400">
+                      No completed reading homework yet.
+                    </p>
+                  ) : (
+                    <div className="flex flex-col gap-3">
+                      {selectedAnalyticsReadingTypeAnalytics.map(item => (
+                        <div key={item.key}>
+                          <div className="flex justify-between mb-1">
+                            <p className="text-xs text-gray-500">
+                              {getReadingTypeLabel(item.key)}
+                            </p>
+
+                            <p className={`text-xs font-semibold ${getAnalyticsColor(item.percentage)}`}>
+                              {item.percentage === null ? '--' : `${item.percentage}%`}
+                            </p>
+                          </div>
+
+                          <div className="w-full bg-white rounded-full h-2 overflow-hidden">
+                            <div
+                              className="bg-purple-600 h-2 rounded-full"
+                              style={{ width: `${item.percentage || 0}%` }}
+                            />
+                          </div>
+
+                          <p className="text-[10px] text-gray-400 mt-1">
+                            {item.correct}/{item.total} correct
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="bg-gray-50 rounded-2xl p-5">
+                  <h3 className="text-sm font-semibold text-gray-700 mb-3">
+                    Student Most Missed Questions
+                  </h3>
+
+                  {selectedAnalyticsMostMissedQuestions.length === 0 ? (
+                    <p className="text-sm text-gray-400">
+                      No missed-question data yet.
+                    </p>
+                  ) : (
+                    <div className="flex flex-col gap-2">
+                      {selectedAnalyticsMostMissedQuestions.map(item => (
+                        <div
+                          key={item.label}
+                          className="bg-white rounded-xl p-3 flex items-center justify-between gap-3"
+                        >
+                          <div className="min-w-0">
+                            <p className="text-xs font-medium text-gray-700 truncate">
+                              {item.label}
+                            </p>
+
+                            <p className="text-[10px] text-gray-400">
+                              {item.wrong}/{item.total} wrong
+                            </p>
+                          </div>
+
+                          <span className="text-xs bg-red-50 text-red-600 px-2 py-1 rounded-full font-semibold">
+                            {item.wrongRate}%
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
         </div>
 
 
