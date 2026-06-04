@@ -2658,6 +2658,53 @@ Continue permanent delete?`
     }
   }
 
+
+  const getWritingMode = (writing, submission = {}) =>
+    submission?.contentType ||
+    submission?.writingMode ||
+    writing?.contentType ||
+    writing?.writingMode ||
+    'full_writing'
+
+  const isWritingTask1Enabled = (writing, submission = {}) => {
+    if (submission?.task1Enabled === true) return true
+    if (submission?.task1Enabled === false) return false
+
+    return getWritingMode(writing, submission) !== 'task2_only'
+  }
+
+  const isWritingTask2Enabled = (writing, submission = {}) => {
+    if (submission?.task2Enabled === true) return true
+    if (submission?.task2Enabled === false) return false
+
+    return getWritingMode(writing, submission) !== 'task1_only'
+  }
+
+  const getWritingTaskLabel = (writing, submission = {}) => {
+    const task1Enabled = isWritingTask1Enabled(writing, submission)
+    const task2Enabled = isWritingTask2Enabled(writing, submission)
+
+    if (task1Enabled && task2Enabled) return 'Task 1 + Task 2'
+    if (task1Enabled) return 'Task 1 Only'
+    if (task2Enabled) return 'Task 2 Only'
+
+    return 'Writing'
+  }
+
+  const getWritingSubmissionWordSummary = (writing, submission = {}) => {
+    const parts = []
+
+    if (isWritingTask1Enabled(writing, submission)) {
+      parts.push(`Task 1: ${submission.task1WordCount || 0} words`)
+    }
+
+    if (isWritingTask2Enabled(writing, submission)) {
+      parts.push(`Task 2: ${submission.task2WordCount || 0} words`)
+    }
+
+    return parts.join(' · ') || 'No answer'
+  }
+
   const openWritingReview = ({ student, writing, submission }) => {
     setSelectedMockWritingReview(null)
     setSelectedWritingReview({ student, writing, submission })
@@ -2722,30 +2769,58 @@ Continue permanent delete?`
     return roundToHalf(avg)
   }
 
-  const suggestedTask1Band = averageBand([
-    writingReviewForm.task1TA,
-    writingReviewForm.task1CC,
-    writingReviewForm.task1LR,
-    writingReviewForm.task1GRA
-  ])
+  const currentNormalWritingReviewTask1Enabled = selectedWritingReview
+    ? isWritingTask1Enabled(selectedWritingReview.writing, selectedWritingReview.submission)
+    : true
 
-  const suggestedTask2Band = averageBand([
-    writingReviewForm.task2TR,
-    writingReviewForm.task2CC,
-    writingReviewForm.task2LR,
-    writingReviewForm.task2GRA
-  ])
+  const currentNormalWritingReviewTask2Enabled = selectedWritingReview
+    ? isWritingTask2Enabled(selectedWritingReview.writing, selectedWritingReview.submission)
+    : true
+
+  const currentWritingReviewTask1Enabled = selectedMockWritingReview
+    ? true
+    : currentNormalWritingReviewTask1Enabled
+
+  const currentWritingReviewTask2Enabled = selectedMockWritingReview
+    ? true
+    : currentNormalWritingReviewTask2Enabled
+
+  const suggestedTask1Band = currentWritingReviewTask1Enabled
+    ? averageBand([
+        writingReviewForm.task1TA,
+        writingReviewForm.task1CC,
+        writingReviewForm.task1LR,
+        writingReviewForm.task1GRA
+      ])
+    : ''
+
+  const suggestedTask2Band = currentWritingReviewTask2Enabled
+    ? averageBand([
+        writingReviewForm.task2TR,
+        writingReviewForm.task2CC,
+        writingReviewForm.task2LR,
+        writingReviewForm.task2GRA
+      ])
+    : ''
 
   const suggestedOverallBand = averageBand([
-    writingReviewForm.task1Band || suggestedTask1Band,
-    writingReviewForm.task2Band || suggestedTask2Band
+    currentWritingReviewTask1Enabled
+      ? writingReviewForm.task1Band || suggestedTask1Band
+      : '',
+    currentWritingReviewTask2Enabled
+      ? writingReviewForm.task2Band || suggestedTask2Band
+      : ''
   ])
 
   const useSuggestedBands = () => {
     setWritingReviewForm(prev => ({
       ...prev,
-      task1Band: prev.task1Band || suggestedTask1Band,
-      task2Band: prev.task2Band || suggestedTask2Band,
+      task1Band: currentWritingReviewTask1Enabled
+        ? prev.task1Band || suggestedTask1Band
+        : prev.task1Band,
+      task2Band: currentWritingReviewTask2Enabled
+        ? prev.task2Band || suggestedTask2Band
+        : prev.task2Band,
       overall: suggestedOverallBand || prev.overall
     }))
   }
@@ -2770,24 +2845,30 @@ Continue permanent delete?`
   }
 
   const buildWritingReviewPayload = () => ({
-    task1Band: writingReviewForm.task1Band,
-    task2Band: writingReviewForm.task2Band,
+    task1Enabled: currentWritingReviewTask1Enabled,
+    task2Enabled: currentWritingReviewTask2Enabled,
+    task1Band: currentWritingReviewTask1Enabled ? writingReviewForm.task1Band : '',
+    task2Band: currentWritingReviewTask2Enabled ? writingReviewForm.task2Band : '',
     rubric: {
-      task1: {
-        taskAchievement: writingReviewForm.task1TA,
-        coherenceCohesion: writingReviewForm.task1CC,
-        lexicalResource: writingReviewForm.task1LR,
-        grammarRangeAccuracy: writingReviewForm.task1GRA
-      },
-      task2: {
-        taskResponse: writingReviewForm.task2TR,
-        coherenceCohesion: writingReviewForm.task2CC,
-        lexicalResource: writingReviewForm.task2LR,
-        grammarRangeAccuracy: writingReviewForm.task2GRA
-      }
+      task1: currentWritingReviewTask1Enabled
+        ? {
+            taskAchievement: writingReviewForm.task1TA,
+            coherenceCohesion: writingReviewForm.task1CC,
+            lexicalResource: writingReviewForm.task1LR,
+            grammarRangeAccuracy: writingReviewForm.task1GRA
+          }
+        : {},
+      task2: currentWritingReviewTask2Enabled
+        ? {
+            taskResponse: writingReviewForm.task2TR,
+            coherenceCohesion: writingReviewForm.task2CC,
+            lexicalResource: writingReviewForm.task2LR,
+            grammarRangeAccuracy: writingReviewForm.task2GRA
+          }
+        : {}
     },
-    task1Feedback: writingReviewForm.task1Feedback,
-    task2Feedback: writingReviewForm.task2Feedback,
+    task1Feedback: currentWritingReviewTask1Enabled ? writingReviewForm.task1Feedback : '',
+    task2Feedback: currentWritingReviewTask2Enabled ? writingReviewForm.task2Feedback : '',
     overall: writingReviewForm.overall,
     generalFeedback: writingReviewForm.generalFeedback
   })
@@ -3983,7 +4064,7 @@ Continue permanent delete?`
                     </p>
 
                     <p className="text-xs text-gray-400 mt-1">
-                      Task 1: {item.submission.task1WordCount || 0} words · Task 2: {item.submission.task2WordCount || 0} words
+                      {getWritingSubmissionWordSummary(item.writing, item.submission)}
                     </p>
                   </div>
 
@@ -4103,7 +4184,7 @@ Continue permanent delete?`
                     </p>
 
                     <p className="text-xs text-gray-400 mt-1">
-                      Overall Band {item.submission.review?.overall || '-'} · Task 1 {item.submission.review?.task1Band || '-'} · Task 2 {item.submission.review?.task2Band || '-'}
+                      {getWritingTaskLabel(item.writing, item.submission)} · Overall Band {item.submission.review?.overall || '-'}
                     </p>
                   </div>
 
@@ -5180,7 +5261,7 @@ Continue permanent delete?`
                                     </p>
 
                                     <p className="text-xs text-gray-400">
-                                      Task 1 + Task 2 · {writing.timeLimit || 60} min
+                                      {getWritingTaskLabel(writing, submission || {})} · {writing.timeLimit || 60} min
                                     </p>
 
                                     {submission && (
@@ -5200,25 +5281,29 @@ Continue permanent delete?`
 
                                   {submission ? (
                                     <div className="flex items-center gap-3">
-                                      <div className="text-right">
-                                        <p className="text-xs text-gray-400">
-                                          Task 1
-                                        </p>
+                                      {isWritingTask1Enabled(writing, submission) && (
+                                        <div className="text-right">
+                                          <p className="text-xs text-gray-400">
+                                            Task 1
+                                          </p>
 
-                                        <p className="text-sm font-semibold text-gray-700">
-                                          {submission.task1WordCount || 0} words
-                                        </p>
-                                      </div>
+                                          <p className="text-sm font-semibold text-gray-700">
+                                            {submission.task1WordCount || 0} words
+                                          </p>
+                                        </div>
+                                      )}
 
-                                      <div className="text-right">
-                                        <p className="text-xs text-gray-400">
-                                          Task 2
-                                        </p>
+                                      {isWritingTask2Enabled(writing, submission) && (
+                                        <div className="text-right">
+                                          <p className="text-xs text-gray-400">
+                                            Task 2
+                                          </p>
 
-                                        <p className="text-sm font-semibold text-gray-700">
-                                          {submission.task2WordCount || 0} words
-                                        </p>
-                                      </div>
+                                          <p className="text-sm font-semibold text-gray-700">
+                                            {submission.task2WordCount || 0} words
+                                          </p>
+                                        </div>
+                                      )}
 
                                       <button
                                         onClick={() =>
@@ -6146,6 +6231,18 @@ Continue permanent delete?`
           ? getMockTask2WordCount(reviewTarget.submission)
           : reviewTarget.submission.task2WordCount
 
+        const task1Enabled = isMockReview
+          ? true
+          : isWritingTask1Enabled(reviewTarget.writing, reviewTarget.submission)
+
+        const task2Enabled = isMockReview
+          ? true
+          : isWritingTask2Enabled(reviewTarget.writing, reviewTarget.submission)
+
+        const reviewTaskLabel = isMockReview
+          ? 'Task 1 + Task 2'
+          : getWritingTaskLabel(reviewTarget.writing, reviewTarget.submission)
+
         return (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center px-4">
           <div className="bg-white rounded-2xl w-full max-w-6xl max-h-[90vh] overflow-y-auto p-6">
@@ -6173,61 +6270,72 @@ Continue permanent delete?`
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <div className="space-y-6">
-                <div className="border border-gray-100 rounded-2xl p-5">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="font-semibold text-gray-800">
-                      Task 1 Answer
-                    </h3>
-
-                    <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1 rounded-full">
-                      {task1WordCount || 0} words
-                    </span>
-                  </div>
-
-                  <p className="text-xs text-gray-400 mb-3">
-                    Prompt:
-                  </p>
-
-                  <p className="text-sm text-gray-700 leading-7 whitespace-pre-wrap mb-4 bg-gray-50 rounded-xl p-4">
-                    {task1Prompt}
-                  </p>
-
-                  {task1Image && (
-                    <img
-                      src={task1Image}
-                      alt="Task 1"
-                      className="w-full max-h-[320px] object-contain bg-gray-50 rounded-xl border border-gray-100 mb-4"
-                    />
-                  )}
-
-                  <p className="text-sm text-gray-800 leading-7 whitespace-pre-wrap">
-                    {task1Answer}
+                <div className="bg-purple-50 border border-purple-100 rounded-2xl p-4">
+                  <p className="text-xs text-purple-500 mb-1">Writing type</p>
+                  <p className="text-sm font-semibold text-purple-800">
+                    {reviewTaskLabel}
                   </p>
                 </div>
 
-                <div className="border border-gray-100 rounded-2xl p-5">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="font-semibold text-gray-800">
-                      Task 2 Answer
-                    </h3>
+                {task1Enabled && (
+                  <div className="border border-gray-100 rounded-2xl p-5">
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="font-semibold text-gray-800">
+                        Task 1 Answer
+                      </h3>
 
-                    <span className="text-xs bg-indigo-50 text-indigo-600 px-3 py-1 rounded-full">
-                      {task2WordCount || 0} words
-                    </span>
+                      <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1 rounded-full">
+                        {task1WordCount || 0} words
+                      </span>
+                    </div>
+
+                    <p className="text-xs text-gray-400 mb-3">
+                      Prompt:
+                    </p>
+
+                    <p className="text-sm text-gray-700 leading-7 whitespace-pre-wrap mb-4 bg-gray-50 rounded-xl p-4">
+                      {task1Prompt || 'No Task 1 prompt'}
+                    </p>
+
+                    {task1Image && (
+                      <img
+                        src={task1Image}
+                        alt="Task 1"
+                        className="w-full max-h-[320px] object-contain bg-gray-50 rounded-xl border border-gray-100 mb-4"
+                      />
+                    )}
+
+                    <p className="text-sm text-gray-800 leading-7 whitespace-pre-wrap">
+                      {task1Answer || 'No Task 1 answer'}
+                    </p>
                   </div>
+                )}
 
-                  <p className="text-xs text-gray-400 mb-3">
-                    Prompt:
-                  </p>
+                {task2Enabled && (
+                  <div className="border border-gray-100 rounded-2xl p-5">
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="font-semibold text-gray-800">
+                        Task 2 Answer
+                      </h3>
 
-                  <p className="text-sm text-gray-700 leading-7 whitespace-pre-wrap mb-4 bg-gray-50 rounded-xl p-4">
-                    {task2Prompt}
-                  </p>
+                      <span className="text-xs bg-indigo-50 text-indigo-600 px-3 py-1 rounded-full">
+                        {task2WordCount || 0} words
+                      </span>
+                    </div>
 
-                  <p className="text-sm text-gray-800 leading-7 whitespace-pre-wrap">
-                    {task2Answer}
-                  </p>
-                </div>
+                    <p className="text-xs text-gray-400 mb-3">
+                      Prompt:
+                    </p>
+
+                    <p className="text-sm text-gray-700 leading-7 whitespace-pre-wrap mb-4 bg-gray-50 rounded-xl p-4">
+                      {task2Prompt || 'No Task 2 prompt'}
+                    </p>
+
+                    <p className="text-sm text-gray-800 leading-7 whitespace-pre-wrap">
+                      {task2Answer || 'No Task 2 answer'}
+                    </p>
+                  </div>
+                )}
               </div>
 
               <div className="border border-gray-100 rounded-2xl p-5 h-fit sticky top-5">
@@ -6260,157 +6368,169 @@ Continue permanent delete?`
                     </button>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="bg-white rounded-xl p-3">
-                      <p className="text-xs text-gray-400 mb-1">
-                        Suggested Task 1
-                      </p>
+                  <div className={`grid gap-3 ${task1Enabled && task2Enabled ? 'grid-cols-2' : 'grid-cols-1'}`}>
+                    {task1Enabled && (
+                      <div className="bg-white rounded-xl p-3">
+                        <p className="text-xs text-gray-400 mb-1">
+                          Suggested Task 1
+                        </p>
 
-                      <p className="text-lg font-bold text-purple-600">
-                        {suggestedTask1Band || '--'}
-                      </p>
+                        <p className="text-lg font-bold text-purple-600">
+                          {suggestedTask1Band || '--'}
+                        </p>
+                      </div>
+                    )}
+
+                    {task2Enabled && (
+                      <div className="bg-white rounded-xl p-3">
+                        <p className="text-xs text-gray-400 mb-1">
+                          Suggested Task 2
+                        </p>
+
+                        <p className="text-lg font-bold text-indigo-600">
+                          {suggestedTask2Band || '--'}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {task1Enabled && (
+                  <div className="border border-gray-100 rounded-2xl p-4 mb-5">
+                    <div className="flex items-center justify-between mb-3">
+                      <h4 className="font-semibold text-gray-800">
+                        Task 1 Rubric
+                      </h4>
+
+                      <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1 rounded-full">
+                        Academic Task 1
+                      </span>
                     </div>
 
-                    <div className="bg-white rounded-xl p-3">
-                      <p className="text-xs text-gray-400 mb-1">
-                        Suggested Task 2
-                      </p>
+                    <div className="grid grid-cols-2 gap-3">
+                      {[
+                        ['task1TA', 'Task Achievement'],
+                        ['task1CC', 'Coherence & Cohesion'],
+                        ['task1LR', 'Lexical Resource'],
+                        ['task1GRA', 'Grammar Range & Accuracy']
+                      ].map(([key, label]) => (
+                        <div key={key}>
+                          <label className="text-xs text-gray-400 block mb-1">
+                            {label}
+                          </label>
 
-                      <p className="text-lg font-bold text-indigo-600">
-                        {suggestedTask2Band || '--'}
-                      </p>
+                          <input
+                            type="number"
+                            min="0"
+                            max="9"
+                            step="0.5"
+                            value={writingReviewForm[key]}
+                            onChange={e =>
+                              setWritingReviewForm(prev => ({
+                                ...prev,
+                                [key]: e.target.value
+                              }))
+                            }
+                            className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400"
+                          />
+                        </div>
+                      ))}
                     </div>
                   </div>
-                </div>
+                )}
 
-                <div className="border border-gray-100 rounded-2xl p-4 mb-5">
-                  <div className="flex items-center justify-between mb-3">
-                    <h4 className="font-semibold text-gray-800">
-                      Task 1 Rubric
-                    </h4>
+                {task2Enabled && (
+                  <div className="border border-gray-100 rounded-2xl p-4 mb-5">
+                    <div className="flex items-center justify-between mb-3">
+                      <h4 className="font-semibold text-gray-800">
+                        Task 2 Rubric
+                      </h4>
 
-                    <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1 rounded-full">
-                      Academic Task 1
-                    </span>
+                      <span className="text-xs bg-indigo-50 text-indigo-600 px-3 py-1 rounded-full">
+                        Essay
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      {[
+                        ['task2TR', 'Task Response'],
+                        ['task2CC', 'Coherence & Cohesion'],
+                        ['task2LR', 'Lexical Resource'],
+                        ['task2GRA', 'Grammar Range & Accuracy']
+                      ].map(([key, label]) => (
+                        <div key={key}>
+                          <label className="text-xs text-gray-400 block mb-1">
+                            {label}
+                          </label>
+
+                          <input
+                            type="number"
+                            min="0"
+                            max="9"
+                            step="0.5"
+                            value={writingReviewForm[key]}
+                            onChange={e =>
+                              setWritingReviewForm(prev => ({
+                                ...prev,
+                                [key]: e.target.value
+                              }))
+                            }
+                            className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400"
+                          />
+                        </div>
+                      ))}
+                    </div>
                   </div>
+                )}
 
-                  <div className="grid grid-cols-2 gap-3">
-                    {[
-                      ['task1TA', 'Task Achievement'],
-                      ['task1CC', 'Coherence & Cohesion'],
-                      ['task1LR', 'Lexical Resource'],
-                      ['task1GRA', 'Grammar Range & Accuracy']
-                    ].map(([key, label]) => (
-                      <div key={key}>
-                        <label className="text-xs text-gray-400 block mb-1">
-                          {label}
-                        </label>
+                <div className={`grid gap-3 mb-5 ${task1Enabled && task2Enabled ? 'grid-cols-3' : 'grid-cols-2'}`}>
+                  {task1Enabled && (
+                    <div>
+                      <label className="text-xs text-gray-400 block mb-1">
+                        Task 1 Band
+                      </label>
 
-                        <input
-                          type="number"
-                          min="0"
-                          max="9"
-                          step="0.5"
-                          value={writingReviewForm[key]}
-                          onChange={e =>
-                            setWritingReviewForm(prev => ({
-                              ...prev,
-                              [key]: e.target.value
-                            }))
-                          }
-                          className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400"
-                        />
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                      <input
+                        type="number"
+                        min="0"
+                        max="9"
+                        step="0.5"
+                        value={writingReviewForm.task1Band}
+                        onChange={e =>
+                          setWritingReviewForm(prev => ({
+                            ...prev,
+                            task1Band: e.target.value
+                          }))
+                        }
+                        placeholder={suggestedTask1Band || ''}
+                        className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400"
+                      />
+                    </div>
+                  )}
 
-                <div className="border border-gray-100 rounded-2xl p-4 mb-5">
-                  <div className="flex items-center justify-between mb-3">
-                    <h4 className="font-semibold text-gray-800">
-                      Task 2 Rubric
-                    </h4>
+                  {task2Enabled && (
+                    <div>
+                      <label className="text-xs text-gray-400 block mb-1">
+                        Task 2 Band
+                      </label>
 
-                    <span className="text-xs bg-indigo-50 text-indigo-600 px-3 py-1 rounded-full">
-                      Essay
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    {[
-                      ['task2TR', 'Task Response'],
-                      ['task2CC', 'Coherence & Cohesion'],
-                      ['task2LR', 'Lexical Resource'],
-                      ['task2GRA', 'Grammar Range & Accuracy']
-                    ].map(([key, label]) => (
-                      <div key={key}>
-                        <label className="text-xs text-gray-400 block mb-1">
-                          {label}
-                        </label>
-
-                        <input
-                          type="number"
-                          min="0"
-                          max="9"
-                          step="0.5"
-                          value={writingReviewForm[key]}
-                          onChange={e =>
-                            setWritingReviewForm(prev => ({
-                              ...prev,
-                              [key]: e.target.value
-                            }))
-                          }
-                          className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400"
-                        />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-3 gap-3 mb-5">
-                  <div>
-                    <label className="text-xs text-gray-400 block mb-1">
-                      Task 1 Band
-                    </label>
-
-                    <input
-                      type="number"
-                      min="0"
-                      max="9"
-                      step="0.5"
-                      value={writingReviewForm.task1Band}
-                      onChange={e =>
-                        setWritingReviewForm(prev => ({
-                          ...prev,
-                          task1Band: e.target.value
-                        }))
-                      }
-                      placeholder={suggestedTask1Band || ''}
-                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-xs text-gray-400 block mb-1">
-                      Task 2 Band
-                    </label>
-
-                    <input
-                      type="number"
-                      min="0"
-                      max="9"
-                      step="0.5"
-                      value={writingReviewForm.task2Band}
-                      onChange={e =>
-                        setWritingReviewForm(prev => ({
-                          ...prev,
-                          task2Band: e.target.value
-                        }))
-                      }
-                      placeholder={suggestedTask2Band || ''}
-                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400"
-                    />
-                  </div>
+                      <input
+                        type="number"
+                        min="0"
+                        max="9"
+                        step="0.5"
+                        value={writingReviewForm.task2Band}
+                        onChange={e =>
+                          setWritingReviewForm(prev => ({
+                            ...prev,
+                            task2Band: e.target.value
+                          }))
+                        }
+                        placeholder={suggestedTask2Band || ''}
+                        className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400"
+                      />
+                    </div>
+                  )}
 
                   <div>
                     <label className="text-xs text-gray-400 block mb-1">
@@ -6435,43 +6555,47 @@ Continue permanent delete?`
                   </div>
                 </div>
 
-                <div className="mb-4">
-                  <label className="text-xs text-gray-400 block mb-1">
-                    Task 1 Feedback
-                  </label>
+                {task1Enabled && (
+                  <div className="mb-4">
+                    <label className="text-xs text-gray-400 block mb-1">
+                      Task 1 Feedback
+                    </label>
 
-                  <textarea
-                    rows={4}
-                    value={writingReviewForm.task1Feedback}
-                    onChange={e =>
-                      setWritingReviewForm(prev => ({
-                        ...prev,
-                        task1Feedback: e.target.value
-                      }))
-                    }
-                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 resize-none"
-                    placeholder="Comment on Task 1..."
-                  />
-                </div>
+                    <textarea
+                      rows={4}
+                      value={writingReviewForm.task1Feedback}
+                      onChange={e =>
+                        setWritingReviewForm(prev => ({
+                          ...prev,
+                          task1Feedback: e.target.value
+                        }))
+                      }
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 resize-none"
+                      placeholder="Comment on Task 1..."
+                    />
+                  </div>
+                )}
 
-                <div className="mb-4">
-                  <label className="text-xs text-gray-400 block mb-1">
-                    Task 2 Feedback
-                  </label>
+                {task2Enabled && (
+                  <div className="mb-4">
+                    <label className="text-xs text-gray-400 block mb-1">
+                      Task 2 Feedback
+                    </label>
 
-                  <textarea
-                    rows={4}
-                    value={writingReviewForm.task2Feedback}
-                    onChange={e =>
-                      setWritingReviewForm(prev => ({
-                        ...prev,
-                        task2Feedback: e.target.value
-                      }))
-                    }
-                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 resize-none"
-                    placeholder="Comment on Task 2..."
-                  />
-                </div>
+                    <textarea
+                      rows={4}
+                      value={writingReviewForm.task2Feedback}
+                      onChange={e =>
+                        setWritingReviewForm(prev => ({
+                          ...prev,
+                          task2Feedback: e.target.value
+                        }))
+                      }
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 resize-none"
+                      placeholder="Comment on Task 2..."
+                    />
+                  </div>
+                )}
 
                 <div className="mb-5">
                   <label className="text-xs text-gray-400 block mb-1">
