@@ -8,10 +8,8 @@ import {
   onSnapshot,
   doc,
   updateDoc,
-  deleteDoc,
   getDoc,
-  arrayUnion,
-  arrayRemove
+  arrayUnion
 } from 'firebase/firestore'
 import { onAuthStateChanged } from 'firebase/auth'
 import { useNavigate } from 'react-router-dom'
@@ -265,7 +263,6 @@ export default function ManageClasses() {
       }
 
       const previousStudentIds = editingClass?.studentIds || []
-      const removedStudentIds = previousStudentIds.filter(id => !formStudentIds.includes(id))
       const addedStudentIds = formStudentIds.filter(id => !previousStudentIds.includes(id))
 
       if (editingClass) {
@@ -302,15 +299,9 @@ export default function ManageClasses() {
         })
       }
 
-      if (editingClass && editingClass.teacherId === teacherId) {
-        for (const studentId of removedStudentIds) {
-          await updateDoc(doc(db, 'users', studentId), {
-            teacherIds: arrayRemove(teacherId),
-            updatedAt: now
-          })
-        }
-      }
-
+      // Removing a student from a class should only remove them from that class.
+      // It must not remove teacherIds from the student profile, because the same
+      // student may still belong to another class or still be assigned to this teacher.
       closeModal()
     } catch (error) {
       console.error(error)
@@ -320,29 +311,32 @@ export default function ManageClasses() {
     }
   }
 
-  const handleDelete = async classItem => {
+  const isSystemClass = classItem =>
+    (classItem.name || '').trim().toLowerCase() === 'all' ||
+    classItem.system === true ||
+    classItem.isSystem === true
+
+  const handleArchiveClass = async classItem => {
+    if (isSystemClass(classItem)) {
+      alert('The ALL class is a system group and cannot be deleted.')
+      return
+    }
+
     const confirmed = window.confirm(
-      `Delete class "${classItem.name}"?\n\nThis will only remove the class group. Students themselves and their existing homework assignments will not be affected.`
+      `Archive class "${classItem.name}"?\n\nThis will only hide the class group from Manage Classes. Students, homework assignments and existing results will not be deleted.`
     )
 
     if (!confirmed) return
 
     try {
-      const teacherId = classItem.teacherId || classItem.createdBy || ''
-
-      if (teacherId) {
-        for (const studentId of classItem.studentIds || []) {
-          await updateDoc(doc(db, 'users', studentId), {
-            teacherIds: arrayRemove(teacherId),
-            updatedAt: new Date().toISOString()
-          })
-        }
-      }
-
-      await deleteDoc(doc(db, 'classes', classItem.id))
+      await updateDoc(doc(db, 'classes', classItem.id), {
+        archived: true,
+        updatedBy: user.uid,
+        updatedAt: new Date().toISOString()
+      })
     } catch (error) {
-      console.error(error)
-      alert('Could not delete class.')
+      console.error('Could not archive class:', error)
+      alert(`Could not archive class. ${error?.message || 'Please try again.'}`)
     }
   }
 
@@ -490,12 +484,14 @@ export default function ManageClasses() {
                     >
                       Edit
                     </button>
-                    <button
-                      onClick={() => handleDelete(classItem)}
-                      className="bg-red-50 text-red-600 rounded-xl px-3 py-2 text-xs font-medium hover:bg-red-100"
-                    >
-                      Delete
-                    </button>
+                    {!isSystemClass(classItem) && (
+                      <button
+                        onClick={() => handleArchiveClass(classItem)}
+                        className="bg-red-50 text-red-600 rounded-xl px-3 py-2 text-xs font-medium hover:bg-red-100"
+                      >
+                        Archive
+                      </button>
+                    )}
                   </div>
                 </div>
               )
@@ -619,8 +615,12 @@ export default function ManageClasses() {
                   value={formSearch}
                   onChange={e => setFormSearch(e.target.value)}
                   placeholder="Search students by name or email..."
-                  className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-purple-400 mb-3"
+                  className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-purple-400 mb-2"
                 />
+
+                <p className="text-[11px] text-gray-400 mb-3">
+                  To move a student, remove them from this class, save, then add them to the other class. This will not delete the student or their homework history.
+                </p>
 
                 {students.length === 0 ? (
                   <p className="text-sm text-gray-400 text-center py-6 bg-gray-50 rounded-xl">
