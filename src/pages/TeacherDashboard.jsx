@@ -2544,6 +2544,300 @@ Continue permanent delete?`
       .slice(0, 5)
   }
 
+
+  const getStudentListeningSubmissions = studentId => {
+    const student = getStudentByAnyId(studentId)
+
+    return listeningSubmissions
+      .filter(submission => submissionBelongsToStudent(submission, student))
+      .sort((a, b) => new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0))
+  }
+
+  const getListeningCompletionStatsForStudent = studentId => {
+    const assignedListenings = getStudentListenings(studentId)
+    const completed = assignedListenings.filter(listening =>
+      getListeningSubmission(studentId, listening.id)
+    ).length
+
+    return {
+      assigned: assignedListenings.length,
+      completed,
+      rate: assignedListenings.length
+        ? Math.round((completed / assignedListenings.length) * 100)
+        : 0
+    }
+  }
+
+  const getAverageListeningBandFromSubmissions = targetSubmissions => {
+    const bands = targetSubmissions
+      .map(submission => Number(submission.result?.band))
+      .filter(value => !Number.isNaN(value) && value > 0)
+
+    if (bands.length === 0) return null
+
+    const avg = bands.reduce((sum, value) => sum + value, 0) / bands.length
+    return (Math.round(avg * 10) / 10).toFixed(1)
+  }
+
+  const getListeningTypeAnalyticsForSubmissions = targetSubmissions => {
+    const stats = {
+      mcq: { correct: 0, total: 0 },
+      fitb: { correct: 0, total: 0 },
+      tfng: { correct: 0, total: 0 },
+      table: { correct: 0, total: 0 },
+      note: { correct: 0, total: 0 },
+      listeningCompletion: { correct: 0, total: 0 },
+      listeningMatching: { correct: 0, total: 0 }
+    }
+
+    targetSubmissions.forEach(submission => {
+      const listening = listenings.find(item => item.id === submission.listeningId)
+      if (!listening) return
+
+      listening.questions?.forEach(question => {
+        if (question.type === 'matching' && Array.isArray(question.matchingItems)) {
+          question.matchingItems.forEach(item => {
+            stats.listeningMatching.total++
+
+            if (isListeningMatchingItemCorrect(submission, question, item)) {
+              stats.listeningMatching.correct++
+            }
+          })
+
+          return
+        }
+
+        if (question.type === 'listeningCompletion') {
+          question.sections?.forEach(section => {
+            section.parts?.forEach(item => {
+              if (item.type !== 'blank') return
+
+              stats.listeningCompletion.total++
+
+              if (isListeningCompletionPartCorrect(submission, question, section, item)) {
+                stats.listeningCompletion.correct++
+              }
+            })
+          })
+
+          return
+        }
+
+        if (question.type === 'table' || question.type === 'summary' || question.type === 'note') {
+          question.rows?.forEach(row => {
+            row.cells?.forEach((cell, cellIndex) => {
+              if (cell.type === 'blank') {
+                stats.table.total++
+
+                if (isTableCellCorrect(submission, question, row, cellIndex)) {
+                  stats.table.correct++
+                }
+              }
+            })
+          })
+
+          return
+        }
+
+        if (!stats[question.type]) return
+
+        stats[question.type].total++
+
+        if (isNormalCorrect(submission, question)) {
+          stats[question.type].correct++
+        }
+      })
+    })
+
+    return Object.entries(stats)
+      .map(([key, value]) => ({
+        key,
+        correct: value.correct,
+        total: value.total,
+        percentage: value.total
+          ? Math.round((value.correct / value.total) * 100)
+          : null
+      }))
+      .filter(item => item.total > 0)
+  }
+
+  const getMostMissedListeningQuestionsForSubmissions = targetSubmissions => {
+    const stats = {}
+
+    targetSubmissions.forEach(submission => {
+      const listening = listenings.find(item => item.id === submission.listeningId)
+      if (!listening) return
+
+      listening.questions?.forEach((question, questionIndex) => {
+        const key = `${listening.title} — Q${questionIndex + 1}`
+
+        if (!stats[key]) {
+          stats[key] = {
+            label: key,
+            wrong: 0,
+            total: 0
+          }
+        }
+
+        if (question.type === 'matching' && Array.isArray(question.matchingItems)) {
+          question.matchingItems.forEach(item => {
+            stats[key].total++
+
+            if (!isListeningMatchingItemCorrect(submission, question, item)) {
+              stats[key].wrong++
+            }
+          })
+
+          return
+        }
+
+        if (question.type === 'listeningCompletion') {
+          question.sections?.forEach(section => {
+            section.parts?.forEach(item => {
+              if (item.type !== 'blank') return
+
+              stats[key].total++
+
+              if (!isListeningCompletionPartCorrect(submission, question, section, item)) {
+                stats[key].wrong++
+              }
+            })
+          })
+
+          return
+        }
+
+        if (question.type === 'table' || question.type === 'summary' || question.type === 'note') {
+          question.rows?.forEach(row => {
+            row.cells?.forEach((cell, cellIndex) => {
+              if (cell.type === 'blank') {
+                stats[key].total++
+
+                if (!isTableCellCorrect(submission, question, row, cellIndex)) {
+                  stats[key].wrong++
+                }
+              }
+            })
+          })
+
+          return
+        }
+
+        stats[key].total++
+
+        if (!isNormalCorrect(submission, question)) {
+          stats[key].wrong++
+        }
+      })
+    })
+
+    return Object.values(stats)
+      .filter(item => item.total > 0)
+      .map(item => ({
+        ...item,
+        wrongRate: Math.round((item.wrong / item.total) * 100)
+      }))
+      .sort((a, b) => b.wrongRate - a.wrongRate)
+      .slice(0, 5)
+  }
+
+  const getStudentVocabularySubmissions = studentId => {
+    const student = getStudentByAnyId(studentId)
+
+    return vocabularySubmissions
+      .filter(submission => submissionBelongsToStudent(submission, student))
+      .sort((a, b) => new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0))
+  }
+
+  const getVocabularyCompletionStatsForStudent = studentId => {
+    const assignedVocabularyTests = getStudentVocabularyTests(studentId)
+    const completed = assignedVocabularyTests.filter(vocabularyTest =>
+      getVocabularySubmission(studentId, vocabularyTest.id)
+    ).length
+
+    return {
+      assigned: assignedVocabularyTests.length,
+      completed,
+      rate: assignedVocabularyTests.length
+        ? Math.round((completed / assignedVocabularyTests.length) * 100)
+        : 0
+    }
+  }
+
+  const getAverageVocabularyAccuracyFromSubmissions = targetSubmissions => {
+    const percentages = targetSubmissions
+      .map(submission => Number(submission.result?.percentage))
+      .filter(value => !Number.isNaN(value) && value >= 0)
+
+    if (percentages.length === 0) return null
+
+    const avg = percentages.reduce((sum, value) => sum + value, 0) / percentages.length
+    return Math.round(avg)
+  }
+
+  const getVocabularyTestPerformanceForSubmissions = targetSubmissions => {
+    return targetSubmissions
+      .map(submission => {
+        const vocabularyTest = vocabularyTests.find(test =>
+          isVocabularySubmissionForTest(submission, test.id)
+        )
+
+        return {
+          id: submission.id,
+          title: vocabularyTest?.title || submission.vocabularyTitle || 'Vocabulary Test',
+          correct: submission.result?.correct || 0,
+          total: submission.result?.total || vocabularyTest?.questions?.length || 0,
+          percentage: submission.result?.percentage ?? null,
+          submittedAt: submission.submittedAt
+        }
+      })
+      .sort((a, b) => new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0))
+      .slice(0, 5)
+  }
+
+  const getMostMissedVocabularyQuestionsForSubmissions = targetSubmissions => {
+    const stats = {}
+
+    targetSubmissions.forEach(submission => {
+      const vocabularyTest = vocabularyTests.find(test =>
+        isVocabularySubmissionForTest(submission, test.id)
+      )
+
+      if (!vocabularyTest) return
+
+      vocabularyTest.questions?.forEach((question, questionIndex) => {
+        const selectedAnswer = submission.answers?.[question.id]
+        const correctAnswer = question.answer
+        const isCorrect = selectedAnswer === correctAnswer
+        const key = `${vocabularyTest.title} — Q${questionIndex + 1}`
+
+        if (!stats[key]) {
+          stats[key] = {
+            label: key,
+            question: question.question || '',
+            wrong: 0,
+            total: 0
+          }
+        }
+
+        stats[key].total++
+
+        if (!isCorrect) {
+          stats[key].wrong++
+        }
+      })
+    })
+
+    return Object.values(stats)
+      .filter(item => item.total > 0 && item.wrong > 0)
+      .map(item => ({
+        ...item,
+        wrongRate: Math.round((item.wrong / item.total) * 100)
+      }))
+      .sort((a, b) => b.wrongRate - a.wrongRate)
+      .slice(0, 5)
+  }
+
   const getReadingTypeLabel = type => {
     if (type === 'matching') return 'Matching Headings'
     if (type === 'sentenceEndings') return 'Sentence Endings'
@@ -3743,24 +4037,60 @@ Continue permanent delete?`
   const selectedAnalyticsStudent = analyticsStudentId === 'all'
     ? null
     : getStudentByAnyId(analyticsStudentId)
-  const selectedAnalyticsStudentSubmissions = selectedAnalyticsStudent
+
+  const selectedAnalyticsReadingSubmissions = selectedAnalyticsStudent
     ? getStudentReadingSubmissions(selectedAnalyticsStudent.id)
     : []
   const selectedAnalyticsReadingStats = selectedAnalyticsStudent
     ? getReadingCompletionStatsForStudent(selectedAnalyticsStudent.id)
     : null
-  const selectedAnalyticsAverageBand = selectedAnalyticsStudent
-    ? getAverageReadingEstimatedBandFromSubmissions(selectedAnalyticsStudentSubmissions)
+  const selectedAnalyticsAverageReadingBand = selectedAnalyticsStudent
+    ? getAverageReadingEstimatedBandFromSubmissions(selectedAnalyticsReadingSubmissions)
     : null
   const selectedAnalyticsReadingTypeAnalytics = selectedAnalyticsStudent
-    ? getReadingTypeAnalyticsForSubmissions(selectedAnalyticsStudentSubmissions)
+    ? getReadingTypeAnalyticsForSubmissions(selectedAnalyticsReadingSubmissions)
     : []
-  const selectedAnalyticsMostMissedQuestions = selectedAnalyticsStudent
-    ? getMostMissedReadingQuestionsForSubmissions(selectedAnalyticsStudentSubmissions)
+  const selectedAnalyticsMostMissedReadingQuestions = selectedAnalyticsStudent
+    ? getMostMissedReadingQuestionsForSubmissions(selectedAnalyticsReadingSubmissions)
     : []
-  const selectedAnalyticsWeakestArea = selectedAnalyticsReadingTypeAnalytics
+  const selectedAnalyticsWeakestReadingArea = selectedAnalyticsReadingTypeAnalytics
     .filter(item => item.percentage !== null && item.percentage !== undefined)
     .sort((a, b) => a.percentage - b.percentage)[0]
+
+  const selectedAnalyticsListeningSubmissions = selectedAnalyticsStudent
+    ? getStudentListeningSubmissions(selectedAnalyticsStudent.id)
+    : []
+  const selectedAnalyticsListeningStats = selectedAnalyticsStudent
+    ? getListeningCompletionStatsForStudent(selectedAnalyticsStudent.id)
+    : null
+  const selectedAnalyticsAverageListeningBand = selectedAnalyticsStudent
+    ? getAverageListeningBandFromSubmissions(selectedAnalyticsListeningSubmissions)
+    : null
+  const selectedAnalyticsListeningTypeAnalytics = selectedAnalyticsStudent
+    ? getListeningTypeAnalyticsForSubmissions(selectedAnalyticsListeningSubmissions)
+    : []
+  const selectedAnalyticsMostMissedListeningQuestions = selectedAnalyticsStudent
+    ? getMostMissedListeningQuestionsForSubmissions(selectedAnalyticsListeningSubmissions)
+    : []
+  const selectedAnalyticsWeakestListeningArea = selectedAnalyticsListeningTypeAnalytics
+    .filter(item => item.percentage !== null && item.percentage !== undefined)
+    .sort((a, b) => a.percentage - b.percentage)[0]
+
+  const selectedAnalyticsVocabularySubmissions = selectedAnalyticsStudent
+    ? getStudentVocabularySubmissions(selectedAnalyticsStudent.id)
+    : []
+  const selectedAnalyticsVocabularyStats = selectedAnalyticsStudent
+    ? getVocabularyCompletionStatsForStudent(selectedAnalyticsStudent.id)
+    : null
+  const selectedAnalyticsAverageVocabularyAccuracy = selectedAnalyticsStudent
+    ? getAverageVocabularyAccuracyFromSubmissions(selectedAnalyticsVocabularySubmissions)
+    : null
+  const selectedAnalyticsVocabularyPerformance = selectedAnalyticsStudent
+    ? getVocabularyTestPerformanceForSubmissions(selectedAnalyticsVocabularySubmissions)
+    : []
+  const selectedAnalyticsMostMissedVocabularyQuestions = selectedAnalyticsStudent
+    ? getMostMissedVocabularyQuestionsForSubmissions(selectedAnalyticsVocabularySubmissions)
+    : []
 
   const averageListeningBand = getAverageListeningBand()
   const listeningCompletionStats = getListeningCompletionStats()
@@ -3929,547 +4259,313 @@ Continue permanent delete?`
 
         {activeTab === 'analytics' && (
           <>
-        <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
-          <div className="flex items-start justify-between gap-4 mb-5">
-            <div>
-              <h2 className="font-semibold text-gray-800">
-                📖 Reading Analytics
-              </h2>
+            <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
+              <div className="flex items-start justify-between gap-4 mb-5">
+                <div>
+                  <h2 className="font-semibold text-gray-800">
+                    👤 Student Analytics
+                  </h2>
 
-              <p className="text-xs text-gray-400 mt-1">
-                Class accuracy, completion rate, difficult questions and at-risk students.
-              </p>
-            </div>
+                  <p className="text-xs text-gray-400 mt-1">
+                    Select one student to see Reading, Listening and Vocabulary analytics separately.
+                  </p>
+                </div>
 
-            <span className="text-xs bg-blue-50 text-blue-600 px-3 py-1.5 rounded-full">
-              {submissions.length} submissions
-            </span>
-          </div>
+                <select
+                  value={analyticsStudentId}
+                  onChange={e => setAnalyticsStudentId(e.target.value)}
+                  className="border border-gray-200 rounded-xl px-3 py-2 text-xs bg-white text-gray-600 outline-none focus:border-purple-400 min-w-[260px]"
+                >
+                  <option value="all">Select student</option>
+                  {students.map(student => (
+                    <option key={student.id} value={student.id}>
+                      {student.name || student.email}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-            <div className="bg-gray-900 text-white rounded-2xl p-5">
-              <p className="text-xs text-gray-400 mb-1">
-                Average Reading Estimated Band
-              </p>
-
-              <p className="text-3xl font-bold">
-                {averageReadingEstimatedBand || '--'}
-              </p>
-
-              <p className="text-xs text-gray-400 mt-2">
-                Based on submitted reading homework
-              </p>
-            </div>
-
-            <div className="bg-blue-50 rounded-2xl p-5">
-              <p className="text-xs text-gray-500 mb-1">
-                Completion Rate
-              </p>
-
-              <p className="text-3xl font-bold text-blue-600">
-                {readingCompletionStats.rate}%
-              </p>
-
-              <p className="text-xs text-gray-500 mt-2">
-                {readingCompletionStats.completed}/{readingCompletionStats.assigned} assignments completed
-              </p>
-            </div>
-
-            <div className="bg-red-50 rounded-2xl p-5">
-              <p className="text-xs text-gray-500 mb-1">
-                Most Missed Question
-              </p>
-
-              <p className="text-xl font-bold text-red-600 truncate">
-                {mostMissedReadingQuestions[0]?.label || '--'}
-              </p>
-
-              <p className="text-xs text-gray-500 mt-2">
-                {mostMissedReadingQuestions[0]
-                  ? `${mostMissedReadingQuestions[0].wrongRate}% wrong`
-                  : 'No question data yet'}
-              </p>
-            </div>
-
-            <div className="bg-amber-50 rounded-2xl p-5">
-              <p className="text-xs text-gray-500 mb-1">
-                At-Risk Students
-              </p>
-
-              <p className="text-3xl font-bold text-amber-600">
-                {atRiskReadingStudents.length}
-              </p>
-
-              <p className="text-xs text-gray-500 mt-2">
-                Latest reading estimate below 6.0
-              </p>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-            <div className="lg:col-span-1 bg-gray-50 rounded-2xl p-5">
-              <h3 className="text-sm font-semibold text-gray-700 mb-3">
-                Accuracy by Question Type
-              </h3>
-
-              <div className="flex flex-col gap-3">
-                {readingTypeAnalytics.map(item => (
-                  <div key={item.key}>
-                    <div className="flex justify-between mb-1">
-                      <p className="text-xs text-gray-500">
-                        {getReadingTypeLabel(item.key)}
+              {!selectedAnalyticsStudent ? (
+                <div className="bg-gray-50 border border-gray-100 rounded-xl p-5 text-sm text-gray-400">
+                  Choose a student from the list to view individual Reading, Listening and Vocabulary analytics.
+                </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                    <div className="bg-gray-900 text-white rounded-2xl p-5">
+                      <p className="text-xs text-gray-400 mb-1">
+                        Student
                       </p>
 
-                      <p className={`text-xs font-semibold ${getAnalyticsColor(item.percentage)}`}>
-                        {item.percentage === null ? '--' : `${item.percentage}%`}
+                      <p className="text-lg font-bold truncate">
+                        {selectedAnalyticsStudent.name || selectedAnalyticsStudent.email}
+                      </p>
+
+                      <p className="text-xs text-gray-400 mt-2 truncate">
+                        {selectedAnalyticsStudent.email}
                       </p>
                     </div>
 
-                    <div className="w-full bg-white rounded-full h-2 overflow-hidden">
-                      <div
-                        className="bg-blue-600 h-2 rounded-full"
-                        style={{ width: `${item.percentage || 0}%` }}
-                      />
+                    <div className="bg-blue-50 rounded-2xl p-5">
+                      <p className="text-xs text-gray-500 mb-1">
+                        Reading
+                      </p>
+
+                      <p className="text-3xl font-bold text-blue-600">
+                        {selectedAnalyticsReadingStats?.rate || 0}%
+                      </p>
+
+                      <p className="text-xs text-gray-500 mt-2">
+                        {selectedAnalyticsReadingStats?.completed || 0}/{selectedAnalyticsReadingStats?.assigned || 0} completed · Avg {selectedAnalyticsAverageReadingBand || '--'}
+                      </p>
                     </div>
 
-                    <p className="text-[10px] text-gray-400 mt-1">
-                      {item.correct}/{item.total} correct
-                    </p>
+                    <div className="bg-purple-50 rounded-2xl p-5">
+                      <p className="text-xs text-gray-500 mb-1">
+                        Listening
+                      </p>
+
+                      <p className="text-3xl font-bold text-purple-600">
+                        {selectedAnalyticsListeningStats?.rate || 0}%
+                      </p>
+
+                      <p className="text-xs text-gray-500 mt-2">
+                        {selectedAnalyticsListeningStats?.completed || 0}/{selectedAnalyticsListeningStats?.assigned || 0} completed · Avg {selectedAnalyticsAverageListeningBand || '--'}
+                      </p>
+                    </div>
+
+                    <div className="bg-green-50 rounded-2xl p-5">
+                      <p className="text-xs text-gray-500 mb-1">
+                        Vocabulary
+                      </p>
+
+                      <p className="text-3xl font-bold text-green-600">
+                        {selectedAnalyticsVocabularyStats?.rate || 0}%
+                      </p>
+
+                      <p className="text-xs text-gray-500 mt-2">
+                        {selectedAnalyticsVocabularyStats?.completed || 0}/{selectedAnalyticsVocabularyStats?.assigned || 0} completed · Avg {selectedAnalyticsAverageVocabularyAccuracy ?? '--'}%
+                      </p>
+                    </div>
                   </div>
-                ))}
-              </div>
-            </div>
 
-            <div className="lg:col-span-1 bg-gray-50 rounded-2xl p-5">
-              <h3 className="text-sm font-semibold text-gray-700 mb-3">
-                Most Missed Questions
-              </h3>
-
-              {mostMissedReadingQuestions.length === 0 ? (
-                <p className="text-sm text-gray-400">
-                  No reading submissions yet.
-                </p>
-              ) : (
-                <div className="flex flex-col gap-2">
-                  {mostMissedReadingQuestions.map(item => (
-                    <div
-                      key={item.label}
-                      className="bg-white rounded-xl p-3 flex items-center justify-between gap-3"
-                    >
-                      <div className="min-w-0">
-                        <p className="text-xs font-medium text-gray-700 truncate">
-                          {item.label}
-                        </p>
-
-                        <p className="text-[10px] text-gray-400">
-                          {item.wrong}/{item.total} wrong
-                        </p>
-                      </div>
-
-                      <span className="text-xs bg-red-50 text-red-600 px-2 py-1 rounded-full font-semibold">
-                        {item.wrongRate}%
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="lg:col-span-1 bg-gray-50 rounded-2xl p-5">
-              <h3 className="text-sm font-semibold text-gray-700 mb-3">
-                At-Risk Students
-              </h3>
-
-              {atRiskReadingStudents.length === 0 ? (
-                <p className="text-sm text-gray-400">
-                  No at-risk reading students yet.
-                </p>
-              ) : (
-                <div className="flex flex-col gap-2">
-                  {atRiskReadingStudents.map(item => (
-                    <div
-                      key={item.student.id}
-                      className="bg-white rounded-xl p-3 flex items-center justify-between gap-3"
-                    >
-                      <div>
-                        <p className="text-xs font-medium text-gray-700">
-                          {item.student.name}
-                        </p>
-
-                        <p className="text-[10px] text-gray-400">
-                          {item.submissions} reading submission(s)
-                        </p>
-                      </div>
-
-                      <span className="text-xs bg-amber-50 text-amber-600 px-2 py-1 rounded-full font-semibold">
-                        Est. {item.latestBand.toFixed(1)}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
-          <div className="flex items-start justify-between gap-4 mb-5">
-            <div>
-              <h2 className="font-semibold text-gray-800">
-                👤 Student Reading Analytics
-              </h2>
-
-              <p className="text-xs text-gray-400 mt-1">
-                Select a student to see individual reading accuracy, weak question types and missed questions.
-              </p>
-            </div>
-
-            <select
-              value={analyticsStudentId}
-              onChange={e => setAnalyticsStudentId(e.target.value)}
-              className="border border-gray-200 rounded-xl px-3 py-2 text-xs bg-white text-gray-600 outline-none focus:border-purple-400 min-w-[260px]"
-            >
-              <option value="all">Select student</option>
-              {students.map(student => (
-                <option key={student.id} value={student.id}>
-                  {student.name || student.email}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {!selectedAnalyticsStudent ? (
-            <div className="bg-gray-50 border border-gray-100 rounded-xl p-5 text-sm text-gray-400">
-              Choose a student from the list to view individual reading analytics.
-            </div>
-          ) : (
-            <>
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-                <div className="bg-gray-900 text-white rounded-2xl p-5">
-                  <p className="text-xs text-gray-400 mb-1">
-                    Student
-                  </p>
-
-                  <p className="text-lg font-bold truncate">
-                    {selectedAnalyticsStudent.name || selectedAnalyticsStudent.email}
-                  </p>
-
-                  <p className="text-xs text-gray-400 mt-2 truncate">
-                    {selectedAnalyticsStudent.email}
-                  </p>
-                </div>
-
-                <div className="bg-blue-50 rounded-2xl p-5">
-                  <p className="text-xs text-gray-500 mb-1">
-                    Reading Completion
-                  </p>
-
-                  <p className="text-3xl font-bold text-blue-600">
-                    {selectedAnalyticsReadingStats?.rate || 0}%
-                  </p>
-
-                  <p className="text-xs text-gray-500 mt-2">
-                    {selectedAnalyticsReadingStats?.completed || 0}/{selectedAnalyticsReadingStats?.assigned || 0} assigned reading completed
-                  </p>
-                </div>
-
-                <div className="bg-purple-50 rounded-2xl p-5">
-                  <p className="text-xs text-gray-500 mb-1">
-                    Average Estimate
-                  </p>
-
-                  <p className="text-3xl font-bold text-purple-600">
-                    {selectedAnalyticsAverageBand || '--'}
-                  </p>
-
-                  <p className="text-xs text-gray-500 mt-2">
-                    Based on this student's reading submissions
-                  </p>
-                </div>
-
-                <div className="bg-amber-50 rounded-2xl p-5">
-                  <p className="text-xs text-gray-500 mb-1">
-                    Weakest Area
-                  </p>
-
-                  <p className="text-lg font-bold text-amber-700 truncate">
-                    {selectedAnalyticsWeakestArea
-                      ? getReadingTypeLabel(selectedAnalyticsWeakestArea.key)
-                      : '--'}
-                  </p>
-
-                  <p className="text-xs text-gray-500 mt-2">
-                    {selectedAnalyticsWeakestArea
-                      ? `${selectedAnalyticsWeakestArea.percentage}% accuracy`
-                      : 'No enough data yet'}
-                  </p>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                <div className="bg-gray-50 rounded-2xl p-5">
-                  <h3 className="text-sm font-semibold text-gray-700 mb-3">
-                    Student Accuracy by Question Type
-                  </h3>
-
-                  {selectedAnalyticsReadingTypeAnalytics.length === 0 ? (
-                    <p className="text-sm text-gray-400">
-                      No completed reading homework yet.
-                    </p>
-                  ) : (
-                    <div className="flex flex-col gap-3">
-                      {selectedAnalyticsReadingTypeAnalytics.map(item => (
-                        <div key={item.key}>
-                          <div className="flex justify-between mb-1">
-                            <p className="text-xs text-gray-500">
-                              {getReadingTypeLabel(item.key)}
-                            </p>
-
-                            <p className={`text-xs font-semibold ${getAnalyticsColor(item.percentage)}`}>
-                              {item.percentage === null ? '--' : `${item.percentage}%`}
-                            </p>
-                          </div>
-
-                          <div className="w-full bg-white rounded-full h-2 overflow-hidden">
-                            <div
-                              className="bg-purple-600 h-2 rounded-full"
-                              style={{ width: `${item.percentage || 0}%` }}
-                            />
-                          </div>
-
-                          <p className="text-[10px] text-gray-400 mt-1">
-                            {item.correct}/{item.total} correct
+                  <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+                    <div className="bg-gray-50 rounded-2xl p-5">
+                      <div className="flex items-start justify-between gap-3 mb-4">
+                        <div>
+                          <h3 className="text-sm font-semibold text-gray-700">
+                            📖 Reading Analytics
+                          </h3>
+                          <p className="text-xs text-gray-400 mt-1">
+                            Weakest area: {selectedAnalyticsWeakestReadingArea ? getReadingTypeLabel(selectedAnalyticsWeakestReadingArea.key) : '--'}
                           </p>
                         </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                        <span className="text-xs bg-blue-50 text-blue-600 px-3 py-1 rounded-full">
+                          {selectedAnalyticsReadingSubmissions.length} submissions
+                        </span>
+                      </div>
 
-                <div className="bg-gray-50 rounded-2xl p-5">
-                  <h3 className="text-sm font-semibold text-gray-700 mb-3">
-                    Student Most Missed Questions
-                  </h3>
-
-                  {selectedAnalyticsMostMissedQuestions.length === 0 ? (
-                    <p className="text-sm text-gray-400">
-                      No missed-question data yet.
-                    </p>
-                  ) : (
-                    <div className="flex flex-col gap-2">
-                      {selectedAnalyticsMostMissedQuestions.map(item => (
-                        <div
-                          key={item.label}
-                          className="bg-white rounded-xl p-3 flex items-center justify-between gap-3"
-                        >
-                          <div className="min-w-0">
-                            <p className="text-xs font-medium text-gray-700 truncate">
-                              {item.label}
-                            </p>
-
-                            <p className="text-[10px] text-gray-400">
-                              {item.wrong}/{item.total} wrong
-                            </p>
-                          </div>
-
-                          <span className="text-xs bg-red-50 text-red-600 px-2 py-1 rounded-full font-semibold">
-                            {item.wrongRate}%
-                          </span>
+                      {selectedAnalyticsReadingTypeAnalytics.length === 0 ? (
+                        <p className="text-sm text-gray-400 bg-white rounded-xl p-4">
+                          No completed reading homework yet.
+                        </p>
+                      ) : (
+                        <div className="flex flex-col gap-3 mb-5">
+                          {selectedAnalyticsReadingTypeAnalytics.map(item => (
+                            <div key={item.key}>
+                              <div className="flex justify-between mb-1">
+                                <p className="text-xs text-gray-500">
+                                  {getReadingTypeLabel(item.key)}
+                                </p>
+                                <p className={`text-xs font-semibold ${getAnalyticsColor(item.percentage)}`}>
+                                  {item.percentage === null ? '--' : `${item.percentage}%`}
+                                </p>
+                              </div>
+                              <div className="w-full bg-white rounded-full h-2 overflow-hidden">
+                                <div
+                                  className="bg-blue-600 h-2 rounded-full"
+                                  style={{ width: `${item.percentage || 0}%` }}
+                                />
+                              </div>
+                              <p className="text-[10px] text-gray-400 mt-1">
+                                {item.correct}/{item.total} correct
+                              </p>
+                            </div>
+                          ))}
                         </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </>
-          )}
-        </div>
+                      )}
 
-
-        <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
-          <div className="flex items-start justify-between gap-4 mb-5">
-            <div>
-              <h2 className="font-semibold text-gray-800">
-                🎧 Listening Analytics
-              </h2>
-
-              <p className="text-xs text-gray-400 mt-1">
-                Class performance, completion rate, difficult questions and at-risk students.
-              </p>
-            </div>
-
-            <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1.5 rounded-full">
-              {listeningSubmissions.length} submissions
-            </span>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-            <div className="bg-gray-900 text-white rounded-2xl p-5">
-              <p className="text-xs text-gray-400 mb-1">
-                Average Listening Band
-              </p>
-
-              <p className="text-3xl font-bold">
-                {averageListeningBand || '--'}
-              </p>
-
-              <p className="text-xs text-gray-400 mt-2">
-                Based on submitted listening homework
-              </p>
-            </div>
-
-            <div className="bg-purple-50 rounded-2xl p-5">
-              <p className="text-xs text-gray-500 mb-1">
-                Completion Rate
-              </p>
-
-              <p className="text-3xl font-bold text-purple-600">
-                {listeningCompletionStats.rate}%
-              </p>
-
-              <p className="text-xs text-gray-500 mt-2">
-                {listeningCompletionStats.completed}/{listeningCompletionStats.assigned} assignments completed
-              </p>
-            </div>
-
-            <div className="bg-red-50 rounded-2xl p-5">
-              <p className="text-xs text-gray-500 mb-1">
-                Most Missed Question
-              </p>
-
-              <p className="text-xl font-bold text-red-600 truncate">
-                {mostMissedListeningQuestions[0]?.label || '--'}
-              </p>
-
-              <p className="text-xs text-gray-500 mt-2">
-                {mostMissedListeningQuestions[0]
-                  ? `${mostMissedListeningQuestions[0].wrongRate}% wrong`
-                  : 'No question data yet'}
-              </p>
-            </div>
-
-            <div className="bg-amber-50 rounded-2xl p-5">
-              <p className="text-xs text-gray-500 mb-1">
-                At-Risk Students
-              </p>
-
-              <p className="text-3xl font-bold text-amber-600">
-                {atRiskListeningStudents.length}
-              </p>
-
-              <p className="text-xs text-gray-500 mt-2">
-                Latest listening band below 6.0
-              </p>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-            <div className="lg:col-span-1 bg-gray-50 rounded-2xl p-5">
-              <h3 className="text-sm font-semibold text-gray-700 mb-3">
-                Accuracy by Question Type
-              </h3>
-
-              <div className="flex flex-col gap-3">
-                {listeningTypeAnalytics.map(item => (
-                  <div key={item.key}>
-                    <div className="flex justify-between mb-1">
-                      <p className="text-xs text-gray-500">
-                        {getListeningTypeLabel(item.key)}
-                      </p>
-
-                      <p className={`text-xs font-semibold ${getAnalyticsColor(item.percentage)}`}>
-                        {item.percentage === null ? '--' : `${item.percentage}%`}
-                      </p>
+                      <h4 className="text-xs font-semibold text-gray-500 mb-2">
+                        Most Missed Reading Questions
+                      </h4>
+                      {selectedAnalyticsMostMissedReadingQuestions.length === 0 ? (
+                        <p className="text-xs text-gray-400 bg-white rounded-xl p-3">
+                          No missed-question data yet.
+                        </p>
+                      ) : (
+                        <div className="flex flex-col gap-2">
+                          {selectedAnalyticsMostMissedReadingQuestions.map(item => (
+                            <div key={item.label} className="bg-white rounded-xl p-3 flex items-center justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="text-xs font-medium text-gray-700 truncate">
+                                  {item.label}
+                                </p>
+                                <p className="text-[10px] text-gray-400">
+                                  {item.wrong}/{item.total} wrong
+                                </p>
+                              </div>
+                              <span className="text-xs bg-red-50 text-red-600 px-2 py-1 rounded-full font-semibold">
+                                {item.wrongRate}%
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
 
-                    <div className="w-full bg-white rounded-full h-2 overflow-hidden">
-                      <div
-                        className="bg-purple-600 h-2 rounded-full"
-                        style={{ width: `${item.percentage || 0}%` }}
-                      />
+                    <div className="bg-gray-50 rounded-2xl p-5">
+                      <div className="flex items-start justify-between gap-3 mb-4">
+                        <div>
+                          <h3 className="text-sm font-semibold text-gray-700">
+                            🎧 Listening Analytics
+                          </h3>
+                          <p className="text-xs text-gray-400 mt-1">
+                            Weakest area: {selectedAnalyticsWeakestListeningArea ? getListeningTypeLabel(selectedAnalyticsWeakestListeningArea.key) : '--'}
+                          </p>
+                        </div>
+                        <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1 rounded-full">
+                          {selectedAnalyticsListeningSubmissions.length} submissions
+                        </span>
+                      </div>
+
+                      {selectedAnalyticsListeningTypeAnalytics.length === 0 ? (
+                        <p className="text-sm text-gray-400 bg-white rounded-xl p-4">
+                          No completed listening homework yet.
+                        </p>
+                      ) : (
+                        <div className="flex flex-col gap-3 mb-5">
+                          {selectedAnalyticsListeningTypeAnalytics.map(item => (
+                            <div key={item.key}>
+                              <div className="flex justify-between mb-1">
+                                <p className="text-xs text-gray-500">
+                                  {getListeningTypeLabel(item.key)}
+                                </p>
+                                <p className={`text-xs font-semibold ${getAnalyticsColor(item.percentage)}`}>
+                                  {item.percentage === null ? '--' : `${item.percentage}%`}
+                                </p>
+                              </div>
+                              <div className="w-full bg-white rounded-full h-2 overflow-hidden">
+                                <div
+                                  className="bg-purple-600 h-2 rounded-full"
+                                  style={{ width: `${item.percentage || 0}%` }}
+                                />
+                              </div>
+                              <p className="text-[10px] text-gray-400 mt-1">
+                                {item.correct}/{item.total} correct
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      <h4 className="text-xs font-semibold text-gray-500 mb-2">
+                        Most Missed Listening Questions
+                      </h4>
+                      {selectedAnalyticsMostMissedListeningQuestions.length === 0 ? (
+                        <p className="text-xs text-gray-400 bg-white rounded-xl p-3">
+                          No missed-question data yet.
+                        </p>
+                      ) : (
+                        <div className="flex flex-col gap-2">
+                          {selectedAnalyticsMostMissedListeningQuestions.map(item => (
+                            <div key={item.label} className="bg-white rounded-xl p-3 flex items-center justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="text-xs font-medium text-gray-700 truncate">
+                                  {item.label}
+                                </p>
+                                <p className="text-[10px] text-gray-400">
+                                  {item.wrong}/{item.total} wrong
+                                </p>
+                              </div>
+                              <span className="text-xs bg-red-50 text-red-600 px-2 py-1 rounded-full font-semibold">
+                                {item.wrongRate}%
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
 
-                    <p className="text-[10px] text-gray-400 mt-1">
-                      {item.correct}/{item.total} correct
-                    </p>
+                    <div className="bg-gray-50 rounded-2xl p-5">
+                      <div className="flex items-start justify-between gap-3 mb-4">
+                        <div>
+                          <h3 className="text-sm font-semibold text-gray-700">
+                            🧩 Vocabulary Analytics
+                          </h3>
+                          <p className="text-xs text-gray-400 mt-1">
+                            Average accuracy: {selectedAnalyticsAverageVocabularyAccuracy ?? '--'}%
+                          </p>
+                        </div>
+                        <span className="text-xs bg-green-50 text-green-600 px-3 py-1 rounded-full">
+                          {selectedAnalyticsVocabularySubmissions.length} submissions
+                        </span>
+                      </div>
+
+                      {selectedAnalyticsVocabularyPerformance.length === 0 ? (
+                        <p className="text-sm text-gray-400 bg-white rounded-xl p-4">
+                          No completed vocabulary test yet.
+                        </p>
+                      ) : (
+                        <div className="flex flex-col gap-2 mb-5">
+                          {selectedAnalyticsVocabularyPerformance.map(item => (
+                            <div key={item.id} className="bg-white rounded-xl p-3 flex items-center justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="text-xs font-medium text-gray-700 truncate">
+                                  {item.title}
+                                </p>
+                                <p className="text-[10px] text-gray-400">
+                                  {item.correct}/{item.total} correct · {formatDateShort(item.submittedAt)}
+                                </p>
+                              </div>
+                              <span className={`text-xs px-2 py-1 rounded-full font-semibold ${item.percentage >= 70 ? 'bg-green-100 text-green-700' : item.percentage >= 50 ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'}`}>
+                                {item.percentage ?? '--'}%
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      <h4 className="text-xs font-semibold text-gray-500 mb-2">
+                        Most Missed Vocabulary Questions
+                      </h4>
+                      {selectedAnalyticsMostMissedVocabularyQuestions.length === 0 ? (
+                        <p className="text-xs text-gray-400 bg-white rounded-xl p-3">
+                          No missed vocabulary questions yet.
+                        </p>
+                      ) : (
+                        <div className="flex flex-col gap-2">
+                          {selectedAnalyticsMostMissedVocabularyQuestions.map(item => (
+                            <div key={item.label} className="bg-white rounded-xl p-3 flex items-center justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="text-xs font-medium text-gray-700 truncate">
+                                  {item.label}
+                                </p>
+                                <p className="text-[10px] text-gray-400 truncate">
+                                  {item.question || `${item.wrong}/${item.total} wrong`}
+                                </p>
+                              </div>
+                              <span className="text-xs bg-red-50 text-red-600 px-2 py-1 rounded-full font-semibold">
+                                {item.wrongRate}%
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="lg:col-span-1 bg-gray-50 rounded-2xl p-5">
-              <h3 className="text-sm font-semibold text-gray-700 mb-3">
-                Most Missed Questions
-              </h3>
-
-              {mostMissedListeningQuestions.length === 0 ? (
-                <p className="text-sm text-gray-400">
-                  No listening submissions yet.
-                </p>
-              ) : (
-                <div className="flex flex-col gap-2">
-                  {mostMissedListeningQuestions.map(item => (
-                    <div
-                      key={item.label}
-                      className="bg-white rounded-xl p-3 flex items-center justify-between gap-3"
-                    >
-                      <div className="min-w-0">
-                        <p className="text-xs font-medium text-gray-700 truncate">
-                          {item.label}
-                        </p>
-
-                        <p className="text-[10px] text-gray-400">
-                          {item.wrong}/{item.total} wrong
-                        </p>
-                      </div>
-
-                      <span className="text-xs bg-red-50 text-red-600 px-2 py-1 rounded-full font-semibold">
-                        {item.wrongRate}%
-                      </span>
-                    </div>
-                  ))}
-                </div>
+                </>
               )}
             </div>
-
-            <div className="lg:col-span-1 bg-gray-50 rounded-2xl p-5">
-              <h3 className="text-sm font-semibold text-gray-700 mb-3">
-                At-Risk Students
-              </h3>
-
-              {atRiskListeningStudents.length === 0 ? (
-                <p className="text-sm text-gray-400">
-                  No at-risk listening students yet.
-                </p>
-              ) : (
-                <div className="flex flex-col gap-2">
-                  {atRiskListeningStudents.map(item => (
-                    <div
-                      key={item.student.id}
-                      className="bg-white rounded-xl p-3 flex items-center justify-between gap-3"
-                    >
-                      <div>
-                        <p className="text-xs font-medium text-gray-700">
-                          {item.student.name}
-                        </p>
-
-                        <p className="text-[10px] text-gray-400">
-                          {item.submissions} listening submission(s)
-                        </p>
-                      </div>
-
-                      <span className="text-xs bg-amber-50 text-amber-600 px-2 py-1 rounded-full font-semibold">
-                        Band {item.latestBand.toFixed(1)}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-
-
           </>
         )}
 
