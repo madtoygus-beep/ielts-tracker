@@ -9,6 +9,7 @@ import {
   doc,
   updateDoc,
   getDoc,
+  deleteDoc,
   arrayUnion
 } from 'firebase/firestore'
 import { onAuthStateChanged } from 'firebase/auth'
@@ -196,6 +197,25 @@ export default function ManageClasses() {
   }, [authChecking, user, userRole])
 
   // ============================================================
+  // Student/class helpers
+  // ============================================================
+  const activeStudentIds = new Set(students.map(student => student.id))
+
+  const getValidStudentIdsForClass = classItem =>
+    (Array.isArray(classItem?.studentIds) ? classItem.studentIds : [])
+      .filter(studentId => activeStudentIds.has(studentId))
+
+  const getStudentName = studentId => {
+    const student = students.find(s => s.id === studentId)
+    return student?.name || student?.email || ''
+  }
+
+  const isSystemClass = classItem =>
+    (classItem.name || '').trim().toLowerCase() === 'all' ||
+    classItem.system === true ||
+    classItem.isSystem === true
+
+  // ============================================================
   // Form helpers
   // ============================================================
   const openCreateModal = () => {
@@ -214,7 +234,7 @@ export default function ManageClasses() {
     setFormName(classItem.name || '')
     setFormDescription(classItem.description || '')
     setFormColor(classItem.color || 'purple')
-    setFormStudentIds(classItem.studentIds || [])
+    setFormStudentIds(getValidStudentIdsForClass(classItem))
     setFormTeacherId(classItem.teacherId || (userRole === 'teacher' ? user?.uid || '' : ''))
     setFormSearch('')
     setShowCreateModal(true)
@@ -262,15 +282,21 @@ export default function ManageClasses() {
         return
       }
 
-      const previousStudentIds = editingClass?.studentIds || []
-      const addedStudentIds = formStudentIds.filter(id => !previousStudentIds.includes(id))
+      const cleanedStudentIds = Array.from(
+        new Set(formStudentIds.filter(studentId => activeStudentIds.has(studentId)))
+      )
+
+      const previousStudentIds = editingClass
+        ? getValidStudentIdsForClass(editingClass)
+        : []
+      const addedStudentIds = cleanedStudentIds.filter(id => !previousStudentIds.includes(id))
 
       if (editingClass) {
         await updateDoc(doc(db, 'classes', editingClass.id), {
           name: formName.trim(),
           description: formDescription.trim(),
           color: formColor,
-          studentIds: formStudentIds,
+          studentIds: cleanedStudentIds,
           teacherId,
           schoolId,
           updatedBy: user.uid,
@@ -281,7 +307,7 @@ export default function ManageClasses() {
           name: formName.trim(),
           description: formDescription.trim(),
           color: formColor,
-          studentIds: formStudentIds,
+          studentIds: cleanedStudentIds,
           teacherId,
           schoolId,
           createdBy: user.uid,
@@ -302,23 +328,19 @@ export default function ManageClasses() {
       // Removing a student from a class should only remove them from that class.
       // It must not remove teacherIds from the student profile, because the same
       // student may still belong to another class or still be assigned to this teacher.
+      // Deleted/missing students are also cleaned from studentIds when the class is saved.
       closeModal()
     } catch (error) {
       console.error(error)
-      alert('Could not save class. Please try again.')
+      alert(`Could not save class. ${error?.message || 'Please try again.'}`)
     } finally {
       setSaving(false)
     }
   }
 
-  const isSystemClass = classItem =>
-    (classItem.name || '').trim().toLowerCase() === 'all' ||
-    classItem.system === true ||
-    classItem.isSystem === true
-
   const handleArchiveClass = async classItem => {
     if (isSystemClass(classItem)) {
-      alert('The ALL class is a system group and cannot be deleted.')
+      alert('The ALL class is a system group and cannot be archived or deleted.')
       return
     }
 
@@ -340,22 +362,37 @@ export default function ManageClasses() {
     }
   }
 
+  const handleDeleteClass = async classItem => {
+    if (isSystemClass(classItem)) {
+      alert('The ALL class is a system group and cannot be archived or deleted.')
+      return
+    }
+
+    const confirmed = window.confirm(
+      `Delete class "${classItem.name}" permanently?\n\nThis will only delete the class group. Students, homework assignments, submissions and results will not be deleted. This action cannot be undone.`
+    )
+
+    if (!confirmed) return
+
+    try {
+      await deleteDoc(doc(db, 'classes', classItem.id))
+    } catch (error) {
+      console.error('Could not delete class:', error)
+      alert(`Could not delete class. ${error?.message || 'Please check Firestore rules and try again.'}`)
+    }
+  }
+
   // ============================================================
   // Search filter for students inside modal
   // ============================================================
   const filteredStudents = students.filter(student => {
     if (!formSearch.trim()) return true
-    const query = formSearch.toLowerCase()
+    const searchQuery = formSearch.toLowerCase()
     return (
-      (student.name || '').toLowerCase().includes(query) ||
-      (student.email || '').toLowerCase().includes(query)
+      (student.name || '').toLowerCase().includes(searchQuery) ||
+      (student.email || '').toLowerCase().includes(searchQuery)
     )
   })
-
-  const getStudentName = studentId => {
-    const student = students.find(s => s.id === studentId)
-    return student?.name || student?.email || 'Unknown student'
-  }
 
   // ============================================================
   // Loading state
@@ -426,7 +463,9 @@ export default function ManageClasses() {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {classes.map(classItem => {
               const colorStyle = getColorStyle(classItem.color)
-              const studentCount = (classItem.studentIds || []).length
+              const validStudentIds = getValidStudentIdsForClass(classItem)
+              const staleStudentCount = (classItem.studentIds || []).length - validStudentIds.length
+              const studentCount = validStudentIds.length
 
               return (
                 <div
@@ -463,7 +502,7 @@ export default function ManageClasses() {
                   {studentCount > 0 && (
                     <div className="bg-gray-50 rounded-xl p-3 mb-4 max-h-32 overflow-y-auto">
                       <div className="flex flex-col gap-1">
-                        {(classItem.studentIds || []).slice(0, 5).map(studentId => (
+                        {validStudentIds.slice(0, 5).map(studentId => (
                           <p key={studentId} className="text-xs text-gray-600 truncate">
                             • {getStudentName(studentId)}
                           </p>
@@ -477,6 +516,20 @@ export default function ManageClasses() {
                     </div>
                   )}
 
+                  {studentCount === 0 && (
+                    <div className="bg-gray-50 rounded-xl p-3 mb-4">
+                      <p className="text-xs text-gray-400">
+                        No active students in this class.
+                      </p>
+                    </div>
+                  )}
+
+                  {staleStudentCount > 0 && (
+                    <p className="text-[11px] text-amber-600 mb-4">
+                      {staleStudentCount} deleted/missing student reference{staleStudentCount === 1 ? '' : 's'} hidden. Click Edit and Save to clean this class.
+                    </p>
+                  )}
+
                   <div className="flex gap-2">
                     <button
                       onClick={() => openEditModal(classItem)}
@@ -485,12 +538,20 @@ export default function ManageClasses() {
                       Edit
                     </button>
                     {!isSystemClass(classItem) && (
-                      <button
-                        onClick={() => handleArchiveClass(classItem)}
-                        className="bg-red-50 text-red-600 rounded-xl px-3 py-2 text-xs font-medium hover:bg-red-100"
-                      >
-                        Archive
-                      </button>
+                      <>
+                        <button
+                          onClick={() => handleArchiveClass(classItem)}
+                          className="bg-amber-50 text-amber-600 rounded-xl px-3 py-2 text-xs font-medium hover:bg-amber-100"
+                        >
+                          Archive
+                        </button>
+                        <button
+                          onClick={() => handleDeleteClass(classItem)}
+                          className="bg-red-50 text-red-600 rounded-xl px-3 py-2 text-xs font-medium hover:bg-red-100"
+                        >
+                          Delete
+                        </button>
+                      </>
                     )}
                   </div>
                 </div>
