@@ -2125,7 +2125,7 @@ Continue permanent delete?`
     })
 
     return Object.values(stats)
-      .filter(item => item.total > 0)
+      .filter(item => item.total > 0 && item.wrong > 0)
       .map(item => ({
         ...item,
         wrongRate: Math.round((item.wrong / item.total) * 100)
@@ -2535,7 +2535,7 @@ Continue permanent delete?`
     })
 
     return Object.values(stats)
-      .filter(item => item.total > 0)
+      .filter(item => item.total > 0 && item.wrong > 0)
       .map(item => ({
         ...item,
         wrongRate: Math.round((item.wrong / item.total) * 100)
@@ -2732,7 +2732,7 @@ Continue permanent delete?`
     })
 
     return Object.values(stats)
-      .filter(item => item.total > 0)
+      .filter(item => item.total > 0 && item.wrong > 0)
       .map(item => ({
         ...item,
         wrongRate: Math.round((item.wrong / item.total) * 100)
@@ -2956,7 +2956,7 @@ Continue permanent delete?`
     })
 
     return Object.values(stats)
-      .filter(item => item.total > 0)
+      .filter(item => item.total > 0 && item.wrong > 0)
       .map(item => ({
         ...item,
         wrongRate: Math.round((item.wrong / item.total) * 100)
@@ -4316,7 +4316,7 @@ Continue permanent delete?`
                       </p>
 
                       <p className="text-xs text-gray-500 mt-2">
-                        {selectedAnalyticsReadingStats?.completed || 0}/{selectedAnalyticsReadingStats?.assigned || 0} completed · Avg {selectedAnalyticsAverageReadingBand || '--'}
+                        {selectedAnalyticsReadingStats?.completed || 0}/{selectedAnalyticsReadingStats?.assigned || 0} completed · Avg Band {selectedAnalyticsAverageReadingBand || '--'}
                       </p>
                     </div>
 
@@ -4330,7 +4330,7 @@ Continue permanent delete?`
                       </p>
 
                       <p className="text-xs text-gray-500 mt-2">
-                        {selectedAnalyticsListeningStats?.completed || 0}/{selectedAnalyticsListeningStats?.assigned || 0} completed · Avg {selectedAnalyticsAverageListeningBand || '--'}
+                        {selectedAnalyticsListeningStats?.completed || 0}/{selectedAnalyticsListeningStats?.assigned || 0} completed · Avg Band {selectedAnalyticsAverageListeningBand || '--'}
                       </p>
                     </div>
 
@@ -4344,7 +4344,7 @@ Continue permanent delete?`
                       </p>
 
                       <p className="text-xs text-gray-500 mt-2">
-                        {selectedAnalyticsVocabularyStats?.completed || 0}/{selectedAnalyticsVocabularyStats?.assigned || 0} completed · Avg {selectedAnalyticsAverageVocabularyAccuracy ?? '--'}%
+                        {selectedAnalyticsVocabularyStats?.completed || 0}/{selectedAnalyticsVocabularyStats?.assigned || 0} completed · Avg Accuracy {selectedAnalyticsAverageVocabularyAccuracy ?? '--'}%
                       </p>
                     </div>
                   </div>
