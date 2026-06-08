@@ -16,7 +16,6 @@ import { useNavigate, useParams } from 'react-router-dom'
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
 const LEGACY_TYPES = ['fitb', 'summaryOptions', 'summary']
-
 const DEFAULT_SCHOOL_ID = 'maxima'
 
 function getProfileSchoolId(profile) {
@@ -64,6 +63,10 @@ export default function CreateReading() {
   const getQuestionItemCount = question => {
     if (question.type === 'matching') {
       return question.paragraphs?.length || 0
+    }
+
+    if (question.type === 'matchingInformation') {
+      return question.items?.length || 0
     }
 
     if (question.type === 'sentenceEndings') {
@@ -454,6 +457,26 @@ export default function CreateReading() {
           }
         }
 
+        if (question.type === 'matchingInformation') {
+          return {
+            id: question.id || crypto.randomUUID(),
+            type: 'matchingInformation',
+            instruction:
+              question.instruction ||
+              'Which section contains the following information?',
+            sectionLetters: question.sectionLetters?.length
+              ? question.sectionLetters
+              : paragraphs.map(p => p.letter),
+            items: question.items?.length
+              ? question.items.map(item => ({
+                  id: item.id || crypto.randomUUID(),
+                  statement: item.statement || item.question || '',
+                  answer: item.answer || ''
+                }))
+              : [{ id: crypto.randomUUID(), statement: '', answer: '' }]
+          }
+        }
+
         if (question.type === 'sentenceEndings') {
           return {
             id: question.id || crypto.randomUUID(),
@@ -619,6 +642,28 @@ export default function CreateReading() {
             letter: p.letter,
             answer: ''
           }))
+        }
+      ])
+      return
+    }
+
+    if (type === 'matchingInformation') {
+      setPassageMode('sections')
+      setQuestions(prev => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          type: 'matchingInformation',
+          instruction:
+            'Which section contains the following information?',
+          sectionLetters: paragraphs.map(p => p.letter),
+          items: [
+            {
+              id: crypto.randomUUID(),
+              statement: '',
+              answer: ''
+            }
+          ]
         }
       ])
       return
@@ -877,6 +922,48 @@ export default function CreateReading() {
           paragraphs: q.paragraphs.map(p =>
             p.letter === letter ? { ...p, answer: value } : p
           )
+        }
+      })
+    )
+  }
+
+  const updateMatchingInformationItem = (questionId, itemId, field, value) => {
+    setQuestions(prev =>
+      prev.map(q => {
+        if (q.id !== questionId) return q
+        return {
+          ...q,
+          items: q.items.map(item =>
+            item.id === itemId ? { ...item, [field]: value } : item
+          )
+        }
+      })
+    )
+  }
+
+  const addMatchingInformationItem = questionId => {
+    setQuestions(prev =>
+      prev.map(q => {
+        if (q.id !== questionId) return q
+        return {
+          ...q,
+          items: [
+            ...q.items,
+            { id: crypto.randomUUID(), statement: '', answer: '' }
+          ]
+        }
+      })
+    )
+  }
+
+  const removeMatchingInformationItem = (questionId, itemId) => {
+    setQuestions(prev =>
+      prev.map(q => {
+        if (q.id !== questionId) return q
+        if (q.items.length <= 1) return q
+        return {
+          ...q,
+          items: q.items.filter(item => item.id !== itemId)
         }
       })
     )
@@ -1332,17 +1419,27 @@ export default function CreateReading() {
   useEffect(() => {
     setQuestions(prev =>
       prev.map(q => {
-        if (q.type !== 'matching') return q
-        return {
-          ...q,
-          paragraphs: paragraphs.map(p => {
-            const existing = q.paragraphs.find(x => x.letter === p.letter)
-            return {
-              letter: p.letter,
-              answer: existing?.answer || ''
-            }
-          })
+        if (q.type === 'matching') {
+          return {
+            ...q,
+            paragraphs: paragraphs.map(p => {
+              const existing = q.paragraphs.find(x => x.letter === p.letter)
+              return {
+                letter: p.letter,
+                answer: existing?.answer || ''
+              }
+            })
+          }
         }
+
+        if (q.type === 'matchingInformation') {
+          return {
+            ...q,
+            sectionLetters: paragraphs.map(p => p.letter)
+          }
+        }
+
+        return q
       })
     )
   }, [paragraphs])
@@ -1427,6 +1524,20 @@ export default function CreateReading() {
         for (const paragraph of question.paragraphs) {
           if (!paragraph.answer) {
             alert('Please select correct headings for all matching paragraphs.')
+            return false
+          }
+        }
+      }
+
+      if (question.type === 'matchingInformation') {
+        if (!question.instruction?.trim()) {
+          alert('Please add instructions for Matching Information.')
+          return false
+        }
+
+        for (const item of question.items || []) {
+          if (!item.statement?.trim() || !item.answer) {
+            alert('Please fill all Matching Information statements and correct section letters.')
             return false
           }
         }
@@ -1642,6 +1753,22 @@ export default function CreateReading() {
         }
       }
 
+      if (question.type === 'matchingInformation') {
+        return {
+          id: question.id,
+          type: 'matchingInformation',
+          instruction: question.instruction || '',
+          sectionLetters: question.sectionLetters?.length
+            ? question.sectionLetters
+            : paragraphs.map(p => p.letter),
+          items: (question.items || []).map(item => ({
+            id: item.id,
+            statement: item.statement || '',
+            answer: item.answer || ''
+          }))
+        }
+      }
+
       if (question.type === 'sentenceEndings') {
         return {
           id: question.id,
@@ -1703,7 +1830,7 @@ export default function CreateReading() {
       setTimeout(() => navigate('/teacher'), 1000)
     } catch (error) {
       console.error(error)
-      alert('Could not save reading homework.')
+      alert(`Could not save reading homework. ${error?.message || ''}`)
       setSaving(false)
     }
   }
@@ -1751,35 +1878,6 @@ export default function CreateReading() {
         {/* Reading Details */}
         <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-5">
           <h2 className="font-semibold text-gray-800 mb-4">Reading Details</h2>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-            <div>
-              <label className="text-xs text-gray-400 mb-1 block">Library visibility</label>
-              <select
-                value={visibility}
-                onChange={e => setVisibility(e.target.value)}
-                className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white"
-              >
-                <option value="private">My Library</option>
-                <option value="school">School Library</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="text-xs text-gray-400 mb-1 block">Reading type</label>
-              <select
-                value={contentType}
-                onChange={e => setContentType(e.target.value)}
-                className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white"
-              >
-                <option value="full_reading">Full Reading</option>
-                <option value="short_reading">Short Reading</option>
-                <option value="mini_reading">Mini Reading</option>
-                <option value="passage_practice">Passage Practice</option>
-                <option value="reading_skill">Skill Practice</option>
-              </select>
-            </div>
-          </div>
 
           <div className="mb-4">
             <label className="text-xs text-gray-400 mb-1 block">Title</label>
@@ -2077,6 +2175,12 @@ export default function CreateReading() {
                 + Matching Headings
               </button>
               <button
+                onClick={() => addQuestion('matchingInformation')}
+                className="text-xs bg-violet-50 text-violet-600 px-3 py-2 rounded-lg hover:bg-violet-100 font-semibold"
+              >
+                + Matching Information
+              </button>
+              <button
                 onClick={() => addQuestion('sentenceEndings')}
                 className="text-xs bg-cyan-50 text-cyan-600 px-3 py-2 rounded-lg hover:bg-cyan-100"
               >
@@ -2341,6 +2445,100 @@ export default function CreateReading() {
                                   {h.number}. {h.text}
                                 </option>
                               ))}
+                          </select>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* ============ MATCHING INFORMATION ============ */}
+                {question.type === 'matchingInformation' && (
+                  <div>
+                    <label className="text-xs text-gray-400 mb-1 block">Instruction</label>
+                    <textarea
+                      rows={2}
+                      value={question.instruction}
+                      onChange={e =>
+                        updateQuestion(question.id, 'instruction', e.target.value)
+                      }
+                      placeholder="Which section contains the following information?"
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 mb-4 resize-none"
+                    />
+
+                    <div className="bg-violet-50 border border-violet-100 rounded-xl p-4 mb-4">
+                      <p className="text-xs text-violet-700 font-medium mb-1">
+                        IELTS Matching Information
+                      </p>
+                      <p className="text-xs text-violet-500">
+                        Students choose the section letter A-G for each statement. Same letters may be used more than once.
+                      </p>
+                    </div>
+
+                    <div className="flex items-center justify-between mb-3">
+                      <p className="text-sm font-medium text-gray-800">Information statements</p>
+                      <button
+                        onClick={() => addMatchingInformationItem(question.id)}
+                        className="text-xs bg-violet-50 text-violet-600 px-3 py-1.5 rounded-lg hover:bg-violet-100"
+                      >
+                        + Add statement
+                      </button>
+                    </div>
+
+                    <div className="flex flex-col gap-3">
+                      {(question.items || []).map((item, itemIndex) => (
+                        <div key={item.id} className="bg-white border border-gray-100 rounded-xl p-3">
+                          <div className="flex items-center justify-between mb-2">
+                            <p className="text-xs font-semibold text-gray-500">
+                              Item {itemIndex + 1}
+                            </p>
+
+                            {(question.items || []).length > 1 && (
+                              <button
+                                onClick={() => removeMatchingInformationItem(question.id, item.id)}
+                                className="text-xs text-red-400 hover:text-red-600"
+                              >
+                                Remove
+                              </button>
+                            )}
+                          </div>
+
+                          <textarea
+                            rows={2}
+                            value={item.statement}
+                            onChange={e =>
+                              updateMatchingInformationItem(
+                                question.id,
+                                item.id,
+                                'statement',
+                                e.target.value
+                              )
+                            }
+                            placeholder="e.g. reference to the amount of time when a car is not in use"
+                            className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 mb-2 resize-none"
+                          />
+
+                          <select
+                            value={item.answer}
+                            onChange={e =>
+                              updateMatchingInformationItem(
+                                question.id,
+                                item.id,
+                                'answer',
+                                e.target.value
+                              )
+                            }
+                            className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 bg-white"
+                          >
+                            <option value="">Select correct section</option>
+                            {(question.sectionLetters?.length
+                              ? question.sectionLetters
+                              : paragraphs.map(p => p.letter)
+                            ).map(letter => (
+                              <option key={letter} value={letter}>
+                                Section {letter}
+                              </option>
+                            ))}
                           </select>
                         </div>
                       ))}
