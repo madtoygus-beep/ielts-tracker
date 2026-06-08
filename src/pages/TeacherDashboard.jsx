@@ -1653,6 +1653,16 @@ Continue permanent delete?`
     return userAnswer === correctAnswer
   }
 
+  const isMatchingInformationCorrect = (submission, question, item) => {
+    const userAnswer = submission.answers?.[question.id]?.[item.id]
+      ?.toString()
+      .trim()
+
+    const correctAnswer = item.answer?.toString().trim()
+
+    return userAnswer === correctAnswer
+  }
+
   const isSummaryOptionCorrect = (submission, question, item) => {
     const userAnswer = submission.answers?.[question.id]?.[item.id]
       ?.toString()
@@ -1738,6 +1748,7 @@ Continue permanent delete?`
 
     const stats = {
       matching: { correct: 0, total: 0 },
+      matchingInformation: { correct: 0, total: 0 },
       sentenceEndings: { correct: 0, total: 0 },
       summaryOptions: { correct: 0, total: 0 },
       tfng: { correct: 0, total: 0 },
@@ -1760,6 +1771,18 @@ Continue permanent delete?`
 
             if (isMatchingCorrect(sub, question, paragraph)) {
               stats.matching.correct++
+            }
+          })
+
+          return
+        }
+
+        if (question.type === 'matchingInformation') {
+          question.items?.forEach(item => {
+            stats.matchingInformation.total++
+
+            if (isMatchingInformationCorrect(sub, question, item)) {
+              stats.matchingInformation.correct++
             }
           })
 
@@ -1837,6 +1860,7 @@ Continue permanent delete?`
 
     const data = {
       matching: percentage(stats.matching),
+      matchingInformation: percentage(stats.matchingInformation),
       sentenceEndings: percentage(stats.sentenceEndings),
       summaryOptions: percentage(stats.summaryOptions),
       tfng: percentage(stats.tfng),
@@ -1860,6 +1884,7 @@ Continue permanent delete?`
 
   const getWeakestLabel = type => {
     if (type === 'matching') return 'Matching Headings'
+    if (type === 'matchingInformation') return 'Matching Information'
     if (type === 'sentenceEndings') return 'Sentence Endings'
     if (type === 'summaryOptions') return 'Summary Completion with Options'
     if (type === 'tfng') return 'True / False / Not Given'
@@ -1914,6 +1939,18 @@ Continue permanent delete?`
           total++
 
           if (isMatchingCorrect(submission, question, paragraph)) {
+            correct++
+          }
+        })
+
+        return
+      }
+
+      if (question.type === 'matchingInformation') {
+        question.items?.forEach(item => {
+          total++
+
+          if (isMatchingInformationCorrect(submission, question, item)) {
             correct++
           }
         })
@@ -2060,6 +2097,18 @@ Continue permanent delete?`
           return
         }
 
+        if (question.type === 'matchingInformation') {
+          question.items?.forEach(item => {
+            stats[key].total++
+
+            if (!isMatchingInformationCorrect(submission, question, item)) {
+              stats[key].wrong++
+            }
+          })
+
+          return
+        }
+
         if (question.type === 'sentenceEndings') {
           question.items?.forEach(item => {
             stats[key].total++
@@ -2172,6 +2221,7 @@ Continue permanent delete?`
   const getReadingTypeAnalytics = () => {
     const stats = {
       matching: { correct: 0, total: 0 },
+      matchingInformation: { correct: 0, total: 0 },
       sentenceEndings: { correct: 0, total: 0 },
       summaryOptions: { correct: 0, total: 0 },
       mcq: { correct: 0, total: 0 },
@@ -2194,6 +2244,18 @@ Continue permanent delete?`
 
             if (isMatchingCorrect(submission, question, paragraph)) {
               stats.matching.correct++
+            }
+          })
+
+          return
+        }
+
+        if (question.type === 'matchingInformation') {
+          question.items?.forEach(item => {
+            stats.matchingInformation.total++
+
+            if (isMatchingInformationCorrect(submission, question, item)) {
+              stats.matchingInformation.correct++
             }
           })
 
@@ -2328,6 +2390,7 @@ Continue permanent delete?`
   const getReadingTypeAnalyticsForSubmissions = targetSubmissions => {
     const stats = {
       matching: { correct: 0, total: 0 },
+      matchingInformation: { correct: 0, total: 0 },
       sentenceEndings: { correct: 0, total: 0 },
       summaryOptions: { correct: 0, total: 0 },
       mcq: { correct: 0, total: 0 },
@@ -2350,6 +2413,18 @@ Continue permanent delete?`
 
             if (isMatchingCorrect(submission, question, paragraph)) {
               stats.matching.correct++
+            }
+          })
+
+          return
+        }
+
+        if (question.type === 'matchingInformation') {
+          question.items?.forEach(item => {
+            stats.matchingInformation.total++
+
+            if (isMatchingInformationCorrect(submission, question, item)) {
+              stats.matchingInformation.correct++
             }
           })
 
@@ -2463,6 +2538,18 @@ Continue permanent delete?`
             stats[key].total++
 
             if (!isMatchingCorrect(submission, question, paragraph)) {
+              stats[key].wrong++
+            }
+          })
+
+          return
+        }
+
+        if (question.type === 'matchingInformation') {
+          question.items?.forEach(item => {
+            stats[key].total++
+
+            if (!isMatchingInformationCorrect(submission, question, item)) {
               stats[key].wrong++
             }
           })
@@ -2840,6 +2927,7 @@ Continue permanent delete?`
 
   const getReadingTypeLabel = type => {
     if (type === 'matching') return 'Matching Headings'
+    if (type === 'matchingInformation') return 'Matching Information'
     if (type === 'sentenceEndings') return 'Sentence Endings'
     if (type === 'summaryOptions') return 'Summary Completion with Options'
     if (type === 'mcq') return 'MCQ'
@@ -5435,6 +5523,7 @@ Continue permanent delete?`
                         <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
                           {[
                             ['Matching', analytics.matching],
+                            ['Matching Information', analytics.matchingInformation],
                             ['Sentence Endings', analytics.sentenceEndings],
                             ['TFNG', analytics.tfng],
                             ['Fill Blank', analytics.fitb],
@@ -6182,8 +6271,10 @@ Continue permanent delete?`
                         <span className="text-xs bg-purple-50 text-purple-600 px-2 py-1 rounded-full">
                           {question.type === 'matching'
                             ? 'Matching Headings'
-                            : question.type === 'sentenceEndings'
-                              ? 'Sentence Endings'
+                            : question.type === 'matchingInformation'
+                              ? 'Matching Information'
+                              : question.type === 'sentenceEndings'
+                                ? 'Sentence Endings'
                               : question.type === 'tfng'
                               ? 'T/F/NG'
                               : question.type === 'fitb'
@@ -6196,7 +6287,79 @@ Continue permanent delete?`
                         </span>
                       </div>
 
-                      {question.type === 'matching' ? (
+                      {question.type === 'matchingInformation' ? (
+                        <div>
+                          {question.instruction && (
+                            <p className="text-sm text-gray-700 mb-4">
+                              {question.instruction}
+                            </p>
+                          )}
+
+                          <div className="flex flex-col gap-3">
+                            {question.items?.map(item => {
+                              const correct = isMatchingInformationCorrect(
+                                selectedReview.submission,
+                                question,
+                                item
+                              )
+
+                              const userAnswer =
+                                selectedReview.submission.answers?.[
+                                  question.id
+                                ]?.[item.id]
+
+                              const correctAnswer = item.answer
+
+                              return (
+                                <div
+                                  key={item.id}
+                                  className={`rounded-xl p-3 border ${
+                                    correct
+                                      ? 'bg-green-50 border-green-100'
+                                      : 'bg-red-50 border-red-100'
+                                  }`}
+                                >
+                                  <div className="flex justify-between mb-2">
+                                    <p className="text-sm font-semibold text-gray-800">
+                                      {item.statement || item.question || 'Matching information item'}
+                                    </p>
+
+                                    <p
+                                      className={`text-xs font-semibold ${
+                                        correct
+                                          ? 'text-green-600'
+                                          : 'text-red-600'
+                                      }`}
+                                    >
+                                      {correct ? 'Correct' : 'Wrong'}
+                                    </p>
+                                  </div>
+
+                                  <p className="text-xs text-gray-500">
+                                    Student:
+                                  </p>
+
+                                  <p className="text-sm text-gray-800 mb-2">
+                                    {userAnswer || 'No answer'}
+                                  </p>
+
+                                  {!correct && (
+                                    <>
+                                      <p className="text-xs text-gray-500">
+                                        Correct:
+                                      </p>
+
+                                      <p className="text-sm font-medium text-green-700">
+                                        {correctAnswer || 'No answer key'}
+                                      </p>
+                                    </>
+                                  )}
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      ) : question.type === 'matching' ? (
                         <div className="flex flex-col gap-3">
                           {question.paragraphs.map(paragraph => {
                             const correct = isMatchingCorrect(
