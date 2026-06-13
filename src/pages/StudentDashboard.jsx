@@ -407,6 +407,16 @@
     return userAnswer === correctAnswer
   }
 
+  function isMatchingInformationCorrect(submission, question, item) {
+    const userAnswer = submission.answers?.[question.id]?.[item.id]
+      ?.toString()
+      .trim()
+
+    const correctAnswer = item.answer?.toString().trim()
+
+    return userAnswer === correctAnswer
+  }
+
   function isSentenceEndingCorrect(submission, question, item) {
     const userAnswer = submission.answers?.[question.id]?.[item.id]
       ?.toString()
@@ -507,6 +517,7 @@
 
   function getQuestionTypeLabel(type) {
     if (type === 'matching') return 'Matching Headings'
+    if (type === 'matchingInformation') return 'Matching Information'
     if (type === 'listeningMatching') return 'Listening Matching'
     if (type === 'sentenceEndings') return 'Sentence Endings'
     if (type === 'mcq') return 'MCQ'
@@ -584,6 +595,24 @@
 
             if (isMatchingCorrect(submission, question, paragraph)) {
               stats.matching.correct++
+              totalCorrect++
+            }
+          })
+
+          return
+        }
+
+        if (question.type === 'matchingInformation') {
+          if (!stats.matchingInformation) {
+            stats.matchingInformation = { correct: 0, total: 0 }
+          }
+
+          question.items?.forEach(item => {
+            stats.matchingInformation.total++
+            totalQuestions++
+
+            if (isMatchingInformationCorrect(submission, question, item)) {
+              stats.matchingInformation.correct++
               totalCorrect++
             }
           })
@@ -877,7 +906,7 @@
       readings,
       readingSubmissions,
       'readingId',
-      ['matching', 'sentenceEndings', 'summaryOptions', 'mcq', 'fitb', 'tfng', 'table', 'summary', 'note', 'noteCompletion']
+      ['matching', 'matchingInformation', 'sentenceEndings', 'summaryOptions', 'mcq', 'fitb', 'tfng', 'table', 'summary', 'note', 'noteCompletion']
     )
 
     const listeningAnalytics = calculateSkillAnalytics(
