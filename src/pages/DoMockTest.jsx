@@ -146,6 +146,8 @@ function getReadingBand(correct, total) {
 function getReadingQuestionCount(question) {
   if (question.type === 'matching') return question.paragraphs?.length || 0
 
+  if (question.type === 'matchingInformation') return question.items?.length || 0
+
   if (question.type === 'sentenceEndings') return question.items?.length || 0
 
   if (question.type === 'summaryOptions') return question.items?.length || 0
@@ -1329,6 +1331,26 @@ export default function DoMockTest() {
     })
   }
 
+  const handleReadingMatchingInformation = (readingId, questionId, itemId, value) => {
+    if (readingLocked) return
+
+    setReadingAnswers(prev => {
+      const readingSet = prev[readingId] || {}
+      const currentQuestion = readingSet[questionId] || {}
+
+      return {
+        ...prev,
+        [readingId]: {
+          ...readingSet,
+          [questionId]: {
+            ...currentQuestion,
+            [itemId]: value
+          }
+        }
+      }
+    })
+  }
+
   const handleReadingSentenceEnding = (readingId, questionId, itemId, value) => {
     if (readingLocked) return
 
@@ -1477,6 +1499,12 @@ export default function DoMockTest() {
   }
 
   const isReadingSummaryOptionCorrect = (readingId, question, item) => {
+    const value = readingAnswers[readingId]?.[question.id]?.[item.id]
+
+    return value?.toString() === item.answer?.toString()
+  }
+
+  const isReadingMatchingInformationCorrect = (readingId, question, item) => {
     const value = readingAnswers[readingId]?.[question.id]?.[item.id]
 
     return value?.toString() === item.answer?.toString()
@@ -1679,6 +1707,18 @@ export default function DoMockTest() {
           const userAnswer = readingAnswers[reading.id]?.[question.id]?.[paragraph.letter]
 
           if (userAnswer?.toString() === paragraph.answer?.toString()) {
+            correct++
+          }
+        })
+
+        return
+      }
+
+      if (question.type === 'matchingInformation') {
+        question.items?.forEach(item => {
+          total++
+
+          if (isReadingMatchingInformationCorrect(reading.id, question, item)) {
             correct++
           }
         })
@@ -3135,6 +3175,67 @@ export default function DoMockTest() {
                                     </option>
                                   )
                                 })}
+                              </select>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {question.type === 'matchingInformation' && (
+                      <div>
+                        {question.instruction && (
+                          <p className="text-sm text-gray-700 mb-4">
+                            {question.instruction}
+                          </p>
+                        )}
+
+                        <div className="bg-white border border-violet-100 rounded-xl p-4 mb-5">
+                          <p className="text-xs font-semibold text-violet-600 uppercase tracking-wider mb-2">
+                            Sections
+                          </p>
+
+                          <p className="text-xs text-gray-500">
+                            Choose the section letter for each statement. Letters may be used more than once.
+                          </p>
+                        </div>
+
+                        <div className="flex flex-col gap-3">
+                          {(question.items || []).map(item => (
+                            <div
+                              key={item.id}
+                              className="grid grid-cols-1 md:grid-cols-[1fr_150px] gap-3 items-center bg-white border border-gray-100 rounded-xl p-3"
+                            >
+                              <p className="text-sm text-gray-800">
+                                {item.statement || item.question}
+                              </p>
+
+                              <select
+                                value={
+                                  readingAnswers[reading.id]?.[question.id]?.[
+                                    item.id
+                                  ] || ''
+                                }
+                                onChange={e =>
+                                  handleReadingMatchingInformation(
+                                    reading.id,
+                                    question.id,
+                                    item.id,
+                                    e.target.value
+                                  )
+                                }
+                                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 bg-white"
+                              >
+                                <option value="">Choose section</option>
+
+                                {(question.sectionLetters?.length
+                                  ? question.sectionLetters
+                                  : reading.paragraphs?.map(paragraph => paragraph.letter) || []
+                                ).map(letter => (
+                                  <option key={letter} value={letter}>
+                                    Section {letter}
+                                  </option>
+                                ))}
                               </select>
                             </div>
                           ))}
