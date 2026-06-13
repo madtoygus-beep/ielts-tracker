@@ -166,6 +166,7 @@ export default function CreateReading() {
 
   const getQuestionTypeLabel = question => {
     if (question.type === 'matching') return 'Matching Headings'
+    if (question.type === 'matchingInformation') return 'Matching Information'
     if (question.type === 'sentenceEndings') return 'Matching Sentence Endings'
     if (question.type === 'noteCompletion') {
       return question.mode === 'choose'
@@ -1887,6 +1888,36 @@ export default function CreateReading() {
               placeholder="e.g. Climate Change Reading"
               className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400"
             />
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+            <div>
+              <label className="text-xs text-gray-400 mb-1 block">Library visibility</label>
+              <select
+                value={visibility}
+                onChange={e => setVisibility(e.target.value)}
+                className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white"
+              >
+                <option value="private">My Library</option>
+                <option value="school">School Library</option>
+                <option value="public">Public Library</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="text-xs text-gray-400 mb-1 block">Reading type</label>
+              <select
+                value={contentType}
+                onChange={e => setContentType(e.target.value)}
+                className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white"
+              >
+                <option value="full_reading">Full Reading</option>
+                <option value="short_reading">Short Reading</option>
+                <option value="mini_reading">Mini Reading</option>
+                <option value="passage_practice">Passage Practice</option>
+                <option value="skill_practice">Skill Practice</option>
+              </select>
+            </div>
           </div>
 
           <div className="mb-4">
