@@ -16,22 +16,97 @@ import { useNavigate, useParams } from 'react-router-dom'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
+function normalizeId(value) {
+  return value === undefined || value === null
+    ? ''
+    : value.toString().trim().toLowerCase()
+}
+
+function uniqueCleanValues(values) {
+  return Array.from(
+    new Set(
+      values
+        .filter(value => value !== undefined && value !== null)
+        .map(value => value.toString().trim())
+        .filter(Boolean)
+    )
+  )
+}
+
+function getCurrentUserAssignmentValues(user, profile) {
+  if (!user) return []
+
+  return uniqueCleanValues([
+    user.uid,
+    user.email,
+    user.email?.toLowerCase(),
+    profile?.uid,
+    profile?.id,
+    profile?.email,
+    profile?.email?.toLowerCase()
+  ])
+}
+
+function getAssignmentValues(item) {
+  return [
+    ...(Array.isArray(item?.assignTo) ? item.assignTo : []),
+    ...(Array.isArray(item?.assignedTo) ? item.assignedTo : []),
+    ...(Array.isArray(item?.studentIds) ? item.studentIds : []),
+    ...(Array.isArray(item?.assignedStudentIds) ? item.assignedStudentIds : []),
+    ...(Array.isArray(item?.assignedEmails) ? item.assignedEmails : [])
+  ]
+}
+
+function isAssignedToCurrentUser(item, user, profile) {
+  const assignedValues = getAssignmentValues(item).map(normalizeId).filter(Boolean)
+  const currentUserValues = getCurrentUserAssignmentValues(user, profile)
+    .map(normalizeId)
+    .filter(Boolean)
+
+  if (assignedValues.length === 0) return false
+
+  return currentUserValues.some(value => assignedValues.includes(value))
+}
+
+function isHiddenForCurrentUser(item, user, profile) {
+  if (!Array.isArray(item?.hiddenFor)) return false
+
+  const hiddenValues = item.hiddenFor.map(normalizeId).filter(Boolean)
+  const currentUserValues = getCurrentUserAssignmentValues(user, profile)
+    .map(normalizeId)
+    .filter(Boolean)
+
+  return currentUserValues.some(value => hiddenValues.includes(value))
+}
+
+
 function normalizeListeningParts(listening) {
-  if (listening?.parts?.length) {
-    return listening.parts.map((part, index) => ({
-      id: part.id || `part-${index + 1}`,
-      title: part.title || `Part ${index + 1}`,
-      instructions: part.instructions || '',
-      questions: part.questions?.length ? part.questions : []
-    }))
+  const sourceQuestions = []
+
+  if (Array.isArray(listening?.parts) && listening.parts.length) {
+    listening.parts.forEach(part => {
+      ;(part.questions || []).forEach(question => {
+        sourceQuestions.push({
+          ...question,
+          partId: question.partId || part.id || '',
+          partTitle: question.partTitle || part.title || ''
+        })
+      })
+    })
+  }
+
+  if (sourceQuestions.length === 0 && Array.isArray(listening?.questions)) {
+    listening.questions.forEach(question => {
+      sourceQuestions.push(question)
+    })
   }
 
   return [
     {
-      id: 'part-1',
-      title: 'Part 1',
+      id: listening?.parts?.[0]?.id || 'listening-main',
+      title: 'Listening Questions',
       instructions: '',
-      questions: listening?.questions?.length ? listening.questions : []
+      questions: sourceQuestions
     }
   ]
 }
@@ -415,20 +490,24 @@ export default function DoListening() {
       setUser(currentUser)
 
       const snap = await getDoc(doc(db, 'listenings', id))
-      if (!snap.exists()) return
+      if (!snap.exists()) {
+        alert('Listening homework not found.')
+        navigate('/student')
+        return
+      }
 
       const data = {
         id: snap.id,
         ...snap.data()
       }
 
-      if (!data.assignTo?.includes(currentUser.uid)) {
+      if (!isAssignedToCurrentUser(data, currentUser, profile)) {
         alert('This listening homework is not assigned to you.')
         navigate('/student')
         return
       }
 
-      if (data.hiddenFor?.includes(currentUser.uid) || data.archived === true) {
+      if (isHiddenForCurrentUser(data, currentUser, profile) || data.archived === true) {
         alert('This listening homework is no longer available.')
         navigate('/student')
         return
@@ -1674,33 +1753,13 @@ export default function DoListening() {
               </h2>
 
               <p className="text-xs text-gray-400 mt-1">
-                {activePart?.title || 'Part'} {activePart?.instructions ? `· ${activePart.instructions}` : ''}
+                Single Listening section — all questions are shown in one place.
               </p>
             </div>
 
             <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1.5 rounded-full">
-              {activePart ? `${getPartQuestionTotal(activePart)} in this part` : '0'}
+              {totalQuestionCount} question{totalQuestionCount === 1 ? '' : 's'}
             </span>
-          </div>
-
-          <div className="flex gap-2 overflow-x-auto mb-6 pb-1">
-            {parts.map(part => (
-              <button
-                key={part.id}
-                type="button"
-                onClick={() => setActivePartId(part.id)}
-                className={`whitespace-nowrap px-4 py-2 rounded-xl text-xs font-medium border ${
-                  activePart?.id === part.id
-                    ? 'bg-purple-600 text-white border-purple-600'
-                    : 'bg-gray-50 text-gray-500 border-gray-100 hover:bg-gray-100'
-                }`}
-              >
-                {part.title}
-                <span className="opacity-70 ml-1">
-                  ({getPartQuestionTotal(part)})
-                </span>
-              </button>
-            ))}
           </div>
 
           <div className="flex flex-col gap-6">
