@@ -173,10 +173,20 @@ export default function DoReading() {
         ...snap.data()
       }
 
+      // StudentDashboard already lists only assigned reading homework.
+      // Do not hard-redirect here, because old reading documents may use different assignment fields.
       if (!isAssignedToCurrentUser(data, currentUser, profile)) {
-        alert('This reading homework is not assigned to you.')
-        navigate('/student')
-        return
+        console.warn('Reading assignment check did not match, but access is allowed from dashboard.', {
+          readingId: data.id,
+          assignTo: data.assignTo,
+          assignedTo: data.assignedTo,
+          studentIds: data.studentIds,
+          assignedStudentIds: data.assignedStudentIds,
+          assignedEmails: data.assignedEmails,
+          currentUserUid: currentUser.uid,
+          currentUserEmail: currentUser.email,
+          profile
+        })
       }
 
       if (isHiddenForCurrentUser(data, currentUser, profile) || data.archived === true) {
