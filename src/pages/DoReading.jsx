@@ -13,7 +13,6 @@ import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { useNavigate, useParams } from 'react-router-dom'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
-const READING_FIX_VERSION = 'DoReading access fix v3 - no auto student redirect'
 
 function normalizeId(value) {
   return value === undefined || value === null
@@ -985,10 +984,6 @@ export default function DoReading() {
     return (
       <div className="min-h-screen bg-[#faf9f6] flex items-center justify-center px-4">
         <div className="bg-white border border-gray-100 rounded-2xl p-8 max-w-xl w-full text-center shadow-sm">
-          <p className="text-xs text-purple-600 font-semibold mb-3">
-            {READING_FIX_VERSION}
-          </p>
-
           {loadError ? (
             <>
               <h1 className="text-2xl font-bold text-gray-900 mb-3">
@@ -1014,7 +1009,7 @@ export default function DoReading() {
             <>
               <p className="text-gray-400 mb-4">Loading reading homework...</p>
               <p className="text-xs text-gray-400">
-                If you see this version text, the correct DoReading.jsx is active.
+                Please wait while your homework is loading.
               </p>
             </>
           )}
@@ -1032,10 +1027,6 @@ export default function DoReading() {
             alt="Maxima"
             className="h-14 object-contain"
           />
-
-          <span className="text-[10px] bg-green-50 text-green-600 px-3 py-1 rounded-full">
-            {READING_FIX_VERSION}
-          </span>
 
           <button
             onClick={() => navigate('/student')}
