@@ -13,7 +13,7 @@ import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { useNavigate, useParams } from 'react-router-dom'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
-
+const READING_FIX_VERSION = 'DoReading access fix v3 - no auto student redirect'
 
 function normalizeId(value) {
   return value === undefined || value === null
@@ -127,6 +127,7 @@ export default function DoReading() {
   const [submitting, setSubmitting] = useState(false)
   const [result, setResult] = useState(null)
   const [alreadyDone, setAlreadyDone] = useState(false)
+  const [loadError, setLoadError] = useState(null)
 
   const timerRef = useRef(null)
   const submittingRef = useRef(false)
@@ -160,11 +161,15 @@ export default function DoReading() {
       }
 
       setUser(currentUser)
+      setLoadError(null)
 
       const snap = await getDoc(doc(db, 'readings', id))
       if (!snap.exists()) {
-        alert('Reading homework not found.')
-        navigate('/student')
+        setLoadError({
+          title: 'Reading homework not found.',
+          message: 'This reading document does not exist in Firestore. The dashboard may be pointing to an old or deleted reading ID.',
+          readingId: id
+        })
         return
       }
 
@@ -190,8 +195,13 @@ export default function DoReading() {
       }
 
       if (isHiddenForCurrentUser(data, currentUser, profile) || data.archived === true) {
-        alert('This reading homework is no longer available.')
-        navigate('/student')
+        setLoadError({
+          title: 'This reading homework is hidden or archived.',
+          message: 'DoReading is working, but this item is marked as hidden/archived for this student. Check hiddenFor and archived fields in Firestore.',
+          readingId: data.id,
+          archived: data.archived === true,
+          hiddenFor: data.hiddenFor || []
+        })
         return
       }
 
@@ -973,8 +983,42 @@ export default function DoReading() {
 
   if (!reading) {
     return (
-      <div className="min-h-screen bg-[#faf9f6] flex items-center justify-center">
-        <p className="text-gray-400">Loading...</p>
+      <div className="min-h-screen bg-[#faf9f6] flex items-center justify-center px-4">
+        <div className="bg-white border border-gray-100 rounded-2xl p-8 max-w-xl w-full text-center shadow-sm">
+          <p className="text-xs text-purple-600 font-semibold mb-3">
+            {READING_FIX_VERSION}
+          </p>
+
+          {loadError ? (
+            <>
+              <h1 className="text-2xl font-bold text-gray-900 mb-3">
+                {loadError.title}
+              </h1>
+
+              <p className="text-sm text-gray-500 leading-6 mb-5">
+                {loadError.message}
+              </p>
+
+              <pre className="text-left text-xs bg-gray-50 border border-gray-100 rounded-xl p-4 overflow-x-auto mb-5">
+                {JSON.stringify(loadError, null, 2)}
+              </pre>
+
+              <button
+                onClick={() => navigate('/student')}
+                className="bg-purple-600 text-white px-5 py-3 rounded-xl text-sm font-medium hover:bg-purple-700"
+              >
+                Back to dashboard
+              </button>
+            </>
+          ) : (
+            <>
+              <p className="text-gray-400 mb-4">Loading reading homework...</p>
+              <p className="text-xs text-gray-400">
+                If you see this version text, the correct DoReading.jsx is active.
+              </p>
+            </>
+          )}
+        </div>
       </div>
     )
   }
@@ -988,6 +1032,10 @@ export default function DoReading() {
             alt="Maxima"
             className="h-14 object-contain"
           />
+
+          <span className="text-[10px] bg-green-50 text-green-600 px-3 py-1 rounded-full">
+            {READING_FIX_VERSION}
+          </span>
 
           <button
             onClick={() => navigate('/student')}
