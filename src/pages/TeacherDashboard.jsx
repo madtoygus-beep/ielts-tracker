@@ -478,16 +478,6 @@ export default function TeacherDashboard() {
     return studentValues.includes(normalizeAssignmentId(submission.uid))
   }
 
-  const mergeUniqueById = items =>
-    Array.from(
-      new Map(
-        items
-          .filter(Boolean)
-          .filter(item => item.id)
-          .map(item => [item.id, item])
-      ).values()
-    )
-
   const handleAddScore = async () => {
     if (
       !form.listening ||
@@ -526,92 +516,30 @@ export default function TeacherDashboard() {
 
   const getStudentReadings = studentId => {
     const student = getStudentByAnyId(studentId)
-
-    const assignedReadings = activeReadings.filter(reading =>
+    return activeReadings.filter(reading =>
       isHomeworkAssignedToStudent(reading, student)
     )
-
-    const submittedReadingIds = new Set(
-      submissions
-        .filter(submission => submissionBelongsToStudent(submission, student))
-        .map(submission => normalizeAssignmentId(submission.readingId))
-        .filter(Boolean)
-    )
-
-    const submittedReadings = readings.filter(reading =>
-      submittedReadingIds.has(normalizeAssignmentId(reading.id))
-    )
-
-    return mergeUniqueById([...assignedReadings, ...submittedReadings])
   }
 
   const getStudentWritings = studentId => {
     const student = getStudentByAnyId(studentId)
-
-    const assignedWritings = activeWritings.filter(writing =>
+    return activeWritings.filter(writing =>
       isHomeworkAssignedToStudent(writing, student)
     )
-
-    const submittedWritingIds = new Set(
-      writingSubmissions
-        .filter(submission => submissionBelongsToStudent(submission, student))
-        .map(submission => normalizeAssignmentId(submission.writingId))
-        .filter(Boolean)
-    )
-
-    const submittedWritings = writings.filter(writing =>
-      submittedWritingIds.has(normalizeAssignmentId(writing.id))
-    )
-
-    return mergeUniqueById([...assignedWritings, ...submittedWritings])
   }
 
   const getStudentListenings = studentId => {
     const student = getStudentByAnyId(studentId)
-
-    const assignedListenings = activeListenings.filter(listening =>
+    return activeListenings.filter(listening =>
       isHomeworkAssignedToStudent(listening, student)
     )
-
-    const submittedListeningIds = new Set(
-      listeningSubmissions
-        .filter(submission => submissionBelongsToStudent(submission, student))
-        .map(submission => normalizeAssignmentId(submission.listeningId))
-        .filter(Boolean)
-    )
-
-    const submittedListenings = listenings.filter(listening =>
-      submittedListeningIds.has(normalizeAssignmentId(listening.id))
-    )
-
-    return mergeUniqueById([...assignedListenings, ...submittedListenings])
   }
 
   const getStudentVocabularyTests = studentId => {
     const student = getStudentByAnyId(studentId)
-
-    const assignedVocabularyTests = activeVocabularyTests.filter(vocabularyTest =>
+    return activeVocabularyTests.filter(vocabularyTest =>
       isHomeworkAssignedToStudent(vocabularyTest, student)
     )
-
-    const submittedVocabularyIds = new Set(
-      vocabularySubmissions
-        .filter(submission => submissionBelongsToStudent(submission, student))
-        .flatMap(submission => [
-          submission.vocabularyTestId,
-          submission.vocabularyId,
-          submission.testId,
-          submission.homeworkId
-        ])
-        .map(normalizeAssignmentId)
-        .filter(Boolean)
-    )
-
-    const submittedVocabularyTests = vocabularyTests.filter(vocabularyTest =>
-      submittedVocabularyIds.has(normalizeAssignmentId(vocabularyTest.id))
-    )
-
-    return mergeUniqueById([...assignedVocabularyTests, ...submittedVocabularyTests])
   }
 
   const isVocabularySubmissionForTest = (submission, vocabularyTestId) => {
@@ -1688,7 +1616,7 @@ Continue permanent delete?`
       return value.join(', ')
     }
 
-    return value || 'No answer'
+    return formatReviewAnswerValue(value)
   }
 
   const isNormalCorrect = (submission, question) => {
@@ -1751,6 +1679,38 @@ Continue permanent delete?`
     const index = letters.indexOf(letter)
 
     return question.endings?.[index] || `Ending ${letter}`
+  }
+
+
+  const getSummaryOptionText = (question, letter) => {
+    if (!letter) return 'No answer'
+
+    const index = letters.indexOf(letter)
+
+    return question.options?.[index] || `Option ${letter}`
+  }
+
+  const formatReviewAnswerValue = value => {
+    if (value === undefined || value === null || value === '') return 'No answer'
+
+    if (Array.isArray(value)) {
+      return value.length ? value.filter(Boolean).join(', ') : 'No answer'
+    }
+
+    if (typeof value === 'object') {
+      const values = Object.values(value)
+        .filter(item => item !== undefined && item !== null && item !== '')
+        .map(item => {
+          if (Array.isArray(item)) return item.filter(Boolean).join(', ')
+          if (typeof item === 'object') return JSON.stringify(item)
+          return item.toString()
+        })
+        .filter(Boolean)
+
+      return values.length ? values.join(', ') : 'No answer'
+    }
+
+    return value.toString()
   }
 
   const isTableCellCorrect = (submission, question, row, cellIndex) => {
@@ -5644,7 +5604,7 @@ Continue permanent delete?`
 
                       {studentReadings.length === 0 ? (
                         <p className="text-sm text-gray-400 bg-gray-50 rounded-xl p-4">
-                          No reading homework or submitted reading result found for this student.
+                          No active reading homework assigned to this student.
                         </p>
                       ) : (
                         <div className="flex flex-col gap-3">
@@ -5743,7 +5703,7 @@ Continue permanent delete?`
 
                       {studentListenings.length === 0 ? (
                         <p className="text-sm text-gray-400 bg-gray-50 rounded-xl p-4">
-                          No listening homework or submitted listening result found for this student.
+                          No active listening homework assigned to this student.
                         </p>
                       ) : (
                         <div className="flex flex-col gap-3">
@@ -5838,7 +5798,7 @@ Continue permanent delete?`
 
                       {studentVocabularyTests.length === 0 ? (
                         <p className="text-sm text-gray-400 bg-gray-50 rounded-xl p-4">
-                          No vocabulary test or submitted vocabulary result found for this student.
+                          No active vocabulary test assigned to this student.
                         </p>
                       ) : (
                         <div className="flex flex-col gap-3">
@@ -5951,7 +5911,7 @@ Continue permanent delete?`
 
                       {studentWritings.length === 0 ? (
                         <p className="text-sm text-gray-400 bg-gray-50 rounded-xl p-4">
-                          No writing homework or submitted writing result found for this student.
+                          No active writing homework assigned to this student.
                         </p>
                       ) : (
                         <div className="flex flex-col gap-3">
@@ -6347,6 +6307,8 @@ Continue permanent delete?`
                               ? 'Matching Information'
                               : question.type === 'sentenceEndings'
                                 ? 'Sentence Endings'
+                                : question.type === 'summaryOptions'
+                                  ? 'Summary Completion with Options'
                               : question.type === 'tfng'
                               ? 'T/F/NG'
                               : question.type === 'fitb'
@@ -6591,6 +6553,120 @@ Continue permanent delete?`
                                       <p className="text-sm font-medium text-green-700">
                                         {correctAnswer}.{' '}
                                         {getSentenceEndingText(
+                                          question,
+                                          correctAnswer
+                                        )}
+                                      </p>
+                                    </>
+                                  )}
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      ) : question.type === 'summaryOptions' ? (
+                        <div>
+                          {question.instruction && (
+                            <p className="text-sm text-gray-700 mb-4">
+                              {question.instruction}
+                            </p>
+                          )}
+
+                          {question.title && (
+                            <p className="text-sm font-semibold text-gray-800 mb-4">
+                              {question.title}
+                            </p>
+                          )}
+
+                          <div className="bg-gray-50 border border-gray-100 rounded-xl p-4 mb-4">
+                            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">
+                              Options
+                            </p>
+
+                            <div className="space-y-1">
+                              {question.options?.filter(Boolean).map((option, optionIndex) => (
+                                <p key={optionIndex} className="text-sm text-gray-700">
+                                  <span className="font-semibold">
+                                    {letters[optionIndex]}.
+                                  </span>{' '}
+                                  {option}
+                                </p>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div className="flex flex-col gap-3">
+                            {question.items?.map(item => {
+                              const correct = isSummaryOptionCorrect(
+                                selectedReview.submission,
+                                question,
+                                item
+                              )
+
+                              const userAnswer =
+                                selectedReview.submission.answers?.[
+                                  question.id
+                                ]?.[item.id]
+
+                              const correctAnswer = item.answer
+
+                              return (
+                                <div
+                                  key={item.id}
+                                  className={`rounded-xl p-3 border ${
+                                    correct
+                                      ? 'bg-green-50 border-green-100'
+                                      : 'bg-red-50 border-red-100'
+                                  }`}
+                                >
+                                  <div className="flex justify-between mb-2">
+                                    <p className="text-sm font-semibold text-gray-800">
+                                      Question {item.number || ''}
+                                    </p>
+
+                                    <p
+                                      className={`text-xs font-semibold ${
+                                        correct
+                                          ? 'text-green-600'
+                                          : 'text-red-600'
+                                      }`}
+                                    >
+                                      {correct ? 'Correct' : 'Wrong'}
+                                    </p>
+                                  </div>
+
+                                  <p className="text-xs text-gray-500">
+                                    Student:
+                                  </p>
+
+                                  <p className="text-sm text-gray-800 mb-2">
+                                    {userAnswer
+                                      ? `${userAnswer}. ${getSummaryOptionText(
+                                          question,
+                                          userAnswer
+                                        )}`
+                                      : 'No answer'}
+                                  </p>
+
+                                  {(item.beforeText || item.afterText) && (
+                                    <p className="text-xs text-gray-500 mb-2 leading-5">
+                                      {item.beforeText || ''}{' '}
+                                      <span className="font-semibold">
+                                        [{formatReviewAnswerValue(userAnswer)}]
+                                      </span>{' '}
+                                      {item.afterText || ''}
+                                    </p>
+                                  )}
+
+                                  {!correct && (
+                                    <>
+                                      <p className="text-xs text-gray-500">
+                                        Correct:
+                                      </p>
+
+                                      <p className="text-sm font-medium text-green-700">
+                                        {correctAnswer}.{' '}
+                                        {getSummaryOptionText(
                                           question,
                                           correctAnswer
                                         )}
