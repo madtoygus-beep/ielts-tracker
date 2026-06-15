@@ -478,6 +478,16 @@ export default function TeacherDashboard() {
     return studentValues.includes(normalizeAssignmentId(submission.uid))
   }
 
+  const mergeUniqueById = items =>
+    Array.from(
+      new Map(
+        items
+          .filter(Boolean)
+          .filter(item => item.id)
+          .map(item => [item.id, item])
+      ).values()
+    )
+
   const handleAddScore = async () => {
     if (
       !form.listening ||
@@ -516,30 +526,92 @@ export default function TeacherDashboard() {
 
   const getStudentReadings = studentId => {
     const student = getStudentByAnyId(studentId)
-    return activeReadings.filter(reading =>
+
+    const assignedReadings = activeReadings.filter(reading =>
       isHomeworkAssignedToStudent(reading, student)
     )
+
+    const submittedReadingIds = new Set(
+      submissions
+        .filter(submission => submissionBelongsToStudent(submission, student))
+        .map(submission => normalizeAssignmentId(submission.readingId))
+        .filter(Boolean)
+    )
+
+    const submittedReadings = readings.filter(reading =>
+      submittedReadingIds.has(normalizeAssignmentId(reading.id))
+    )
+
+    return mergeUniqueById([...assignedReadings, ...submittedReadings])
   }
 
   const getStudentWritings = studentId => {
     const student = getStudentByAnyId(studentId)
-    return activeWritings.filter(writing =>
+
+    const assignedWritings = activeWritings.filter(writing =>
       isHomeworkAssignedToStudent(writing, student)
     )
+
+    const submittedWritingIds = new Set(
+      writingSubmissions
+        .filter(submission => submissionBelongsToStudent(submission, student))
+        .map(submission => normalizeAssignmentId(submission.writingId))
+        .filter(Boolean)
+    )
+
+    const submittedWritings = writings.filter(writing =>
+      submittedWritingIds.has(normalizeAssignmentId(writing.id))
+    )
+
+    return mergeUniqueById([...assignedWritings, ...submittedWritings])
   }
 
   const getStudentListenings = studentId => {
     const student = getStudentByAnyId(studentId)
-    return activeListenings.filter(listening =>
+
+    const assignedListenings = activeListenings.filter(listening =>
       isHomeworkAssignedToStudent(listening, student)
     )
+
+    const submittedListeningIds = new Set(
+      listeningSubmissions
+        .filter(submission => submissionBelongsToStudent(submission, student))
+        .map(submission => normalizeAssignmentId(submission.listeningId))
+        .filter(Boolean)
+    )
+
+    const submittedListenings = listenings.filter(listening =>
+      submittedListeningIds.has(normalizeAssignmentId(listening.id))
+    )
+
+    return mergeUniqueById([...assignedListenings, ...submittedListenings])
   }
 
   const getStudentVocabularyTests = studentId => {
     const student = getStudentByAnyId(studentId)
-    return activeVocabularyTests.filter(vocabularyTest =>
+
+    const assignedVocabularyTests = activeVocabularyTests.filter(vocabularyTest =>
       isHomeworkAssignedToStudent(vocabularyTest, student)
     )
+
+    const submittedVocabularyIds = new Set(
+      vocabularySubmissions
+        .filter(submission => submissionBelongsToStudent(submission, student))
+        .flatMap(submission => [
+          submission.vocabularyTestId,
+          submission.vocabularyId,
+          submission.testId,
+          submission.homeworkId
+        ])
+        .map(normalizeAssignmentId)
+        .filter(Boolean)
+    )
+
+    const submittedVocabularyTests = vocabularyTests.filter(vocabularyTest =>
+      submittedVocabularyIds.has(normalizeAssignmentId(vocabularyTest.id))
+    )
+
+    return mergeUniqueById([...assignedVocabularyTests, ...submittedVocabularyTests])
   }
 
   const isVocabularySubmissionForTest = (submission, vocabularyTestId) => {
@@ -5572,7 +5644,7 @@ Continue permanent delete?`
 
                       {studentReadings.length === 0 ? (
                         <p className="text-sm text-gray-400 bg-gray-50 rounded-xl p-4">
-                          No active reading homework assigned to this student.
+                          No reading homework or submitted reading result found for this student.
                         </p>
                       ) : (
                         <div className="flex flex-col gap-3">
@@ -5671,7 +5743,7 @@ Continue permanent delete?`
 
                       {studentListenings.length === 0 ? (
                         <p className="text-sm text-gray-400 bg-gray-50 rounded-xl p-4">
-                          No active listening homework assigned to this student.
+                          No listening homework or submitted listening result found for this student.
                         </p>
                       ) : (
                         <div className="flex flex-col gap-3">
@@ -5766,7 +5838,7 @@ Continue permanent delete?`
 
                       {studentVocabularyTests.length === 0 ? (
                         <p className="text-sm text-gray-400 bg-gray-50 rounded-xl p-4">
-                          No active vocabulary test assigned to this student.
+                          No vocabulary test or submitted vocabulary result found for this student.
                         </p>
                       ) : (
                         <div className="flex flex-col gap-3">
@@ -5879,7 +5951,7 @@ Continue permanent delete?`
 
                       {studentWritings.length === 0 ? (
                         <p className="text-sm text-gray-400 bg-gray-50 rounded-xl p-4">
-                          No active writing homework assigned to this student.
+                          No writing homework or submitted writing result found for this student.
                         </p>
                       ) : (
                         <div className="flex flex-col gap-3">
