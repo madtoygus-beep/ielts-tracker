@@ -262,6 +262,19 @@ export default function DoReading() {
     return [...value].map(v => v?.toString().trim()).sort()
   }
 
+  const countWords = value => {
+    return value
+      ?.toString()
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean).length || 0
+  }
+
+  const isWithinWordLimit = (value, maxWords) => {
+    if (!maxWords) return true
+    return countWords(value) <= Number(maxWords)
+  }
+
   const tableAnswerKey = (questionId, rowId, cellIndex) => {
     return `${questionId}_${rowId}_${cellIndex}`
   }
@@ -286,7 +299,9 @@ export default function DoReading() {
     return list.map(normalize)
   }
 
-  const isBlankAnswerCorrect = (userAnswer, mainAnswer, acceptedAnswers = '') => {
+  const isBlankAnswerCorrect = (userAnswer, mainAnswer, acceptedAnswers = '', maxWords = '') => {
+    if (!isWithinWordLimit(userAnswer, maxWords)) return false
+
     const cleanUser = normalize(userAnswer)
     const accepted = getAcceptedAnswers(mainAnswer, acceptedAnswers)
 
@@ -298,6 +313,10 @@ export default function DoReading() {
   const getQuestionItemCount = question => {
     if (question.type === 'matching') {
       return question.paragraphs?.length || 0
+    }
+
+    if (question.type === 'matchingInformation') {
+      return question.items?.length || 0
     }
 
     if (question.type === 'sentenceEndings') {
@@ -418,6 +437,7 @@ export default function DoReading() {
 
   const getQuestionTypeLabel = question => {
     if (question.type === 'matching') return 'Matching Headings'
+    if (question.type === 'matchingInformation') return 'Matching Information'
     if (question.type === 'sentenceEndings') return 'Sentence Endings'
     if (question.type === 'summaryOptions') return 'Summary Completion with Options'
     if (question.type === 'noteCompletion') {
@@ -474,6 +494,16 @@ export default function DoReading() {
       [questionId]: {
         ...(prev[questionId] || {}),
         [letter]: value
+      }
+    }))
+  }
+
+  const handleMatchingInformation = (questionId, itemId, value) => {
+    setAnswers(prev => ({
+      ...prev,
+      [questionId]: {
+        ...(prev[questionId] || {}),
+        [itemId]: value
       }
     }))
   }
@@ -599,6 +629,15 @@ export default function DoReading() {
       return userAnswer.join('|') === correctAnswer.join('|')
     }
 
+    if (question.type === 'fitb') {
+      return isBlankAnswerCorrect(
+        answers[question.id],
+        question.answer,
+        question.acceptedAnswers,
+        question.maxWords
+      )
+    }
+
     const userAnswer = normalize(answers[question.id])
     const correctAnswer = normalize(question.answer)
 
@@ -609,17 +648,28 @@ export default function DoReading() {
 
   const isTableCellCorrect = (question, row, cellIndex) => {
     const key = tableAnswerKey(question.id, row.id, cellIndex)
-    const userAnswer = normalize(answers[key])
-    const correctAnswer = normalize(row.cells[cellIndex].answer)
+    const cell = row.cells[cellIndex]
+
+    return isBlankAnswerCorrect(
+      answers[key],
+      cell.answer,
+      cell.acceptedAnswers,
+      cell.maxWords
+    )
+  }
+
+  const isMatchingCorrect = (question, paragraph) => {
+    const userAnswer = answers[question.id]?.[paragraph.letter]?.toString()
+    const correctAnswer = paragraph.answer?.toString()
 
     if (!userAnswer || !correctAnswer) return false
 
     return userAnswer === correctAnswer
   }
 
-  const isMatchingCorrect = (question, paragraph) => {
-    const userAnswer = answers[question.id]?.[paragraph.letter]?.toString()
-    const correctAnswer = paragraph.answer?.toString()
+  const isMatchingInformationCorrect = (question, item) => {
+    const userAnswer = answers[question.id]?.[item.id]?.toString()
+    const correctAnswer = item.answer?.toString()
 
     if (!userAnswer || !correctAnswer) return false
 
@@ -655,7 +705,8 @@ export default function DoReading() {
     return isBlankAnswerCorrect(
       userAnswer,
       part.answer,
-      part.acceptedAnswers
+      part.acceptedAnswers,
+      part.maxWords
     )
   }
 
@@ -692,10 +743,22 @@ export default function DoReading() {
 
     reading.questions.forEach(question => {
       if (question.type === 'matching') {
-        question.paragraphs.forEach(paragraph => {
+        question.paragraphs?.forEach(paragraph => {
           total++
 
           if (isMatchingCorrect(question, paragraph)) {
+            correct++
+          }
+        })
+
+        return
+      }
+
+      if (question.type === 'matchingInformation') {
+        question.items?.forEach(item => {
+          total++
+
+          if (isMatchingInformationCorrect(question, item)) {
             correct++
           }
         })
@@ -1192,6 +1255,75 @@ export default function DoReading() {
                       </div>
                     )}
 
+                    {question.type === 'matchingInformation' && (
+                      <div>
+                        <p className="font-medium text-sm text-gray-800 mb-2">
+                          Matching Information
+                        </p>
+
+                        {question.instruction && (
+                          <p className="text-sm text-gray-600 mb-4">
+                            {question.instruction}
+                          </p>
+                        )}
+
+                        <div className="flex flex-col gap-3">
+                          {question.items?.map(item => {
+                            const userAnswer = answers[question.id]?.[item.id]
+                            const correctAnswer = item.answer
+                            const correct = isMatchingInformationCorrect(question, item)
+
+                            return (
+                              <div
+                                key={item.id}
+                                className={`rounded-xl p-4 border ${
+                                  correct
+                                    ? 'bg-green-50 border-green-100'
+                                    : 'bg-red-50 border-red-100'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between mb-2">
+                                  <p className="text-sm font-semibold text-gray-800">
+                                    {item.statement || item.question}
+                                  </p>
+
+                                  <span
+                                    className={`text-xs font-semibold ${
+                                      correct
+                                        ? 'text-green-600'
+                                        : 'text-red-600'
+                                    }`}
+                                  >
+                                    {correct ? 'Correct' : 'Wrong'}
+                                  </span>
+                                </div>
+
+                                <p className="text-xs text-gray-500 mb-1">
+                                  Your answer:
+                                </p>
+
+                                <p className="text-sm text-gray-800 mb-2">
+                                  {userAnswer ? `Section ${userAnswer}` : 'No answer'}
+                                </p>
+
+                                {!correct && (
+                                  <>
+                                    <p className="text-xs text-gray-500 mb-1">
+                                      Correct answer:
+                                    </p>
+
+                                    <p className="text-sm font-medium text-green-700">
+                                      Section {correctAnswer}
+                                    </p>
+                                  </>
+                                )}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )}
+
                     {question.type === 'sentenceEndings' && (
                       <div>
                         <p className="font-medium text-sm text-gray-800 mb-2">
@@ -1484,7 +1616,7 @@ export default function DoReading() {
                       </div>
                     )}
 
-                    {question.type !== 'matching' && question.type !== 'sentenceEndings' && question.type !== 'summaryOptions' && question.type !== 'noteCompletion' && question.type !== 'table' && question.type !== 'summary' && (
+                    {question.type !== 'matching' && question.type !== 'matchingInformation' && question.type !== 'sentenceEndings' && question.type !== 'summaryOptions' && question.type !== 'noteCompletion' && question.type !== 'table' && question.type !== 'summary' && (
                       <div>
                         <p className="text-sm text-gray-800 mb-4">
                           {question.question}
@@ -1770,6 +1902,62 @@ export default function DoReading() {
                                   </option>
                                 )
                               })}
+                          </select>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {question.type === 'matchingInformation' && (
+                  <div>
+                    {question.instruction && (
+                      <p className="text-sm text-gray-700 mb-4">
+                        {question.instruction}
+                      </p>
+                    )}
+
+                    <div className="bg-white border border-violet-100 rounded-xl p-4 mb-5">
+                      <p className="text-xs font-semibold text-violet-600 uppercase tracking-wider mb-2">
+                        Sections
+                      </p>
+
+                      <p className="text-xs text-gray-500">
+                        Choose the section letter for each statement. Letters may be used more than once.
+                      </p>
+                    </div>
+
+                    <div className="flex flex-col gap-3">
+                      {(question.items || []).map(item => (
+                        <div
+                          key={item.id}
+                          className="grid grid-cols-1 md:grid-cols-[1fr_150px] gap-3 items-center bg-white border border-gray-100 rounded-xl p-3"
+                        >
+                          <p className="text-sm text-gray-800">
+                            {item.statement || item.question}
+                          </p>
+
+                          <select
+                            value={answers[question.id]?.[item.id] || ''}
+                            onChange={e =>
+                              handleMatchingInformation(
+                                question.id,
+                                item.id,
+                                e.target.value
+                              )
+                            }
+                            className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 bg-white"
+                          >
+                            <option value="">Choose section</option>
+
+                            {(question.sectionLetters?.length
+                              ? question.sectionLetters
+                              : reading.paragraphs?.map(paragraph => paragraph.letter) || []
+                            ).map(letter => (
+                              <option key={letter} value={letter}>
+                                Section {letter}
+                              </option>
+                            ))}
                           </select>
                         </div>
                       ))}

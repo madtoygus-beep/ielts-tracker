@@ -19,6 +19,70 @@ function countWords(text) {
     .filter(Boolean).length
 }
 
+
+function normalizeId(value) {
+  return value === undefined || value === null
+    ? ''
+    : value.toString().trim().toLowerCase()
+}
+
+function uniqueCleanValues(values) {
+  return Array.from(
+    new Set(
+      values
+        .filter(value => value !== undefined && value !== null)
+        .map(value => value.toString().trim())
+        .filter(Boolean)
+    )
+  )
+}
+
+function getCurrentUserAssignmentValues(user, profile) {
+  if (!user) return []
+
+  return uniqueCleanValues([
+    user.uid,
+    user.email,
+    user.email?.toLowerCase(),
+    profile?.uid,
+    profile?.id,
+    profile?.email,
+    profile?.email?.toLowerCase()
+  ])
+}
+
+function getAssignmentValues(item) {
+  return [
+    ...(Array.isArray(item?.assignTo) ? item.assignTo : []),
+    ...(Array.isArray(item?.assignedTo) ? item.assignedTo : []),
+    ...(Array.isArray(item?.studentIds) ? item.studentIds : []),
+    ...(Array.isArray(item?.assignedStudentIds) ? item.assignedStudentIds : []),
+    ...(Array.isArray(item?.assignedEmails) ? item.assignedEmails : [])
+  ]
+}
+
+function isAssignedToCurrentUser(item, user, profile) {
+  const assignedValues = getAssignmentValues(item).map(normalizeId).filter(Boolean)
+  const currentUserValues = getCurrentUserAssignmentValues(user, profile)
+    .map(normalizeId)
+    .filter(Boolean)
+
+  if (assignedValues.length === 0) return false
+
+  return currentUserValues.some(value => assignedValues.includes(value))
+}
+
+function isHiddenForCurrentUser(item, user, profile) {
+  if (!Array.isArray(item?.hiddenFor)) return false
+
+  const hiddenValues = item.hiddenFor.map(normalizeId).filter(Boolean)
+  const currentUserValues = getCurrentUserAssignmentValues(user, profile)
+    .map(normalizeId)
+    .filter(Boolean)
+
+  return currentUserValues.some(value => hiddenValues.includes(value))
+}
+
 function formatTime(seconds) {
   const m = Math.floor(seconds / 60)
     .toString()
@@ -142,13 +206,13 @@ export default function DoWriting() {
         ...snap.data()
       }
 
-      if (!data.assignTo?.includes(currentUser.uid)) {
+      if (!isAssignedToCurrentUser(data, currentUser, profile)) {
         alert('This writing homework is not assigned to you.')
         navigate('/student')
         return
       }
 
-      if (data.hiddenFor?.includes(currentUser.uid) || data.archived === true) {
+      if (isHiddenForCurrentUser(data, currentUser, profile) || data.archived === true) {
         alert('This writing homework is no longer available.')
         navigate('/student')
         return

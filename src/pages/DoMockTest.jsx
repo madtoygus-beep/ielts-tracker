@@ -629,6 +629,70 @@ function getReadingNoteBlankQuestionNumber(reading, questionId, paragraphId, par
   return number
 }
 
+
+function normalizeId(value) {
+  return value === undefined || value === null
+    ? ''
+    : value.toString().trim().toLowerCase()
+}
+
+function uniqueCleanValues(values) {
+  return Array.from(
+    new Set(
+      values
+        .filter(value => value !== undefined && value !== null)
+        .map(value => value.toString().trim())
+        .filter(Boolean)
+    )
+  )
+}
+
+function getCurrentUserAssignmentValues(user, profile) {
+  if (!user) return []
+
+  return uniqueCleanValues([
+    user.uid,
+    user.email,
+    user.email?.toLowerCase(),
+    profile?.uid,
+    profile?.id,
+    profile?.email,
+    profile?.email?.toLowerCase()
+  ])
+}
+
+function getAssignmentValues(item) {
+  return [
+    ...(Array.isArray(item?.assignTo) ? item.assignTo : []),
+    ...(Array.isArray(item?.assignedTo) ? item.assignedTo : []),
+    ...(Array.isArray(item?.studentIds) ? item.studentIds : []),
+    ...(Array.isArray(item?.assignedStudentIds) ? item.assignedStudentIds : []),
+    ...(Array.isArray(item?.assignedEmails) ? item.assignedEmails : [])
+  ]
+}
+
+function isAssignedToCurrentUser(item, user, profile) {
+  const assignedValues = getAssignmentValues(item).map(normalizeId).filter(Boolean)
+  const currentUserValues = getCurrentUserAssignmentValues(user, profile)
+    .map(normalizeId)
+    .filter(Boolean)
+
+  if (assignedValues.length === 0) return false
+
+  return currentUserValues.some(value => assignedValues.includes(value))
+}
+
+function isHiddenForCurrentUser(item, user, profile) {
+  if (!Array.isArray(item?.hiddenFor)) return false
+
+  const hiddenValues = item.hiddenFor.map(normalizeId).filter(Boolean)
+  const currentUserValues = getCurrentUserAssignmentValues(user, profile)
+    .map(normalizeId)
+    .filter(Boolean)
+
+  return currentUserValues.some(value => hiddenValues.includes(value))
+}
+
 function getSavedMockState(storageKey) {
   try {
     const saved = localStorage.getItem(storageKey)
@@ -752,13 +816,13 @@ export default function DoMockTest() {
           ...mockSnap.data()
         }
 
-        if (!mockData.assignTo?.includes(currentUser.uid)) {
+        if (!isAssignedToCurrentUser(mockData, currentUser, profile)) {
           alert('This mock test is not assigned to you.')
           navigate('/student')
           return
         }
 
-        if (mockData.hiddenFor?.includes(currentUser.uid) || mockData.archived === true) {
+        if (isHiddenForCurrentUser(mockData, currentUser, profile) || mockData.archived === true) {
           alert('This mock test is no longer available.')
           navigate('/student')
           return
