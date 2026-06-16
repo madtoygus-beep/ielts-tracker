@@ -47,8 +47,24 @@ function getProfileSchoolId(profile) {
   return profile?.schoolId || DEFAULT_SCHOOL_ID
 }
 
+function getEntitySchoolId(entity) {
+  return entity?.schoolId || DEFAULT_SCHOOL_ID
+}
+
 function isAdminProfile(profile) {
   return profile?.role === 'admin'
+}
+
+function isSameSchool(entity, profile) {
+  return getEntitySchoolId(entity) === getProfileSchoolId(profile)
+}
+
+function getLibraryVisibility(item) {
+  return item?.visibility || item?.libraryVisibility || 'private'
+}
+
+function isSchoolLibraryItem(item) {
+  return getLibraryVisibility(item) === 'school'
 }
 
 function isAssignedToTeacher(entity, teacherId) {
@@ -65,6 +81,7 @@ function filterStudentsByProfile(students, profile, teacherId) {
   if (isAdminProfile(profile)) return students
 
   return students.filter(student =>
+    isSameSchool(student, profile) &&
     isAssignedToTeacher(student, teacherId)
   )
 }
@@ -73,6 +90,7 @@ function filterClassesByProfile(classes, profile, teacherId) {
   if (isAdminProfile(profile)) return classes
 
   return classes.filter(classItem =>
+    isSameSchool(classItem, profile) &&
     isAssignedToTeacher(classItem, teacherId)
   )
 }
@@ -81,7 +99,8 @@ function filterResourcesByProfile(items, profile, teacherId) {
   if (isAdminProfile(profile)) return items
 
   return items.filter(item =>
-    isAssignedToTeacher(item, teacherId)
+    isSameSchool(item, profile) &&
+    (isAssignedToTeacher(item, teacherId) || isSchoolLibraryItem(item))
   )
 }
 
@@ -1807,6 +1826,8 @@ export default function CreateListening() {
         await addDoc(collection(db, 'listenings'), {
           ...payload,
           createdBy: user.uid,
+          teacherId: profile?.role === 'teacher' ? user.uid : '',
+          teacherIds: profile?.role === 'teacher' ? [user.uid] : [],
           createdAt: new Date().toISOString(),
           archived: false
         })

@@ -62,7 +62,8 @@ service cloud.firestore {
         && sameSchool(resource.data)
         && (
           resource.data.get('teacherId', '') == request.auth.uid ||
-          resource.data.get('createdBy', '') == request.auth.uid
+          resource.data.get('createdBy', '') == request.auth.uid ||
+          resource.data.get('teacherIds', []).hasAny([request.auth.uid])
         );
     }
 
@@ -117,11 +118,18 @@ service cloud.firestore {
       allow create: if isAdmin()
         || (
           isTeacher()
+          && schoolIdOf(request.resource.data) == schoolIdOf(userDoc(request.auth.uid).data)
           && request.resource.data.createdBy == request.auth.uid
           && request.resource.data.get('teacherId', request.auth.uid) == request.auth.uid
         );
 
-      allow update: if isAdmin() || teacherCanReadClass();
+      allow update: if isAdmin()
+        || (
+          teacherCanReadClass()
+          && schoolIdOf(request.resource.data) == schoolIdOf(resource.data)
+          && request.resource.data.get('teacherId', '') == resource.data.get('teacherId', '')
+          && request.resource.data.get('createdBy', '') == resource.data.get('createdBy', '')
+        );
 
       allow delete: if isAdmin() || teacherCanReadClass();
     }

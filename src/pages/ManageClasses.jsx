@@ -293,6 +293,7 @@ export default function ManageClasses() {
           color: formColor,
           studentIds: cleanedStudentIds,
           teacherId,
+          teacherIds: teacherId ? [teacherId] : [],
           schoolId,
           updatedBy: user.uid,
           updatedAt: now
@@ -304,6 +305,7 @@ export default function ManageClasses() {
           color: formColor,
           studentIds: cleanedStudentIds,
           teacherId,
+          teacherIds: teacherId ? [teacherId] : [],
           schoolId,
           createdBy: user.uid,
           updatedBy: user.uid,
