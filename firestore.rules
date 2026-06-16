@@ -72,7 +72,11 @@ service cloud.firestore {
         && request.resource.data.get('deleted', false) == resource.data.get('deleted', false)
         && request.resource.data.get('requestedRole', null) == resource.data.get('requestedRole', null)
         && request.resource.data.get('approvedAt', null) == resource.data.get('approvedAt', null)
-        && request.resource.data.get('rejectedAt', null) == resource.data.get('rejectedAt', null);
+        && request.resource.data.get('rejectedAt', null) == resource.data.get('rejectedAt', null)
+        && request.resource.data.get('schoolId', 'maxima') == resource.data.get('schoolId', 'maxima')
+        && request.resource.data.get('teacherIds', []) == resource.data.get('teacherIds', [])
+        && request.resource.data.get('email', '') == resource.data.get('email', '')
+        && request.resource.data.get('createdAt', null) == resource.data.get('createdAt', null);
     }
 
     function isAssignedToCurrentUser(data) {
