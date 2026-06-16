@@ -127,9 +127,13 @@ export default function DoReading() {
   const [result, setResult] = useState(null)
   const [alreadyDone, setAlreadyDone] = useState(false)
   const [loadError, setLoadError] = useState(null)
+  const [flaggedQuestions, setFlaggedQuestions] = useState([])
+  const [studentNote, setStudentNote] = useState('')
+  const [showQuestionMap, setShowQuestionMap] = useState(true)
 
   const timerRef = useRef(null)
   const submittingRef = useRef(false)
+  const questionRefs = useRef({})
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -451,6 +455,114 @@ export default function DoReading() {
     if (question.type === 'summary') return 'Summary Completion'
     if (question.mode === 'multi') return 'MCQ — Choose TWO'
     return 'MCQ'
+  }
+
+  const hasAnswerValue = value => {
+    if (Array.isArray(value)) return value.filter(Boolean).length > 0
+    if (value && typeof value === 'object') {
+      return Object.values(value).some(item => hasAnswerValue(item))
+    }
+
+    return value !== undefined && value !== null && value.toString().trim() !== ''
+  }
+
+  const getQuestionStatus = (question, index) => {
+    let answered = 0
+    let total = getQuestionItemCount(question)
+
+    if (question.type === 'matching') {
+      answered = (question.paragraphs || []).filter(paragraph =>
+        hasAnswerValue(answers[question.id]?.[paragraph.letter])
+      ).length
+    } else if (question.type === 'matchingInformation') {
+      answered = (question.items || []).filter(item =>
+        hasAnswerValue(answers[question.id]?.[item.id])
+      ).length
+    } else if (question.type === 'sentenceEndings') {
+      answered = (question.items || []).filter(item =>
+        hasAnswerValue(answers[question.id]?.[item.id])
+      ).length
+    } else if (question.type === 'summaryOptions') {
+      answered = (question.items || []).filter(item =>
+        hasAnswerValue(answers[question.id]?.[item.id])
+      ).length
+    } else if (question.type === 'noteCompletion') {
+      answered = 0
+      total = 0
+
+      question.paragraphs?.forEach(paragraph => {
+        paragraph.parts?.forEach(part => {
+          if (part.type !== 'blank') return
+
+          total++
+
+          if (hasAnswerValue(answers[noteAnswerKey(question.id, paragraph.id, part.id)])) {
+            answered++
+          }
+        })
+      })
+    } else if (question.type === 'mcq' && question.mode === 'multi') {
+      const selected = Array.isArray(answers[question.id]) ? answers[question.id] : []
+      total = question.answers?.length || 2
+      answered = Math.min(selected.filter(Boolean).length, total)
+    } else if (question.type === 'table' || question.type === 'summary') {
+      answered = 0
+      total = 0
+
+      question.rows?.forEach(row => {
+        row.cells?.forEach((cell, cellIndex) => {
+          if (cell.type !== 'blank') return
+
+          total++
+
+          if (hasAnswerValue(answers[tableAnswerKey(question.id, row.id, cellIndex)])) {
+            answered++
+          }
+        })
+      })
+    } else {
+      answered = hasAnswerValue(answers[question.id]) ? 1 : 0
+      total = 1
+    }
+
+    const label = getQuestionRangeLabel(question, index)
+
+    return {
+      id: question.id,
+      label,
+      answered,
+      total,
+      complete: total > 0 && answered >= total,
+      flagged: flaggedQuestions.includes(question.id)
+    }
+  }
+
+  const getQuestionStatuses = () =>
+    (reading?.questions || []).map((question, index) =>
+      getQuestionStatus(question, index)
+    )
+
+  const getAnsweredQuestionCount = () =>
+    getQuestionStatuses().reduce((sum, item) => sum + item.answered, 0)
+
+  const getUnansweredQuestionLabels = () =>
+    getQuestionStatuses()
+      .filter(item => !item.complete)
+      .map(item => item.label)
+
+  const toggleFlagQuestion = questionId => {
+    setFlaggedQuestions(prev =>
+      prev.includes(questionId)
+        ? prev.filter(id => id !== questionId)
+        : [...prev, questionId]
+    )
+  }
+
+  const scrollToQuestion = questionId => {
+    questionRefs.current[questionId]?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'start'
+    })
   }
 
   const handleAnswer = (questionId, value) => {
@@ -849,7 +961,28 @@ export default function DoReading() {
     if (submittingRef.current || submitted || alreadyDone || !reading || !user) return
 
     if (!autoSubmit) {
-      const ok = window.confirm('Submit your answers? You cannot retake this homework after submitting.')
+      const unansweredLabels = getUnansweredQuestionLabels()
+      const flaggedLabels = getQuestionStatuses()
+        .filter(item => item.flagged)
+        .map(item => item.label)
+
+      const warningLines = []
+
+      if (unansweredLabels.length > 0) {
+        warningLines.push(
+          `You still have ${unansweredLabels.length} unanswered question group(s): ${unansweredLabels.join(', ')}`
+        )
+      }
+
+      if (flaggedLabels.length > 0) {
+        warningLines.push(
+          `You flagged these for review: ${flaggedLabels.join(', ')}`
+        )
+      }
+
+      warningLines.push('Submit your answers? You cannot retake this homework after submitting.')
+
+      const ok = window.confirm(warningLines.join('\n\n'))
       if (!ok) return
     }
 
@@ -866,6 +999,8 @@ export default function DoReading() {
         readingId: id,
         answers,
         result: res,
+        flaggedQuestions,
+        studentNote: studentNote.trim(),
         submittedAt: new Date().toISOString(),
         finishedLate: timeLeft <= 0,
         autoSubmitted: autoSubmit
@@ -1715,6 +1850,10 @@ export default function DoReading() {
           >
             ⏱ {formatTime(timeLeft)}
           </div>
+
+          <span className="hidden md:inline-flex text-xs bg-purple-50 text-purple-600 px-3 py-1.5 rounded-xl font-semibold">
+            {getAnsweredQuestionCount()} / {getTotalQuestionCount()} answered
+          </span>
         </div>
       </nav>
 
@@ -1756,47 +1895,142 @@ export default function DoReading() {
 
           <div className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden lg:h-[calc(100vh-8rem)]">
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 bg-white sticky top-0 z-10">
-              <h2 className="font-semibold text-gray-800">
-                Questions ({getTotalQuestionCount()})
-              </h2>
+              <div>
+                <h2 className="font-semibold text-gray-800">
+                  Questions ({getTotalQuestionCount()})
+                </h2>
 
-              <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1 rounded-full">
-                Answer panel
-              </span>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  {getAnsweredQuestionCount()} answered · {getTotalQuestionCount() - getAnsweredQuestionCount()} remaining
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowQuestionMap(prev => !prev)}
+                className="text-xs bg-purple-50 text-purple-600 px-3 py-1 rounded-full hover:bg-purple-100"
+              >
+                {showQuestionMap ? 'Hide map' : 'Show map'}
+              </button>
             </div>
 
             <div className="p-5 md:p-7 overflow-y-auto h-[65vh] lg:h-[calc(100vh-12rem)]">
+              {showQuestionMap && (
+                <div className="bg-white border border-purple-100 rounded-2xl p-4 mb-6 shadow-sm">
+                  <div className="flex items-center justify-between gap-3 mb-3">
+                    <div>
+                      <p className="text-sm font-semibold text-gray-800">
+                        Question map
+                      </p>
+
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        Green: answered · White: unanswered · Amber: flagged
+                      </p>
+                    </div>
+
+                    <span className="text-xs bg-gray-100 text-gray-500 px-3 py-1 rounded-full">
+                      {getAnsweredQuestionCount()} / {getTotalQuestionCount()}
+                    </span>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    {getQuestionStatuses().map(status => (
+                      <button
+                        key={status.id}
+                        type="button"
+                        onClick={() => scrollToQuestion(status.id)}
+                        className={`text-xs font-semibold px-3 py-2 rounded-xl border transition-all ${
+                          status.flagged
+                            ? 'bg-amber-50 border-amber-200 text-amber-700'
+                            : status.complete
+                              ? 'bg-green-50 border-green-200 text-green-700'
+                              : 'bg-white border-gray-200 text-gray-500 hover:border-purple-200'
+                        }`}
+                        title={`${status.answered}/${status.total} answered`}
+                      >
+                        {status.label}
+                        {status.flagged ? ' ★' : ''}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="bg-white border border-gray-100 rounded-2xl p-4 mb-6 shadow-sm">
+                <div className="flex items-center justify-between gap-3 mb-2">
+                  <p className="text-sm font-semibold text-gray-800">
+                    Scratch note
+                  </p>
+
+                  <span className="text-xs text-gray-400">
+                    Saved with your submission
+                  </span>
+                </div>
+
+                <textarea
+                  rows={3}
+                  value={studentNote}
+                  onChange={e => setStudentNote(e.target.value)}
+                  placeholder="Write short notes, keywords or paragraph clues here..."
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 resize-none"
+                />
+              </div>
 
           <div className="flex flex-col gap-6">
             {reading.questions.map((question, index) => (
               <div
                 key={question.id}
-                className="bg-gray-50 border border-gray-100 rounded-2xl p-5 overflow-hidden"
+                ref={element => {
+                  if (element) questionRefs.current[question.id] = element
+                }}
+                className={`bg-gray-50 border rounded-2xl p-5 overflow-hidden scroll-mt-28 ${
+                  flaggedQuestions.includes(question.id)
+                    ? 'border-amber-300 ring-2 ring-amber-100'
+                    : 'border-gray-100'
+                }`}
               >
-                <div className="flex items-center gap-2 mb-4">
-                  <span className="text-xs font-medium text-gray-400">
-                    {getQuestionRangeLabel(question, index)}
-                  </span>
+                <div className="flex items-center justify-between gap-3 mb-4">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs font-medium text-gray-400">
+                      {getQuestionRangeLabel(question, index)}
+                    </span>
 
-                  <span
-                    className={`text-xs px-2 py-1 rounded-full ${
-                      question.type === 'matching'
-                        ? 'bg-indigo-50 text-indigo-600'
-                        : question.type === 'sentenceEndings'
-                          ? 'bg-cyan-50 text-cyan-600'
-                          : question.type === 'summaryOptions'
-                            ? 'bg-fuchsia-50 text-fuchsia-600'
-                            : question.type === 'tfng'
-                          ? 'bg-blue-50 text-blue-600'
-                          : question.type === 'fitb'
-                            ? 'bg-amber-50 text-amber-600'
-                            : (question.type === 'table' || question.type === 'summary' || question.type === 'noteCompletion')
-                              ? 'bg-emerald-50 text-emerald-600'
-                              : 'bg-purple-50 text-purple-600'
+                    <span
+                      className={`text-xs px-2 py-1 rounded-full ${
+                        question.type === 'matching'
+                          ? 'bg-indigo-50 text-indigo-600'
+                          : question.type === 'sentenceEndings'
+                            ? 'bg-cyan-50 text-cyan-600'
+                            : question.type === 'summaryOptions'
+                              ? 'bg-fuchsia-50 text-fuchsia-600'
+                              : question.type === 'tfng'
+                            ? 'bg-blue-50 text-blue-600'
+                            : question.type === 'fitb'
+                              ? 'bg-amber-50 text-amber-600'
+                              : (question.type === 'table' || question.type === 'summary' || question.type === 'noteCompletion')
+                                ? 'bg-emerald-50 text-emerald-600'
+                                : 'bg-purple-50 text-purple-600'
+                      }`}
+                    >
+                      {getQuestionTypeLabel(question)}
+                    </span>
+
+                    <span className="text-xs bg-white border border-gray-100 text-gray-500 px-2 py-1 rounded-full">
+                      {getQuestionStatus(question, index).answered}/{getQuestionStatus(question, index).total} answered
+                    </span>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => toggleFlagQuestion(question.id)}
+                    className={`text-xs px-3 py-1.5 rounded-xl border flex-shrink-0 ${
+                      flaggedQuestions.includes(question.id)
+                        ? 'bg-amber-50 border-amber-200 text-amber-700'
+                        : 'bg-white border-gray-200 text-gray-500 hover:border-amber-200'
                     }`}
                   >
-{getQuestionTypeLabel(question)}
-                  </span>
+                    {flaggedQuestions.includes(question.id) ? '★ Flagged' : '☆ Review later'}
+                  </button>
                 </div>
 
                 {question.type === 'matching' && (
@@ -2299,13 +2533,25 @@ export default function DoReading() {
             ))}
           </div>
 
-              <button
-                onClick={() => handleSubmit(false)}
-                disabled={submitting}
-                className="w-full bg-purple-600 text-white rounded-xl py-4 text-sm font-medium hover:bg-purple-700 mt-8 disabled:opacity-60"
-              >
-                {submitting ? 'Submitting...' : 'Submit answers'}
-              </button>
+              <div className="bg-white border border-gray-100 rounded-2xl p-4 mt-8">
+                <div className="flex items-center justify-between gap-3 mb-3 text-xs text-gray-500">
+                  <span>
+                    Answered: {getAnsweredQuestionCount()} / {getTotalQuestionCount()}
+                  </span>
+
+                  <span>
+                    Flagged: {flaggedQuestions.length}
+                  </span>
+                </div>
+
+                <button
+                  onClick={() => handleSubmit(false)}
+                  disabled={submitting}
+                  className="w-full bg-purple-600 text-white rounded-xl py-4 text-sm font-medium hover:bg-purple-700 disabled:opacity-60"
+                >
+                  {submitting ? 'Submitting...' : 'Submit answers'}
+                </button>
+              </div>
             </div>
           </div>
         </div>
