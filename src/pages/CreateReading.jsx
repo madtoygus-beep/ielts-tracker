@@ -26,6 +26,44 @@ function isLegacyType(type) {
   return LEGACY_TYPES.includes(type)
 }
 
+function isAdminProfile(profile) {
+  return profile?.role === 'admin'
+}
+
+function isAssignedToTeacher(entity, teacherId) {
+  if (!entity || !teacherId) return false
+
+  return (
+    entity.teacherId === teacherId ||
+    entity.createdBy === teacherId ||
+    (Array.isArray(entity.teacherIds) && entity.teacherIds.includes(teacherId))
+  )
+}
+
+function filterStudentsByProfile(students, profile, teacherId) {
+  if (isAdminProfile(profile)) return students
+
+  return students.filter(student =>
+    isAssignedToTeacher(student, teacherId)
+  )
+}
+
+function filterClassesByProfile(classes, profile, teacherId) {
+  if (isAdminProfile(profile)) return classes
+
+  return classes.filter(classItem =>
+    isAssignedToTeacher(classItem, teacherId)
+  )
+}
+
+function filterClassStudentIds(classItem, visibleStudents) {
+  const visibleStudentIds = new Set(visibleStudents.map(student => student.id))
+
+  return (classItem.studentIds || []).filter(studentId =>
+    visibleStudentIds.has(studentId)
+  )
+}
+
 export default function CreateReading() {
   const { id } = useParams()
   const isEditMode = Boolean(id)
@@ -252,31 +290,56 @@ export default function CreateReading() {
   }, [navigate])
 
   useEffect(() => {
+    if (!user || !profile) return
+
     const q = query(collection(db, 'users'), where('role', '==', 'student'))
+
     return onSnapshot(q, snap => {
-      setStudents(
-        snap.docs
-          .map(d => ({ id: d.id, ...d.data() }))
-          .filter(student => student.status === 'approved' && student.deleted !== true)
-          .sort((a, b) =>
-            (a.name || a.email || '').localeCompare(b.name || b.email || '')
-          )
+      const list = snap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .filter(student => student.status === 'approved' && student.deleted !== true)
+
+      const visibleStudents = filterStudentsByProfile(
+        list,
+        profile,
+        user.uid
+      ).sort((a, b) =>
+        (a.name || a.email || '').localeCompare(b.name || b.email || '')
       )
+
+      setStudents(visibleStudents)
     })
-  }, [])
+  }, [user, profile])
 
   useEffect(() => {
+    if (!user || !profile) return
+
     const q = query(collection(db, 'classes'))
 
     return onSnapshot(q, snap => {
       const list = snap.docs
         .map(d => ({ id: d.id, ...d.data() }))
         .filter(classItem => classItem.archived !== true)
-        .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
 
-      setClasses(list)
+      const visibleClasses = filterClassesByProfile(
+        list,
+        profile,
+        user.uid
+      ).sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+
+      setClasses(visibleClasses)
     })
-  }, [])
+  }, [user, profile])
+
+  useEffect(() => {
+    if (!user || !profile || isAdminProfile(profile) || students.length === 0) return
+
+    const visibleStudentIds = new Set(students.map(student => student.id))
+
+    setAssignTo(prev =>
+      prev.filter(studentId => visibleStudentIds.has(studentId))
+    )
+  }, [user, profile, students])
 
   // ============================================================
   // Load existing reading (edit mode)
@@ -302,7 +365,13 @@ export default function CreateReading() {
       setVisibility(data.visibility || data.libraryVisibility || 'private')
       setTimeLimit(data.timeLimit || 60)
       setDueDate(data.dueDate || '')
-      setAssignTo(data.assignTo || [])
+      setAssignTo(
+        data.assignTo?.length
+          ? data.assignTo
+          : data.assignedStudentIds?.length
+            ? data.assignedStudentIds
+            : data.studentIds || []
+      )
       setPassageMode(
         data.passageMode || (data.paragraphs ? 'sections' : 'standard')
       )
@@ -543,7 +612,7 @@ export default function CreateReading() {
   }
 
   const assignClassToReading = classItem => {
-    const classStudentIds = classItem.studentIds || []
+    const classStudentIds = filterClassStudentIds(classItem, students)
 
     if (classStudentIds.length === 0) {
       alert('This class has no students yet.')
@@ -554,7 +623,7 @@ export default function CreateReading() {
   }
 
   const removeClassFromReading = classItem => {
-    const classStudentIds = classItem.studentIds || []
+    const classStudentIds = filterClassStudentIds(classItem, students)
 
     setAssignTo(prev =>
       prev.filter(studentId => !classStudentIds.includes(studentId))
@@ -562,13 +631,13 @@ export default function CreateReading() {
   }
 
   const isClassFullyAssigned = classItem => {
-    const classStudentIds = classItem.studentIds || []
+    const classStudentIds = filterClassStudentIds(classItem, students)
     if (classStudentIds.length === 0) return false
     return classStudentIds.every(studentId => assignTo.includes(studentId))
   }
 
   const isClassPartlyAssigned = classItem => {
-    const classStudentIds = classItem.studentIds || []
+    const classStudentIds = filterClassStudentIds(classItem, students)
     if (classStudentIds.length === 0) return false
     return classStudentIds.some(studentId => assignTo.includes(studentId))
   }
@@ -1804,6 +1873,7 @@ export default function CreateReading() {
       assignedStudentIds: students.filter(student => assignTo.includes(student.id)).map(student => student.id),
       assignedEmails: students.filter(student => assignTo.includes(student.id)).map(student => student.email?.toLowerCase()).filter(Boolean),
       schoolId: getProfileSchoolId(profile),
+      teacherId: profile?.role === 'teacher' ? user.uid : undefined,
       passageMode,
       passage: fullPassage,
       paragraphs,
