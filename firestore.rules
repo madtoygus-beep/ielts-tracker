@@ -75,6 +75,14 @@ service cloud.firestore {
         && request.resource.data.get('rejectedAt', null) == resource.data.get('rejectedAt', null);
     }
 
+    function isAssignedToCurrentUser(data) {
+      return data.get('assignTo', []).hasAny([request.auth.uid])
+        || data.get('assignedTo', []).hasAny([request.auth.uid])
+        || data.get('studentIds', []).hasAny([request.auth.uid])
+        || data.get('assignedStudentIds', []).hasAny([request.auth.uid])
+        || data.get('assignedEmails', []).hasAny([request.auth.token.email]);
+    }
+
     // ============================================================
     // USERS
     // ============================================================
@@ -100,7 +108,7 @@ service cloud.firestore {
     match /classes/{classId} {
       allow read: if isAdmin()
         || teacherCanReadClass()
-        || (isStudent() && resource.data.studentIds.hasAny([request.auth.uid]));
+        || (isStudent() && resource.data.get('studentIds', []).hasAny([request.auth.uid]));
 
       allow create: if isAdmin()
         || (
@@ -122,6 +130,7 @@ service cloud.firestore {
       allow read: if isAdmin()
         || isTeacher()
         || (isStudent() && resource.data.uid == request.auth.uid);
+
       allow create: if isAdmin() || isTeacher();
       allow update, delete: if isAdmin() || isTeacher();
     }
@@ -139,8 +148,10 @@ service cloud.firestore {
       allow read: if isAdmin()
         || isTeacher()
         || (isStudent() && resource.data.uid == request.auth.uid);
+
       allow create: if isStudent()
         && request.resource.data.uid == request.auth.uid;
+
       allow update, delete: if isAdmin() || isTeacher();
     }
 
@@ -157,8 +168,10 @@ service cloud.firestore {
       allow read: if isAdmin()
         || isTeacher()
         || (isStudent() && resource.data.uid == request.auth.uid);
+
       allow create: if isStudent()
         && request.resource.data.uid == request.auth.uid;
+
       allow update, delete: if isAdmin() || isTeacher();
     }
 
@@ -175,8 +188,10 @@ service cloud.firestore {
       allow read: if isAdmin()
         || isTeacher()
         || (isStudent() && resource.data.uid == request.auth.uid);
+
       allow create: if isStudent()
         && request.resource.data.uid == request.auth.uid;
+
       allow update, delete: if isAdmin() || isTeacher();
     }
 
@@ -187,7 +202,8 @@ service cloud.firestore {
     match /mockTests/{id} {
       allow read: if isAdmin()
         || isTeacher()
-        || (isStudent() && resource.data.assignTo.hasAny([request.auth.uid]));
+        || (isStudent() && isAssignedToCurrentUser(resource.data));
+
       allow create, update, delete: if isAdmin() || isTeacher();
     }
 
@@ -195,8 +211,10 @@ service cloud.firestore {
       allow read: if isAdmin()
         || isTeacher()
         || (isStudent() && resource.data.uid == request.auth.uid);
+
       allow create: if isStudent()
         && request.resource.data.uid == request.auth.uid;
+
       allow update, delete: if isAdmin() || isTeacher();
     }
 
@@ -213,8 +231,10 @@ service cloud.firestore {
       allow read: if isAdmin()
         || isTeacher()
         || (isStudent() && resource.data.uid == request.auth.uid);
+
       allow create: if isStudent()
         && request.resource.data.uid == request.auth.uid;
+
       allow update, delete: if isAdmin() || isTeacher();
     }
   }
