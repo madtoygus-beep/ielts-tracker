@@ -1,0 +1,60 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isAuth() {
+      return request.auth != null;
+    }
+
+    function userDoc() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid));
+    }
+
+    function isApprovedUser() {
+      return isAuth()
+        && userDoc().data.status == 'approved'
+        && userDoc().data.deleted != true;
+    }
+
+    function isAdmin() {
+      return isApprovedUser()
+        && userDoc().data.role == 'admin';
+    }
+
+    function isTeacher() {
+      return isApprovedUser()
+        && userDoc().data.role == 'teacher';
+    }
+
+    function isTeacherOrAdmin() {
+      return isAdmin() || isTeacher();
+    }
+
+    function isAudioFile() {
+      return request.resource != null
+        && request.resource.contentType.matches('audio/.*');
+    }
+
+    match /listening-audios/{ownerId}/{fileName} {
+      allow read: if isApprovedUser();
+
+      allow write: if (
+        request.resource != null
+        && isTeacherOrAdmin()
+        && request.auth.uid == ownerId
+        && isAudioFile()
+        && request.resource.size <= 30 * 1024 * 1024
+      ) || (
+        request.resource == null
+        && (
+          isAdmin()
+          || (isTeacher() && request.auth.uid == ownerId)
+        )
+      );
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

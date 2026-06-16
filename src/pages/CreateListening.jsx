@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { auth, db } from '../firebase'
+import { auth, db, storage } from '../firebase'
 import {
   addDoc,
   collection,
@@ -11,11 +11,37 @@ import {
   where
 } from 'firebase/firestore'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
+import {
+  getDownloadURL,
+  ref,
+  uploadBytesResumable
+} from 'firebase/storage'
 import { useNavigate, useParams } from 'react-router-dom'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
 const DEFAULT_SCHOOL_ID = 'maxima'
+const MAX_AUDIO_SIZE = 30 * 1024 * 1024
+
+const ACCEPTED_AUDIO_EXTENSIONS = ['mp3', 'm4a', 'wav', 'aac', 'mpeg', 'mp4']
+
+function isAcceptedAudioFile(file) {
+  if (!file) return false
+
+  const type = file.type || ''
+  const extension = file.name?.split('.').pop()?.toLowerCase() || ''
+
+  return type.startsWith('audio/') || ACCEPTED_AUDIO_EXTENSIONS.includes(extension)
+}
+
+function sanitizeFileName(name) {
+  return (name || 'audio')
+    .toString()
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]/g, '-')
+    .replace(/-+/g, '-')
+    .slice(0, 90)
+}
 
 function getProfileSchoolId(profile) {
   return profile?.schoolId || DEFAULT_SCHOOL_ID
@@ -224,6 +250,10 @@ export default function CreateListening() {
   const [contentType, setContentType] = useState('full_listening')
   const [visibility, setVisibility] = useState('private')
   const [audioUrl, setAudioUrl] = useState('')
+  const [audioFileName, setAudioFileName] = useState('')
+  const [audioStoragePath, setAudioStoragePath] = useState('')
+  const [audioUploading, setAudioUploading] = useState(false)
+  const [audioUploadProgress, setAudioUploadProgress] = useState(0)
   const [instructions, setInstructions] = useState('')
   const [dueDate, setDueDate] = useState('')
   const [timeLimit, setTimeLimit] = useState(30)
@@ -356,6 +386,8 @@ export default function CreateListening() {
       setContentType(data.contentType || data.listeningType || 'full_listening')
       setVisibility(data.visibility || data.libraryVisibility || 'private')
       setAudioUrl(data.audioUrl || '')
+      setAudioFileName(data.audioFileName || data.audioName || '')
+      setAudioStoragePath(data.audioStoragePath || '')
       setInstructions(data.instructions || '')
       setDueDate(data.dueDate || '')
       setTimeLimit(data.timeLimit || 30)
@@ -769,6 +801,79 @@ export default function CreateListening() {
   const getStudentName = studentId => {
     const student = students.find(item => item.id === studentId)
     return student?.name || student?.email || 'Unknown student'
+  }
+
+  const handleAudioUpload = event => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    if (!user) {
+      alert('User session expired. Please log in again.')
+      event.target.value = ''
+      return
+    }
+
+    if (!isAcceptedAudioFile(file)) {
+      alert('Please upload an audio file. Supported formats: MP3, M4A, WAV, AAC.')
+      event.target.value = ''
+      return
+    }
+
+    if (file.size > MAX_AUDIO_SIZE) {
+      alert('Audio file is too large. Maximum file size is 30 MB.')
+      event.target.value = ''
+      return
+    }
+
+    const safeFileName = sanitizeFileName(file.name)
+    const storagePath = `listening-audios/${user.uid}/${Date.now()}-${crypto.randomUUID()}-${safeFileName}`
+    const audioRef = ref(storage, storagePath)
+
+    setAudioUploading(true)
+    setAudioUploadProgress(0)
+
+    const uploadTask = uploadBytesResumable(audioRef, file, {
+      contentType: file.type || 'audio/mpeg',
+      customMetadata: {
+        createdBy: user.uid,
+        schoolId: getProfileSchoolId(profile),
+        originalName: file.name
+      }
+    })
+
+    uploadTask.on(
+      'state_changed',
+      snapshot => {
+        const progress = Math.round(
+          (snapshot.bytesTransferred / snapshot.totalBytes) * 100
+        )
+
+        setAudioUploadProgress(progress)
+      },
+      error => {
+        console.error('Audio upload failed:', error)
+        alert('Could not upload audio. Please check Firebase Storage settings and try again.')
+        setAudioUploading(false)
+        setAudioUploadProgress(0)
+        event.target.value = ''
+      },
+      async () => {
+        try {
+          const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref)
+
+          setAudioUrl(downloadUrl)
+          setAudioFileName(file.name)
+          setAudioStoragePath(storagePath)
+          setAudioUploadProgress(100)
+        } catch (error) {
+          console.error('Could not get audio URL:', error)
+          alert('Audio uploaded, but the download URL could not be created.')
+        } finally {
+          setAudioUploading(false)
+          event.target.value = ''
+        }
+      }
+    )
   }
 
   const updateQuestion = (questionId, key, value) => {
@@ -1648,7 +1753,7 @@ export default function CreateListening() {
     }
 
     if (!audioUrl.trim()) {
-      alert('Please add an audio URL.')
+      alert('Please upload an audio file or add an audio URL.')
       return
     }
 
@@ -1675,6 +1780,8 @@ export default function CreateListening() {
       listeningType: contentType,
       visibility,
       audioUrl: audioUrl.trim(),
+      audioFileName,
+      audioStoragePath,
       instructions,
       dueDate,
       timeLimit: Number(timeLimit) || 30,
@@ -1791,18 +1898,62 @@ export default function CreateListening() {
 
               <div className="mb-4">
                 <label className="text-xs text-gray-400 mb-1 block">
-                  Audio URL
+                  Upload audio file
+                </label>
+
+                <input
+                  type="file"
+                  accept="audio/*,.mp3,.m4a,.wav,.aac"
+                  onChange={handleAudioUpload}
+                  disabled={audioUploading}
+                  className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm bg-white disabled:opacity-60"
+                />
+
+                <p className="text-xs text-gray-400 mt-2">
+                  Upload MP3, M4A, WAV or AAC. Maximum file size: 30 MB. The file is stored in Firebase Storage.
+                </p>
+
+                {audioUploading && (
+                  <div className="mt-3 bg-purple-50 border border-purple-100 rounded-xl p-3">
+                    <div className="flex justify-between text-xs text-purple-600 mb-2">
+                      <span>Uploading audio...</span>
+                      <span>{audioUploadProgress}%</span>
+                    </div>
+
+                    <div className="h-2 bg-white rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-purple-600 transition-all"
+                        style={{ width: `${audioUploadProgress}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {audioFileName && !audioUploading && (
+                  <p className="text-xs text-green-600 mt-2">
+                    Uploaded: {audioFileName}
+                  </p>
+                )}
+              </div>
+
+              <div className="mb-4">
+                <label className="text-xs text-gray-400 mb-1 block">
+                  Audio URL / optional manual link
                 </label>
 
                 <input
                   value={audioUrl}
-                  onChange={e => setAudioUrl(e.target.value)}
-                  placeholder="https://...mp3"
+                  onChange={e => {
+                    setAudioUrl(e.target.value)
+                    setAudioFileName('')
+                    setAudioStoragePath('')
+                  }}
+                  placeholder="Paste a direct MP3/M4A URL or upload a file above"
                   className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400"
                 />
 
                 <p className="text-xs text-gray-400 mt-2">
-                  Use a direct MP3 link or any browser-playable audio URL.
+                  Uploaded files automatically fill this field. You can still paste a browser-playable audio URL manually.
                 </p>
               </div>
 
