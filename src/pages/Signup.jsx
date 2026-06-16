@@ -2,7 +2,8 @@ import { useState } from 'react'
 import {
   createUserWithEmailAndPassword,
   fetchSignInMethodsForEmail,
-  sendPasswordResetEmail
+  sendPasswordResetEmail,
+  signOut
 } from 'firebase/auth'
 import {
   doc,
@@ -39,6 +40,14 @@ export default function Signup() {
       setMessage('Password reset email sent. Please check your inbox.')
     } catch (err) {
       setError('Could not send password reset email.')
+    }
+  }
+
+  const safelySignOut = async () => {
+    try {
+      await signOut(auth)
+    } catch (err) {
+      console.warn('Could not sign out after signup:', err)
     }
   }
 
@@ -87,6 +96,8 @@ export default function Signup() {
         updatedAt: new Date().toISOString()
       })
 
+      await safelySignOut()
+
       setMessage('Access request created. Please wait for admin approval.')
 
       setTimeout(() => {
@@ -114,6 +125,7 @@ export default function Signup() {
       }
 
       if (err.code === 'permission-denied') {
+        await safelySignOut()
         setError(
           'Account was created, but the profile could not be saved because of Firestore permissions. Please contact admin.'
         )
@@ -230,6 +242,9 @@ export default function Signup() {
             type="password"
             value={password}
             onChange={e => setPassword(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') handleSignup()
+            }}
           />
 
           <button

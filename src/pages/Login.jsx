@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import {
   signInWithEmailAndPassword,
-  sendPasswordResetEmail
+  sendPasswordResetEmail,
+  signOut
 } from 'firebase/auth'
 import { doc, getDoc } from 'firebase/firestore'
 import { auth, db } from '../firebase'
@@ -16,6 +17,14 @@ export default function Login() {
   const navigate = useNavigate()
 
   const cleanEmail = email.trim().toLowerCase()
+
+  const safelySignOut = async () => {
+    try {
+      await signOut(auth)
+    } catch (err) {
+      console.warn('Could not sign out blocked account:', err)
+    }
+  }
 
   const handleResetPassword = async () => {
     setError('')
@@ -55,13 +64,15 @@ export default function Login() {
       const snap = await getDoc(doc(db, 'users', result.user.uid))
 
       if (!snap.exists()) {
+        await safelySignOut()
         setError('User profile not found. Please contact admin.')
         return
       }
 
       const userData = snap.data()
 
-      if (userData.deleted || userData.status === 'deleted') {
+      if (userData.deleted === true || userData.status === 'deleted') {
+        await safelySignOut()
         setError(
           'This account was removed by admin. Please contact admin before creating a new account.'
         )
@@ -69,14 +80,22 @@ export default function Login() {
       }
 
       if (userData.status === 'pending') {
+        await safelySignOut()
         setError('Your account is waiting for admin approval. Please do not create another account.')
         return
       }
 
       if (userData.status === 'rejected') {
+        await safelySignOut()
         setError(
           'Your account request was rejected. Please contact admin if you think this is a mistake.'
         )
+        return
+      }
+
+      if (userData.status !== 'approved') {
+        await safelySignOut()
+        setError('Your account is not approved yet. Please contact admin.')
         return
       }
 
@@ -87,6 +106,7 @@ export default function Login() {
       } else if (userData.role === 'teacher') {
         navigate('/teacher')
       } else {
+        await safelySignOut()
         setError('Your account role is not assigned yet. Please contact admin.')
       }
     } catch (err) {
@@ -152,6 +172,9 @@ export default function Login() {
             type="email"
             value={email}
             onChange={e => setEmail(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') handleLogin()
+            }}
           />
 
           <input
@@ -160,6 +183,9 @@ export default function Login() {
             type="password"
             value={password}
             onChange={e => setPassword(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') handleLogin()
+            }}
           />
 
           <button
