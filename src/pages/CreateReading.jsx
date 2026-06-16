@@ -22,6 +22,14 @@ function getProfileSchoolId(profile) {
   return profile?.schoolId || DEFAULT_SCHOOL_ID
 }
 
+function getEntitySchoolId(entity) {
+  return entity?.schoolId || DEFAULT_SCHOOL_ID
+}
+
+function isSameSchool(entity, profile) {
+  return getEntitySchoolId(entity) === getProfileSchoolId(profile)
+}
+
 function isLegacyType(type) {
   return LEGACY_TYPES.includes(type)
 }
@@ -44,6 +52,7 @@ function filterStudentsByProfile(students, profile, teacherId) {
   if (isAdminProfile(profile)) return students
 
   return students.filter(student =>
+    isSameSchool(student, profile) &&
     isAssignedToTeacher(student, teacherId)
   )
 }
@@ -52,6 +61,7 @@ function filterClassesByProfile(classes, profile, teacherId) {
   if (isAdminProfile(profile)) return classes
 
   return classes.filter(classItem =>
+    isSameSchool(classItem, profile) &&
     isAssignedToTeacher(classItem, teacherId)
   )
 }
@@ -292,7 +302,14 @@ export default function CreateReading() {
   useEffect(() => {
     if (!user || !profile) return
 
-    const q = query(collection(db, 'users'), where('role', '==', 'student'))
+    const q = isAdminProfile(profile)
+      ? query(collection(db, 'users'), where('role', '==', 'student'))
+      : query(
+          collection(db, 'users'),
+          where('role', '==', 'student'),
+          where('schoolId', '==', getProfileSchoolId(profile)),
+          where('teacherIds', 'array-contains', user.uid)
+        )
 
     return onSnapshot(q, snap => {
       const list = snap.docs
@@ -314,7 +331,13 @@ export default function CreateReading() {
   useEffect(() => {
     if (!user || !profile) return
 
-    const q = query(collection(db, 'classes'))
+    const q = isAdminProfile(profile)
+      ? query(collection(db, 'classes'))
+      : query(
+          collection(db, 'classes'),
+          where('schoolId', '==', getProfileSchoolId(profile)),
+          where('teacherId', '==', user.uid)
+        )
 
     return onSnapshot(q, snap => {
       const list = snap.docs
@@ -1874,6 +1897,7 @@ export default function CreateReading() {
       assignedEmails: students.filter(student => assignTo.includes(student.id)).map(student => student.email?.toLowerCase()).filter(Boolean),
       schoolId: getProfileSchoolId(profile),
       teacherId: profile?.role === 'teacher' ? user.uid : undefined,
+      teacherIds: profile?.role === 'teacher' ? [user.uid] : undefined,
       passageMode,
       passage: fullPassage,
       paragraphs,
@@ -1970,7 +1994,6 @@ export default function CreateReading() {
               >
                 <option value="private">My Library</option>
                 <option value="school">School Library</option>
-                <option value="public">Public Library</option>
               </select>
             </div>
 

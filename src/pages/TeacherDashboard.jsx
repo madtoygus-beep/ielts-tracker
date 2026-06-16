@@ -23,6 +23,28 @@ function getSchoolId(item) {
   return item?.schoolId || DEFAULT_SCHOOL_ID
 }
 
+function isAssignedToTeacher(entity, teacherId) {
+  if (!entity || !teacherId) return false
+
+  return (
+    entity.teacherId === teacherId ||
+    entity.createdBy === teacherId ||
+    (Array.isArray(entity.teacherIds) && entity.teacherIds.includes(teacherId))
+  )
+}
+
+function getLibraryVisibility(item) {
+  return item?.visibility || item?.libraryVisibility || 'private'
+}
+
+function isTeacherLibraryVisible(item, teacherId, schoolId) {
+  if (!item || getSchoolId(item) !== schoolId) return false
+
+  const visibility = getLibraryVisibility(item)
+
+  return isAssignedToTeacher(item, teacherId) || visibility === 'school'
+}
+
 export default function TeacherDashboard() {
   const [students, setStudents] = useState([])
   const [classes, setClasses] = useState([])
@@ -251,10 +273,7 @@ export default function TeacherDashboard() {
                 if (isAdminUser) return true
                 if (getSchoolId(item) !== teacherSchoolId) return false
 
-                const itemVisibility = item.visibility || item.libraryVisibility || 'private'
-                const isOwnedByTeacher = item.createdBy === currentUser.uid || item.teacherId === currentUser.uid
-
-                return isOwnedByTeacher || itemVisibility === 'school'
+                return isTeacherLibraryVisible(item, currentUser.uid, teacherSchoolId)
               })
 
             list.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
@@ -276,10 +295,7 @@ export default function TeacherDashboard() {
                 if (isAdminUser) return true
                 if (getSchoolId(item) !== teacherSchoolId) return false
 
-                const itemVisibility = item.visibility || item.libraryVisibility || 'private'
-                const isOwnedByTeacher = item.createdBy === currentUser.uid || item.teacherId === currentUser.uid
-
-                return isOwnedByTeacher || itemVisibility === 'school'
+                return isTeacherLibraryVisible(item, currentUser.uid, teacherSchoolId)
               })
 
             list.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
@@ -301,10 +317,7 @@ export default function TeacherDashboard() {
                 if (isAdminUser) return true
                 if (getSchoolId(item) !== teacherSchoolId) return false
 
-                const itemVisibility = item.visibility || item.libraryVisibility || 'private'
-                const isOwnedByTeacher = item.createdBy === currentUser.uid || item.teacherId === currentUser.uid
-
-                return isOwnedByTeacher || itemVisibility === 'school'
+                return isTeacherLibraryVisible(item, currentUser.uid, teacherSchoolId)
               })
 
             list.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
@@ -326,10 +339,7 @@ export default function TeacherDashboard() {
                 if (isAdminUser) return true
                 if (getSchoolId(item) !== teacherSchoolId) return false
 
-                const itemVisibility = item.visibility || item.libraryVisibility || 'private'
-                const isOwnedByTeacher = item.createdBy === currentUser.uid || item.teacherId === currentUser.uid
-
-                return isOwnedByTeacher || itemVisibility === 'school'
+                return isTeacherLibraryVisible(item, currentUser.uid, teacherSchoolId)
               })
 
             list.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
@@ -351,10 +361,7 @@ export default function TeacherDashboard() {
                 if (isAdminUser) return true
                 if (getSchoolId(item) !== teacherSchoolId) return false
 
-                const itemVisibility = item.visibility || item.libraryVisibility || 'private'
-                const isOwnedByTeacher = item.createdBy === currentUser.uid || item.teacherId === currentUser.uid
-
-                return isOwnedByTeacher || itemVisibility === 'school'
+                return isTeacherLibraryVisible(item, currentUser.uid, teacherSchoolId)
               })
 
             list.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
@@ -859,7 +866,7 @@ export default function TeacherDashboard() {
   const isSchoolLibraryItem = item => getLibraryVisibility(item) === 'school'
 
   const isOwnedByCurrentTeacher = item =>
-    profile?.role === 'admin' || item?.createdBy === user?.uid || item?.teacherId === user?.uid
+    profile?.role === 'admin' || isAssignedToTeacher(item, user?.uid)
 
   const getLibraryContentType = (item, fallback = 'full') =>
     item?.contentType || item?.practiceType || fallback
@@ -1091,6 +1098,9 @@ export default function TeacherDashboard() {
       teacherId: profile?.role === 'teacher'
         ? user.uid
         : selectedHomework.teacherId || selectedHomework.createdBy || user.uid,
+      teacherIds: profile?.role === 'teacher'
+        ? [user.uid]
+        : selectedHomework.teacherIds || (selectedHomework.teacherId ? [selectedHomework.teacherId] : []),
       updatedBy: user.uid,
       updatedAt: new Date().toISOString()
     })
@@ -1248,6 +1258,7 @@ Continue permanent delete?`
       archived: false,
       createdBy: user.uid,
       teacherId: profile?.role === 'teacher' ? user.uid : reading.teacherId || '',
+      teacherIds: profile?.role === 'teacher' ? [user.uid] : reading.teacherIds || (reading.teacherId ? [reading.teacherId] : []),
       schoolId: profile?.schoolId || getSchoolId(reading),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
@@ -1341,6 +1352,7 @@ Continue permanent delete?`
       archived: false,
       createdBy: user.uid,
       teacherId: profile?.role === 'teacher' ? user.uid : writing.teacherId || '',
+      teacherIds: profile?.role === 'teacher' ? [user.uid] : writing.teacherIds || (writing.teacherId ? [writing.teacherId] : []),
       schoolId: profile?.schoolId || getSchoolId(writing),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
@@ -1434,6 +1446,7 @@ Continue permanent delete?`
       archived: false,
       createdBy: user.uid,
       teacherId: profile?.role === 'teacher' ? user.uid : listening.teacherId || '',
+      teacherIds: profile?.role === 'teacher' ? [user.uid] : listening.teacherIds || (listening.teacherId ? [listening.teacherId] : []),
       schoolId: profile?.schoolId || getSchoolId(listening),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
@@ -1527,6 +1540,7 @@ Continue permanent delete?`
       archived: false,
       createdBy: user.uid,
       teacherId: profile?.role === 'teacher' ? user.uid : vocabularyTest.teacherId || '',
+      teacherIds: profile?.role === 'teacher' ? [user.uid] : vocabularyTest.teacherIds || (vocabularyTest.teacherId ? [vocabularyTest.teacherId] : []),
       schoolId: profile?.schoolId || getSchoolId(vocabularyTest),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
