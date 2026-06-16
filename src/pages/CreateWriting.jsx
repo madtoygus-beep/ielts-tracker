@@ -19,6 +19,12 @@ function getProfileSchoolId(profile) {
   return profile?.schoolId || DEFAULT_SCHOOL_ID
 }
 
+function getDefaultWritingTimeLimit(type) {
+  if (type === 'task1_only') return 20
+  if (type === 'task2_only') return 40
+  return 60
+}
+
 function getEntitySchoolId(entity) {
   return entity?.schoolId || DEFAULT_SCHOOL_ID
 }
@@ -99,6 +105,7 @@ export default function CreateWriting() {
   const [contentType, setContentType] = useState('full_writing')
   const [visibility, setVisibility] = useState('private')
   const [dueDate, setDueDate] = useState('')
+  const [timeLimit, setTimeLimit] = useState(60)
   const [assignTo, setAssignTo] = useState([])
 
   const [task1Title, setTask1Title] = useState('Writing Task 1')
@@ -225,9 +232,12 @@ export default function CreateWriting() {
       const data = snap.data()
 
       setTitle(data.title || '')
-      setContentType(data.contentType || data.writingMode || 'full_writing')
+      const loadedContentType = data.contentType || data.writingMode || 'full_writing'
+
+      setContentType(loadedContentType)
       setVisibility(data.visibility || data.libraryVisibility || 'private')
       setDueDate(data.dueDate || '')
+      setTimeLimit(Number(data.timeLimit) || getDefaultWritingTimeLimit(loadedContentType))
       setAssignTo(data.assignTo || [])
 
       setTask1Title(data.task1?.title || 'Writing Task 1')
@@ -261,11 +271,21 @@ export default function CreateWriting() {
 
   const hasTask1 = contentType !== 'task2_only'
   const hasTask2 = contentType !== 'task1_only'
-  const writingTimeLimit = contentType === 'task1_only'
-    ? 20
-    : contentType === 'task2_only'
-      ? 40
-      : 60
+  const defaultWritingTimeLimit = getDefaultWritingTimeLimit(contentType)
+  const safeTimeLimit = Number(timeLimit) || defaultWritingTimeLimit
+
+  const handleContentTypeChange = nextContentType => {
+    const currentDefault = getDefaultWritingTimeLimit(contentType)
+    const nextDefault = getDefaultWritingTimeLimit(nextContentType)
+
+    setContentType(nextContentType)
+
+    setTimeLimit(prev =>
+      Number(prev) === currentDefault
+        ? nextDefault
+        : prev
+    )
+  }
 
   useEffect(() => {
     if (!user || !profile || isAdminProfile(profile) || students.length === 0) return
@@ -333,7 +353,7 @@ export default function CreateWriting() {
     assignedStudentIds: students.filter(student => assignTo.includes(student.id)).map(student => student.id),
     assignedEmails: students.filter(student => assignTo.includes(student.id)).map(student => student.email?.toLowerCase()).filter(Boolean),
     schoolId: getProfileSchoolId(profile),
-    timeLimit: writingTimeLimit,
+    timeLimit: safeTimeLimit,
     task1Enabled: hasTask1,
     task2Enabled: hasTask2,
     task1: {
@@ -440,6 +460,11 @@ export default function CreateWriting() {
       return
     }
 
+    if (!safeTimeLimit || safeTimeLimit < 5 || safeTimeLimit > 180) {
+      alert('Please set a writing time limit between 5 and 180 minutes.')
+      return
+    }
+
     if (hasTask1 && !task1Prompt.trim()) {
       alert('Please add Task 1 prompt.')
       return
@@ -542,7 +567,7 @@ export default function CreateWriting() {
                 </div>
                 <div>
                   <label className="text-xs text-gray-400 mb-1 block">Content type</label>
-                  <select value={contentType} onChange={e => setContentType(e.target.value)} className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white">
+                  <select value={contentType} onChange={e => handleContentTypeChange(e.target.value)} className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white">
                     <option value="full_writing">Full Writing</option>
                     <option value="task1_only">Task 1 Only</option>
                     <option value="task2_only">Task 2 Only</option>
@@ -584,9 +609,34 @@ export default function CreateWriting() {
               </div>
 
               <div className="mt-4 bg-purple-50 border border-purple-100 rounded-xl p-4">
-                <p className="text-xs text-purple-500 mb-1">Student timer</p>
-                <p className="text-sm font-semibold text-purple-700">
-                  {writingTimeLimit} minutes
+                <div className="flex items-center justify-between gap-4 mb-3">
+                  <div>
+                    <p className="text-xs text-purple-500 mb-1">Student timer</p>
+                    <p className="text-sm font-semibold text-purple-700">
+                      {safeTimeLimit} minutes
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setTimeLimit(defaultWritingTimeLimit)}
+                    className="text-xs bg-white text-purple-600 px-3 py-2 rounded-xl border border-purple-100 hover:bg-purple-100"
+                  >
+                    Reset default
+                  </button>
+                </div>
+
+                <input
+                  type="number"
+                  min="5"
+                  max="180"
+                  value={timeLimit}
+                  onChange={e => setTimeLimit(e.target.value)}
+                  className="w-full border border-purple-100 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white"
+                />
+
+                <p className="text-xs text-purple-500 mt-2">
+                  You can give extra time for normal writing homework. Mock tests keep their own fixed flow.
                 </p>
               </div>
             </div>
