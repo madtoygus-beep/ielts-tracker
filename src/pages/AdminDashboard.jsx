@@ -238,52 +238,87 @@ export default function AdminDashboard() {
     Boolean(item.mockTestId) ||
     Boolean(item.mockId)
 
-  const updateHomeworkAssignmentsVisibility = async (uid, hidden) => {
-    const assignmentCollections = [
-      'readings',
-      'listenings',
-      'writingHomeworks'
-    ]
+  const getStudentReferenceValues = student => {
+    return Array.from(
+      new Set(
+        [
+          student?.id,
+          student?.uid,
+          student?.authUid,
+          student?.email,
+          student?.email?.toLowerCase()
+        ]
+          .filter(value => value !== undefined && value !== null)
+          .map(value => value.toString().trim())
+          .filter(Boolean)
+      )
+    )
+  }
 
+  const updateAssignmentsVisibilityForStudent = async (collectionNames, student, hidden) => {
+    const referenceValues = getStudentReferenceValues(student)
+    const assignmentFields = [
+      'assignTo',
+      'assignedTo',
+      'studentIds',
+      'assignedStudentIds',
+      'assignedEmails'
+    ]
+    const updatedDocumentKeys = new Set()
     let updatedCount = 0
 
-    for (const collectionName of assignmentCollections) {
-      const q = query(
-        collection(db, collectionName),
-        where('assignTo', 'array-contains', uid)
-      )
+    if (referenceValues.length === 0) return 0
 
-      const snap = await getDocs(q)
+    for (const collectionName of collectionNames) {
+      for (const field of assignmentFields) {
+        for (const referenceValue of referenceValues) {
+          const q = query(
+            collection(db, collectionName),
+            where(field, 'array-contains', referenceValue)
+          )
 
-      for (const item of snap.docs) {
-        await updateDoc(doc(db, collectionName, item.id), {
-          hiddenFor: hidden ? arrayUnion(uid) : arrayRemove(uid),
-          updatedAt: new Date().toISOString()
-        })
+          const snap = await getDocs(q)
 
-        updatedCount++
+          for (const item of snap.docs) {
+            const documentKey = `${collectionName}/${item.id}`
+            if (updatedDocumentKeys.has(documentKey)) continue
+
+            await updateDoc(doc(db, collectionName, item.id), {
+              hiddenFor: hidden
+                ? arrayUnion(...referenceValues)
+                : arrayRemove(...referenceValues),
+              updatedAt: new Date().toISOString()
+            })
+
+            updatedDocumentKeys.add(documentKey)
+            updatedCount++
+          }
+        }
       }
     }
 
     return updatedCount
   }
 
-  const updateMockAssignmentsVisibility = async (uid, hidden) => {
-    const q = query(
-      collection(db, 'mockTests'),
-      where('assignTo', 'array-contains', uid)
+  const updateHomeworkAssignmentsVisibility = async (student, hidden) => {
+    return updateAssignmentsVisibilityForStudent(
+      [
+        'readings',
+        'listenings',
+        'writingHomeworks',
+        'vocabularyTests'
+      ],
+      student,
+      hidden
     )
+  }
 
-    const snap = await getDocs(q)
-
-    for (const item of snap.docs) {
-      await updateDoc(doc(db, 'mockTests', item.id), {
-        hiddenFor: hidden ? arrayUnion(uid) : arrayRemove(uid),
-        updatedAt: new Date().toISOString()
-      })
-    }
-
-    return snap.docs.length
+  const updateMockAssignmentsVisibility = async (student, hidden) => {
+    return updateAssignmentsVisibilityForStudent(
+      ['mockTests'],
+      student,
+      hidden
+    )
   }
 
   const hideStudentRecords = async (student, type) => {
@@ -319,12 +354,13 @@ export default function AdminDashboard() {
           isMockScore
         )
 
-        archivedCount += await updateMockAssignmentsVisibility(student.id, true)
+        archivedCount += await updateMockAssignmentsVisibility(student, true)
       } else {
         const homeworkCollections = [
           'readingSubmissions',
           'listeningSubmissions',
-          'writingSubmissions'
+          'writingSubmissions',
+          'vocabularySubmissions'
         ]
 
         for (const collectionName of homeworkCollections) {
@@ -334,7 +370,7 @@ export default function AdminDashboard() {
           })
         }
 
-        archivedCount += await updateHomeworkAssignmentsVisibility(student.id, true)
+        archivedCount += await updateHomeworkAssignmentsVisibility(student, true)
       }
 
       alert(`${student.name || student.email}'s ${label} were hidden. Updated ${archivedCount} record(s).`)
@@ -377,12 +413,13 @@ export default function AdminDashboard() {
           isMockScore
         )
 
-        restoredCount += await updateMockAssignmentsVisibility(student.id, false)
+        restoredCount += await updateMockAssignmentsVisibility(student, false)
       } else {
         const homeworkCollections = [
           'readingSubmissions',
           'listeningSubmissions',
-          'writingSubmissions'
+          'writingSubmissions',
+          'vocabularySubmissions'
         ]
 
         for (const collectionName of homeworkCollections) {
@@ -392,7 +429,7 @@ export default function AdminDashboard() {
           })
         }
 
-        restoredCount += await updateHomeworkAssignmentsVisibility(student.id, false)
+        restoredCount += await updateHomeworkAssignmentsVisibility(student, false)
       }
 
       alert(`${student.name || student.email}'s ${label} were restored. Restored/updated ${restoredCount} record(s).`)
@@ -422,7 +459,8 @@ export default function AdminDashboard() {
         const homeworkCollections = [
           'readingSubmissions',
           'listeningSubmissions',
-          'writingSubmissions'
+          'writingSubmissions',
+          'vocabularySubmissions'
         ]
 
         for (const collectionName of homeworkCollections) {

@@ -286,11 +286,6 @@ export default function ManageClasses() {
         new Set(formStudentIds.filter(studentId => activeStudentIds.has(studentId)))
       )
 
-      const previousStudentIds = editingClass
-        ? getValidStudentIdsForClass(editingClass)
-        : []
-      const addedStudentIds = cleanedStudentIds.filter(id => !previousStudentIds.includes(id))
-
       if (editingClass) {
         await updateDoc(doc(db, 'classes', editingClass.id), {
           name: formName.trim(),
@@ -311,18 +306,25 @@ export default function ManageClasses() {
           teacherId,
           schoolId,
           createdBy: user.uid,
+          updatedBy: user.uid,
           createdAt: now,
           updatedAt: now,
           archived: false
         })
       }
 
-      for (const studentId of addedStudentIds) {
-        await updateDoc(doc(db, 'users', studentId), {
-          teacherIds: arrayUnion(teacherId),
-          schoolId,
-          updatedAt: now
-        })
+      // Firestore rules allow teachers to create/update their own classes,
+      // but only admins can update other user documents. Therefore teacherIds
+      // on student profiles are updated here only when an admin manages the class.
+      // Teacher-created classes use students already linked to that teacher.
+      if (userRole === 'admin') {
+        for (const studentId of cleanedStudentIds) {
+          await updateDoc(doc(db, 'users', studentId), {
+            teacherIds: arrayUnion(teacherId),
+            schoolId,
+            updatedAt: now
+          })
+        }
       }
 
       // Removing a student from a class should only remove them from that class.
