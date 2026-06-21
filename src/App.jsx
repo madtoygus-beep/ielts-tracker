@@ -25,6 +25,7 @@ const CreateVocabulary = lazy(() => import('./pages/CreateVocabulary'))
 const DoVocabulary = lazy(() => import('./pages/DoVocabulary'))
 
 const ManageClasses = lazy(() => import('./pages/ManageClasses'))
+const TeacherPreview = lazy(() => import('./pages/TeacherPreview'))
 
 function PageLoader() {
   return (
@@ -78,6 +79,11 @@ function App() {
 
           <Route path="/teacher/classes" element={<ManageClasses />} />
           <Route path="/admin/classes" element={<ManageClasses />} />
+
+          <Route
+            path="/preview/:type/:id"
+            element={<TeacherPreview />}
+          />
         </Routes>
       </Suspense>
     </BrowserRouter>

@@ -237,6 +237,10 @@ export default function TeacherDashboard() {
 
   const navigate = useNavigate()
 
+  const openTeacherPreview = (type, contentId) => {
+    navigate(`/preview/${type}/${contentId}`)
+  }
+
   useEffect(() => {
     let isActive = true
     const liveUnsubscribers = []
@@ -4008,6 +4012,13 @@ Continue permanent delete?`
       </div>
 
       <div className="flex gap-2 flex-wrap justify-end">
+        <button
+          onClick={() => openTeacherPreview('mock', mockTest.id)}
+          className="text-xs bg-indigo-50 text-indigo-600 px-3 py-2 rounded-xl hover:bg-indigo-100"
+        >
+          Preview
+        </button>
+
         {!archived && (
           <button
             onClick={() => openAssignmentManager(mockTest, 'mock')}
@@ -4083,6 +4094,13 @@ Continue permanent delete?`
       </div>
 
       <div className="flex gap-2 flex-wrap justify-end">
+        <button
+          onClick={() => openTeacherPreview('reading', reading.id)}
+          className="text-xs bg-indigo-50 text-indigo-600 px-3 py-2 rounded-xl hover:bg-indigo-100"
+        >
+          Preview
+        </button>
+
         {!archived && (
           <>
             {isOwnedByCurrentTeacher(reading) && (
@@ -4187,6 +4205,13 @@ Continue permanent delete?`
         </div>
 
         <div className="flex gap-2 flex-wrap justify-end">
+          <button
+            onClick={() => openTeacherPreview('writing', writing.id)}
+            className="text-xs bg-indigo-50 text-indigo-600 px-3 py-2 rounded-xl hover:bg-indigo-100"
+          >
+            Preview
+          </button>
+
           {!archived && (
             <>
               {isOwnedByCurrentTeacher(writing) && (
@@ -4281,6 +4306,13 @@ Continue permanent delete?`
       </div>
 
       <div className="flex gap-2 flex-wrap justify-end">
+        <button
+          onClick={() => openTeacherPreview('listening', listening.id)}
+          className="text-xs bg-indigo-50 text-indigo-600 px-3 py-2 rounded-xl hover:bg-indigo-100"
+        >
+          Preview
+        </button>
+
         {!archived && (
           <>
             {isOwnedByCurrentTeacher(listening) && (
@@ -4375,6 +4407,13 @@ Continue permanent delete?`
       </div>
 
       <div className="flex gap-2 flex-wrap justify-end">
+        <button
+          onClick={() => openTeacherPreview('vocabulary', vocabularyTest.id)}
+          className="text-xs bg-indigo-50 text-indigo-600 px-3 py-2 rounded-xl hover:bg-indigo-100"
+        >
+          Preview
+        </button>
+
         {!archived && (
           <>
             {isOwnedByCurrentTeacher(vocabularyTest) && (
