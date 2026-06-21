@@ -115,6 +115,22 @@ function getReadingBand(correct, total) {
   return getBandFromPercentage(correct, total)
 }
 
+function getHighlightStorageKey(userId, readingId) {
+  return `reading-highlights:${userId}:${readingId}`
+}
+
+function getElementFromNode(node) {
+  if (!node) return null
+  return node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement
+}
+
+function getTextOffsetWithin(container, node, offset) {
+  const range = document.createRange()
+  range.selectNodeContents(container)
+  range.setEnd(node, offset)
+  return range.toString().length
+}
+
 export default function DoReading() {
   const { id } = useParams()
 
@@ -130,10 +146,14 @@ export default function DoReading() {
   const [flaggedQuestions, setFlaggedQuestions] = useState([])
   const [studentNote, setStudentNote] = useState('')
   const [showQuestionMap, setShowQuestionMap] = useState(true)
+  const [highlights, setHighlights] = useState([])
+  const [pendingHighlight, setPendingHighlight] = useState(null)
+  const [highlightMessage, setHighlightMessage] = useState('')
 
   const timerRef = useRef(null)
   const submittingRef = useRef(false)
   const questionRefs = useRef({})
+  const highlightMessageTimerRef = useRef(null)
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -211,6 +231,26 @@ export default function DoReading() {
       setReading(data)
       setTimeLeft((data.timeLimit || 60) * 60)
 
+      let locallySavedHighlights = []
+
+      try {
+        const storedHighlights = localStorage.getItem(
+          getHighlightStorageKey(currentUser.uid, id)
+        )
+
+        if (storedHighlights) {
+          const parsedHighlights = JSON.parse(storedHighlights)
+
+          if (Array.isArray(parsedHighlights)) {
+            locallySavedHighlights = parsedHighlights
+          }
+        }
+      } catch (error) {
+        console.warn('Could not restore reading highlights:', error)
+      }
+
+      setHighlights(locallySavedHighlights)
+
       const q = query(
         collection(db, 'readingSubmissions'),
         where('uid', '==', currentUser.uid),
@@ -225,6 +265,15 @@ export default function DoReading() {
         setAlreadyDone(true)
         setAnswers(sub.answers || {})
         setResult(sub.result)
+        setFlaggedQuestions(
+          Array.isArray(sub.flaggedQuestions) ? sub.flaggedQuestions : []
+        )
+        setStudentNote(sub.studentNote || '')
+        setHighlights(
+          Array.isArray(sub.highlights)
+            ? sub.highlights
+            : locallySavedHighlights
+        )
         setSubmitted(true)
       }
     })
@@ -246,6 +295,27 @@ export default function DoReading() {
 
     return () => clearInterval(timerRef.current)
   }, [timeLeft, submitted])
+
+  useEffect(() => {
+    if (!user || !reading || submitted) return
+
+    try {
+      localStorage.setItem(
+        getHighlightStorageKey(user.uid, id),
+        JSON.stringify(highlights)
+      )
+    } catch (error) {
+      console.warn('Could not save reading highlights:', error)
+    }
+  }, [highlights, id, reading, submitted, user])
+
+  useEffect(() => {
+    return () => {
+      if (highlightMessageTimerRef.current) {
+        clearTimeout(highlightMessageTimerRef.current)
+      }
+    }
+  }, [])
 
   const formatTime = secs => {
     const m = Math.floor(secs / 60)
@@ -563,6 +633,233 @@ export default function DoReading() {
       behavior: 'smooth',
       block: 'start'
     })
+  }
+
+  const showHighlightMessage = message => {
+    setHighlightMessage(message)
+
+    if (highlightMessageTimerRef.current) {
+      clearTimeout(highlightMessageTimerRef.current)
+    }
+
+    highlightMessageTimerRef.current = setTimeout(() => {
+      setHighlightMessage('')
+    }, 2600)
+  }
+
+  const getPassageBlockText = blockId => {
+    if (!reading) return ''
+
+    if (blockId === 'standard-passage') {
+      return reading.passage || ''
+    }
+
+    const paragraph = reading.paragraphs?.find(
+      item => `paragraph-${item.id || item.letter}` === blockId
+    )
+
+    return paragraph?.text || ''
+  }
+
+  const captureHighlightSelection = () => {
+    if (submitted) return
+
+    const selection = window.getSelection()
+
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+      setPendingHighlight(null)
+      return
+    }
+
+    const range = selection.getRangeAt(0)
+    const startElement = getElementFromNode(range.startContainer)
+    const endElement = getElementFromNode(range.endContainer)
+
+    const startBlock = startElement?.closest?.('[data-highlight-block]')
+    const endBlock = endElement?.closest?.('[data-highlight-block]')
+
+    if (!startBlock || !endBlock) {
+      setPendingHighlight(null)
+      return
+    }
+
+    if (startBlock !== endBlock) {
+      setPendingHighlight(null)
+      showHighlightMessage('Select text inside one paragraph at a time.')
+      return
+    }
+
+    const blockId = startBlock.dataset.highlightBlock
+    const sourceText = getPassageBlockText(blockId)
+
+    if (!sourceText) {
+      setPendingHighlight(null)
+      return
+    }
+
+    let start = getTextOffsetWithin(
+      startBlock,
+      range.startContainer,
+      range.startOffset
+    )
+
+    let end = getTextOffsetWithin(
+      startBlock,
+      range.endContainer,
+      range.endOffset
+    )
+
+    if (end < start) {
+      const previousStart = start
+      start = end
+      end = previousStart
+    }
+
+    while (start < end && /\s/.test(sourceText[start])) start++
+    while (end > start && /\s/.test(sourceText[end - 1])) end--
+
+    if (end <= start) {
+      setPendingHighlight(null)
+      return
+    }
+
+    setPendingHighlight({
+      blockId,
+      start,
+      end,
+      text: sourceText.slice(start, end)
+    })
+  }
+
+  const addPendingHighlight = () => {
+    if (!pendingHighlight) {
+      showHighlightMessage('First select a word or sentence in the passage.')
+      return
+    }
+
+    const { blockId, start, end } = pendingHighlight
+    const sourceText = getPassageBlockText(blockId)
+
+    let mergedStart = start
+    let mergedEnd = end
+
+    const remaining = highlights.filter(highlight => {
+      if (highlight.blockId !== blockId) return true
+
+      const overlaps =
+        highlight.start <= mergedEnd &&
+        highlight.end >= mergedStart
+
+      if (overlaps) {
+        mergedStart = Math.min(mergedStart, highlight.start)
+        mergedEnd = Math.max(mergedEnd, highlight.end)
+        return false
+      }
+
+      return true
+    })
+
+    const nextHighlight = {
+      id: crypto.randomUUID(),
+      blockId,
+      start: mergedStart,
+      end: mergedEnd,
+      text: sourceText.slice(mergedStart, mergedEnd)
+    }
+
+    setHighlights([...remaining, nextHighlight])
+    setPendingHighlight(null)
+
+    const selection = window.getSelection()
+    selection?.removeAllRanges()
+
+    showHighlightMessage('Highlighted.')
+  }
+
+  const removeHighlight = highlightId => {
+    setHighlights(prev =>
+      prev.filter(highlight => highlight.id !== highlightId)
+    )
+    showHighlightMessage('Highlight removed.')
+  }
+
+  const clearHighlights = () => {
+    if (highlights.length === 0) return
+
+    const ok = window.confirm('Clear all passage highlights?')
+    if (!ok) return
+
+    setHighlights([])
+    setPendingHighlight(null)
+    showHighlightMessage('All highlights cleared.')
+  }
+
+  const renderHighlightedText = (text, blockId, reviewMode = false) => {
+    if (!text) return null
+
+    const validHighlights = highlights
+      .filter(highlight =>
+        highlight.blockId === blockId &&
+        Number.isInteger(highlight.start) &&
+        Number.isInteger(highlight.end) &&
+        highlight.start >= 0 &&
+        highlight.end > highlight.start &&
+        highlight.end <= text.length
+      )
+      .sort((a, b) => a.start - b.start)
+
+    if (validHighlights.length === 0) return text
+
+    const parts = []
+    let cursor = 0
+
+    validHighlights.forEach(highlight => {
+      if (highlight.start > cursor) {
+        parts.push(
+          <span key={`text-${blockId}-${cursor}`}>
+            {text.slice(cursor, highlight.start)}
+          </span>
+        )
+      }
+
+      const visibleStart = Math.max(cursor, highlight.start)
+
+      if (highlight.end > visibleStart) {
+        parts.push(
+          <mark
+            key={highlight.id}
+            title={reviewMode ? 'Student highlight' : 'Click to remove highlight'}
+            onClick={
+              reviewMode
+                ? undefined
+                : event => {
+                    event.stopPropagation()
+                    removeHighlight(highlight.id)
+                  }
+            }
+            className={`rounded px-0.5 ${
+              reviewMode
+                ? 'bg-yellow-200 text-inherit'
+                : 'bg-yellow-200 text-inherit cursor-pointer hover:bg-yellow-300'
+            }`}
+          >
+            {text.slice(visibleStart, highlight.end)}
+          </mark>
+        )
+      }
+
+      cursor = Math.max(cursor, highlight.end)
+    })
+
+    if (cursor < text.length) {
+      parts.push(
+        <span key={`text-${blockId}-${cursor}`}>
+          {text.slice(cursor)}
+        </span>
+      )
+    }
+
+    return parts
   }
 
   const handleAnswer = (questionId, value) => {
@@ -1001,6 +1298,7 @@ export default function DoReading() {
         result: res,
         flaggedQuestions,
         studentNote: studentNote.trim(),
+        highlights,
         submittedAt: new Date().toISOString(),
         finishedLate: timeLeft <= 0,
         autoSubmitted: autoSubmit
@@ -1273,15 +1571,29 @@ export default function DoReading() {
                         Paragraph {paragraph.letter}
                       </h3>
 
-                      <p className="text-sm text-gray-700 leading-7 whitespace-pre-wrap">
-                        {paragraph.text}
+                      <p
+                        data-highlight-block={`paragraph-${paragraph.id || paragraph.letter}`}
+                        className="text-sm text-gray-700 leading-7 whitespace-pre-wrap"
+                      >
+                        {renderHighlightedText(
+                          paragraph.text,
+                          `paragraph-${paragraph.id || paragraph.letter}`,
+                          true
+                        )}
                       </p>
                     </div>
                   ))}
                 </div>
               ) : (
-                <div className="text-sm text-gray-700 leading-7 whitespace-pre-wrap">
-                  {reading.passage}
+                <div
+                  data-highlight-block="standard-passage"
+                  className="text-sm text-gray-700 leading-7 whitespace-pre-wrap"
+                >
+                  {renderHighlightedText(
+                    reading.passage,
+                    'standard-passage',
+                    true
+                  )}
                 </div>
               )}
             </div>
@@ -1860,17 +2172,52 @@ export default function DoReading() {
       <div className="max-w-[1500px] mx-auto px-4 md:px-6 py-6">
         <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)] gap-6">
           <div className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden lg:sticky lg:top-24 lg:h-[calc(100vh-8rem)]">
-            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 bg-white sticky top-0 z-10">
-              <h2 className="font-semibold text-gray-800">
-                Reading Passage
-              </h2>
+            <div className="px-5 py-4 border-b border-gray-100 bg-white sticky top-0 z-10">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div>
+                  <h2 className="font-semibold text-gray-800">
+                    Reading Passage
+                  </h2>
 
-              <span className="text-xs bg-gray-100 text-gray-500 px-3 py-1 rounded-full">
-                Scroll passage
-              </span>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    Select text, then press Highlight. Click a yellow highlight to remove it.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={addPendingHighlight}
+                    disabled={!pendingHighlight}
+                    className="text-xs bg-yellow-100 text-yellow-800 px-3 py-2 rounded-xl hover:bg-yellow-200 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    🖍 Highlight
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={clearHighlights}
+                    disabled={highlights.length === 0}
+                    className="text-xs bg-gray-100 text-gray-600 px-3 py-2 rounded-xl hover:bg-gray-200 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    Clear ({highlights.length})
+                  </button>
+                </div>
+              </div>
+
+              {(pendingHighlight || highlightMessage) && (
+                <div className="mt-3 text-xs rounded-xl px-3 py-2 bg-yellow-50 text-yellow-800 border border-yellow-100">
+                  {highlightMessage ||
+                    `Selected: “${pendingHighlight.text.slice(0, 90)}${pendingHighlight.text.length > 90 ? '…' : ''}”`}
+                </div>
+              )}
             </div>
 
-            <div className="p-5 md:p-7 overflow-y-auto h-[65vh] lg:h-[calc(100vh-12rem)]">
+            <div
+              onMouseUp={captureHighlightSelection}
+              onTouchEnd={() => setTimeout(captureHighlightSelection, 0)}
+              className="p-5 md:p-7 overflow-y-auto h-[65vh] lg:h-[calc(100vh-12rem)] select-text"
+            >
               {reading.passageMode === 'sections' ? (
                 <div className="space-y-8">
                   {reading.paragraphs.map(paragraph => (
@@ -1879,15 +2226,27 @@ export default function DoReading() {
                         Paragraph {paragraph.letter}
                       </h3>
 
-                      <p className="text-sm md:text-[15px] text-gray-700 leading-8 whitespace-pre-wrap">
-                        {paragraph.text}
+                      <p
+                        data-highlight-block={`paragraph-${paragraph.id || paragraph.letter}`}
+                        className="text-sm md:text-[15px] text-gray-700 leading-8 whitespace-pre-wrap"
+                      >
+                        {renderHighlightedText(
+                          paragraph.text,
+                          `paragraph-${paragraph.id || paragraph.letter}`
+                        )}
                       </p>
                     </div>
                   ))}
                 </div>
               ) : (
-                <div className="text-sm md:text-[15px] text-gray-700 leading-8 whitespace-pre-wrap">
-                  {reading.passage}
+                <div
+                  data-highlight-block="standard-passage"
+                  className="text-sm md:text-[15px] text-gray-700 leading-8 whitespace-pre-wrap"
+                >
+                  {renderHighlightedText(
+                    reading.passage,
+                    'standard-passage'
+                  )}
                 </div>
               )}
             </div>
