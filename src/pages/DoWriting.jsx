@@ -37,6 +37,21 @@ function uniqueCleanValues(values) {
   )
 }
 
+function getSourceTeacherIds(source) {
+  const explicitTeacherIds = Array.isArray(source?.teacherIds)
+    ? source.teacherIds
+    : []
+
+  if (explicitTeacherIds.length > 0) {
+    return uniqueCleanValues(explicitTeacherIds)
+  }
+
+  return uniqueCleanValues([
+    source?.teacherId,
+    source?.createdBy
+  ])
+}
+
 function getCurrentUserAssignmentValues(user, profile) {
   if (!user) return []
 
@@ -453,10 +468,17 @@ export default function DoWriting() {
       clearTimeout(autosaveTimeoutRef.current)
     }
 
+    const submissionTeacherIds = getSourceTeacherIds(writing)
+
     try {
       await addDoc(collection(db, 'writingSubmissions'), {
         uid: user.uid,
+        studentId: user.uid,
+        studentEmail: user.email || '',
         writingId: id,
+        schoolId: writing.schoolId || 'maxima',
+        teacherId: submissionTeacherIds[0] || '',
+        teacherIds: submissionTeacherIds,
         contentType: writingMode,
         writingMode,
         task1Enabled: hasTask1,

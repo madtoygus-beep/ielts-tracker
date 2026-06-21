@@ -39,6 +39,32 @@ function normalizeValue(value) {
     : value.toString().trim().toLowerCase()
 }
 
+function uniqueCleanValues(values) {
+  return Array.from(
+    new Set(
+      values
+        .filter(value => value !== undefined && value !== null)
+        .map(value => value.toString().trim())
+        .filter(Boolean)
+    )
+  )
+}
+
+function getSourceTeacherIds(source) {
+  const explicitTeacherIds = Array.isArray(source?.teacherIds)
+    ? source.teacherIds
+    : []
+
+  if (explicitTeacherIds.length > 0) {
+    return uniqueCleanValues(explicitTeacherIds)
+  }
+
+  return uniqueCleanValues([
+    source?.teacherId,
+    source?.createdBy
+  ])
+}
+
 function getAssignmentValues(item) {
   return [
     ...(Array.isArray(item?.assignTo) ? item.assignTo : []),
@@ -268,10 +294,12 @@ export default function DoVocabulary() {
     clearInterval(timerRef.current)
 
     const res = calculateScore()
+    const submissionTeacherIds = getSourceTeacherIds(test)
 
     try {
       await addDoc(collection(db, 'vocabularySubmissions'), {
         uid: user.uid,
+        studentId: user.uid,
         studentEmail: user.email || profile?.email || '',
         studentName: profile?.name || profile?.fullName || user.email || '',
         vocabularyTestId: id,
@@ -279,7 +307,8 @@ export default function DoVocabulary() {
         testId: id,
         homeworkId: id,
         vocabularyTitle: test.title || '',
-        teacherId: test.teacherId || test.createdBy || '',
+        teacherId: submissionTeacherIds[0] || '',
+        teacherIds: submissionTeacherIds,
         schoolId: test.schoolId || profile?.schoolId || 'maxima',
         answers,
         result: res,

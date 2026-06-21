@@ -45,6 +45,114 @@ function isTeacherLibraryVisible(item, teacherId, schoolId) {
   return isAssignedToTeacher(item, teacherId) || visibility === 'school'
 }
 
+function listenMergedQueries(queryList, onItems, label = 'Firestore query') {
+  if (!Array.isArray(queryList) || queryList.length === 0) {
+    onItems([])
+    return () => {}
+  }
+
+  let active = true
+  const buckets = new Map()
+
+  const emit = () => {
+    if (!active) return
+
+    const merged = new Map()
+
+    buckets.forEach(items => {
+      items.forEach(item => merged.set(item.id, item))
+    })
+
+    onItems(Array.from(merged.values()))
+  }
+
+  const unsubscribers = queryList.map((queryRef, index) =>
+    onSnapshot(
+      queryRef,
+      snapshot => {
+        buckets.set(
+          index,
+          snapshot.docs.map(item => ({ id: item.id, ...item.data() }))
+        )
+        emit()
+      },
+      error => {
+        console.warn(`${label} failed`, error)
+        buckets.set(index, [])
+        emit()
+      }
+    )
+  )
+
+  return () => {
+    active = false
+    unsubscribers.forEach(unsubscribe => unsubscribe())
+  }
+}
+
+function buildOwnedContentQueries(collectionName, teacherId) {
+  const source = collection(db, collectionName)
+
+  return [
+    query(source, where('teacherIds', 'array-contains', teacherId)),
+    query(source, where('teacherId', '==', teacherId)),
+    query(source, where('createdBy', '==', teacherId))
+  ]
+}
+
+function buildTeacherLibraryQueries(collectionName, teacherId, schoolId) {
+  const source = collection(db, collectionName)
+
+  return [
+    ...buildOwnedContentQueries(collectionName, teacherId),
+    query(
+      source,
+      where('schoolId', '==', schoolId),
+      where('visibility', '==', 'school')
+    ),
+    query(
+      source,
+      where('schoolId', '==', schoolId),
+      where('libraryVisibility', '==', 'school')
+    )
+  ]
+}
+
+async function getOwnedContentIds(collectionName, teacherId) {
+  const snapshots = await Promise.all(
+    buildOwnedContentQueries(collectionName, teacherId).map(queryRef =>
+      getDocs(queryRef)
+    )
+  )
+
+  return Array.from(
+    new Set(
+      snapshots.flatMap(snapshot => snapshot.docs.map(item => item.id))
+    )
+  )
+}
+
+function buildTeacherSubmissionQueries(
+  collectionName,
+  teacherId,
+  parentFields,
+  parentIds
+) {
+  const source = collection(db, collectionName)
+  const queries = [
+    query(source, where('teacherIds', 'array-contains', teacherId)),
+    query(source, where('teacherId', '==', teacherId))
+  ]
+
+  parentIds.forEach(parentId => {
+    parentFields.forEach(parentField => {
+      queries.push(query(source, where(parentField, '==', parentId)))
+    })
+  })
+
+  return queries
+}
+
 export default function TeacherDashboard() {
   const [students, setStudents] = useState([])
   const [classes, setClasses] = useState([])
@@ -234,145 +342,214 @@ export default function TeacherDashboard() {
           })
         )
 
-        trackSnapshot(
-          onSnapshot(collection(db, 'scores'), snap => {
-            const groupedScores = {}
+        const [
+          ownedReadingIds,
+          ownedWritingIds,
+          ownedListeningIds,
+          ownedMockIds,
+          ownedVocabularyIds
+        ] = isAdminUser
+          ? [[], [], [], [], []]
+          : await Promise.all([
+              getOwnedContentIds('readings', currentUser.uid),
+              getOwnedContentIds('writingHomeworks', currentUser.uid),
+              getOwnedContentIds('listenings', currentUser.uid),
+              getOwnedContentIds('mockTests', currentUser.uid),
+              getOwnedContentIds('vocabularyTests', currentUser.uid)
+            ])
 
-            snap.docs.forEach(scoreDoc => {
-              const score = {
-                id: scoreDoc.id,
-                ...scoreDoc.data()
-              }
+        if (!isActive) return
 
-              if (!score.uid) return
+        const contentQueries = collectionName =>
+          isAdminUser
+            ? [query(collection(db, collectionName))]
+            : buildTeacherLibraryQueries(
+                collectionName,
+                currentUser.uid,
+                teacherSchoolId
+              )
 
-              if (!isAdminUser && getSchoolId(score) !== teacherSchoolId) return
-
-              if (!groupedScores[score.uid]) {
-                groupedScores[score.uid] = []
-              }
-
-              groupedScores[score.uid].push(score)
-            })
-
-            Object.keys(groupedScores).forEach(studentId => {
-              groupedScores[studentId].sort(
-                (a, b) => new Date(b.date || 0) - new Date(a.date || 0)
+        const setSortedLibraryItems = setter => items => {
+          const list = items
+            .filter(item => {
+              if (isAdminUser) return true
+              return isTeacherLibraryVisible(
+                item,
+                currentUser.uid,
+                teacherSchoolId
               )
             })
+            .sort(
+              (a, b) =>
+                new Date(b.createdAt || 0) - new Date(a.createdAt || 0)
+            )
 
-            setScores(groupedScores)
-          })
+          setter(list)
+        }
+
+        trackSnapshot(
+          listenMergedQueries(
+            contentQueries('readings'),
+            setSortedLibraryItems(setReadings),
+            'Reading library query'
+          )
         )
 
         trackSnapshot(
-          onSnapshot(query(collection(db, 'readings')), snap => {
-            const list = snap.docs
-              .map(d => ({ id: d.id, ...d.data() }))
-              .filter(item => {
-                if (isAdminUser) return true
-                if (getSchoolId(item) !== teacherSchoolId) return false
+          listenMergedQueries(
+            contentQueries('writingHomeworks'),
+            setSortedLibraryItems(setWritings),
+            'Writing library query'
+          )
+        )
 
-                return isTeacherLibraryVisible(item, currentUser.uid, teacherSchoolId)
+        trackSnapshot(
+          listenMergedQueries(
+            contentQueries('listenings'),
+            setSortedLibraryItems(setListenings),
+            'Listening library query'
+          )
+        )
+
+        trackSnapshot(
+          listenMergedQueries(
+            contentQueries('mockTests'),
+            setSortedLibraryItems(setMockTests),
+            'Mock library query'
+          )
+        )
+
+        trackSnapshot(
+          listenMergedQueries(
+            contentQueries('vocabularyTests'),
+            setSortedLibraryItems(setVocabularyTests),
+            'Vocabulary library query'
+          )
+        )
+
+        const submissionQueries = (
+          collectionName,
+          parentFields,
+          parentIds
+        ) =>
+          isAdminUser
+            ? [query(collection(db, collectionName))]
+            : buildTeacherSubmissionQueries(
+                collectionName,
+                currentUser.uid,
+                parentFields,
+                parentIds
+              )
+
+        trackSnapshot(
+          listenMergedQueries(
+            submissionQueries(
+              'readingSubmissions',
+              ['readingId'],
+              ownedReadingIds
+            ),
+            setSubmissions,
+            'Reading submission query'
+          )
+        )
+
+        trackSnapshot(
+          listenMergedQueries(
+            submissionQueries(
+              'writingSubmissions',
+              ['writingId'],
+              ownedWritingIds
+            ),
+            setWritingSubmissions,
+            'Writing submission query'
+          )
+        )
+
+        trackSnapshot(
+          listenMergedQueries(
+            submissionQueries(
+              'listeningSubmissions',
+              ['listeningId'],
+              ownedListeningIds
+            ),
+            setListeningSubmissions,
+            'Listening submission query'
+          )
+        )
+
+        trackSnapshot(
+          listenMergedQueries(
+            submissionQueries(
+              'mockSubmissions',
+              ['mockTestId'],
+              ownedMockIds
+            ),
+            setMockSubmissions,
+            'Mock submission query'
+          )
+        )
+
+        trackSnapshot(
+          listenMergedQueries(
+            submissionQueries(
+              'vocabularySubmissions',
+              ['vocabularyTestId', 'vocabularyId', 'testId', 'homeworkId'],
+              ownedVocabularyIds
+            ),
+            setVocabularySubmissions,
+            'Vocabulary submission query'
+          )
+        )
+
+        const scoreQueries = isAdminUser
+          ? [query(collection(db, 'scores'))]
+          : [
+              query(
+                collection(db, 'scores'),
+                where('teacherIds', 'array-contains', currentUser.uid)
+              ),
+              query(
+                collection(db, 'scores'),
+                where('teacherId', '==', currentUser.uid)
+              ),
+              query(
+                collection(db, 'scores'),
+                where('addedBy', '==', currentUser.uid)
+              ),
+              ...ownedMockIds.map(mockId =>
+                query(
+                  collection(db, 'scores'),
+                  where('mockTestId', '==', mockId)
+                )
+              )
+            ]
+
+        trackSnapshot(
+          listenMergedQueries(
+            scoreQueries,
+            scoreItems => {
+              const groupedScores = {}
+
+              scoreItems.forEach(score => {
+                if (!score.uid) return
+
+                if (!groupedScores[score.uid]) {
+                  groupedScores[score.uid] = []
+                }
+
+                groupedScores[score.uid].push(score)
               })
 
-            list.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
-            setReadings(list)
-          })
-        )
-
-        trackSnapshot(
-          onSnapshot(query(collection(db, 'readingSubmissions')), snap => {
-            setSubmissions(snap.docs.map(d => ({ id: d.id, ...d.data() })))
-          })
-        )
-
-        trackSnapshot(
-          onSnapshot(query(collection(db, 'writingHomeworks')), snap => {
-            const list = snap.docs
-              .map(d => ({ id: d.id, ...d.data() }))
-              .filter(item => {
-                if (isAdminUser) return true
-                if (getSchoolId(item) !== teacherSchoolId) return false
-
-                return isTeacherLibraryVisible(item, currentUser.uid, teacherSchoolId)
+              Object.keys(groupedScores).forEach(studentId => {
+                groupedScores[studentId].sort(
+                  (a, b) => new Date(b.date || 0) - new Date(a.date || 0)
+                )
               })
 
-            list.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
-            setWritings(list)
-          })
-        )
-
-        trackSnapshot(
-          onSnapshot(query(collection(db, 'writingSubmissions')), snap => {
-            setWritingSubmissions(snap.docs.map(d => ({ id: d.id, ...d.data() })))
-          })
-        )
-
-        trackSnapshot(
-          onSnapshot(query(collection(db, 'listenings')), snap => {
-            const list = snap.docs
-              .map(d => ({ id: d.id, ...d.data() }))
-              .filter(item => {
-                if (isAdminUser) return true
-                if (getSchoolId(item) !== teacherSchoolId) return false
-
-                return isTeacherLibraryVisible(item, currentUser.uid, teacherSchoolId)
-              })
-
-            list.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
-            setListenings(list)
-          })
-        )
-
-        trackSnapshot(
-          onSnapshot(query(collection(db, 'listeningSubmissions')), snap => {
-            setListeningSubmissions(snap.docs.map(d => ({ id: d.id, ...d.data() })))
-          })
-        )
-
-        trackSnapshot(
-          onSnapshot(query(collection(db, 'mockTests')), snap => {
-            const list = snap.docs
-              .map(d => ({ id: d.id, ...d.data() }))
-              .filter(item => {
-                if (isAdminUser) return true
-                if (getSchoolId(item) !== teacherSchoolId) return false
-
-                return isTeacherLibraryVisible(item, currentUser.uid, teacherSchoolId)
-              })
-
-            list.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
-            setMockTests(list)
-          })
-        )
-
-        trackSnapshot(
-          onSnapshot(query(collection(db, 'mockSubmissions')), snap => {
-            setMockSubmissions(snap.docs.map(d => ({ id: d.id, ...d.data() })))
-          })
-        )
-
-        trackSnapshot(
-          onSnapshot(query(collection(db, 'vocabularyTests')), snap => {
-            const list = snap.docs
-              .map(d => ({ id: d.id, ...d.data() }))
-              .filter(item => {
-                if (isAdminUser) return true
-                if (getSchoolId(item) !== teacherSchoolId) return false
-
-                return isTeacherLibraryVisible(item, currentUser.uid, teacherSchoolId)
-              })
-
-            list.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
-            setVocabularyTests(list)
-          })
-        )
-
-        trackSnapshot(
-          onSnapshot(query(collection(db, 'vocabularySubmissions')), snap => {
-            setVocabularySubmissions(snap.docs.map(d => ({ id: d.id, ...d.data() })))
-          })
+              setScores(groupedScores)
+            },
+            'Score query'
+          )
         )
       } catch (error) {
         console.error(error)
@@ -496,12 +673,18 @@ export default function TeacherDashboard() {
       return
     }
 
+    const scoreTeacherIds = profile?.role === 'teacher'
+      ? [user.uid]
+      : selected.teacherIds || []
+
     await addDoc(collection(db, 'scores'), {
       ...form,
       uid: getStudentPrimaryAssignmentId(selected),
+      studentId: getStudentPrimaryAssignmentId(selected),
       overall: overall(form),
       addedBy: user.uid,
-      teacherId: profile?.role === 'teacher' ? user.uid : selected.teacherIds?.[0] || '',
+      teacherId: scoreTeacherIds[0] || '',
+      teacherIds: scoreTeacherIds,
       schoolId: profile?.schoolId || getSchoolId(selected)
     })
 
@@ -988,6 +1171,13 @@ export default function TeacherDashboard() {
   )
 
   const openAssignmentManager = (homework, type) => {
+    if (!isOwnedByCurrentTeacher(homework)) {
+      alert(
+        'This is a School Library item. Duplicate it into My Library before assigning it to students.'
+      )
+      return
+    }
+
     setSelectedHomework(homework)
     setSelectedHomeworkType(type)
     setAssignmentDraft(mapHomeworkAssignmentsToStudentIds(homework))

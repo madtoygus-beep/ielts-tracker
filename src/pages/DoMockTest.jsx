@@ -647,6 +647,21 @@ function uniqueCleanValues(values) {
   )
 }
 
+function getSourceTeacherIds(source) {
+  const explicitTeacherIds = Array.isArray(source?.teacherIds)
+    ? source.teacherIds
+    : []
+
+  if (explicitTeacherIds.length > 0) {
+    return uniqueCleanValues(explicitTeacherIds)
+  }
+
+  return uniqueCleanValues([
+    source?.teacherId,
+    source?.createdBy
+  ])
+}
+
 function getCurrentUserAssignmentValues(user, profile) {
   if (!user) return []
 
@@ -2054,8 +2069,15 @@ export default function DoMockTest() {
           ? [mock.readingId]
           : []
 
+      const submissionTeacherIds = getSourceTeacherIds(mock)
+
       await addDoc(collection(db, 'mockSubmissions'), {
         uid: user.uid,
+        studentId: user.uid,
+        studentEmail: user.email || '',
+        schoolId: mock.schoolId || 'maxima',
+        teacherId: submissionTeacherIds[0] || '',
+        teacherIds: submissionTeacherIds,
         mockTestId: mock.id,
         title: mock.title || 'Untitled Mock Test',
         listeningId: listeningIds[0] || '',
@@ -2077,6 +2099,11 @@ export default function DoMockTest() {
       try {
         await addDoc(collection(db, 'scores'), {
           uid: user.uid,
+          studentId: user.uid,
+          studentEmail: user.email || '',
+          schoolId: mock.schoolId || 'maxima',
+          teacherId: submissionTeacherIds[0] || '',
+          teacherIds: submissionTeacherIds,
           date: submittedAt.slice(0, 10),
           source: 'mock_test',
           mockTestId: mock.id,
