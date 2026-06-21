@@ -3,7 +3,7 @@ service cloud.firestore {
   match /databases/{database}/documents {
 
     // ============================================================
-    // HELPER FUNCTIONS
+    // AUTH / ROLE HELPERS
     // ============================================================
 
     function isAuth() {
@@ -43,27 +43,79 @@ service cloud.firestore {
       return data.get('schoolId', 'maxima');
     }
 
-    function sameSchool(data) {
-      return isApprovedUser()
-        && schoolIdOf(data) == schoolIdOf(userDoc(request.auth.uid).data);
+    function currentSchoolId() {
+      return schoolIdOf(userDoc(request.auth.uid).data);
     }
 
-    function teacherCanReadUser(userId) {
+    function sameSchool(data) {
+      return isApprovedUser() && schoolIdOf(data) == currentSchoolId();
+    }
+
+    function teacherIdsOf(data) {
+      return data.get('teacherIds', []).size() > 0
+        ? data.get('teacherIds', [])
+        : data.get('teacherId', '') != ''
+          ? [data.get('teacherId', '')]
+          : data.get('createdBy', '') != ''
+            ? [data.get('createdBy', '')]
+            : [];
+    }
+
+    function teacherOwns(data) {
       return isTeacher()
-        && sameSchool(resource.data)
         && (
-          resource.data.role == 'teacher' ||
+          data.get('teacherId', '') == request.auth.uid
+          || data.get('createdBy', '') == request.auth.uid
+          || data.get('teacherIds', []).hasAny([request.auth.uid])
+        );
+    }
+
+    function isSchoolLibraryItem(data) {
+      return data.get('visibility', data.get('libraryVisibility', 'private')) == 'school';
+    }
+
+    function teacherCanReadContent(data) {
+      return isTeacher()
+        && (
+          teacherOwns(data)
+          || (sameSchool(data) && isSchoolLibraryItem(data))
+        );
+    }
+
+    function teacherCanCreateContent(data) {
+      return isTeacher()
+        && schoolIdOf(data) == currentSchoolId()
+        && (
+          data.get('teacherId', '') == request.auth.uid
+          || data.get('createdBy', '') == request.auth.uid
+          || data.get('teacherIds', []).hasAny([request.auth.uid])
+        );
+    }
+
+    function teacherCanUpdateContent() {
+      return teacherOwns(resource.data)
+        && teacherOwns(request.resource.data)
+        && schoolIdOf(request.resource.data) == schoolIdOf(resource.data)
+        && request.resource.data.get('createdBy', '') == resource.data.get('createdBy', '');
+    }
+
+    function teacherCanReadUser() {
+      return isTeacher()
+        && (
           resource.data.get('teacherIds', []).hasAny([request.auth.uid])
+          || (
+            resource.data.role == 'teacher'
+            && sameSchool(resource.data)
+          )
         );
     }
 
     function teacherCanReadClass() {
       return isTeacher()
-        && sameSchool(resource.data)
         && (
-          resource.data.get('teacherId', '') == request.auth.uid ||
-          resource.data.get('createdBy', '') == request.auth.uid ||
-          resource.data.get('teacherIds', []).hasAny([request.auth.uid])
+          resource.data.get('teacherId', '') == request.auth.uid
+          || resource.data.get('createdBy', '') == request.auth.uid
+          || resource.data.get('teacherIds', []).hasAny([request.auth.uid])
         );
     }
 
@@ -85,7 +137,36 @@ service cloud.firestore {
         || data.get('assignedTo', []).hasAny([request.auth.uid])
         || data.get('studentIds', []).hasAny([request.auth.uid])
         || data.get('assignedStudentIds', []).hasAny([request.auth.uid])
-        || data.get('assignedEmails', []).hasAny([request.auth.token.email]);
+        || data.get('assignedEmails', []).hasAny([request.auth.token.get('email', '')]);
+    }
+
+    function studentCanReadContent(data) {
+      return isStudent()
+        && (
+          isAssignedToCurrentUser(data)
+          || sameSchool(data)
+        );
+    }
+
+    function validStudentSubmissionBase(data, parentData) {
+      return isStudent()
+        && data.uid == request.auth.uid
+        && data.get('studentId', '') == request.auth.uid
+        && schoolIdOf(data) == schoolIdOf(parentData)
+        && schoolIdOf(parentData) == currentSchoolId()
+        && teacherIdsOf(parentData).size() > 0
+        && data.get('teacherIds', []) == teacherIdsOf(parentData)
+        && data.get('teacherId', '') == teacherIdsOf(parentData)[0]
+        && isAssignedToCurrentUser(parentData);
+    }
+
+    function teacherListedOn(data) {
+      return isTeacher()
+        && (
+          data.get('teacherId', '') == request.auth.uid
+          || data.get('teacherIds', []).hasAny([request.auth.uid])
+          || data.get('addedBy', '') == request.auth.uid
+        );
     }
 
     // ============================================================
@@ -93,7 +174,7 @@ service cloud.firestore {
     // ============================================================
 
     match /users/{userId} {
-      allow read: if isAdmin() || isOwner(userId) || teacherCanReadUser(userId);
+      allow read: if isAdmin() || isOwner(userId) || teacherCanReadUser();
 
       allow create: if isOwner(userId)
         && request.resource.data.status == 'pending'
@@ -118,8 +199,8 @@ service cloud.firestore {
       allow create: if isAdmin()
         || (
           isTeacher()
-          && schoolIdOf(request.resource.data) == schoolIdOf(userDoc(request.auth.uid).data)
-          && request.resource.data.createdBy == request.auth.uid
+          && schoolIdOf(request.resource.data) == currentSchoolId()
+          && request.resource.data.get('createdBy', request.auth.uid) == request.auth.uid
           && request.resource.data.get('teacherId', request.auth.uid) == request.auth.uid
         );
 
@@ -138,73 +219,177 @@ service cloud.firestore {
     // SCORES
     // ============================================================
 
+    function mockForScoreExists(data) {
+      return data.get('mockTestId', '') != ''
+        && exists(/databases/$(database)/documents/mockTests/$(data.mockTestId));
+    }
+
+    function teacherOwnsScoreMock(data) {
+      return mockForScoreExists(data)
+        && teacherOwns(
+          get(/databases/$(database)/documents/mockTests/$(data.mockTestId)).data
+        );
+    }
+
+    function validStudentMockScore(data) {
+      return isStudent()
+        && data.uid == request.auth.uid
+        && data.get('studentId', '') == request.auth.uid
+        && data.get('source', '') == 'mock_test'
+        && mockForScoreExists(data)
+        && validStudentSubmissionBase(
+          data,
+          get(/databases/$(database)/documents/mockTests/$(data.mockTestId)).data
+        );
+    }
+
     match /scores/{scoreId} {
       allow read: if isAdmin()
-        || isTeacher()
+        || teacherListedOn(resource.data)
+        || teacherOwnsScoreMock(resource.data)
         || (isStudent() && resource.data.uid == request.auth.uid);
 
-      allow create: if isAdmin() || isTeacher();
-      allow update, delete: if isAdmin() || isTeacher();
+      allow create: if isAdmin()
+        || (
+          isTeacher()
+          && teacherListedOn(request.resource.data)
+          && schoolIdOf(request.resource.data) == currentSchoolId()
+          && userDoc(request.resource.data.uid).data.get('teacherIds', []).hasAny([request.auth.uid])
+        )
+        || validStudentMockScore(request.resource.data);
+
+      allow update, delete: if isAdmin()
+        || teacherListedOn(resource.data)
+        || teacherOwnsScoreMock(resource.data);
     }
 
     // ============================================================
-    // READINGS
+    // READING
     // ============================================================
 
     match /readings/{id} {
-      allow read: if isApprovedUser();
-      allow create, update, delete: if isAdmin() || isTeacher();
+      allow read: if isAdmin()
+        || teacherCanReadContent(resource.data)
+        || studentCanReadContent(resource.data);
+
+      allow create: if isAdmin() || teacherCanCreateContent(request.resource.data);
+      allow update: if isAdmin() || teacherCanUpdateContent();
+      allow delete: if isAdmin() || teacherOwns(resource.data);
+    }
+
+    function readingParentExists(data) {
+      return data.get('readingId', '') != ''
+        && exists(/databases/$(database)/documents/readings/$(data.readingId));
+    }
+
+    function teacherOwnsReadingParent(data) {
+      return readingParentExists(data)
+        && teacherOwns(
+          get(/databases/$(database)/documents/readings/$(data.readingId)).data
+        );
     }
 
     match /readingSubmissions/{id} {
       allow read: if isAdmin()
-        || isTeacher()
+        || teacherListedOn(resource.data)
+        || teacherOwnsReadingParent(resource.data)
         || (isStudent() && resource.data.uid == request.auth.uid);
 
-      allow create: if isStudent()
-        && request.resource.data.uid == request.auth.uid;
+      allow create: if readingParentExists(request.resource.data)
+        && validStudentSubmissionBase(
+          request.resource.data,
+          get(/databases/$(database)/documents/readings/$(request.resource.data.readingId)).data
+        );
 
-      allow update, delete: if isAdmin() || isTeacher();
+      allow update, delete: if isAdmin()
+        || teacherListedOn(resource.data)
+        || teacherOwnsReadingParent(resource.data);
     }
 
     // ============================================================
-    // LISTENINGS
+    // LISTENING
     // ============================================================
 
     match /listenings/{id} {
-      allow read: if isApprovedUser();
-      allow create, update, delete: if isAdmin() || isTeacher();
+      allow read: if isAdmin()
+        || teacherCanReadContent(resource.data)
+        || studentCanReadContent(resource.data);
+
+      allow create: if isAdmin() || teacherCanCreateContent(request.resource.data);
+      allow update: if isAdmin() || teacherCanUpdateContent();
+      allow delete: if isAdmin() || teacherOwns(resource.data);
+    }
+
+    function listeningParentExists(data) {
+      return data.get('listeningId', '') != ''
+        && exists(/databases/$(database)/documents/listenings/$(data.listeningId));
+    }
+
+    function teacherOwnsListeningParent(data) {
+      return listeningParentExists(data)
+        && teacherOwns(
+          get(/databases/$(database)/documents/listenings/$(data.listeningId)).data
+        );
     }
 
     match /listeningSubmissions/{id} {
       allow read: if isAdmin()
-        || isTeacher()
+        || teacherListedOn(resource.data)
+        || teacherOwnsListeningParent(resource.data)
         || (isStudent() && resource.data.uid == request.auth.uid);
 
-      allow create: if isStudent()
-        && request.resource.data.uid == request.auth.uid;
+      allow create: if listeningParentExists(request.resource.data)
+        && validStudentSubmissionBase(
+          request.resource.data,
+          get(/databases/$(database)/documents/listenings/$(request.resource.data.listeningId)).data
+        );
 
-      allow update, delete: if isAdmin() || isTeacher();
+      allow update, delete: if isAdmin()
+        || teacherListedOn(resource.data)
+        || teacherOwnsListeningParent(resource.data);
     }
 
     // ============================================================
-    // WRITING HOMEWORKS
+    // WRITING
     // ============================================================
 
     match /writingHomeworks/{id} {
-      allow read: if isApprovedUser();
-      allow create, update, delete: if isAdmin() || isTeacher();
+      allow read: if isAdmin()
+        || teacherCanReadContent(resource.data)
+        || studentCanReadContent(resource.data);
+
+      allow create: if isAdmin() || teacherCanCreateContent(request.resource.data);
+      allow update: if isAdmin() || teacherCanUpdateContent();
+      allow delete: if isAdmin() || teacherOwns(resource.data);
+    }
+
+    function writingParentExists(data) {
+      return data.get('writingId', '') != ''
+        && exists(/databases/$(database)/documents/writingHomeworks/$(data.writingId));
+    }
+
+    function teacherOwnsWritingParent(data) {
+      return writingParentExists(data)
+        && teacherOwns(
+          get(/databases/$(database)/documents/writingHomeworks/$(data.writingId)).data
+        );
     }
 
     match /writingSubmissions/{id} {
       allow read: if isAdmin()
-        || isTeacher()
+        || teacherListedOn(resource.data)
+        || teacherOwnsWritingParent(resource.data)
         || (isStudent() && resource.data.uid == request.auth.uid);
 
-      allow create: if isStudent()
-        && request.resource.data.uid == request.auth.uid;
+      allow create: if writingParentExists(request.resource.data)
+        && validStudentSubmissionBase(
+          request.resource.data,
+          get(/databases/$(database)/documents/writingHomeworks/$(request.resource.data.writingId)).data
+        );
 
-      allow update, delete: if isAdmin() || isTeacher();
+      allow update, delete: if isAdmin()
+        || teacherListedOn(resource.data)
+        || teacherOwnsWritingParent(resource.data);
     }
 
     // ============================================================
@@ -213,41 +398,84 @@ service cloud.firestore {
 
     match /mockTests/{id} {
       allow read: if isAdmin()
-        || isTeacher()
+        || teacherCanReadContent(resource.data)
         || (isStudent() && isAssignedToCurrentUser(resource.data));
 
-      allow create, update, delete: if isAdmin() || isTeacher();
+      allow create: if isAdmin() || teacherCanCreateContent(request.resource.data);
+      allow update: if isAdmin() || teacherCanUpdateContent();
+      allow delete: if isAdmin() || teacherOwns(resource.data);
+    }
+
+    function mockParentExists(data) {
+      return data.get('mockTestId', '') != ''
+        && exists(/databases/$(database)/documents/mockTests/$(data.mockTestId));
+    }
+
+    function teacherOwnsMockParent(data) {
+      return mockParentExists(data)
+        && teacherOwns(
+          get(/databases/$(database)/documents/mockTests/$(data.mockTestId)).data
+        );
     }
 
     match /mockSubmissions/{id} {
       allow read: if isAdmin()
-        || isTeacher()
+        || teacherListedOn(resource.data)
+        || teacherOwnsMockParent(resource.data)
         || (isStudent() && resource.data.uid == request.auth.uid);
 
-      allow create: if isStudent()
-        && request.resource.data.uid == request.auth.uid;
+      allow create: if mockParentExists(request.resource.data)
+        && validStudentSubmissionBase(
+          request.resource.data,
+          get(/databases/$(database)/documents/mockTests/$(request.resource.data.mockTestId)).data
+        );
 
-      allow update, delete: if isAdmin() || isTeacher();
+      allow update, delete: if isAdmin()
+        || teacherListedOn(resource.data)
+        || teacherOwnsMockParent(resource.data);
     }
 
     // ============================================================
-    // VOCABULARY TESTS
+    // VOCABULARY
     // ============================================================
 
     match /vocabularyTests/{id} {
-      allow read: if isApprovedUser();
-      allow create, update, delete: if isAdmin() || isTeacher();
+      allow read: if isAdmin()
+        || teacherCanReadContent(resource.data)
+        || studentCanReadContent(resource.data);
+
+      allow create: if isAdmin() || teacherCanCreateContent(request.resource.data);
+      allow update: if isAdmin() || teacherCanUpdateContent();
+      allow delete: if isAdmin() || teacherOwns(resource.data);
+    }
+
+    function vocabularyParentExists(data) {
+      return data.get('vocabularyTestId', '') != ''
+        && exists(/databases/$(database)/documents/vocabularyTests/$(data.vocabularyTestId));
+    }
+
+    function teacherOwnsVocabularyParent(data) {
+      return vocabularyParentExists(data)
+        && teacherOwns(
+          get(/databases/$(database)/documents/vocabularyTests/$(data.vocabularyTestId)).data
+        );
     }
 
     match /vocabularySubmissions/{id} {
       allow read: if isAdmin()
-        || isTeacher()
+        || teacherListedOn(resource.data)
+        || teacherOwnsVocabularyParent(resource.data)
         || (isStudent() && resource.data.uid == request.auth.uid);
 
-      allow create: if isStudent()
-        && request.resource.data.uid == request.auth.uid;
+      allow create: if vocabularyParentExists(request.resource.data)
+        && validStudentSubmissionBase(
+          request.resource.data,
+          get(/databases/$(database)/documents/vocabularyTests/$(request.resource.data.vocabularyTestId)).data
+        );
 
-      allow update, delete: if isAdmin() || isTeacher();
+      allow update, delete: if isAdmin()
+        || teacherListedOn(resource.data)
+        || teacherOwnsVocabularyParent(resource.data);
     }
   }
 }
