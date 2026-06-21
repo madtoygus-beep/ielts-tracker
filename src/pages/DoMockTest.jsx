@@ -905,8 +905,10 @@ export default function DoMockTest() {
           .filter(snap => snap.exists())
           .map(snap => ({ id: snap.id, ...snap.data() }))
 
-        if (loadedListenings.length === 0) {
-          throw new Error('Listening test was not found.')
+        if (loadedListenings.length !== listeningIds.length) {
+          throw new Error(
+            'One or more Listening tests linked to this mock could not be loaded.'
+          )
         }
 
         if (!writingSnap.exists()) {
@@ -926,8 +928,10 @@ export default function DoMockTest() {
           .filter(snap => snap.exists())
           .map(snap => ({ id: snap.id, ...snap.data() }))
 
-        if (loadedReadings.length === 0) {
-          throw new Error('No reading tests were found for this mock.')
+        if (loadedReadings.length !== readingIds.length) {
+          throw new Error(
+            'One or more Reading passages linked to this mock could not be loaded.'
+          )
         }
 
         setReadings(loadedReadings)
@@ -966,31 +970,73 @@ export default function DoMockTest() {
     setReadingAnswers(saved.readingAnswers || {})
     setWritingAnswers(saved.writingAnswers || { task1: '', task2: '' })
 
-    setListeningTimeLeft(saved.listeningTimeLeft ?? LISTENING_DURATION)
-    setReadingTimeLeft(saved.readingTimeLeft ?? READING_DURATION)
-    setWritingTimeLeft(saved.writingTimeLeft ?? WRITING_DURATION)
-
     const restoredListeningStarted = Boolean(saved.listeningStarted)
     const restoredReadingStarted = Boolean(saved.readingStarted)
     const restoredWritingStarted = Boolean(saved.writingStarted)
+
+    const savedAt = new Date(saved.updatedAt || 0).getTime()
+    const elapsedSinceSave = Number.isFinite(savedAt) && savedAt > 0
+      ? Math.max(0, Math.floor((Date.now() - savedAt) / 1000))
+      : 0
+
+    const savedListeningLocked =
+      Boolean(saved.listeningLocked) ||
+      restoredReadingStarted ||
+      restoredWritingStarted
+
+    const savedReadingLocked =
+      Boolean(saved.readingLocked) ||
+      restoredWritingStarted
+
+    const savedWritingLocked = Boolean(saved.writingLocked)
+
+    const restoredListeningTime =
+      restoredListeningStarted && !savedListeningLocked
+        ? Math.max(
+            (saved.listeningTimeLeft ?? LISTENING_DURATION) -
+              elapsedSinceSave,
+            0
+          )
+        : saved.listeningTimeLeft ?? LISTENING_DURATION
+
+    const restoredReadingTime =
+      restoredReadingStarted && !savedReadingLocked
+        ? Math.max(
+            (saved.readingTimeLeft ?? READING_DURATION) -
+              elapsedSinceSave,
+            0
+          )
+        : saved.readingTimeLeft ?? READING_DURATION
+
+    const restoredWritingTime =
+      restoredWritingStarted && !savedWritingLocked
+        ? Math.max(
+            (saved.writingTimeLeft ?? WRITING_DURATION) -
+              elapsedSinceSave,
+            0
+          )
+        : saved.writingTimeLeft ?? WRITING_DURATION
+
+    setListeningTimeLeft(restoredListeningTime)
+    setReadingTimeLeft(restoredReadingTime)
+    setWritingTimeLeft(restoredWritingTime)
 
     setListeningStarted(restoredListeningStarted)
     setReadingStarted(restoredReadingStarted)
     setWritingStarted(restoredWritingStarted)
 
-    setListeningLocked(
-      Boolean(saved.listeningLocked) ||
-      restoredReadingStarted ||
-      restoredWritingStarted
-    )
-    setReadingLocked(
-      Boolean(saved.readingLocked) ||
-      restoredWritingStarted
-    )
-    setWritingLocked(Boolean(saved.writingLocked))
+    setListeningLocked(savedListeningLocked || restoredListeningTime <= 0)
+    setReadingLocked(savedReadingLocked || restoredReadingTime <= 0)
+    setWritingLocked(savedWritingLocked || restoredWritingTime <= 0)
 
     setAudioStarted(Boolean(saved.audioStarted))
-    setAudioLocked(Boolean(saved.audioLocked))
+    setAudioLocked(
+      Boolean(saved.audioLocked) ||
+      savedListeningLocked ||
+      restoredListeningTime <= 0
+    )
+
+    tabSwitchCountRef.current = Number(saved.tabSwitchCount) || 0
 
     restoredRef.current = true
   }, [storageKey, loading, alreadySubmitted, finalResult])
@@ -1016,6 +1062,7 @@ export default function DoMockTest() {
         writingLocked,
         audioStarted,
         audioLocked,
+        tabSwitchCount: tabSwitchCountRef.current,
         updatedAt: new Date().toISOString()
       }
 
@@ -1066,19 +1113,28 @@ export default function DoMockTest() {
     return listenings.flatMap((listeningItem, listeningIndex) => {
       const normalizedParts = normalizeListeningParts(listeningItem)
 
-      return normalizedParts.map((part, partIndex) => ({
-        ...part,
-        id: `${listeningItem.id}_${part.id || partIndex}`,
-        originalPartId: part.id,
-        listeningId: listeningItem.id,
-        listeningTitle: listeningItem.title || `Listening ${listeningIndex + 1}`,
-        listeningAudioUrl: listeningItem.audioUrl || '',
-        listeningInstructions: listeningItem.instructions || '',
-        displayTitle:
-          listenings.length > 1
-            ? `L${listeningIndex + 1}`
-            : part.title || `Part ${partIndex + 1}`
-      }))
+      return normalizedParts.map((part, partIndex) => {
+        const sourcePartId = part.id || `part-${partIndex + 1}`
+
+        return {
+          ...part,
+          id: `${listeningItem.id}_${sourcePartId}`,
+          originalPartId: part.id,
+          listeningId: listeningItem.id,
+          listeningTitle: listeningItem.title || `Listening ${listeningIndex + 1}`,
+          listeningAudioUrl: listeningItem.audioUrl || '',
+          listeningInstructions: listeningItem.instructions || '',
+          questions: (part.questions || []).map((question, questionIndex) => ({
+            ...question,
+            originalQuestionId: question.id || '',
+            id: `${listeningItem.id}__${sourcePartId}__${question.id || questionIndex}`
+          })),
+          displayTitle:
+            listenings.length > 1
+              ? `L${listeningIndex + 1}`
+              : part.title || `Part ${partIndex + 1}`
+        }
+      })
     })
   }, [listenings])
 
@@ -1106,6 +1162,288 @@ export default function DoMockTest() {
   }, [readings, listeningParts])
 
   const activeSection = sections[sectionIndex] || sections[0]
+
+  const hasAnswerValue = value => {
+    if (Array.isArray(value)) {
+      return value.filter(Boolean).length > 0
+    }
+
+    if (value && typeof value === 'object') {
+      return Object.values(value).some(item => hasAnswerValue(item))
+    }
+
+    return (
+      value !== undefined &&
+      value !== null &&
+      value.toString().trim() !== ''
+    )
+  }
+
+  const getListeningPartProgress = part => {
+    let answered = 0
+    let total = 0
+
+    ;(part?.questions || []).forEach(question => {
+      if (question.type === 'table' || question.type === 'note') {
+        question.rows?.forEach(row => {
+          row.cells?.forEach((cell, cellIndex) => {
+            if (cell.type !== 'blank') return
+
+            total++
+
+            if (
+              hasAnswerValue(
+                listeningAnswers[
+                  tableAnswerKey(question.id, row.id, cellIndex)
+                ]
+              )
+            ) {
+              answered++
+            }
+          })
+        })
+
+        return
+      }
+
+      if (question.type === 'listeningCompletion') {
+        question.sections?.forEach(section => {
+          section.parts?.forEach(item => {
+            if (item.type !== 'blank') return
+
+            total++
+
+            if (
+              hasAnswerValue(
+                listeningAnswers[
+                  listeningCompletionAnswerKey(
+                    question.id,
+                    section.id,
+                    item.id
+                  )
+                ]
+              )
+            ) {
+              answered++
+            }
+          })
+        })
+
+        return
+      }
+
+      if (question.type === 'map') {
+        question.mapItems?.forEach(item => {
+          total++
+
+          if (
+            hasAnswerValue(
+              listeningAnswers[mapAnswerKey(question.id, item.id)]
+            )
+          ) {
+            answered++
+          }
+        })
+
+        return
+      }
+
+      if (question.type === 'matching') {
+        question.matchingItems?.forEach(item => {
+          total++
+
+          if (
+            hasAnswerValue(
+              listeningAnswers[
+                matchingAnswerKey(question.id, item.id)
+              ]
+            )
+          ) {
+            answered++
+          }
+        })
+
+        return
+      }
+
+      if (question.type === 'mcq' && question.mode === 'multi') {
+        const required = question.answers?.length || 2
+        const selected = Array.isArray(listeningAnswers[question.id])
+          ? listeningAnswers[question.id].filter(Boolean)
+          : []
+
+        total += required
+        answered += Math.min(selected.length, required)
+        return
+      }
+
+      total++
+
+      if (hasAnswerValue(listeningAnswers[question.id])) {
+        answered++
+      }
+    })
+
+    return {
+      answered,
+      total,
+      complete: total > 0 && answered >= total
+    }
+  }
+
+  const getReadingProgress = reading => {
+    let answered = 0
+    let total = 0
+    const answerSet = readingAnswers[reading?.id] || {}
+
+    ;(reading?.questions || []).forEach(question => {
+      if (question.type === 'matching') {
+        question.paragraphs?.forEach(paragraph => {
+          total++
+
+          if (
+            hasAnswerValue(
+              answerSet[question.id]?.[paragraph.letter]
+            )
+          ) {
+            answered++
+          }
+        })
+
+        return
+      }
+
+      if (
+        question.type === 'matchingInformation' ||
+        question.type === 'sentenceEndings' ||
+        question.type === 'summaryOptions'
+      ) {
+        question.items?.forEach(item => {
+          total++
+
+          if (hasAnswerValue(answerSet[question.id]?.[item.id])) {
+            answered++
+          }
+        })
+
+        return
+      }
+
+      if (question.type === 'noteCompletion') {
+        question.paragraphs?.forEach(paragraph => {
+          paragraph.parts?.forEach(part => {
+            if (part.type !== 'blank') return
+
+            total++
+
+            if (
+              hasAnswerValue(
+                answerSet[
+                  noteAnswerKey(
+                    question.id,
+                    paragraph.id,
+                    part.id
+                  )
+                ]
+              )
+            ) {
+              answered++
+            }
+          })
+        })
+
+        return
+      }
+
+      if (
+        question.type === 'table' ||
+        question.type === 'summary' ||
+        question.type === 'note'
+      ) {
+        question.rows?.forEach(row => {
+          row.cells?.forEach((cell, cellIndex) => {
+            if (cell.type !== 'blank') return
+
+            total++
+
+            if (
+              hasAnswerValue(
+                answerSet[
+                  tableAnswerKey(question.id, row.id, cellIndex)
+                ]
+              )
+            ) {
+              answered++
+            }
+          })
+        })
+
+        return
+      }
+
+      if (question.type === 'mcq' && question.mode === 'multi') {
+        const required = question.answers?.length || 2
+        const selected = Array.isArray(answerSet[question.id])
+          ? answerSet[question.id].filter(Boolean)
+          : []
+
+        total += required
+        answered += Math.min(selected.length, required)
+        return
+      }
+
+      total++
+
+      if (hasAnswerValue(answerSet[question.id])) {
+        answered++
+      }
+    })
+
+    return {
+      answered,
+      total,
+      complete: total > 0 && answered >= total
+    }
+  }
+
+  const getListeningOverallProgress = () =>
+    listeningParts.reduce(
+      (summary, part) => {
+        const progress = getListeningPartProgress(part)
+
+        return {
+          answered: summary.answered + progress.answered,
+          total: summary.total + progress.total
+        }
+      },
+      { answered: 0, total: 0 }
+    )
+
+  const getReadingOverallProgress = () =>
+    readings.reduce(
+      (summary, reading) => {
+        const progress = getReadingProgress(reading)
+
+        return {
+          answered: summary.answered + progress.answered,
+          total: summary.total + progress.total
+        }
+      },
+      { answered: 0, total: 0 }
+    )
+
+  const getActiveSectionProgress = () => {
+    if (activeSection.key?.startsWith('listening-')) {
+      return getListeningPartProgress(activeSection.listeningPart)
+    }
+
+    if (activeSection.key?.startsWith('reading-')) {
+      return getReadingProgress(activeSection.reading)
+    }
+
+    return null
+  }
+
 
   useEffect(() => {
     const timeout = setTimeout(() => {
@@ -1266,6 +1604,66 @@ export default function DoMockTest() {
 
     return () => clearInterval(interval)
   }, [writingStarted, writingLocked, writingTimeLeft])
+
+  useEffect(() => {
+    if (
+      !listeningStarted ||
+      listeningTimeLeft > 0 ||
+      !activeSection.key?.startsWith('listening-')
+    ) {
+      return
+    }
+
+    const prepareReadingIndex = sections.findIndex(
+      section => section.key === 'prepare-reading'
+    )
+
+    if (prepareReadingIndex < 0) return
+
+    setListeningLocked(true)
+    setAudioLocked(true)
+
+    if (audioRef.current) {
+      audioRef.current.pause()
+    }
+
+    setSectionIndex(prepareReadingIndex)
+    setMaxUnlockedSectionIndex(previous =>
+      Math.max(previous, prepareReadingIndex)
+    )
+  }, [
+    listeningStarted,
+    listeningTimeLeft,
+    activeSection.key,
+    sections
+  ])
+
+  useEffect(() => {
+    if (
+      !readingStarted ||
+      readingTimeLeft > 0 ||
+      !activeSection.key?.startsWith('reading-')
+    ) {
+      return
+    }
+
+    const prepareWritingIndex = sections.findIndex(
+      section => section.key === 'prepare-writing'
+    )
+
+    if (prepareWritingIndex < 0) return
+
+    setReadingLocked(true)
+    setSectionIndex(prepareWritingIndex)
+    setMaxUnlockedSectionIndex(previous =>
+      Math.max(previous, prepareWritingIndex)
+    )
+  }, [
+    readingStarted,
+    readingTimeLeft,
+    activeSection.key,
+    sections
+  ])
 
   useEffect(() => {
     if (activeSection.key?.startsWith('listening-') && !listeningStarted && !listeningLocked) {
@@ -2092,6 +2490,15 @@ export default function DoMockTest() {
         },
         result,
         autoSubmitted: auto,
+        tabSwitchCount: tabSwitchCountRef.current,
+        timing: {
+          listeningTimeLeft,
+          readingTimeLeft,
+          writingTimeLeft,
+          listeningLocked,
+          readingLocked,
+          writingLocked
+        },
         submittedAt,
         status: 'submitted'
       })
@@ -2143,7 +2550,13 @@ export default function DoMockTest() {
     readings,
     listenings,
     listeningParts,
-    sections.length
+    sections.length,
+    listeningTimeLeft,
+    readingTimeLeft,
+    writingTimeLeft,
+    listeningLocked,
+    readingLocked,
+    writingLocked
   ])
 
   useEffect(() => {
@@ -2196,6 +2609,21 @@ export default function DoMockTest() {
     readingLocked,
     writingLocked
   ])
+
+  const handleExitMock = () => {
+    if (alreadySubmitted || finalResult) {
+      navigate('/student')
+      return
+    }
+
+    const confirmed = window.confirm(
+      'Exit the mock test?\n\nYour current answers are saved on this device, but the active section timer will continue while you are away.'
+    )
+
+    if (!confirmed) return
+
+    navigate('/student')
+  }
 
   const isSectionAccessible = index => {
     if (index > maxUnlockedSectionIndex) return false
@@ -2253,15 +2681,72 @@ export default function DoMockTest() {
 
   const nextSection = () => {
     if (activeSection.key === 'prepare-reading') {
+      const confirmed = window.confirm(
+        'Start Reading now?\n\nListening will be permanently locked and you will not be able to return to it.'
+      )
+
+      if (!confirmed) return
+
       lockListeningSection()
       goToSection(sectionIndex + 1)
       return
     }
 
     if (activeSection.key === 'prepare-writing') {
+      const confirmed = window.confirm(
+        'Start Writing now?\n\nReading will be permanently locked and you will not be able to return to it.'
+      )
+
+      if (!confirmed) return
+
       lockReadingSection()
       goToSection(sectionIndex + 1)
       return
+    }
+
+    const progress = getActiveSectionProgress()
+
+    if (
+      progress &&
+      !progress.complete &&
+      !(
+        activeSection.key?.startsWith('listening-')
+          ? listeningLocked
+          : readingLocked
+      )
+    ) {
+      const confirmed = window.confirm(
+        `This section has ${Math.max(
+          progress.total - progress.answered,
+          0
+        )} unanswered question(s). Continue anyway?`
+      )
+
+      if (!confirmed) return
+    }
+
+    if (activeSection.key === 'writing-task1') {
+      const task1Words = countWords(writingAnswers.task1)
+
+      if (task1Words < 150) {
+        const confirmed = window.confirm(
+          `Task 1 currently has ${task1Words} words. The recommended minimum is 150 words. Continue to Task 2?`
+        )
+
+        if (!confirmed) return
+      }
+    }
+
+    if (activeSection.key === 'writing-task2') {
+      const task2Words = countWords(writingAnswers.task2)
+
+      if (task2Words < 250) {
+        const confirmed = window.confirm(
+          `Task 2 currently has ${task2Words} words. The recommended minimum is 250 words. Continue to Review?`
+        )
+
+        if (!confirmed) return
+      }
     }
 
     goToSection(sectionIndex + 1)
@@ -2610,6 +3095,34 @@ export default function DoMockTest() {
   const renderListening = part => (
     <div className="space-y-6">
       {renderSectionTimerCard()}
+
+      {(() => {
+        const progress = getListeningPartProgress(part)
+
+        return (
+          <div className="bg-white border border-purple-100 rounded-2xl p-4 flex items-center justify-between gap-4">
+            <div>
+              <p className="text-xs text-gray-400 uppercase tracking-wider">
+                Listening progress
+              </p>
+
+              <p className="text-sm font-semibold text-gray-800 mt-1">
+                {progress.answered} of {progress.total} answered
+              </p>
+            </div>
+
+            <span className={`text-xs px-3 py-1.5 rounded-full ${
+              progress.complete
+                ? 'bg-green-50 text-green-600'
+                : 'bg-amber-50 text-amber-600'
+            }`}>
+              {progress.complete
+                ? 'Complete'
+                : `${Math.max(progress.total - progress.answered, 0)} remaining`}
+            </span>
+          </div>
+        )
+      })()}
 
       {listeningLocked && (
         <div className="bg-red-50 border border-red-100 text-red-600 rounded-2xl p-4 text-sm font-medium">
@@ -3091,6 +3604,34 @@ export default function DoMockTest() {
   const renderReading = reading => (
     <div className="space-y-6">
       {renderSectionTimerCard()}
+
+      {(() => {
+        const progress = getReadingProgress(reading)
+
+        return (
+          <div className="bg-white border border-blue-100 rounded-2xl p-4 flex items-center justify-between gap-4">
+            <div>
+              <p className="text-xs text-gray-400 uppercase tracking-wider">
+                Reading passage progress
+              </p>
+
+              <p className="text-sm font-semibold text-gray-800 mt-1">
+                {progress.answered} of {progress.total} answered
+              </p>
+            </div>
+
+            <span className={`text-xs px-3 py-1.5 rounded-full ${
+              progress.complete
+                ? 'bg-green-50 text-green-600'
+                : 'bg-amber-50 text-amber-600'
+            }`}>
+              {progress.complete
+                ? 'Complete'
+                : `${Math.max(progress.total - progress.answered, 0)} remaining`}
+            </span>
+          </div>
+        )
+      })()}
 
       {readingLocked && (
         <div className="bg-red-50 border border-red-100 text-red-600 rounded-2xl p-4 text-sm font-medium">
@@ -3926,6 +4467,8 @@ export default function DoMockTest() {
   const renderReview = () => {
     const t1Words = countWords(writingAnswers.task1)
     const t2Words = countWords(writingAnswers.task2)
+    const listeningProgress = getListeningOverallProgress()
+    const readingProgress = getReadingOverallProgress()
 
     return (
       <div className="space-y-6">
@@ -3942,20 +4485,30 @@ export default function DoMockTest() {
             <div className="bg-purple-50 rounded-2xl p-5">
               <p className="text-xs text-gray-500 mb-1">Listening</p>
               <p className="text-xl font-bold text-purple-600">
-                Completed
+                {listeningProgress.answered}/{listeningProgress.total}
               </p>
               <p className="text-xs text-gray-500 mt-1">
-                Result hidden until submission
+                {listeningProgress.answered >= listeningProgress.total
+                  ? 'All questions answered'
+                  : `${Math.max(
+                      listeningProgress.total - listeningProgress.answered,
+                      0
+                    )} unanswered`}
               </p>
             </div>
 
             <div className="bg-blue-50 rounded-2xl p-5">
               <p className="text-xs text-gray-500 mb-1">Reading</p>
               <p className="text-xl font-bold text-blue-600">
-                Completed
+                {readingProgress.answered}/{readingProgress.total}
               </p>
               <p className="text-xs text-gray-500 mt-1">
-                Result hidden until submission
+                {readingProgress.answered >= readingProgress.total
+                  ? 'All questions answered'
+                  : `${Math.max(
+                      readingProgress.total - readingProgress.answered,
+                      0
+                    )} unanswered`}
               </p>
             </div>
 
@@ -4132,7 +4685,7 @@ export default function DoMockTest() {
           )}
 
           <button
-            onClick={() => navigate('/student')}
+            onClick={handleExitMock}
             className="text-sm text-gray-400 hover:text-gray-600"
           >
             Exit

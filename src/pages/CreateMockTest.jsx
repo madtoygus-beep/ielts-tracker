@@ -83,6 +83,79 @@ function filterClassStudentIds(classItem, visibleStudents) {
   )
 }
 
+function listenMergedQueries(queryList, onItems, label = 'Firestore query') {
+  if (!Array.isArray(queryList) || queryList.length === 0) {
+    onItems([])
+    return () => {}
+  }
+
+  let active = true
+  const buckets = new Map()
+
+  const emit = () => {
+    if (!active) return
+
+    const merged = new Map()
+
+    buckets.forEach(items => {
+      items.forEach(item => merged.set(item.id, item))
+    })
+
+    onItems(Array.from(merged.values()))
+  }
+
+  const unsubscribers = queryList.map((queryRef, index) =>
+    onSnapshot(
+      queryRef,
+      snapshot => {
+        buckets.set(
+          index,
+          snapshot.docs.map(item => ({ id: item.id, ...item.data() }))
+        )
+        emit()
+      },
+      error => {
+        console.warn(`${label} failed`, error)
+        buckets.set(index, [])
+        emit()
+      }
+    )
+  )
+
+  return () => {
+    active = false
+    unsubscribers.forEach(unsubscribe => unsubscribe())
+  }
+}
+
+function buildTeacherOwnedQueries(collectionName, teacherId) {
+  const source = collection(db, collectionName)
+
+  return [
+    query(source, where('teacherIds', 'array-contains', teacherId)),
+    query(source, where('teacherId', '==', teacherId)),
+    query(source, where('createdBy', '==', teacherId))
+  ]
+}
+
+function buildTeacherLibraryQueries(collectionName, teacherId, schoolId) {
+  const source = collection(db, collectionName)
+
+  return [
+    ...buildTeacherOwnedQueries(collectionName, teacherId),
+    query(
+      source,
+      where('schoolId', '==', schoolId),
+      where('visibility', '==', 'school')
+    ),
+    query(
+      source,
+      where('schoolId', '==', schoolId),
+      where('libraryVisibility', '==', 'school')
+    )
+  ]
+}
+
 export default function CreateMockTest() {
   const navigate = useNavigate()
 
@@ -165,87 +238,112 @@ export default function CreateMockTest() {
   useEffect(() => {
     if (!user || !profile) return
 
-    const unsubReadings = onSnapshot(collection(db, 'readings'), snap => {
-      const list = snap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
-        .filter(item => !item.archived)
+    const schoolId = getProfileSchoolId(profile)
+    const isAdmin = isAdminProfile(profile)
 
-      const visibleReadings = filterResourcesByProfile(
-        list,
-        profile,
-        user.uid
+    const resourceQueries = collectionName =>
+      isAdmin
+        ? [query(collection(db, collectionName))]
+        : buildTeacherLibraryQueries(
+            collectionName,
+            user.uid,
+            schoolId
+          )
+
+    const subscribeResources = (collectionName, setter, label) =>
+      listenMergedQueries(
+        resourceQueries(collectionName),
+        items => {
+          const visibleItems = filterResourcesByProfile(
+            items.filter(item => item.archived !== true),
+            profile,
+            user.uid
+          )
+
+          visibleItems.sort((a, b) =>
+            (a.title || '').localeCompare(b.title || '')
+          )
+
+          setter(visibleItems)
+        },
+        label
       )
 
-      visibleReadings.sort((a, b) => (a.title || '').localeCompare(b.title || ''))
-      setReadings(visibleReadings)
-    })
-
-    const unsubListenings = onSnapshot(collection(db, 'listenings'), snap => {
-      const list = snap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
-        .filter(item => !item.archived)
-
-      const visibleListenings = filterResourcesByProfile(
-        list,
-        profile,
-        user.uid
-      )
-
-      visibleListenings.sort((a, b) => (a.title || '').localeCompare(b.title || ''))
-      setListenings(visibleListenings)
-    })
-
-    const unsubWritings = onSnapshot(collection(db, 'writingHomeworks'), snap => {
-      const list = snap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
-        .filter(item => !item.archived)
-
-      const visibleWritings = filterResourcesByProfile(
-        list,
-        profile,
-        user.uid
-      )
-
-      visibleWritings.sort((a, b) => (a.title || '').localeCompare(b.title || ''))
-      setWritings(visibleWritings)
-    })
-
-    const studentsQuery = query(
-      collection(db, 'users'),
-      where('role', '==', 'student')
+    const unsubReadings = subscribeResources(
+      'readings',
+      setReadings,
+      'Mock reading library query'
     )
 
-    const unsubStudents = onSnapshot(studentsQuery, snap => {
-      const list = snap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
-        .filter(student => student.status === 'approved' && student.deleted !== true)
+    const unsubListenings = subscribeResources(
+      'listenings',
+      setListenings,
+      'Mock listening library query'
+    )
 
-      const visibleStudents = filterStudentsByProfile(
-        list,
-        profile,
-        user.uid
-      )
+    const unsubWritings = subscribeResources(
+      'writingHomeworks',
+      setWritings,
+      'Mock writing library query'
+    )
 
-      visibleStudents.sort((a, b) =>
-        (a.name || a.email || '').localeCompare(b.name || b.email || '')
-      )
+    const studentQueries = isAdmin
+      ? [
+          query(
+            collection(db, 'users'),
+            where('role', '==', 'student')
+          )
+        ]
+      : [
+          query(
+            collection(db, 'users'),
+            where('teacherIds', 'array-contains', user.uid)
+          )
+        ]
 
-      setStudents(visibleStudents)
-    })
+    const unsubStudents = listenMergedQueries(
+      studentQueries,
+      items => {
+        const list = items.filter(student =>
+          student.role === 'student' &&
+          student.status === 'approved' &&
+          student.deleted !== true
+        )
 
-    const unsubClasses = onSnapshot(collection(db, 'classes'), snap => {
-      const list = snap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
-        .filter(classItem => classItem.archived !== true)
+        const visibleStudents = filterStudentsByProfile(
+          list,
+          profile,
+          user.uid
+        )
 
-      const visibleClasses = filterClassesByProfile(
-        list,
-        profile,
-        user.uid
-      ).sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+        visibleStudents.sort((a, b) =>
+          (a.name || a.email || '').localeCompare(b.name || b.email || '')
+        )
 
-      setClasses(visibleClasses)
-    })
+        setStudents(visibleStudents)
+      },
+      'Mock student query'
+    )
+
+    const classQueries = isAdmin
+      ? [query(collection(db, 'classes'))]
+      : buildTeacherOwnedQueries('classes', user.uid)
+
+    const unsubClasses = listenMergedQueries(
+      classQueries,
+      items => {
+        const list = items.filter(classItem => classItem.archived !== true)
+
+        const visibleClasses = filterClassesByProfile(
+          list,
+          profile,
+          user.uid
+        ).sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+
+        setClasses(visibleClasses)
+      },
+      'Mock class query'
+    )
 
     return () => {
       unsubReadings()
@@ -381,6 +479,11 @@ export default function CreateMockTest() {
 
     if (!cleanTitle) {
       alert('Please add a mock test title.')
+      return
+    }
+
+    if (contentType !== 'full_mock') {
+      alert('Only Full Mock creation is enabled in this version.')
       return
     }
 
@@ -534,12 +637,17 @@ export default function CreateMockTest() {
 
                 <div>
                   <label className="text-xs text-gray-400 mb-1 block">Mock type</label>
-                  <select value={contentType} onChange={e => setContentType(e.target.value)} className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white">
+                  <select
+                    value={contentType}
+                    disabled
+                    className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm bg-gray-50 text-gray-600"
+                  >
                     <option value="full_mock">Full Mock</option>
-                    <option value="reading_mock">Reading Mock</option>
-                    <option value="listening_mock">Listening Mock</option>
-                    <option value="writing_mock">Writing Mock</option>
                   </select>
+
+                  <p className="text-[11px] text-gray-400 mt-1">
+                    Section-only mock types will be added after the full mock flow is finalized.
+                  </p>
                 </div>
               </div>
 

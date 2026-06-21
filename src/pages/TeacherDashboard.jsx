@@ -3894,8 +3894,18 @@ Continue permanent delete?`
       }
     )
 
+    const scoreTeacherIds = profile?.role === 'teacher'
+      ? [user.uid]
+      : Array.isArray(submission.teacherIds)
+        ? submission.teacherIds
+        : submission.teacherId
+          ? [submission.teacherId]
+          : []
+
     const mockScorePayload = {
       uid: submission.uid,
+      studentId: submission.studentId || submission.uid,
+      studentEmail: submission.studentEmail || '',
       date: (submission.submittedAt || now).slice(0, 10),
       source: 'mock_test',
       mockTestId: submission.mockTestId || '',
@@ -3910,29 +3920,34 @@ Continue permanent delete?`
       overall: finalOverall,
       updatedAt: now,
       updatedBy: user.uid,
-      teacherId: profile?.role === 'teacher' ? user.uid : submission.teacherId || '',
-      schoolId: profile?.schoolId || DEFAULT_SCHOOL_ID
+      teacherId: scoreTeacherIds[0] || '',
+      teacherIds: scoreTeacherIds,
+      schoolId: submission.schoolId || profile?.schoolId || DEFAULT_SCHOOL_ID
     }
 
-    const scoreSnap = await getDocs(
-      query(
-        collection(db, 'scores'),
-        where('uid', '==', submission.uid)
-      )
+    const candidateScoreItems = [
+      ...(scores[submission.uid] || []),
+      ...(scores[submission.studentId] || [])
+    ]
+
+    const uniqueCandidateScores = Array.from(
+      new Map(
+        candidateScoreItems
+          .filter(score => score?.id)
+          .map(score => [score.id, score])
+      ).values()
     )
 
-    const matchingScoreDocs = scoreSnap.docs.filter(scoreDoc => {
-      const scoreData = scoreDoc.data()
-
+    const matchingScoreItems = uniqueCandidateScores.filter(score => {
       return (
-        scoreData.mockTestId === submission.mockTestId ||
-        scoreData.mockId === submission.mockTestId
+        score.mockTestId === submission.mockTestId ||
+        score.mockId === submission.mockTestId
       )
     })
 
-    if (matchingScoreDocs.length > 0) {
-      for (const scoreDoc of matchingScoreDocs) {
-        await updateDoc(doc(db, 'scores', scoreDoc.id), mockScorePayload)
+    if (matchingScoreItems.length > 0) {
+      for (const scoreItem of matchingScoreItems) {
+        await updateDoc(doc(db, 'scores', scoreItem.id), mockScorePayload)
       }
     } else {
       await addDoc(collection(db, 'scores'), {

@@ -1803,6 +1803,41 @@
     const [submissions, setSubmissions] = useState([])
     const navigate = useNavigate()
 
+    const getMockOverall = submission => {
+      const result = submission?.result || {}
+
+      return (
+        result.finalOverall ||
+        result.overall ||
+        result.reviewedOverall ||
+        result.overallEstimate ||
+        null
+      )
+    }
+
+    const getMockWritingBand = submission => {
+      const result = submission?.result || {}
+
+      return (
+        result.writing?.band ||
+        submission?.writingReview?.overall ||
+        submission?.review?.writingOverall ||
+        null
+      )
+    }
+
+    const hasSavedMockProgress = mockId => {
+      if (!user?.uid || !mockId) return false
+
+      try {
+        return Boolean(
+          localStorage.getItem(`mock_progress_${mockId}_${user.uid}`)
+        )
+      } catch {
+        return false
+      }
+    }
+
     useEffect(() => {
       if (!user) return
 
@@ -1887,6 +1922,12 @@
                         <span className="text-xs bg-red-50 text-red-500 px-3 py-1 rounded-full">
                           Not completed
                         </span>
+
+                        {hasSavedMockProgress(mock.id) && (
+                          <span className="text-xs bg-blue-50 text-blue-600 px-3 py-1 rounded-full">
+                            Progress saved
+                          </span>
+                        )}
                       </div>
                     </div>
 
@@ -1894,7 +1935,7 @@
                       onClick={() => navigate(`/do-mock/${mock.id}`)}
                       className="bg-purple-600 text-white px-4 py-2 rounded-xl text-xs font-medium hover:bg-purple-700"
                     >
-                      Start →
+                      {hasSavedMockProgress(mock.id) ? 'Resume →' : 'Start →'}
                     </button>
                   </div>
                 )
@@ -1913,6 +1954,8 @@
               {completedMocks.map((mock, index) => {
                 const submission = getSubmission(mock.id)
                 const result = submission?.result
+                const overall = getMockOverall(submission)
+                const writingBand = getMockWritingBand(submission)
 
                 return (
                   <div
@@ -1934,11 +1977,19 @@
                         </span>
 
                         <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1 rounded-full">
-                          Overall {result?.overallEstimate || '-'}
+                          Overall {overall || '-'}
                         </span>
 
-                        <span className="text-xs bg-amber-50 text-amber-600 px-3 py-1 rounded-full">
-                          Writing pending review
+                        <span
+                          className={`text-xs px-3 py-1 rounded-full ${
+                            writingBand
+                              ? 'bg-green-50 text-green-600'
+                              : 'bg-amber-50 text-amber-600'
+                          }`}
+                        >
+                          {writingBand
+                            ? `Writing Band ${formatBand(writingBand)}`
+                            : 'Writing pending review'}
                         </span>
                       </div>
                     </div>
