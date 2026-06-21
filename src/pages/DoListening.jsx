@@ -462,10 +462,14 @@ export default function DoListening() {
   const [submitting, setSubmitting] = useState(false)
   const [result, setResult] = useState(null)
   const [alreadyDone, setAlreadyDone] = useState(false)
+  const [flaggedQuestions, setFlaggedQuestions] = useState([])
+  const [studentNote, setStudentNote] = useState('')
+  const [showQuestionMap, setShowQuestionMap] = useState(true)
 
   const timerRef = useRef(null)
   const submittingRef = useRef(false)
   const restoredRef = useRef(false)
+  const questionRefs = useRef({})
   const navigate = useNavigate()
 
   const storageKey = user?.uid && id ? `listening_progress_${id}_${user.uid}` : null
@@ -550,6 +554,10 @@ export default function DoListening() {
         setAlreadyDone(true)
         setAnswers(sub.answers || {})
         setResult(sub.result)
+        setFlaggedQuestions(
+          Array.isArray(sub.flaggedQuestions) ? sub.flaggedQuestions : []
+        )
+        setStudentNote(sub.studentNote || '')
         setSubmitted(true)
 
         const key = `listening_progress_${id}_${currentUser.uid}`
@@ -572,6 +580,10 @@ export default function DoListening() {
     }
 
     setAnswers(saved.answers || {})
+    setFlaggedQuestions(
+      Array.isArray(saved.flaggedQuestions) ? saved.flaggedQuestions : []
+    )
+    setStudentNote(saved.studentNote || '')
 
     if (saved.activePartId) {
       setActivePartId(saved.activePartId)
@@ -594,13 +606,25 @@ export default function DoListening() {
           answers,
           activePartId,
           timeLeft,
+          flaggedQuestions,
+          studentNote,
           updatedAt: new Date().toISOString()
         })
       )
     }, 300)
 
     return () => clearTimeout(timeout)
-  }, [storageKey, listening, submitted, alreadyDone, answers, activePartId, timeLeft])
+  }, [
+    storageKey,
+    listening,
+    submitted,
+    alreadyDone,
+    answers,
+    activePartId,
+    timeLeft,
+    flaggedQuestions,
+    studentNote
+  ])
 
   useEffect(() => {
     if (submitted || alreadyDone) return
@@ -703,6 +727,138 @@ export default function DoListening() {
 
   const matchingAnswerKey = (questionId, itemId) => {
     return `${questionId}_${itemId}`
+  }
+
+  const hasAnswerValue = value => {
+    if (Array.isArray(value)) {
+      return value.filter(Boolean).length > 0
+    }
+
+    if (value && typeof value === 'object') {
+      return Object.values(value).some(item => hasAnswerValue(item))
+    }
+
+    return (
+      value !== undefined &&
+      value !== null &&
+      value.toString().trim() !== ''
+    )
+  }
+
+  const getQuestionStatus = (question, index) => {
+    let answered = 0
+    let total = getListeningQuestionCount(question)
+
+    if (question.type === 'table' || question.type === 'note') {
+      answered = 0
+      total = 0
+
+      question.rows?.forEach(row => {
+        row.cells?.forEach((cell, cellIndex) => {
+          if (cell.type !== 'blank') return
+
+          total++
+
+          if (
+            hasAnswerValue(
+              answers[tableAnswerKey(question.id, row.id, cellIndex)]
+            )
+          ) {
+            answered++
+          }
+        })
+      })
+    } else if (question.type === 'listeningCompletion') {
+      answered = 0
+      total = 0
+
+      question.sections?.forEach(section => {
+        section.parts?.forEach(item => {
+          if (item.type !== 'blank') return
+
+          total++
+
+          if (
+            hasAnswerValue(
+              answers[
+                completionAnswerKey(
+                  question.id,
+                  section.id,
+                  item.id
+                )
+              ]
+            )
+          ) {
+            answered++
+          }
+        })
+      })
+    } else if (question.type === 'map') {
+      const items = question.mapItems || []
+      total = items.length
+      answered = items.filter(item =>
+        hasAnswerValue(answers[mapAnswerKey(question.id, item.id)])
+      ).length
+    } else if (question.type === 'matching') {
+      const items = question.matchingItems || []
+      total = items.length
+      answered = items.filter(item =>
+        hasAnswerValue(
+          answers[matchingAnswerKey(question.id, item.id)]
+        )
+      ).length
+    } else if (question.type === 'mcq' && question.mode === 'multi') {
+      const selected = Array.isArray(answers[question.id])
+        ? answers[question.id]
+        : []
+
+      total = question.answers?.length || 2
+      answered = Math.min(selected.filter(Boolean).length, total)
+    } else {
+      total = 1
+      answered = hasAnswerValue(answers[question.id]) ? 1 : 0
+    }
+
+    return {
+      id: question.id,
+      label: getQuestionRangeLabel(parts, activePart?.id, index),
+      answered,
+      total,
+      complete: total > 0 && answered >= total,
+      partial: answered > 0 && answered < total,
+      flagged: flaggedQuestions.includes(question.id)
+    }
+  }
+
+  const getQuestionStatuses = () =>
+    activeQuestions.map((question, index) =>
+      getQuestionStatus(question, index)
+    )
+
+  const getAnsweredQuestionCount = () =>
+    getQuestionStatuses().reduce(
+      (sum, status) => sum + status.answered,
+      0
+    )
+
+  const getUnansweredQuestionLabels = () =>
+    getQuestionStatuses()
+      .filter(status => !status.complete)
+      .map(status => status.label)
+
+  const toggleFlagQuestion = questionId => {
+    setFlaggedQuestions(previous =>
+      previous.includes(questionId)
+        ? previous.filter(id => id !== questionId)
+        : [...previous, questionId]
+    )
+  }
+
+  const scrollToQuestion = questionId => {
+    questionRefs.current[questionId]?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'start'
+    })
   }
 
   const handleAnswer = (questionId, value) => {
@@ -991,7 +1147,28 @@ export default function DoListening() {
     if (submittingRef.current || submitted || alreadyDone || !listening || !user) return
 
     if (!autoSubmit) {
-      const ok = window.confirm('Submit your answers? You cannot retake this homework after submitting.')
+      const unansweredLabels = getUnansweredQuestionLabels()
+      const flaggedLabels = getQuestionStatuses()
+        .filter(status => status.flagged)
+        .map(status => status.label)
+
+      const warningLines = [
+        'Submit your answers? You cannot retake this homework after submitting.'
+      ]
+
+      if (unansweredLabels.length > 0) {
+        warningLines.push(
+          `Unanswered or incomplete: ${unansweredLabels.join(', ')}`
+        )
+      }
+
+      if (flaggedLabels.length > 0) {
+        warningLines.push(
+          `Marked for review: ${flaggedLabels.join(', ')}`
+        )
+      }
+
+      const ok = window.confirm(warningLines.join('\n\n'))
       if (!ok) return
     }
 
@@ -1013,6 +1190,8 @@ export default function DoListening() {
         teacherId: submissionTeacherIds[0] || '',
         teacherIds: submissionTeacherIds,
         answers,
+        flaggedQuestions,
+        studentNote: studentNote.trim(),
         result: res,
         submittedAt: new Date().toISOString(),
         finishedLate: timeLeft <= 0,
@@ -1737,6 +1916,10 @@ export default function DoListening() {
             {listening.title}
           </span>
 
+          <span className="text-xs font-semibold bg-purple-50 text-purple-600 px-3 py-2 rounded-xl whitespace-nowrap">
+            {getAnsweredQuestionCount()} / {totalQuestionCount} answered
+          </span>
+
           <div
             className={`font-mono text-lg font-bold px-4 py-1.5 rounded-xl ${
               timeLeft <= 60
@@ -1774,28 +1957,110 @@ export default function DoListening() {
               </h2>
 
               <p className="text-xs text-gray-400 mt-1">
-                Single Listening section — all questions are shown in one place.
+                {getAnsweredQuestionCount()} answered ·{' '}
+                {Math.max(
+                  totalQuestionCount - getAnsweredQuestionCount(),
+                  0
+                )} remaining
               </p>
             </div>
 
-            <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1.5 rounded-full">
-              {totalQuestionCount} question{totalQuestionCount === 1 ? '' : 's'}
-            </span>
+            <button
+              type="button"
+              onClick={() => setShowQuestionMap(previous => !previous)}
+              className="text-xs bg-purple-50 text-purple-600 px-3 py-2 rounded-xl hover:bg-purple-100"
+            >
+              {showQuestionMap ? 'Hide map' : 'Show map'}
+            </button>
+          </div>
+
+          {showQuestionMap && (
+            <div className="bg-white border border-purple-100 rounded-2xl p-5 mb-6 shadow-sm">
+              <div className="flex items-center justify-between gap-3 mb-3">
+                <div>
+                  <h3 className="font-semibold text-gray-800">
+                    Question map
+                  </h3>
+
+                  <p className="text-xs text-gray-400 mt-1">
+                    Green: answered · Blue: partial · White: unanswered · Amber: flagged
+                  </p>
+                </div>
+
+                <span className="text-xs bg-gray-100 text-gray-500 px-3 py-1.5 rounded-full">
+                  {getAnsweredQuestionCount()} / {totalQuestionCount}
+                </span>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                {getQuestionStatuses().map(status => (
+                  <button
+                    key={status.id}
+                    type="button"
+                    onClick={() => scrollToQuestion(status.id)}
+                    className={`px-3 py-2 rounded-xl text-xs font-semibold border transition-all ${
+                      status.flagged
+                        ? 'bg-amber-100 text-amber-700 border-amber-200'
+                        : status.complete
+                          ? 'bg-green-50 text-green-700 border-green-200'
+                          : status.partial
+                            ? 'bg-blue-50 text-blue-700 border-blue-200'
+                            : 'bg-white text-gray-500 border-gray-200 hover:border-purple-300'
+                    }`}
+                  >
+                    {status.label}
+                    {status.total > 1 && (
+                      <span className="ml-1 opacity-70">
+                        {status.answered}/{status.total}
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="bg-white border border-gray-100 rounded-2xl p-5 mb-6 shadow-sm">
+            <div className="flex items-center justify-between gap-3 mb-3">
+              <h3 className="font-semibold text-gray-800">
+                Scratch note
+              </h3>
+
+              <span className="text-xs text-gray-400">
+                Saved with your submission
+              </span>
+            </div>
+
+            <textarea
+              value={studentNote}
+              onChange={event => setStudentNote(event.target.value)}
+              placeholder="Write short notes, keywords or answer clues here..."
+              rows={3}
+              className="w-full resize-y border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400"
+            />
           </div>
 
           <div className="flex flex-col gap-6">
             {activeQuestions.map((question, index) => (
               <div
                 key={question.id}
-                className="border border-gray-100 rounded-2xl p-5"
+                ref={element => {
+                  questionRefs.current[question.id] = element
+                }}
+                className={`border rounded-2xl p-5 scroll-mt-52 ${
+                  flaggedQuestions.includes(question.id)
+                    ? 'border-amber-200 bg-amber-50/30'
+                    : 'border-gray-100'
+                }`}
               >
-                <div className="flex items-center gap-2 mb-4">
-                  <span className="text-xs font-medium text-gray-400">
-                    {getQuestionRangeLabel(parts, activePart?.id, index)}
-                  </span>
+                <div className="flex items-start justify-between gap-3 mb-4">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs font-medium text-gray-400">
+                      {getQuestionRangeLabel(parts, activePart?.id, index)}
+                    </span>
 
-                  <span
-                    className={`text-xs px-2 py-1 rounded-full ${
+                    <span
+                      className={`text-xs px-2 py-1 rounded-full ${
                       question.type === 'tfng'
                         ? 'bg-blue-50 text-blue-600'
                         : question.type === 'fitb'
@@ -1822,7 +2087,29 @@ export default function DoListening() {
                             : question.mode === 'multi'
                             ? 'MCQ — Choose TWO'
                             : 'MCQ'}
-                  </span>
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2 flex-wrap justify-end">
+                    <span className="text-xs bg-white border border-gray-200 text-gray-500 px-2.5 py-1.5 rounded-full whitespace-nowrap">
+                      {getQuestionStatus(question, index).answered}/
+                      {getQuestionStatus(question, index).total} answered
+                    </span>
+
+                    <button
+                      type="button"
+                      onClick={() => toggleFlagQuestion(question.id)}
+                      className={`text-xs px-3 py-1.5 rounded-xl border whitespace-nowrap ${
+                        flaggedQuestions.includes(question.id)
+                          ? 'bg-amber-100 text-amber-700 border-amber-200'
+                          : 'bg-white text-gray-500 border-gray-200 hover:border-amber-300'
+                      }`}
+                    >
+                      {flaggedQuestions.includes(question.id)
+                        ? '★ Review later'
+                        : '☆ Review later'}
+                    </button>
+                  </div>
                 </div>
 
                 {question.type === 'listeningCompletion' &&
