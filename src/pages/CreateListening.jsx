@@ -1883,7 +1883,7 @@ export default function CreateListening() {
   }
 
   return (
-    <div className="min-h-screen bg-[#faf9f6]">
+    <div className="min-h-screen bg-[#faf9f6] overflow-x-hidden">
       <nav className="flex justify-between items-center px-8 py-4 bg-white border-b border-gray-100">
         <img src="/1.png" alt="Maxima" className="h-14 object-contain" />
 
@@ -1895,7 +1895,7 @@ export default function CreateListening() {
         </button>
       </nav>
 
-      <div className="max-w-6xl mx-auto px-6 py-10">
+      <div className="w-full max-w-[1500px] mx-auto px-4 sm:px-6 py-10 min-w-0">
         <h1 className="text-3xl font-bold text-gray-900 mb-2">
           {isEditMode ? 'Edit Listening Homework' : 'Create Listening Homework'}
         </h1>
@@ -1910,9 +1910,9 @@ export default function CreateListening() {
           </div>
         )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6">
-          <div className="space-y-6">
-            <div className="bg-white border border-gray-100 rounded-2xl p-6">
+        <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_320px] 2xl:grid-cols-[minmax(0,1fr)_360px] gap-6 items-start min-w-0">
+          <div className="space-y-6 min-w-0">
+            <div className="bg-white border border-gray-100 rounded-2xl p-6 min-w-0 overflow-hidden">
               <h2 className="font-semibold text-gray-800 mb-4">
                 Listening Details
               </h2>
@@ -2066,7 +2066,7 @@ export default function CreateListening() {
               </div>
             </div>
 
-            <div className="bg-white border border-gray-100 rounded-2xl p-6">
+            <div className="bg-white border border-gray-100 rounded-2xl p-6 min-w-0 overflow-hidden">
               <div className="flex items-start justify-between gap-4 mb-5">
                 <div>
                   <h2 className="font-semibold text-gray-800">
@@ -3164,7 +3164,7 @@ export default function CreateListening() {
             </div>
           </div>
 
-          <div className="bg-white border border-gray-100 rounded-2xl p-6 h-fit sticky top-6">
+          <div className="bg-white border border-gray-100 rounded-2xl p-6 h-fit xl:sticky xl:top-6 min-w-0 w-full">
             <h2 className="font-semibold text-gray-800 mb-2">
               Assign Students
             </h2>
