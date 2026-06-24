@@ -389,36 +389,70 @@ export default function CreateListening() {
 
   useEffect(() => {
     const loadListening = async () => {
-      if (!isEditMode) return
+      if (!isEditMode || !user || !profile) return
 
-      const snap = await getDoc(doc(db, 'listenings', id))
+      try {
+        const snap = await getDoc(doc(db, 'listenings', id))
 
-      if (!snap.exists()) {
-        alert('Listening homework not found.')
+        if (!snap.exists()) {
+          alert('Listening homework not found.')
+          navigate('/teacher')
+          return
+        }
+
+        const data = snap.data()
+
+        if (
+          !isAdminProfile(profile) &&
+          (
+            !isSameSchool(data, profile) ||
+            !isAssignedToTeacher(data, user.uid)
+          )
+        ) {
+          alert(
+            'You cannot edit this School Library item directly. Duplicate it into My Library first.'
+          )
+          navigate('/teacher')
+          return
+        }
+
+        setTitle(data.title || '')
+        setContentType(data.contentType || data.listeningType || 'full_listening')
+        setVisibility(data.visibility || data.libraryVisibility || 'private')
+        setAudioUrl(data.audioUrl || '')
+        setAudioFileName(data.audioFileName || data.audioName || '')
+        setAudioStoragePath(data.audioStoragePath || '')
+        setInstructions(data.instructions || '')
+        setDueDate(data.dueDate || '')
+        setTimeLimit(data.timeLimit || 30)
+
+        setAssignTo(
+          Array.from(
+            new Set([
+              ...(Array.isArray(data.assignTo) ? data.assignTo : []),
+              ...(Array.isArray(data.assignedTo) ? data.assignedTo : []),
+              ...(Array.isArray(data.studentIds) ? data.studentIds : []),
+              ...(Array.isArray(data.assignedStudentIds)
+                ? data.assignedStudentIds
+                : [])
+            ])
+          )
+        )
+
+        const loadedParts = normalizeParts(data)
+        setParts(loadedParts)
+        setActivePartId(loadedParts[0]?.id || null)
+      } catch (error) {
+        console.error('Could not load listening for editing:', error)
+        alert(
+          'Could not open this listening homework for editing. Please check your permission and try again.'
+        )
         navigate('/teacher')
-        return
       }
-
-      const data = snap.data()
-
-      setTitle(data.title || '')
-      setContentType(data.contentType || data.listeningType || 'full_listening')
-      setVisibility(data.visibility || data.libraryVisibility || 'private')
-      setAudioUrl(data.audioUrl || '')
-      setAudioFileName(data.audioFileName || data.audioName || '')
-      setAudioStoragePath(data.audioStoragePath || '')
-      setInstructions(data.instructions || '')
-      setDueDate(data.dueDate || '')
-      setTimeLimit(data.timeLimit || 30)
-      setAssignTo(data.assignTo || [])
-
-      const loadedParts = normalizeParts(data)
-      setParts(loadedParts)
-      setActivePartId(loadedParts[0]?.id || null)
     }
 
     loadListening()
-  }, [id, isEditMode, navigate])
+  }, [id, isEditMode, navigate, user, profile])
 
   const filteredStudents = useMemo(() => {
     const term = search.trim().toLowerCase()
@@ -1619,7 +1653,7 @@ export default function CreateListening() {
       }
 
       for (const question of part.questions) {
-      if (question.type !== 'table' && question.type !== 'note' && question.type !== 'map' && question.type !== 'listeningCompletion' && question.type !== 'matching' && !question.question.trim()) {
+      if (question.type !== 'table' && question.type !== 'note' && question.type !== 'map' && question.type !== 'listeningCompletion' && question.type !== 'matching' && !question.question?.trim()) {
         alert('Please fill in every question text.')
         return false
       }
@@ -1643,7 +1677,7 @@ export default function CreateListening() {
         }
       }
 
-      if (question.type === 'fitb' && !question.answer.trim()) {
+      if (question.type === 'fitb' && !question.answer?.trim()) {
         alert('Every fill in the blank question needs a correct answer.')
         return false
       }
@@ -1776,7 +1810,7 @@ export default function CreateListening() {
       return
     }
 
-    if (assignTo.length === 0) {
+    if (!isEditMode && assignTo.length === 0) {
       alert('Please assign at least one student.')
       return
     }
@@ -1839,8 +1873,10 @@ export default function CreateListening() {
         navigate('/teacher')
       }, 1000)
     } catch (error) {
-      console.error(error)
-      alert('Could not save listening homework.')
+      console.error('Could not save listening homework:', error)
+      alert(
+        `Could not save listening homework.${error?.message ? `\n\n${error.message}` : ''}`
+      )
     } finally {
       setSaving(false)
     }
