@@ -6,11 +6,12 @@ import {
   doc,
   getDoc,
   onSnapshot,
+  updateDoc,
   query,
   where
 } from 'firebase/firestore'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 
 const DEFAULT_SCHOOL_ID = 'maxima'
 
@@ -157,6 +158,8 @@ function buildTeacherLibraryQueries(collectionName, teacherId, schoolId) {
 }
 
 export default function CreateMockTest() {
+  const { id } = useParams()
+  const isEditMode = Boolean(id)
   const navigate = useNavigate()
 
   const [user, setUser] = useState(null)
@@ -182,6 +185,8 @@ export default function CreateMockTest() {
   const [search, setSearch] = useState('')
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [loadingExisting, setLoadingExisting] = useState(isEditMode)
+  const [existingMock, setExistingMock] = useState(null)
 
   useEffect(() => {
     let active = true
@@ -234,6 +239,90 @@ export default function CreateMockTest() {
       unsub()
     }
   }, [navigate])
+
+  useEffect(() => {
+    const loadExistingMock = async () => {
+      if (!isEditMode || !user || !profile) return
+
+      try {
+        const mockSnap = await getDoc(doc(db, 'mockTests', id))
+
+        if (!mockSnap.exists()) {
+          alert('Mock test not found.')
+          navigate('/teacher')
+          return
+        }
+
+        const data = {
+          id: mockSnap.id,
+          ...mockSnap.data()
+        }
+
+        if (
+          !isAdminProfile(profile) &&
+          (
+            !isSameSchool(data, profile) ||
+            !isAssignedToTeacher(data, user.uid)
+          )
+        ) {
+          alert(
+            'You cannot edit this School Library mock directly. Duplicate it into My Library first.'
+          )
+          navigate('/teacher')
+          return
+        }
+
+        setExistingMock(data)
+        setTitle(data.title || '')
+        setVisibility(data.visibility || data.libraryVisibility || 'private')
+        setContentType(data.contentType || data.mockType || 'full_mock')
+        setDueDate(data.dueDate || '')
+
+        const loadedListeningIds = Array.isArray(data.listeningIds)
+          ? data.listeningIds.filter(Boolean)
+          : data.listeningId
+            ? [data.listeningId]
+            : []
+
+        const loadedReadingIds = Array.isArray(data.readingIds)
+          ? data.readingIds.filter(Boolean)
+          : data.readingId
+            ? [data.readingId]
+            : []
+
+        setListeningIds(
+          [...loadedListeningIds, '', '', '', ''].slice(0, 4)
+        )
+        setReadingIds(
+          [...loadedReadingIds, '', '', ''].slice(0, 3)
+        )
+        setWritingId(data.writingId || '')
+
+        setAssignTo(
+          Array.from(
+            new Set([
+              ...(Array.isArray(data.assignTo) ? data.assignTo : []),
+              ...(Array.isArray(data.assignedTo) ? data.assignedTo : []),
+              ...(Array.isArray(data.studentIds) ? data.studentIds : []),
+              ...(Array.isArray(data.assignedStudentIds)
+                ? data.assignedStudentIds
+                : [])
+            ])
+          )
+        )
+      } catch (error) {
+        console.error('Could not load mock test for editing:', error)
+        alert(
+          `Could not open this mock test for editing.${error?.message ? `\n\n${error.message}` : ''}`
+        )
+        navigate('/teacher')
+      } finally {
+        setLoadingExisting(false)
+      }
+    }
+
+    loadExistingMock()
+  }, [id, isEditMode, navigate, profile, user])
 
   useEffect(() => {
     if (!user || !profile) return
@@ -398,8 +487,9 @@ export default function CreateMockTest() {
     selectedReadingIds.length === 3 &&
     !hasDuplicateReadings &&
     writingId &&
-    assignTo.length > 0 &&
-    !saving
+    (isEditMode || assignTo.length > 0) &&
+    !saving &&
+    !loadingExisting
 
   const updateListeningId = (index, value) => {
     setListeningIds(prev => {
@@ -512,7 +602,7 @@ export default function CreateMockTest() {
       return
     }
 
-    if (assignTo.length === 0) {
+    if (!isEditMode && assignTo.length === 0) {
       alert('Please assign at least one student.')
       return
     }
@@ -525,30 +615,56 @@ export default function CreateMockTest() {
 
     setSaving(true)
 
+    const now = new Date().toISOString()
+
+    const payload = {
+      title: cleanTitle,
+      module: 'mock',
+      contentType,
+      mockType: contentType,
+      visibility,
+      dueDate,
+      listeningId: cleanListeningIds[0] || '',
+      listeningIds: cleanListeningIds,
+      readingIds: cleanReadingIds,
+      writingId,
+      assignTo,
+      assignedStudentIds: selectedStudents.map(student => student.id),
+      assignedEmails: selectedStudents
+        .map(student => student.email?.toLowerCase())
+        .filter(Boolean),
+      schoolId: getProfileSchoolId(profile),
+      mode: 'single-page-flow',
+      updatedAt: now,
+      updatedBy: user.uid
+    }
+
     try {
-      await addDoc(collection(db, 'mockTests'), {
-        title: cleanTitle,
-        module: 'mock',
-        contentType,
-        mockType: contentType,
-        visibility,
-        dueDate,
-        listeningId: cleanListeningIds[0] || '',
-        listeningIds: cleanListeningIds,
-        readingIds: cleanReadingIds,
-        writingId,
-        assignTo,
-        assignedStudentIds: selectedStudents.map(student => student.id),
-        assignedEmails: selectedStudents.map(student => student.email?.toLowerCase()).filter(Boolean),
-        schoolId: getProfileSchoolId(profile),
-        teacherId: profile?.role === 'teacher' ? user.uid : '',
-        teacherIds: profile?.role === 'teacher' ? [user.uid] : [],
-        mode: 'single-page-flow',
-        createdBy: user.uid,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        archived: false
-      })
+      if (isEditMode) {
+        await updateDoc(doc(db, 'mockTests', id), {
+          ...payload,
+          teacherId:
+            existingMock?.teacherId ||
+            existingMock?.createdBy ||
+            (profile?.role === 'teacher' ? user.uid : ''),
+          teacherIds:
+            Array.isArray(existingMock?.teacherIds) &&
+            existingMock.teacherIds.length > 0
+              ? existingMock.teacherIds
+              : profile?.role === 'teacher'
+                ? [user.uid]
+                : []
+        })
+      } else {
+        await addDoc(collection(db, 'mockTests'), {
+          ...payload,
+          teacherId: profile?.role === 'teacher' ? user.uid : '',
+          teacherIds: profile?.role === 'teacher' ? [user.uid] : [],
+          createdBy: user.uid,
+          createdAt: now,
+          archived: false
+        })
+      }
 
       setSaved(true)
 
@@ -556,14 +672,16 @@ export default function CreateMockTest() {
         navigate('/teacher')
       }, 900)
     } catch (error) {
-      console.error(error)
-      alert('Could not create mock test.')
+      console.error('Could not save mock test:', error)
+      alert(
+        `Could not save mock test.${error?.message ? `\n\n${error.message}` : ''}`
+      )
     } finally {
       setSaving(false)
     }
   }
 
-  if (checkingUser) {
+  if (checkingUser || loadingExisting) {
     return (
       <div className="min-h-screen bg-[#faf9f6] flex items-center justify-center">
         <p className="text-gray-400">Checking permissions...</p>
@@ -586,7 +704,7 @@ export default function CreateMockTest() {
 
       <div className="max-w-6xl mx-auto px-6 py-10">
         <h1 className="text-3xl font-bold text-gray-900 mb-2">
-          Create Full Mock Test
+          {isEditMode ? 'Edit Full Mock Test' : 'Create Full Mock Test'}
         </h1>
 
         <p className="text-gray-500 mb-8">
@@ -595,7 +713,7 @@ export default function CreateMockTest() {
 
         {saved && (
           <div className="bg-green-50 text-green-600 rounded-xl p-4 mb-6 text-sm font-medium">
-            ✓ Mock test created. Redirecting...
+            ✓ Mock test {isEditMode ? 'updated' : 'created'}. Redirecting...
           </div>
         )}
 
@@ -968,7 +1086,13 @@ export default function CreateMockTest() {
               disabled={!canCreate}
               className="w-full bg-purple-600 text-white rounded-xl py-4 text-sm font-medium hover:bg-purple-700 mt-6 disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              {saving ? 'Creating...' : 'Create Full IELTS Mock Test'}
+              {saving
+                ? isEditMode
+                  ? 'Saving Changes...'
+                  : 'Creating...'
+                : isEditMode
+                  ? 'Save Mock Changes'
+                  : 'Create Full IELTS Mock Test'}
             </button>
           </div>
         </div>

@@ -4030,6 +4030,13 @@ Continue permanent delete?`
 
         {isOwnedByCurrentTeacher(mockTest) && (
           <>
+            <button
+              onClick={() => navigate(`/edit-mock/${mockTest.id}`)}
+              className="text-xs bg-blue-50 text-blue-600 px-3 py-2 rounded-xl hover:bg-blue-100"
+            >
+              Edit
+            </button>
+
             {archived ? (
               <button
                 onClick={() => restoreMockTest(mockTest)}

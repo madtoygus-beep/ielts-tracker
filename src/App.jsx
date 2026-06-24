@@ -71,6 +71,7 @@ function App() {
           <Route path="/do-listening/:id" element={<DoListening />} />
 
           <Route path="/create-mock" element={<CreateMockTest />} />
+          <Route path="/edit-mock/:id" element={<CreateMockTest />} />
           <Route path="/do-mock/:id" element={<DoMockTest />} />
 
           <Route path="/create-vocabulary" element={<CreateVocabulary />} />

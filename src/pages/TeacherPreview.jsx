@@ -30,7 +30,7 @@ const TYPE_CONFIG = {
   mock: {
     collection: 'mockTests',
     label: 'Full Mock',
-    editPath: null
+    editPath: id => `/edit-mock/${id}`
   }
 }
 
