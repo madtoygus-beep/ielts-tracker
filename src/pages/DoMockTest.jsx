@@ -759,6 +759,7 @@ export default function DoMockTest() {
   const loadingRef = useRef(true)
   const audioRef = useRef(null)
   const audioLastTimeRef = useRef(0)
+  const audioSeekLockRef = useRef(false)
   const listeningTickRef = useRef(null)
   const readingTickRef = useRef(null)
   const writingTickRef = useRef(null)
@@ -770,6 +771,8 @@ export default function DoMockTest() {
   const [audioStarted, setAudioStarted] = useState(false)
   const [audioLocked, setAudioLocked] = useState(false)
   const [audioWarning, setAudioWarning] = useState('')
+  const [audioCurrentTime, setAudioCurrentTime] = useState(0)
+  const [audioDuration, setAudioDuration] = useState(0)
   const [tabWarning, setTabWarning] = useState('')
 
   const storageKey = useMemo(() => {
@@ -1467,7 +1470,10 @@ export default function DoMockTest() {
     setAudioStarted(false)
     setAudioLocked(false)
     setAudioWarning('')
+    setAudioCurrentTime(0)
+    setAudioDuration(0)
     audioLastTimeRef.current = 0
+    audioSeekLockRef.current = false
 
     if (audioRef.current) {
       audioRef.current.pause()
@@ -2342,6 +2348,18 @@ export default function DoMockTest() {
     }
   }
 
+  const handleStartAudio = () => {
+    if (!audioRef.current || listeningLocked || audioLocked || audioStarted) {
+      return
+    }
+
+    audioRef.current.play().catch(() => {
+      setAudioWarning(
+        'Your browser blocked audio playback. Please click Start Audio again.'
+      )
+    })
+  }
+
   const handleAudioPlay = () => {
     if (listeningLocked || audioLocked) {
       audioRef.current?.pause()
@@ -2364,31 +2382,55 @@ export default function DoMockTest() {
   }
 
   const handleAudioSeeking = () => {
-    if (!audioRef.current) return
+    if (!audioRef.current || audioSeekLockRef.current) return
 
     const currentTime = audioRef.current.currentTime
+    const allowedTime = audioLastTimeRef.current
+    const difference = currentTime - allowedTime
 
-    if (currentTime > audioLastTimeRef.current + 1.5) {
-      audioRef.current.currentTime = audioLastTimeRef.current
-      setAudioWarning('Audio seeking is not allowed during the listening section.')
-      return
-    }
+    if (Math.abs(difference) <= 0.35) return
 
-    if (audioStarted && currentTime < audioLastTimeRef.current - 1.5) {
-      audioRef.current.currentTime = audioLastTimeRef.current
-      setAudioWarning('Audio replay is not allowed during the listening section.')
-    }
+    audioSeekLockRef.current = true
+    audioRef.current.currentTime = allowedTime
+
+    setAudioWarning(
+      difference > 0
+        ? 'Fast-forwarding is disabled during the listening section.'
+        : 'Rewinding is disabled during the listening section.'
+    )
+
+    window.setTimeout(() => {
+      audioSeekLockRef.current = false
+    }, 120)
   }
 
   const handleAudioTimeUpdate = () => {
-    if (!audioRef.current) return
+    if (!audioRef.current || audioRef.current.seeking || audioSeekLockRef.current) {
+      return
+    }
 
-    if (audioRef.current.currentTime > audioLastTimeRef.current) {
-      audioLastTimeRef.current = audioRef.current.currentTime
+    const currentTime = audioRef.current.currentTime
+
+    if (currentTime >= audioLastTimeRef.current) {
+      audioLastTimeRef.current = currentTime
+      setAudioCurrentTime(currentTime)
     }
   }
 
+  const handleAudioLoadedMetadata = () => {
+    if (!audioRef.current) return
+
+    const duration = Number(audioRef.current.duration)
+
+    setAudioDuration(Number.isFinite(duration) ? duration : 0)
+    setAudioCurrentTime(audioRef.current.currentTime || 0)
+  }
+
   const handleAudioEnded = () => {
+    if (audioDuration > 0) {
+      setAudioCurrentTime(audioDuration)
+    }
+
     setAudioLocked(true)
     setAudioWarning('Listening audio finished. You cannot replay it.')
   }
@@ -3151,13 +3193,69 @@ export default function DoMockTest() {
           </div>
         )}
 
+        <div className="border border-purple-100 bg-purple-50/60 rounded-2xl p-4">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3">
+            <div>
+              <p className="text-sm font-semibold text-gray-800">
+                Listening Audio
+              </p>
+
+              <p className="text-xs text-gray-500 mt-1">
+                The recording plays once. Pausing, rewinding and fast-forwarding are disabled.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleStartAudio}
+              disabled={
+                audioStarted ||
+                listeningLocked ||
+                audioLocked ||
+                !part?.listeningAudioUrl
+              }
+              className="bg-purple-600 text-white rounded-xl px-5 py-2.5 text-sm font-semibold hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {audioLocked
+                ? 'Audio Finished'
+                : audioStarted
+                  ? 'Audio Playing'
+                  : 'Start Audio'}
+            </button>
+          </div>
+
+          <div className="h-2 bg-white rounded-full overflow-hidden border border-purple-100">
+            <div
+              className="h-full bg-purple-600 transition-[width] duration-300"
+              style={{
+                width: `${
+                  audioDuration > 0
+                    ? Math.min(
+                        100,
+                        Math.max(0, (audioCurrentTime / audioDuration) * 100)
+                      )
+                    : 0
+                }%`
+              }}
+            />
+          </div>
+
+          <div className="flex justify-between mt-2 text-xs font-mono text-purple-700">
+            <span>{formatTime(Math.floor(audioCurrentTime || 0))}</span>
+            <span>
+              {audioDuration > 0
+                ? formatTime(Math.floor(audioDuration))
+                : '--:--'}
+            </span>
+          </div>
+        </div>
+
         <audio
           ref={audioRef}
-          controls
-          controlsList="nodownload noplaybackrate"
-          disablePictureInPicture
+          preload="metadata"
           src={part?.listeningAudioUrl}
-          className="w-full"
+          className="hidden"
+          onLoadedMetadata={handleAudioLoadedMetadata}
           onPlay={handleAudioPlay}
           onPause={handleAudioPause}
           onSeeking={handleAudioSeeking}
