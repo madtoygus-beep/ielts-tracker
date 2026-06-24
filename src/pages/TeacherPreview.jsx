@@ -144,8 +144,10 @@ function getItemText(item) {
     item?.prompt ||
     item?.text ||
     item?.statement ||
+    item?.sentence ||
     item?.label ||
     item?.title ||
+    [item?.beforeText, item?.afterText].filter(Boolean).join(' ') ||
     ''
   )
 }
@@ -424,8 +426,8 @@ function ReadingPreview({
   }
 
   return (
-    <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)] gap-6">
-      <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm">
+    <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)] gap-6 min-w-0">
+      <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm min-w-0">
         <h2 className="text-lg font-bold text-gray-900 mb-4">
           Reading Passage
         </h2>
@@ -451,7 +453,7 @@ function ReadingPreview({
         )}
       </div>
 
-      <div className="space-y-5">
+      <div className="space-y-5 min-w-0">
         {questions.map((question, index) => {
           const keyBase = `${answerPrefix}:${question.id || index}`
           const label = getRangeLabel(questions, index)
@@ -522,6 +524,12 @@ function ReadingPreview({
                 typeLabel="Matching Information"
                 showAnswers={false}
               >
+                {question.instruction && (
+                  <p className="text-sm text-gray-600 mb-4 whitespace-pre-wrap">
+                    {question.instruction}
+                  </p>
+                )}
+
                 <div className="space-y-4">
                   {toArray(question.items).map((item, itemIndex) => {
                     const itemId = item.id || itemIndex
@@ -553,41 +561,45 @@ function ReadingPreview({
             )
           }
 
-          if (
-            question.type === 'sentenceEndings' ||
-            question.type === 'summaryOptions'
-          ) {
-            const options =
-              question.type === 'sentenceEndings'
-                ? toArray(question.endings)
-                : toArray(question.options)
+          if (question.type === 'sentenceEndings') {
+            const endings = toArray(question.endings)
 
             return (
               <QuestionShell
                 key={keyBase}
                 label={label}
-                typeLabel={
-                  question.type === 'sentenceEndings'
-                    ? 'Sentence Endings'
-                    : 'Summary Completion with Options'
-                }
+                typeLabel="Sentence Endings"
                 showAnswers={false}
               >
+                {question.instruction && (
+                  <p className="text-sm text-gray-600 mb-4 whitespace-pre-wrap">
+                    {question.instruction}
+                  </p>
+                )}
+
                 <div className="space-y-4">
                   {toArray(question.items).map((item, itemIndex) => {
                     const itemId = item.id || itemIndex
                     const fieldKey = `${keyBase}:${itemId}`
 
                     return (
-                      <div key={itemId}>
-                        <p className="text-sm text-gray-800 mb-2">
-                          {getItemText(item)}
+                      <div
+                        key={itemId}
+                        className="border border-gray-100 rounded-xl p-4 bg-gray-50"
+                      >
+                        <p className="text-xs font-semibold text-purple-600 mb-2">
+                          Sentence {itemIndex + 1}
+                        </p>
+
+                        <p className="text-sm font-medium text-gray-800 mb-3 whitespace-pre-wrap">
+                          {item.sentence || getItemText(item) || 'Sentence stem is missing.'}
                         </p>
 
                         <SelectAnswer
                           value={answers[fieldKey]}
                           onChange={value => setAnswer(fieldKey, value)}
-                          options={options}
+                          options={endings}
+                          placeholder="Choose the correct ending"
                         />
 
                         {showAnswers && (
@@ -599,6 +611,122 @@ function ReadingPreview({
                     )
                   })}
                 </div>
+
+                {endings.length > 0 && (
+                  <div className="mt-5 bg-purple-50 border border-purple-100 rounded-xl p-4">
+                    <p className="text-xs font-semibold text-purple-700 uppercase tracking-wide mb-3">
+                      Sentence endings
+                    </p>
+
+                    <div className="space-y-2">
+                      {endings.map((ending, endingIndex) => (
+                        <div
+                          key={`${endingIndex}-${ending}`}
+                          className="grid grid-cols-[28px_minmax(0,1fr)] gap-2 text-sm text-gray-700"
+                        >
+                          <span className="font-semibold text-purple-700">
+                            {letters[endingIndex]}.
+                          </span>
+                          <span className="whitespace-pre-wrap">
+                            {ending || 'Ending text is missing.'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </QuestionShell>
+            )
+          }
+
+          if (question.type === 'summaryOptions') {
+            const options = toArray(question.options)
+
+            return (
+              <QuestionShell
+                key={keyBase}
+                label={label}
+                typeLabel="Summary Completion with Options"
+                showAnswers={false}
+              >
+                {question.instruction && (
+                  <p className="text-sm text-gray-600 mb-4 whitespace-pre-wrap">
+                    {question.instruction}
+                  </p>
+                )}
+
+                {question.title && (
+                  <h3 className="font-semibold text-gray-900 mb-4">
+                    {question.title}
+                  </h3>
+                )}
+
+                <div className="space-y-4">
+                  {toArray(question.items).map((item, itemIndex) => {
+                    const itemId = item.id || itemIndex
+                    const fieldKey = `${keyBase}:${itemId}`
+
+                    return (
+                      <div
+                        key={itemId}
+                        className="border border-gray-100 rounded-xl p-4 bg-gray-50"
+                      >
+                        <p className="text-xs font-semibold text-purple-600 mb-2">
+                          Question {item.number || itemIndex + 1}
+                        </p>
+
+                        {item.beforeText && (
+                          <p className="text-sm text-gray-800 mb-2 whitespace-pre-wrap">
+                            {item.beforeText}
+                          </p>
+                        )}
+
+                        <SelectAnswer
+                          value={answers[fieldKey]}
+                          onChange={value => setAnswer(fieldKey, value)}
+                          options={options}
+                          placeholder="Choose an option"
+                        />
+
+                        {item.afterText && (
+                          <p className="text-sm text-gray-800 mt-2 whitespace-pre-wrap">
+                            {item.afterText}
+                          </p>
+                        )}
+
+                        {showAnswers && (
+                          <AnswerBadge>
+                            {item.answer}
+                          </AnswerBadge>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+
+                {options.length > 0 && (
+                  <div className="mt-5 bg-purple-50 border border-purple-100 rounded-xl p-4">
+                    <p className="text-xs font-semibold text-purple-700 uppercase tracking-wide mb-3">
+                      Options
+                    </p>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {options.map((option, optionIndex) => (
+                        <div
+                          key={`${optionIndex}-${option}`}
+                          className="grid grid-cols-[28px_minmax(0,1fr)] gap-2 text-sm text-gray-700"
+                        >
+                          <span className="font-semibold text-purple-700">
+                            {letters[optionIndex]}.
+                          </span>
+                          <span className="whitespace-pre-wrap">
+                            {option || 'Option text is missing.'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </QuestionShell>
             )
           }
@@ -611,6 +739,12 @@ function ReadingPreview({
                 typeLabel="Note Completion"
                 showAnswers={false}
               >
+                {question.instruction && (
+                  <p className="text-sm text-gray-600 mb-4 whitespace-pre-wrap">
+                    {question.instruction}
+                  </p>
+                )}
+
                 {question.title && (
                   <h3 className="font-semibold text-gray-900 mb-4">
                     {question.title}
@@ -626,7 +760,7 @@ function ReadingPreview({
                         </p>
                       )}
 
-                      <div className="space-y-3">
+                      <div className="space-y-3 min-w-0">
                         {toArray(paragraph.parts).map((part, partIndex) => {
                           if (part.type !== 'blank') {
                             return (
@@ -634,7 +768,7 @@ function ReadingPreview({
                                 key={part.id || partIndex}
                                 className="text-sm text-gray-700 whitespace-pre-wrap"
                               >
-                                {part.text}
+                                {part.content || part.text || ''}
                               </span>
                             )
                           }
