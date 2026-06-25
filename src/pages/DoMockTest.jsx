@@ -751,6 +751,7 @@ export default function DoMockTest() {
   const [writingLocked, setWritingLocked] = useState(false)
 
   const [finalResult, setFinalResult] = useState(null)
+  const [completedSubmission, setCompletedSubmission] = useState(null)
   const [submitting, setSubmitting] = useState(false)
 
   const submittingRef = useRef(false)
@@ -862,8 +863,22 @@ export default function DoMockTest() {
 
         if (!existingSnap.empty) {
           setAlreadySubmitted(true)
-          const submission = existingSnap.docs[0].data()
+
+          const submission = {
+            id: existingSnap.docs[0].id,
+            ...existingSnap.docs[0].data()
+          }
+
+          setCompletedSubmission(submission)
           setFinalResult(submission.result || null)
+          setListeningAnswers(submission.listeningAnswers || {})
+          setReadingAnswers(submission.readingAnswers || {})
+          setWritingAnswers(
+            submission.writingAnswers || {
+              task1: '',
+              task2: ''
+            }
+          )
 
           const key = `mock_progress_${id}_${currentUser.uid}`
           localStorage.removeItem(key)
@@ -2481,8 +2496,21 @@ export default function DoMockTest() {
       if (!existingSnap.empty) {
         setAlreadySubmitted(true)
 
-        const existingSubmission = existingSnap.docs[0].data()
+        const existingSubmission = {
+          id: existingSnap.docs[0].id,
+          ...existingSnap.docs[0].data()
+        }
+
+        setCompletedSubmission(existingSubmission)
         setFinalResult(existingSubmission.result || null)
+        setListeningAnswers(existingSubmission.listeningAnswers || {})
+        setReadingAnswers(existingSubmission.readingAnswers || {})
+        setWritingAnswers(
+          existingSubmission.writingAnswers || {
+            task1: '',
+            task2: ''
+          }
+        )
 
         if (storageKey) {
           localStorage.removeItem(storageKey)
@@ -2571,6 +2599,16 @@ export default function DoMockTest() {
         localStorage.removeItem(storageKey)
       }
 
+      setCompletedSubmission({
+        mockTestId: mock.id,
+        listeningAnswers: listeningAnswers || {},
+        readingAnswers: readingAnswers || {},
+        writingAnswers: {
+          task1: writingAnswers?.task1 || '',
+          task2: writingAnswers?.task2 || ''
+        },
+        result
+      })
       setFinalResult(result)
       setAlreadySubmitted(true)
       setSectionIndex(sections.length - 1)
@@ -4677,6 +4715,591 @@ export default function DoMockTest() {
     )
   }
 
+
+  const formatReviewAnswer = (value, options = []) => {
+    if (Array.isArray(value)) {
+      if (value.length === 0) return 'No answer'
+
+      return value
+        .map(item => {
+          const index = letters.indexOf(item)
+          return index >= 0 && options[index]
+            ? `${item}. ${options[index]}`
+            : item
+        })
+        .join(', ')
+    }
+
+    if (value === undefined || value === null || value === '') {
+      return 'No answer'
+    }
+
+    const cleanValue = value.toString()
+    const optionIndex = letters.indexOf(cleanValue)
+
+    if (optionIndex >= 0 && options[optionIndex]) {
+      return `${cleanValue}. ${options[optionIndex]}`
+    }
+
+    return cleanValue
+  }
+
+  const getNearbyCompletionText = (parts, targetIndex) => {
+    const previous = parts?.[targetIndex - 1]
+    const next = parts?.[targetIndex + 1]
+
+    return [
+      previous?.content || previous?.text || '',
+      '_____',
+      next?.content || next?.text || ''
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .trim()
+  }
+
+  const buildListeningReviewItems = () => {
+    const items = []
+
+    listeningParts.forEach(part => {
+      ;(part.questions || []).forEach(question => {
+        const displayNumbers = getListeningQuestionDisplayNumbers(
+          listeningParts,
+          part.id,
+          question
+        )
+
+        let subIndex = 0
+
+        const pushItem = ({
+          prompt,
+          userAnswer,
+          correctAnswer,
+          correct,
+          options = [],
+          status = null
+        }) => {
+          const number =
+            displayNumbers[subIndex] ||
+            displayNumbers[0] ||
+            items.length + 1
+
+          items.push({
+            id: `listening-${part.id}-${question.id}-${subIndex}`,
+            section: part.displayTitle || part.title || 'Listening',
+            number,
+            prompt:
+              prompt ||
+              question.question ||
+              question.instruction ||
+              'Listening question',
+            userAnswer: formatReviewAnswer(userAnswer, options),
+            correctAnswer: formatReviewAnswer(correctAnswer, options),
+            correct,
+            status
+          })
+
+          subIndex++
+        }
+
+        if (question.type === 'table' || question.type === 'note') {
+          ;(question.rows || []).forEach(row => {
+            const rowText = (row.cells || [])
+              .filter(cell => cell.type === 'text')
+              .map(cell => cell.text)
+              .filter(Boolean)
+              .join(' · ')
+
+            ;(row.cells || []).forEach((cell, cellIndex) => {
+              if (cell.type !== 'blank') return
+
+              const key = tableAnswerKey(
+                question.id,
+                row.id,
+                cellIndex
+              )
+              const userAnswer = listeningAnswers[key]
+
+              pushItem({
+                prompt:
+                  [
+                    rowText,
+                    cell.beforeText,
+                    '_____',
+                    cell.afterText
+                  ]
+                    .filter(Boolean)
+                    .join(' ') ||
+                  question.instruction,
+                userAnswer,
+                correctAnswer: cell.answer,
+                correct: isBlankCorrect(
+                  userAnswer,
+                  cell.answer,
+                  cell.acceptedAnswers,
+                  cell.maxWords
+                )
+              })
+            })
+          })
+
+          return
+        }
+
+        if (question.type === 'listeningCompletion') {
+          ;(question.sections || []).forEach(section => {
+            ;(section.parts || []).forEach((item, itemIndex) => {
+              if (item.type !== 'blank') return
+
+              const key = listeningCompletionAnswerKey(
+                question.id,
+                section.id,
+                item.id
+              )
+              const options =
+                question.completionMode === 'choose'
+                  ? question.options || []
+                  : []
+
+              pushItem({
+                prompt:
+                  [
+                    section.heading,
+                    getNearbyCompletionText(
+                      section.parts,
+                      itemIndex
+                    )
+                  ]
+                    .filter(Boolean)
+                    .join(' — ') ||
+                  question.instruction,
+                userAnswer: listeningAnswers[key],
+                correctAnswer: item.answer,
+                options,
+                correct: isListeningCompletionPartCorrect(
+                  question,
+                  section,
+                  item
+                )
+              })
+            })
+          })
+
+          return
+        }
+
+        if (question.type === 'map') {
+          ;(question.mapItems || []).forEach(item => {
+            const key = mapAnswerKey(question.id, item.id)
+            const userAnswer = listeningAnswers[key]
+
+            pushItem({
+              prompt: item.prompt || question.instruction,
+              userAnswer,
+              correctAnswer: item.answer,
+              correct:
+                normalize(userAnswer) ===
+                normalize(item.answer)
+            })
+          })
+
+          return
+        }
+
+        if (question.type === 'matching') {
+          ;(question.matchingItems || []).forEach(item => {
+            const key = matchingAnswerKey(question.id, item.id)
+            const userAnswer = listeningAnswers[key]
+
+            pushItem({
+              prompt: item.prompt || question.matchingTitle,
+              userAnswer,
+              correctAnswer: item.answer,
+              options: question.options || [],
+              correct: isListeningMatchingItemCorrect(
+                question,
+                item
+              )
+            })
+          })
+
+          return
+        }
+
+        if (question.type === 'mcq' && question.mode === 'multi') {
+          const score = getListeningMultiAnswerScore(question)
+
+          pushItem({
+            prompt: question.question,
+            userAnswer: listeningAnswers[question.id] || [],
+            correctAnswer: question.answers || [],
+            options: question.options || [],
+            correct: score.correct === score.total,
+            status:
+              score.correct > 0 && score.correct < score.total
+                ? `Partly correct (${score.correct}/${score.total})`
+                : null
+          })
+
+          return
+        }
+
+        pushItem({
+          prompt: question.question,
+          userAnswer: listeningAnswers[question.id],
+          correctAnswer: question.answer,
+          options:
+            question.type === 'mcq'
+              ? question.options || []
+              : [],
+          correct: isListeningNormalCorrect(question)
+        })
+      })
+    })
+
+    return items
+  }
+
+  const buildReadingReviewItems = () => {
+    const items = []
+
+    readings.forEach(reading => {
+      ;(reading.questions || []).forEach(
+        (question, questionIndex) => {
+          const questionStart =
+            (reading.questions || [])
+              .slice(0, questionIndex)
+              .reduce(
+                (sum, item) =>
+                  sum + getReadingQuestionCount(item),
+                0
+              ) + 1
+
+          let subIndex = 0
+
+          const pushItem = ({
+            prompt,
+            userAnswer,
+            correctAnswer,
+            correct,
+            options = [],
+            status = null
+          }) => {
+            const number = questionStart + subIndex
+
+            items.push({
+              id: `reading-${reading.id}-${question.id}-${subIndex}`,
+              section: reading.title || 'Reading',
+              number,
+              prompt:
+                prompt ||
+                question.question ||
+                question.instruction ||
+                'Reading question',
+              userAnswer: formatReviewAnswer(
+                userAnswer,
+                options
+              ),
+              correctAnswer: formatReviewAnswer(
+                correctAnswer,
+                options
+              ),
+              correct,
+              status
+            })
+
+            subIndex++
+          }
+
+          if (question.type === 'matching') {
+            ;(question.paragraphs || []).forEach(paragraph => {
+              const userAnswer =
+                readingAnswers[reading.id]?.[question.id]?.[
+                  paragraph.letter
+                ]
+
+              pushItem({
+                prompt: `Paragraph ${paragraph.letter}`,
+                userAnswer,
+                correctAnswer: paragraph.answer,
+                options: reading.headings || [],
+                correct:
+                  userAnswer?.toString() ===
+                  paragraph.answer?.toString()
+              })
+            })
+
+            return
+          }
+
+          if (question.type === 'matchingInformation') {
+            ;(question.items || []).forEach(item => {
+              const userAnswer =
+                readingAnswers[reading.id]?.[question.id]?.[
+                  item.id
+                ]
+
+              pushItem({
+                prompt:
+                  item.statement ||
+                  item.sentence ||
+                  item.prompt ||
+                  item.text,
+                userAnswer,
+                correctAnswer: item.answer,
+                correct:
+                  userAnswer?.toString() ===
+                  item.answer?.toString()
+              })
+            })
+
+            return
+          }
+
+          if (question.type === 'sentenceEndings') {
+            ;(question.items || []).forEach(item => {
+              const userAnswer =
+                readingAnswers[reading.id]?.[question.id]?.[
+                  item.id
+                ]
+
+              pushItem({
+                prompt:
+                  item.sentence ||
+                  item.prompt ||
+                  item.text,
+                userAnswer,
+                correctAnswer: item.answer,
+                options: question.endings || [],
+                correct:
+                  userAnswer?.toString() ===
+                  item.answer?.toString()
+              })
+            })
+
+            return
+          }
+
+          if (question.type === 'summaryOptions') {
+            ;(question.items || []).forEach(item => {
+              const userAnswer =
+                readingAnswers[reading.id]?.[question.id]?.[
+                  item.id
+                ]
+
+              pushItem({
+                prompt:
+                  [
+                    item.beforeText,
+                    '_____',
+                    item.afterText
+                  ]
+                    .filter(Boolean)
+                    .join(' ') ||
+                  item.prompt ||
+                  item.text,
+                userAnswer,
+                correctAnswer: item.answer,
+                options: question.options || [],
+                correct:
+                  userAnswer?.toString() ===
+                  item.answer?.toString()
+              })
+            })
+
+            return
+          }
+
+          if (question.type === 'noteCompletion') {
+            ;(question.paragraphs || []).forEach(paragraph => {
+              ;(paragraph.parts || []).forEach(
+                (part, partIndex) => {
+                  if (part.type !== 'blank') return
+
+                  const key = noteAnswerKey(
+                    question.id,
+                    paragraph.id,
+                    part.id
+                  )
+                  const userAnswer =
+                    readingAnswers[reading.id]?.[key]
+                  const options =
+                    question.mode === 'choose'
+                      ? question.options || []
+                      : []
+
+                  pushItem({
+                    prompt:
+                      [
+                        paragraph.heading ||
+                          paragraph.title,
+                        getNearbyCompletionText(
+                          paragraph.parts,
+                          partIndex
+                        )
+                      ]
+                        .filter(Boolean)
+                        .join(' — ') ||
+                      question.instruction,
+                    userAnswer,
+                    correctAnswer: part.answer,
+                    options,
+                    correct: isReadingNotePartCorrect(
+                      reading.id,
+                      question,
+                      paragraph,
+                      part
+                    )
+                  })
+                }
+              )
+            })
+
+            return
+          }
+
+          if (
+            question.type === 'table' ||
+            question.type === 'summary' ||
+            question.type === 'note'
+          ) {
+            ;(question.rows || []).forEach(row => {
+              const rowText = (row.cells || [])
+                .filter(cell => cell.type === 'text')
+                .map(cell => cell.text)
+                .filter(Boolean)
+                .join(' · ')
+
+              ;(row.cells || []).forEach(
+                (cell, cellIndex) => {
+                  if (cell.type !== 'blank') return
+
+                  const key = tableAnswerKey(
+                    question.id,
+                    row.id,
+                    cellIndex
+                  )
+                  const userAnswer =
+                    readingAnswers[reading.id]?.[key]
+
+                  pushItem({
+                    prompt:
+                      [
+                        rowText,
+                        cell.beforeText,
+                        '_____',
+                        cell.afterText
+                      ]
+                        .filter(Boolean)
+                        .join(' ') ||
+                      question.instruction,
+                    userAnswer,
+                    correctAnswer: cell.answer,
+                    correct: isBlankCorrect(
+                      userAnswer,
+                      cell.answer,
+                      cell.acceptedAnswers,
+                      cell.maxWords
+                    )
+                  })
+                }
+              )
+            })
+
+            return
+          }
+
+          if (
+            question.type === 'mcq' &&
+            question.mode === 'multi'
+          ) {
+            const score = getReadingMultiAnswerScore(
+              reading.id,
+              question
+            )
+
+            pushItem({
+              prompt: question.question,
+              userAnswer:
+                readingAnswers[reading.id]?.[question.id] ||
+                [],
+              correctAnswer: question.answers || [],
+              options: question.options || [],
+              correct: score.correct === score.total,
+              status:
+                score.correct > 0 &&
+                score.correct < score.total
+                  ? `Partly correct (${score.correct}/${score.total})`
+                  : null
+            })
+
+            return
+          }
+
+          pushItem({
+            prompt: question.question,
+            userAnswer:
+              readingAnswers[reading.id]?.[question.id],
+            correctAnswer: question.answer,
+            options:
+              question.type === 'mcq'
+                ? question.options || []
+                : [],
+            correct: isReadingNormalCorrect(
+              reading.id,
+              question
+            )
+          })
+        }
+      )
+    })
+
+    return items
+  }
+
+  const renderIncorrectAnswerCard = item => (
+    <div
+      key={item.id}
+      className="border border-red-100 bg-red-50 rounded-2xl p-5"
+    >
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div>
+          <p className="text-xs font-semibold text-red-500 uppercase tracking-wide">
+            {item.section} · Q{item.number}
+          </p>
+
+          <p className="text-sm font-medium text-gray-900 mt-2 whitespace-pre-wrap">
+            {item.prompt || 'Question text is not available.'}
+          </p>
+        </div>
+
+        <span className="text-xs font-semibold text-red-600 bg-white px-3 py-1 rounded-full border border-red-100 flex-shrink-0">
+          {item.status || 'Wrong'}
+        </span>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="bg-white border border-red-100 rounded-xl p-4">
+          <p className="text-xs text-gray-400 mb-1">
+            Your answer
+          </p>
+          <p className="text-sm font-medium text-red-700 whitespace-pre-wrap">
+            {item.userAnswer}
+          </p>
+        </div>
+
+        <div className="bg-white border border-green-100 rounded-xl p-4">
+          <p className="text-xs text-gray-400 mb-1">
+            Correct answer
+          </p>
+          <p className="text-sm font-medium text-green-700 whitespace-pre-wrap">
+            {item.correctAnswer}
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+
   if (loading) {
     return (
       <div className="min-h-screen bg-[#faf9f6] flex items-center justify-center">
@@ -4686,26 +5309,46 @@ export default function DoMockTest() {
   }
 
   if (finalResult) {
+    const listeningReviewItems = buildListeningReviewItems()
+    const readingReviewItems = buildReadingReviewItems()
+    const listeningMistakes = listeningReviewItems.filter(
+      item => !item.correct
+    )
+    const readingMistakes = readingReviewItems.filter(
+      item => !item.correct
+    )
+
+    const writingReview =
+      finalResult?.writing?.review ||
+      completedSubmission?.writingReview ||
+      completedSubmission?.result?.writing?.review ||
+      null
+
+    const writingStatus =
+      finalResult?.writing?.status ||
+      completedSubmission?.writingReview?.status ||
+      'pending_review'
+
     return (
       <div className="min-h-screen bg-[#faf9f6]">
-        <nav className="flex justify-between items-center px-8 py-4 bg-white border-b border-gray-100">
-          <img src="/1.png" alt="Maxima" className="h-14 object-contain" />
+        <nav className="flex justify-between items-center px-4 sm:px-8 py-4 bg-white border-b border-gray-100 sticky top-0 z-20">
+          <img src="/1.png" alt="Maxima" className="h-12 sm:h-14 object-contain" />
 
           <button
             onClick={() => navigate('/student')}
-            className="text-sm text-gray-400 hover:text-gray-600"
+            className="text-sm text-gray-500 hover:text-gray-700"
           >
             ← Back to Dashboard
           </button>
         </nav>
 
-        <div className="max-w-4xl mx-auto px-6 py-10">
-          <div className="bg-white border border-gray-100 rounded-2xl p-8 text-center mb-6">
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 py-8 sm:py-10">
+          <div className="bg-white border border-gray-100 rounded-2xl p-6 sm:p-8 text-center mb-6">
             <p className="text-sm text-gray-400 mb-2">
               Mock Test Submitted
             </p>
 
-            <h1 className="text-3xl font-bold text-gray-900 mb-4">
+            <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 mb-4">
               {mock?.title}
             </h1>
 
@@ -4718,7 +5361,7 @@ export default function DoMockTest() {
             </p>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
             <div className="bg-white border border-gray-100 rounded-2xl p-5">
               <p className="text-xs text-gray-400 mb-1">Listening</p>
               <p className="text-3xl font-bold text-purple-600">
@@ -4741,16 +5384,148 @@ export default function DoMockTest() {
 
             <div className="bg-white border border-gray-100 rounded-2xl p-5">
               <p className="text-xs text-gray-400 mb-1">Writing</p>
-              <p className="text-xl font-bold text-amber-600">Pending</p>
+              <p className={`text-xl font-bold ${
+                writingStatus === 'reviewed'
+                  ? 'text-green-600'
+                  : 'text-amber-600'
+              }`}>
+                {writingStatus === 'reviewed'
+                  ? writingReview?.overall || 'Reviewed'
+                  : 'Pending'}
+              </p>
               <p className="text-xs text-gray-400 mt-1">
-                Teacher review required
+                {writingStatus === 'reviewed'
+                  ? 'Teacher feedback available'
+                  : 'Teacher review required'}
               </p>
             </div>
+          </div>
+
+          <div className="bg-blue-50 border border-blue-100 rounded-2xl p-5 mb-6">
+            <p className="text-sm text-blue-700 leading-6">
+              Your incorrect answers are listed below. Correct answers are shown only after the mock has been submitted.
+            </p>
+          </div>
+
+          <div className="space-y-5">
+            <details open className="bg-white border border-gray-100 rounded-2xl overflow-hidden">
+              <summary className="cursor-pointer px-6 py-5 font-semibold text-gray-900 flex items-center justify-between gap-3">
+                <span>Listening Mistakes</span>
+                <span className="text-xs bg-red-50 text-red-600 px-3 py-1 rounded-full">
+                  {listeningMistakes.length} wrong
+                </span>
+              </summary>
+
+              <div className="border-t border-gray-100 p-5 space-y-4">
+                {listeningMistakes.length > 0 ? (
+                  listeningMistakes.map(renderIncorrectAnswerCard)
+                ) : (
+                  <div className="bg-green-50 border border-green-100 rounded-xl p-5 text-sm text-green-700">
+                    Excellent — all Listening answers were correct.
+                  </div>
+                )}
+              </div>
+            </details>
+
+            <details open className="bg-white border border-gray-100 rounded-2xl overflow-hidden">
+              <summary className="cursor-pointer px-6 py-5 font-semibold text-gray-900 flex items-center justify-between gap-3">
+                <span>Reading Mistakes</span>
+                <span className="text-xs bg-red-50 text-red-600 px-3 py-1 rounded-full">
+                  {readingMistakes.length} wrong
+                </span>
+              </summary>
+
+              <div className="border-t border-gray-100 p-5 space-y-4">
+                {readingMistakes.length > 0 ? (
+                  readingMistakes.map(renderIncorrectAnswerCard)
+                ) : (
+                  <div className="bg-green-50 border border-green-100 rounded-xl p-5 text-sm text-green-700">
+                    Excellent — all Reading answers were correct.
+                  </div>
+                )}
+              </div>
+            </details>
+
+            <details className="bg-white border border-gray-100 rounded-2xl overflow-hidden">
+              <summary className="cursor-pointer px-6 py-5 font-semibold text-gray-900">
+                Writing Submission & Feedback
+              </summary>
+
+              <div className="border-t border-gray-100 p-5 space-y-5">
+                <div>
+                  <div className="flex items-center justify-between gap-3 mb-2">
+                    <h3 className="font-semibold text-gray-900">
+                      Writing Task 1
+                    </h3>
+                    <span className="text-xs text-gray-400">
+                      {countWords(writingAnswers.task1 || '')} words
+                    </span>
+                  </div>
+
+                  <div className="bg-gray-50 border border-gray-100 rounded-xl p-4 text-sm text-gray-700 whitespace-pre-wrap min-h-[90px]">
+                    {writingAnswers.task1 || 'No Task 1 answer submitted.'}
+                  </div>
+
+                  {writingReview?.task1Feedback && (
+                    <div className="bg-purple-50 border border-purple-100 rounded-xl p-4 mt-3">
+                      <p className="text-xs font-semibold text-purple-600 mb-1">
+                        Teacher feedback
+                      </p>
+                      <p className="text-sm text-purple-800 whitespace-pre-wrap">
+                        {writingReview.task1Feedback}
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between gap-3 mb-2">
+                    <h3 className="font-semibold text-gray-900">
+                      Writing Task 2
+                    </h3>
+                    <span className="text-xs text-gray-400">
+                      {countWords(writingAnswers.task2 || '')} words
+                    </span>
+                  </div>
+
+                  <div className="bg-gray-50 border border-gray-100 rounded-xl p-4 text-sm text-gray-700 whitespace-pre-wrap min-h-[90px]">
+                    {writingAnswers.task2 || 'No Task 2 answer submitted.'}
+                  </div>
+
+                  {writingReview?.task2Feedback && (
+                    <div className="bg-purple-50 border border-purple-100 rounded-xl p-4 mt-3">
+                      <p className="text-xs font-semibold text-purple-600 mb-1">
+                        Teacher feedback
+                      </p>
+                      <p className="text-sm text-purple-800 whitespace-pre-wrap">
+                        {writingReview.task2Feedback}
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {writingReview?.generalFeedback ? (
+                  <div className="bg-blue-50 border border-blue-100 rounded-xl p-4">
+                    <p className="text-xs font-semibold text-blue-600 mb-1">
+                      General feedback
+                    </p>
+                    <p className="text-sm text-blue-800 whitespace-pre-wrap">
+                      {writingReview.generalFeedback}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="bg-amber-50 border border-amber-100 rounded-xl p-4 text-sm text-amber-700">
+                    Writing feedback will appear here after your teacher completes the review.
+                  </div>
+                )}
+              </div>
+            </details>
           </div>
         </div>
       </div>
     )
   }
+
 
   return (
     <div className="min-h-screen bg-[#faf9f6]">

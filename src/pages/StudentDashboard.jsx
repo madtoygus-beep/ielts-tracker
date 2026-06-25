@@ -1216,9 +1216,12 @@
                       </p>
                     </div>
 
-                    <span className="text-xs bg-green-50 text-green-600 px-3 py-1.5 rounded-full">
-                      Done
-                    </span>
+                    <button
+                      onClick={() => navigate(`/do-reading/${r.id}`)}
+                      className="text-xs bg-purple-600 text-white px-3 py-2 rounded-xl hover:bg-purple-700"
+                    >
+                      Review Answers
+                    </button>
                   </div>
                 )
               })}
@@ -1363,9 +1366,12 @@
                       </p>
                     </div>
 
-                    <span className="text-xs bg-green-50 text-green-600 px-3 py-1.5 rounded-full">
-                      Done
-                    </span>
+                    <button
+                      onClick={() => navigate(`/do-listening/${l.id}`)}
+                      className="text-xs bg-purple-600 text-white px-3 py-2 rounded-xl hover:bg-purple-700"
+                    >
+                      Review Answers
+                    </button>
                   </div>
                 )
               })}
@@ -1784,9 +1790,12 @@
                       </p>
                     </div>
 
-                    <span className="text-xs bg-green-50 text-green-600 px-3 py-1.5 rounded-full">
-                      Done
-                    </span>
+                    <button
+                      onClick={() => navigate(`/do-vocabulary/${item.id}`)}
+                      className="text-xs bg-purple-600 text-white px-3 py-2 rounded-xl hover:bg-purple-700"
+                    >
+                      Review Answers
+                    </button>
                   </div>
                 )
               })}
@@ -1994,9 +2003,12 @@
                       </div>
                     </div>
 
-                    <span className="text-xs bg-green-50 text-green-600 px-3 py-1.5 rounded-full">
-                      Done
-                    </span>
+                    <button
+                      onClick={() => navigate(`/do-mock/${mock.id}`)}
+                      className="text-xs bg-purple-600 text-white px-3 py-2 rounded-xl hover:bg-purple-700"
+                    >
+                      Review Answers
+                    </button>
                   </div>
                 )
               })}
@@ -2478,19 +2490,17 @@
                     </div>
 
                     <div className="flex items-center gap-2">
-                      {reviewed && (
-                        <button
-                          onClick={() =>
-                            setSelectedReview({
-                              writing: w,
-                              submission
-                            })
-                          }
-                          className="text-xs bg-purple-600 text-white px-3 py-2 rounded-xl hover:bg-purple-700"
-                        >
-                          Review
-                        </button>
-                      )}
+                      <button
+                        onClick={() =>
+                          setSelectedReview({
+                            writing: w,
+                            submission
+                          })
+                        }
+                        className="text-xs bg-purple-600 text-white px-3 py-2 rounded-xl hover:bg-purple-700"
+                      >
+                        {reviewed ? 'Review Feedback' : 'View Submission'}
+                      </button>
 
                       <span
                         className={`text-xs px-3 py-1.5 rounded-full ${
@@ -2523,7 +2533,9 @@
                   </p>
 
                   <p className="text-sm text-purple-600 font-semibold mt-1">
-                    Overall Band {selectedReview.submission.review?.overall}
+                    {selectedReview.submission.reviewed
+                      ? `Overall Band ${selectedReview.submission.review?.overall || '-'}`
+                      : 'Waiting for teacher review'}
                   </p>
                 </div>
 
