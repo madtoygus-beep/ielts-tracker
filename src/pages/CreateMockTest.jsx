@@ -15,6 +15,68 @@ import { useNavigate, useParams } from 'react-router-dom'
 
 const DEFAULT_SCHOOL_ID = 'maxima'
 
+const FULL_MOCK_TIMES = {
+  listening: 35,
+  reading: 60,
+  writing: 60
+}
+
+const MINI_MOCK_TIMES = {
+  listening: 15,
+  reading: 30,
+  writing: 30
+}
+
+function normalizeTimeLimit(value, fallback) {
+  const number = Number(value)
+
+  if (!Number.isFinite(number)) return fallback
+
+  return Math.max(5, Math.min(180, Math.round(number)))
+}
+
+function getStoredMockTimes(data, mockType) {
+  const defaults =
+    mockType === 'mini_mock'
+      ? MINI_MOCK_TIMES
+      : FULL_MOCK_TIMES
+
+  const stored = data?.sectionTimeLimits || {}
+
+  return {
+    listening: normalizeTimeLimit(
+      stored.listening ?? data?.listeningTimeLimit,
+      defaults.listening
+    ),
+    reading: normalizeTimeLimit(
+      stored.reading ?? data?.readingTimeLimit,
+      defaults.reading
+    ),
+    writing: normalizeTimeLimit(
+      stored.writing ?? data?.writingTimeLimit,
+      defaults.writing
+    )
+  }
+}
+
+function getWritingMode(item) {
+  return (
+    item?.contentType ||
+    item?.writingMode ||
+    item?.writingType ||
+    'full_writing'
+  )
+}
+
+function getWritingModeLabel(item) {
+  const mode = getWritingMode(item)
+
+  if (mode === 'task1_only') return 'Task 1 Only'
+  if (mode === 'task2_only') return 'Task 2 Only'
+
+  return 'Full Writing'
+}
+
 function getProfileSchoolId(profile) {
   return profile?.schoolId || DEFAULT_SCHOOL_ID
 }
@@ -170,6 +232,9 @@ export default function CreateMockTest() {
   const [visibility, setVisibility] = useState('private')
   const [contentType, setContentType] = useState('full_mock')
   const [dueDate, setDueDate] = useState('')
+  const [sectionTimeLimits, setSectionTimeLimits] = useState({
+    ...FULL_MOCK_TIMES
+  })
 
   const [readings, setReadings] = useState([])
   const [listenings, setListenings] = useState([])
@@ -272,11 +337,19 @@ export default function CreateMockTest() {
           return
         }
 
+        const existingMockType =
+          data.contentType ||
+          data.mockType ||
+          'full_mock'
+
         setExistingMock(data)
         setTitle(data.title || '')
         setVisibility(data.visibility || data.libraryVisibility || 'private')
-        setContentType(data.contentType || data.mockType || 'full_mock')
+        setContentType(existingMockType)
         setDueDate(data.dueDate || '')
+        setSectionTimeLimits(
+          getStoredMockTimes(data, existingMockType)
+        )
 
         const loadedListeningIds = Array.isArray(data.listeningIds)
           ? data.listeningIds.filter(Boolean)
@@ -291,10 +364,14 @@ export default function CreateMockTest() {
             : []
 
         setListeningIds(
-          [...loadedListeningIds, '', '', '', ''].slice(0, 4)
+          existingMockType === 'mini_mock'
+            ? [loadedListeningIds[0] || '', '', '', '']
+            : [...loadedListeningIds, '', '', '', ''].slice(0, 4)
         )
         setReadingIds(
-          [...loadedReadingIds, '', '', ''].slice(0, 3)
+          existingMockType === 'mini_mock'
+            ? [loadedReadingIds[0] || '', '', '']
+            : [...loadedReadingIds, '', '', ''].slice(0, 3)
         )
         setWritingId(data.writingId || '')
 
@@ -474,17 +551,40 @@ export default function CreateMockTest() {
   const selectedListeningIds = listeningIds.filter(Boolean)
   const selectedReadingIds = readingIds.filter(Boolean)
 
+  const isMiniMock = contentType === 'mini_mock'
+  const mockTypeLabel = isMiniMock ? 'Mini Mock' : 'Full Mock'
+  const listeningSlotCount = isMiniMock ? 1 : 4
+  const readingSlotCount = isMiniMock ? 1 : 3
+  const requiredReadingCount = isMiniMock ? 1 : 3
+
+  const selectedWriting = writings.find(item => item.id === writingId)
+  const selectedWritingMode = getWritingMode(selectedWriting)
+  const selectedWritingLabel = getWritingModeLabel(selectedWriting)
+
   const hasDuplicateListenings =
     selectedListeningIds.length !== new Set(selectedListeningIds).size
 
   const hasDuplicateReadings =
     selectedReadingIds.length !== new Set(selectedReadingIds).size
 
+  const validListeningSelection =
+    isMiniMock
+      ? selectedListeningIds.length === 1
+      : selectedListeningIds.length >= 1
+
+  const validReadingSelection =
+    selectedReadingIds.length === requiredReadingCount
+
+  const totalTimeMinutes =
+    Number(sectionTimeLimits.listening || 0) +
+    Number(sectionTimeLimits.reading || 0) +
+    Number(sectionTimeLimits.writing || 0)
+
   const canCreate =
     title.trim() &&
-    selectedListeningIds.length >= 1 &&
+    validListeningSelection &&
     !hasDuplicateListenings &&
-    selectedReadingIds.length === 3 &&
+    validReadingSelection &&
     !hasDuplicateReadings &&
     writingId &&
     (isEditMode || assignTo.length > 0) &&
@@ -505,6 +605,26 @@ export default function CreateMockTest() {
       copy[index] = value
       return copy
     })
+  }
+
+  const handleMockTypeChange = value => {
+    setContentType(value)
+
+    if (value === 'mini_mock') {
+      setListeningIds(prev => [prev[0] || '', '', '', ''])
+      setReadingIds(prev => [prev[0] || '', '', ''])
+      setSectionTimeLimits({ ...MINI_MOCK_TIMES })
+      return
+    }
+
+    setSectionTimeLimits({ ...FULL_MOCK_TIMES })
+  }
+
+  const updateSectionTimeLimit = (section, value) => {
+    setSectionTimeLimits(prev => ({
+      ...prev,
+      [section]: value
+    }))
   }
 
   const toggleStudent = studentId => {
@@ -572,34 +692,63 @@ export default function CreateMockTest() {
       return
     }
 
-    if (contentType !== 'full_mock') {
-      alert('Only Full Mock creation is enabled in this version.')
+    if (isMiniMock && cleanListeningIds.length !== 1) {
+      alert('Mini Mock needs exactly one Listening test.')
       return
     }
 
-    if (cleanListeningIds.length === 0) {
-      alert('Please select at least one listening part/test.')
+    if (!isMiniMock && cleanListeningIds.length === 0) {
+      alert('Please select at least one Listening part/test.')
       return
     }
 
     if (Array.from(new Set(cleanListeningIds)).length !== cleanListeningIds.length) {
-      alert('Please select different listening parts/tests or leave unused parts empty.')
+      alert('Please select different Listening tests or leave unused parts empty.')
       return
     }
 
-    if (cleanReadingIds.length !== 3) {
-      alert('Please select Reading Passage 1, 2 and 3.')
+    if (cleanReadingIds.length !== requiredReadingCount) {
+      alert(
+        isMiniMock
+          ? 'Mini Mock needs exactly one Reading test.'
+          : 'Please select Reading Passage 1, 2 and 3.'
+      )
       return
     }
 
-    if (Array.from(new Set(cleanReadingIds)).length !== 3) {
-      alert('Please select three different reading tests.')
+    if (Array.from(new Set(cleanReadingIds)).length !== cleanReadingIds.length) {
+      alert(
+        isMiniMock
+          ? 'Please select one Reading test.'
+          : 'Please select three different Reading tests.'
+      )
       return
     }
 
     if (!writingId) {
-      alert('Please select a writing test.')
+      alert('Please select a Writing test.')
       return
+    }
+
+    const cleanSectionTimeLimits = {
+      listening: normalizeTimeLimit(
+        sectionTimeLimits.listening,
+        isMiniMock
+          ? MINI_MOCK_TIMES.listening
+          : FULL_MOCK_TIMES.listening
+      ),
+      reading: normalizeTimeLimit(
+        sectionTimeLimits.reading,
+        isMiniMock
+          ? MINI_MOCK_TIMES.reading
+          : FULL_MOCK_TIMES.reading
+      ),
+      writing: normalizeTimeLimit(
+        sectionTimeLimits.writing,
+        isMiniMock
+          ? MINI_MOCK_TIMES.writing
+          : FULL_MOCK_TIMES.writing
+      )
     }
 
     if (!isEditMode && assignTo.length === 0) {
@@ -628,6 +777,12 @@ export default function CreateMockTest() {
       listeningIds: cleanListeningIds,
       readingIds: cleanReadingIds,
       writingId,
+      writingMode: selectedWritingMode,
+      sectionTimeLimits: cleanSectionTimeLimits,
+      totalTimeMinutes:
+        cleanSectionTimeLimits.listening +
+        cleanSectionTimeLimits.reading +
+        cleanSectionTimeLimits.writing,
       assignTo,
       assignedStudentIds: selectedStudents.map(student => student.id),
       assignedEmails: selectedStudents
@@ -704,11 +859,15 @@ export default function CreateMockTest() {
 
       <div className="max-w-6xl mx-auto px-6 py-10">
         <h1 className="text-3xl font-bold text-gray-900 mb-2">
-          {isEditMode ? 'Edit Full Mock Test' : 'Create Full Mock Test'}
+          {isEditMode
+            ? `Edit ${mockTypeLabel}`
+            : `Create ${mockTypeLabel}`}
         </h1>
 
         <p className="text-gray-500 mb-8">
-          IELTS format: selected Listening parts → Reading Passage 1, 2, 3 → Writing. Students complete it inside one flow.
+          {isMiniMock
+            ? 'Mini Mock format: one Listening → one Reading → one Writing resource inside a single controlled flow.'
+            : 'Full Mock format: selected Listening part(s) → Reading Passage 1, 2, 3 → Writing inside a single controlled flow.'}
         </p>
 
         {saved && (
@@ -717,9 +876,13 @@ export default function CreateMockTest() {
           </div>
         )}
 
-        {(listenings.length === 0 || readings.length < 3 || writings.length === 0) && (
+        {(listenings.length === 0 ||
+          readings.length < requiredReadingCount ||
+          writings.length === 0) && (
           <div className="bg-amber-50 border border-amber-100 text-amber-700 rounded-2xl p-5 mb-6 text-sm">
-            You need at least 1 listening test, 3 reading tests and 1 writing test before creating a full mock.
+            {isMiniMock
+              ? 'You need at least 1 Listening, 1 Reading and 1 Writing resource before creating a Mini Mock.'
+              : 'You need at least 1 Listening, 3 Reading and 1 Writing resource before creating a Full Mock.'}
           </div>
         )}
 
@@ -738,7 +901,7 @@ export default function CreateMockTest() {
                 <input
                   value={title}
                   onChange={e => setTitle(e.target.value)}
-                  placeholder="e.g. Full IELTS Mock Test 01"
+                  placeholder={isMiniMock ? 'e.g. Weekly Mini Mock 01' : 'e.g. Full IELTS Mock Test 01'}
                   className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400"
                 />
               </div>
@@ -757,14 +920,15 @@ export default function CreateMockTest() {
                   <label className="text-xs text-gray-400 mb-1 block">Mock type</label>
                   <select
                     value={contentType}
-                    disabled
-                    className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm bg-gray-50 text-gray-600"
+                    onChange={e => handleMockTypeChange(e.target.value)}
+                    className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm bg-white text-gray-700 outline-none focus:border-purple-400"
                   >
                     <option value="full_mock">Full Mock</option>
+                    <option value="mini_mock">Mini Mock</option>
                   </select>
 
                   <p className="text-[11px] text-gray-400 mt-1">
-                    Section-only mock types will be added after the full mock flow is finalized.
+                    Full Mock uses three Reading passages. Mini Mock uses one Listening, one Reading and one Writing resource.
                   </p>
                 </div>
               </div>
@@ -780,6 +944,52 @@ export default function CreateMockTest() {
                   onChange={e => setDueDate(e.target.value)}
                   className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400"
                 />
+              </div>
+
+              <div className="mt-5 bg-gray-50 border border-gray-100 rounded-2xl p-4">
+                <div className="flex items-start justify-between gap-4 mb-3">
+                  <div>
+                    <p className="text-sm font-semibold text-gray-800">
+                      Section time limits
+                    </p>
+
+                    <p className="text-xs text-gray-400 mt-1">
+                      {isMiniMock
+                        ? 'Set a custom time for each Mini Mock section.'
+                        : 'Full Mock uses the standard section times.'}
+                    </p>
+                  </div>
+
+                  <span className="text-xs bg-white text-purple-600 px-3 py-1 rounded-full">
+                    {totalTimeMinutes} min total
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {[
+                    ['listening', 'Listening'],
+                    ['reading', 'Reading'],
+                    ['writing', 'Writing']
+                  ].map(([key, label]) => (
+                    <div key={key}>
+                      <label className="text-xs text-gray-400 mb-1 block">
+                        {label} / minutes
+                      </label>
+
+                      <input
+                        type="number"
+                        min="5"
+                        max="180"
+                        value={sectionTimeLimits[key]}
+                        onChange={e =>
+                          updateSectionTimeLimit(key, e.target.value)
+                        }
+                        disabled={!isMiniMock}
+                        className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 bg-white disabled:bg-gray-100 disabled:text-gray-500"
+                      />
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
 
@@ -797,20 +1007,24 @@ export default function CreateMockTest() {
                       </h3>
 
                       <p className="text-xs text-gray-500 mt-1">
-                        Select at least one listening test. You may leave unused parts empty.
+                        {isMiniMock
+                          ? 'Select exactly one Listening resource.'
+                          : 'Select at least one Listening resource. You may leave unused slots empty.'}
                       </p>
                     </div>
 
                     <span className="text-xs bg-white text-purple-600 px-3 py-1 rounded-full">
-                      {selectedListeningIds.length}/4 selected
+                      {selectedListeningIds.length}/{listeningSlotCount} selected
                     </span>
                   </div>
 
                   <div className="grid grid-cols-1 gap-3">
-                    {[0, 1, 2, 3].map(index => (
+                    {Array.from({ length: listeningSlotCount }, (_, index) => index).map(index => (
                       <div key={index}>
                         <label className="text-xs text-gray-400 mb-1 block">
-                          Listening Part {index + 1} {index === 0 ? '/ required' : '/ optional'}
+                          {isMiniMock
+                            ? 'Listening / required'
+                            : `Listening Slot ${index + 1} ${index === 0 ? '/ required' : '/ optional'}`}
                         </label>
 
                         <select
@@ -823,9 +1037,9 @@ export default function CreateMockTest() {
                           }`}
                         >
                           <option value="">
-                            {index === 0
-                              ? 'Select listening part/test'
-                              : 'Optional: select listening part/test'}
+                            {isMiniMock || index === 0
+                              ? 'Select Listening resource'
+                              : 'Optional: select Listening resource'}
                           </option>
 
                           {listenings.map(item => (
@@ -845,10 +1059,10 @@ export default function CreateMockTest() {
                   )}
                 </div>
 
-                {[0, 1, 2].map(index => (
+                {Array.from({ length: readingSlotCount }, (_, index) => index).map(index => (
                   <div key={index}>
                     <label className="text-xs text-gray-400 mb-1 block">
-                      Reading Passage {index + 1}
+                      {isMiniMock ? 'Reading / required' : `Reading Passage ${index + 1}`}
                     </label>
 
                     <select
@@ -861,7 +1075,7 @@ export default function CreateMockTest() {
                       }`}
                     >
                       <option value="">
-                        Select reading passage {index + 1}
+                        {isMiniMock ? 'Select Reading resource' : `Select Reading passage ${index + 1}`}
                       </option>
 
                       {readings.map(item => (
@@ -875,7 +1089,7 @@ export default function CreateMockTest() {
 
                 {hasDuplicateReadings && (
                   <p className="text-xs text-red-500">
-                    Please choose three different reading passages.
+                    {isMiniMock ? 'Please select one Reading resource.' : 'Please choose three different Reading passages.'}
                   </p>
                 )}
 
@@ -892,13 +1106,13 @@ export default function CreateMockTest() {
                     <option value="">Select writing test</option>
                     {writings.map(item => (
                       <option key={item.id} value={item.id}>
-                        {item.title}
+                        {item.title} · {getWritingModeLabel(item)}
                       </option>
                     ))}
                   </select>
 
                   <p className="text-xs text-gray-400 mt-2">
-                    Writing will be saved inside the mock submission and reviewed later.
+                    Selected format: {writingId ? selectedWritingLabel : 'Choose a Writing resource'}. Writing is saved inside the mock submission and reviewed later.
                   </p>
                 </div>
               </div>
@@ -906,11 +1120,13 @@ export default function CreateMockTest() {
 
             <div className="bg-white border border-gray-100 rounded-2xl p-6">
               <h2 className="font-semibold text-gray-800 mb-4">
-                Single-page mock flow
+                {mockTypeLabel} flow
               </h2>
 
               <p className="text-sm text-gray-500 leading-6">
-                Students will not jump to separate homework pages. They will start the mock and move through each selected listening part, reading passage and writing section with Next Section buttons.
+                {isMiniMock
+                  ? `Students complete one Listening, one Reading and ${selectedWritingLabel} in order. The current total time is ${totalTimeMinutes} minutes.`
+                  : 'Students move through the selected Listening part(s), three Reading passages and Writing with controlled section transitions.'}
               </p>
             </div>
           </div>
@@ -921,7 +1137,7 @@ export default function CreateMockTest() {
             </h2>
 
             <p className="text-xs text-gray-400 mb-4">
-              Selected students will receive this full mock test.
+              Selected students will receive this {mockTypeLabel}.
             </p>
 
             {classes.length > 0 && (
@@ -1092,7 +1308,7 @@ export default function CreateMockTest() {
                   : 'Creating...'
                 : isEditMode
                   ? 'Save Mock Changes'
-                  : 'Create Full IELTS Mock Test'}
+                  : `Create ${mockTypeLabel}`}
             </button>
           </div>
         </div>

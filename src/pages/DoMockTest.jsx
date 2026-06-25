@@ -20,6 +20,65 @@ const LISTENING_DURATION = 35 * 60
 const READING_DURATION = 60 * 60
 const WRITING_DURATION = 60 * 60
 
+const MINI_MOCK_DEFAULT_MINUTES = {
+  listening: 15,
+  reading: 30,
+  writing: 30
+}
+
+function getMockType(mock) {
+  return mock?.mockType || mock?.contentType || 'full_mock'
+}
+
+function getMockTypeLabel(mock) {
+  return getMockType(mock) === 'mini_mock'
+    ? 'Mini Mock'
+    : 'Full Mock'
+}
+
+function getMockSectionMinutes(mock, section) {
+  const isMiniMock = getMockType(mock) === 'mini_mock'
+  const fullDefaults = {
+    listening: LISTENING_DURATION / 60,
+    reading: READING_DURATION / 60,
+    writing: WRITING_DURATION / 60
+  }
+  const defaults = isMiniMock
+    ? MINI_MOCK_DEFAULT_MINUTES
+    : fullDefaults
+
+  const stored = mock?.sectionTimeLimits || {}
+  const legacyKey = `${section}TimeLimit`
+  const value = Number(stored[section] ?? mock?.[legacyKey])
+
+  if (!Number.isFinite(value) || value <= 0) {
+    return defaults[section]
+  }
+
+  return Math.max(5, Math.min(180, Math.round(value)))
+}
+
+function getMockSectionSeconds(mock, section) {
+  return getMockSectionMinutes(mock, section) * 60
+}
+
+function getMockWritingMode(mock, writing) {
+  return (
+    mock?.writingMode ||
+    writing?.contentType ||
+    writing?.writingMode ||
+    writing?.writingType ||
+    'full_writing'
+  )
+}
+
+function getWritingModeLabel(mode) {
+  if (mode === 'task1_only') return 'Writing Task 1'
+  if (mode === 'task2_only') return 'Writing Task 2'
+
+  return 'Writing Task 1 + Task 2'
+}
+
 function normalize(value) {
   return value?.toString().trim().toLowerCase()
 }
@@ -848,6 +907,15 @@ export default function DoMockTest() {
         }
 
         setMock(mockData)
+        setListeningTimeLeft(
+          getMockSectionSeconds(mockData, 'listening')
+        )
+        setReadingTimeLeft(
+          getMockSectionSeconds(mockData, 'reading')
+        )
+        setWritingTimeLeft(
+          getMockSectionSeconds(mockData, 'writing')
+        )
 
         const existingQuery = query(
           collection(db, 'mockSubmissions'),
@@ -1011,29 +1079,29 @@ export default function DoMockTest() {
     const restoredListeningTime =
       restoredListeningStarted && !savedListeningLocked
         ? Math.max(
-            (saved.listeningTimeLeft ?? LISTENING_DURATION) -
+            (saved.listeningTimeLeft ?? getMockSectionSeconds(mock, 'listening')) -
               elapsedSinceSave,
             0
           )
-        : saved.listeningTimeLeft ?? LISTENING_DURATION
+        : saved.listeningTimeLeft ?? getMockSectionSeconds(mock, 'listening')
 
     const restoredReadingTime =
       restoredReadingStarted && !savedReadingLocked
         ? Math.max(
-            (saved.readingTimeLeft ?? READING_DURATION) -
+            (saved.readingTimeLeft ?? getMockSectionSeconds(mock, 'reading')) -
               elapsedSinceSave,
             0
           )
-        : saved.readingTimeLeft ?? READING_DURATION
+        : saved.readingTimeLeft ?? getMockSectionSeconds(mock, 'reading')
 
     const restoredWritingTime =
       restoredWritingStarted && !savedWritingLocked
         ? Math.max(
-            (saved.writingTimeLeft ?? WRITING_DURATION) -
+            (saved.writingTimeLeft ?? getMockSectionSeconds(mock, 'writing')) -
               elapsedSinceSave,
             0
           )
-        : saved.writingTimeLeft ?? WRITING_DURATION
+        : saved.writingTimeLeft ?? getMockSectionSeconds(mock, 'writing')
 
     setListeningTimeLeft(restoredListeningTime)
     setReadingTimeLeft(restoredReadingTime)
@@ -1057,7 +1125,7 @@ export default function DoMockTest() {
     tabSwitchCountRef.current = Number(saved.tabSwitchCount) || 0
 
     restoredRef.current = true
-  }, [storageKey, loading, alreadySubmitted, finalResult])
+  }, [storageKey, loading, alreadySubmitted, finalResult, mock])
 
   useEffect(() => {
     if (!storageKey || loading || alreadySubmitted || finalResult) return
@@ -1156,7 +1224,33 @@ export default function DoMockTest() {
     })
   }, [listenings])
 
+  const writingMode = useMemo(
+    () => getMockWritingMode(mock, writing),
+    [mock, writing]
+  )
+
+  const hasWritingTask1 = writingMode !== 'task2_only'
+  const hasWritingTask2 = writingMode !== 'task1_only'
+  const mockTypeLabel = getMockTypeLabel(mock)
+  const isMiniMock = getMockType(mock) === 'mini_mock'
+
   const sections = useMemo(() => {
+    const writingSections = []
+
+    if (hasWritingTask1) {
+      writingSections.push({
+        key: 'writing-task1',
+        label: 'Writing T1'
+      })
+    }
+
+    if (hasWritingTask2) {
+      writingSections.push({
+        key: 'writing-task2',
+        label: 'Writing T2'
+      })
+    }
+
     return [
       { key: 'intro', label: 'Start' },
       ...listeningParts.map((part, index) => ({
@@ -1173,11 +1267,15 @@ export default function DoMockTest() {
         readingIndex: index
       })),
       { key: 'prepare-writing', label: 'Prepare Writing' },
-      { key: 'writing-task1', label: 'Writing T1' },
-      { key: 'writing-task2', label: 'Writing T2' },
+      ...writingSections,
       { key: 'review', label: 'Review' }
     ]
-  }, [readings, listeningParts])
+  }, [
+    readings,
+    listeningParts,
+    hasWritingTask1,
+    hasWritingTask2
+  ])
 
   const activeSection = sections[sectionIndex] || sections[0]
 
@@ -2356,8 +2454,15 @@ export default function DoMockTest() {
       },
       writing: {
         status: 'pending_review',
-        task1WordCount: countWords(writingAnswers.task1),
-        task2WordCount: countWords(writingAnswers.task2)
+        writingMode,
+        task1Enabled: hasWritingTask1,
+        task2Enabled: hasWritingTask2,
+        task1WordCount: hasWritingTask1
+          ? countWords(writingAnswers.task1)
+          : 0,
+        task2WordCount: hasWritingTask2
+          ? countWords(writingAnswers.task2)
+          : 0
       },
       overallEstimate
     }
@@ -2548,6 +2653,16 @@ export default function DoMockTest() {
         teacherIds: submissionTeacherIds,
         mockTestId: mock.id,
         title: mock.title || 'Untitled Mock Test',
+        mockType: getMockType(mock),
+        contentType: getMockType(mock),
+        writingMode,
+        task1Enabled: hasWritingTask1,
+        task2Enabled: hasWritingTask2,
+        sectionTimeLimits: {
+          listening: getMockSectionMinutes(mock, 'listening'),
+          reading: getMockSectionMinutes(mock, 'reading'),
+          writing: getMockSectionMinutes(mock, 'writing')
+        },
         listeningId: listeningIds[0] || '',
         listeningIds,
         readingIds,
@@ -2636,7 +2751,10 @@ export default function DoMockTest() {
     writingTimeLeft,
     listeningLocked,
     readingLocked,
-    writingLocked
+    writingLocked,
+    writingMode,
+    hasWritingTask1,
+    hasWritingTask2
   ])
 
   useEffect(() => {
@@ -2810,7 +2928,11 @@ export default function DoMockTest() {
 
       if (task1Words < 150) {
         const confirmed = window.confirm(
-          `Task 1 currently has ${task1Words} words. The recommended minimum is 150 words. Continue to Task 2?`
+          `Task 1 currently has ${task1Words} words. The recommended minimum is 150 words. ${
+            hasWritingTask2
+              ? 'Continue to Task 2?'
+              : 'Continue to Review?'
+          }`
         )
 
         if (!confirmed) return
@@ -4404,7 +4526,9 @@ export default function DoMockTest() {
           </div>
 
           <p className="text-sm text-gray-500">
-            Task 1 and Task 2 share a 60-minute timer. You can move between them freely.
+            {hasWritingTask2
+              ? `Task 1 and Task 2 share a ${getMockSectionMinutes(mock, 'writing')}-minute timer.`
+              : `This Task 1 section has a ${getMockSectionMinutes(mock, 'writing')}-minute timer.`}
           </p>
         </div>
 
@@ -4489,7 +4613,9 @@ export default function DoMockTest() {
           </div>
 
           <p className="text-sm text-gray-500">
-            Task 2 carries more weight than Task 1 in the final writing band.
+            {hasWritingTask1
+              ? `Task 2 carries more weight than Task 1. Both tasks share a ${getMockSectionMinutes(mock, 'writing')}-minute timer.`
+              : `This Task 2 section has a ${getMockSectionMinutes(mock, 'writing')}-minute timer.`}
           </p>
         </div>
 
@@ -4548,8 +4674,8 @@ export default function DoMockTest() {
       : 'Now prepare for the Writing Part'
 
     const description = isReading
-      ? 'The Listening section is complete. Your Reading timer has not started yet. When you click Start Reading, the Listening section will be locked.'
-      : 'The Reading section is complete. Your Writing timer has not started yet. When you click Start Writing, the Reading section will be locked.'
+      ? `The Listening section is complete. Your ${getMockSectionMinutes(mock, 'reading')}-minute Reading timer has not started yet. When you click Start Reading, Listening will be locked.`
+      : `The Reading section is complete. Your ${getMockSectionMinutes(mock, 'writing')}-minute Writing timer has not started yet. When you click Start Writing, Reading will be locked.`
 
     const buttonLabel = isReading ? 'Start Reading →' : 'Start Writing →'
 
@@ -4673,34 +4799,42 @@ export default function DoMockTest() {
             Writing Word Count
           </h3>
 
-          <div className="grid grid-cols-2 gap-4">
-            <div className="bg-gray-50 rounded-xl p-4">
-              <p className="text-xs text-gray-500 mb-1">Task 1</p>
-              <p className="text-xl font-bold text-gray-800">
-                {t1Words} words
-              </p>
-              <p
-                className={`text-xs mt-1 ${
-                  t1Words >= 150 ? 'text-green-600' : 'text-amber-600'
-                }`}
-              >
-                {t1Words >= 150 ? '✓ Above minimum' : 'Below 150 words'}
-              </p>
-            </div>
+          <div className={`grid grid-cols-1 ${
+            hasWritingTask1 && hasWritingTask2
+              ? 'md:grid-cols-2'
+              : ''
+          } gap-4`}>
+            {hasWritingTask1 && (
+              <div className="bg-gray-50 rounded-xl p-4">
+                <p className="text-xs text-gray-500 mb-1">Task 1</p>
+                <p className="text-xl font-bold text-gray-800">
+                  {t1Words} words
+                </p>
+                <p
+                  className={`text-xs mt-1 ${
+                    t1Words >= 150 ? 'text-green-600' : 'text-amber-600'
+                  }`}
+                >
+                  {t1Words >= 150 ? '✓ Above minimum' : 'Below 150 words'}
+                </p>
+              </div>
+            )}
 
-            <div className="bg-gray-50 rounded-xl p-4">
-              <p className="text-xs text-gray-500 mb-1">Task 2</p>
-              <p className="text-xl font-bold text-gray-800">
-                {t2Words} words
-              </p>
-              <p
-                className={`text-xs mt-1 ${
-                  t2Words >= 250 ? 'text-green-600' : 'text-amber-600'
-                }`}
-              >
-                {t2Words >= 250 ? '✓ Above minimum' : 'Below 250 words'}
-              </p>
-            </div>
+            {hasWritingTask2 && (
+              <div className="bg-gray-50 rounded-xl p-4">
+                <p className="text-xs text-gray-500 mb-1">Task 2</p>
+                <p className="text-xl font-bold text-gray-800">
+                  {t2Words} words
+                </p>
+                <p
+                  className={`text-xs mt-1 ${
+                    t2Words >= 250 ? 'text-green-600' : 'text-amber-600'
+                  }`}
+                >
+                  {t2Words >= 250 ? '✓ Above minimum' : 'Below 250 words'}
+                </p>
+              </div>
+            )}
           </div>
         </div>
 
@@ -4709,7 +4843,7 @@ export default function DoMockTest() {
           disabled={submitting}
           className="w-full bg-purple-600 text-white rounded-xl py-4 text-sm font-medium hover:bg-purple-700 disabled:opacity-60"
         >
-          {submitting ? 'Submitting...' : 'Submit Full Mock Test'}
+          {submitting ? 'Submitting...' : `Submit ${mockTypeLabel}`}
         </button>
       </div>
     )
@@ -5348,6 +5482,20 @@ export default function DoMockTest() {
               Mock Test Submitted
             </p>
 
+            <div className="flex items-center justify-center gap-2 mb-3">
+              <span className={`text-xs font-semibold px-3 py-1.5 rounded-full ${
+                isMiniMock
+                  ? 'bg-blue-50 text-blue-700'
+                  : 'bg-purple-50 text-purple-700'
+              }`}>
+                {mockTypeLabel}
+              </span>
+
+              <span className="text-xs bg-gray-100 text-gray-600 px-3 py-1.5 rounded-full">
+                {getWritingModeLabel(writingMode)}
+              </span>
+            </div>
+
             <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 mb-4">
               {mock?.title}
             </h1>
@@ -5452,11 +5600,12 @@ export default function DoMockTest() {
               </summary>
 
               <div className="border-t border-gray-100 p-5 space-y-5">
-                <div>
-                  <div className="flex items-center justify-between gap-3 mb-2">
-                    <h3 className="font-semibold text-gray-900">
-                      Writing Task 1
-                    </h3>
+                {hasWritingTask1 && (
+                  <div>
+                    <div className="flex items-center justify-between gap-3 mb-2">
+                      <h3 className="font-semibold text-gray-900">
+                        Writing Task 1
+                      </h3>
                     <span className="text-xs text-gray-400">
                       {countWords(writingAnswers.task1 || '')} words
                     </span>
@@ -5475,14 +5624,16 @@ export default function DoMockTest() {
                         {writingReview.task1Feedback}
                       </p>
                     </div>
-                  )}
-                </div>
+                    )}
+                  </div>
+                )}
 
-                <div>
-                  <div className="flex items-center justify-between gap-3 mb-2">
-                    <h3 className="font-semibold text-gray-900">
-                      Writing Task 2
-                    </h3>
+                {hasWritingTask2 && (
+                  <div>
+                    <div className="flex items-center justify-between gap-3 mb-2">
+                      <h3 className="font-semibold text-gray-900">
+                        Writing Task 2
+                      </h3>
                     <span className="text-xs text-gray-400">
                       {countWords(writingAnswers.task2 || '')} words
                     </span>
@@ -5501,8 +5652,9 @@ export default function DoMockTest() {
                         {writingReview.task2Feedback}
                       </p>
                     </div>
-                  )}
-                </div>
+                    )}
+                  </div>
+                )}
 
                 {writingReview?.generalFeedback ? (
                   <div className="bg-blue-50 border border-blue-100 rounded-xl p-4">
@@ -5608,24 +5760,46 @@ export default function DoMockTest() {
               {mock?.title}
             </h1>
 
+            <div className="flex items-center justify-center gap-2 mb-4">
+              <span className={`text-xs font-semibold px-3 py-1.5 rounded-full ${
+                isMiniMock
+                  ? 'bg-blue-50 text-blue-700'
+                  : 'bg-purple-50 text-purple-700'
+              }`}>
+                {mockTypeLabel}
+              </span>
+
+              <span className="text-xs bg-gray-100 text-gray-600 px-3 py-1.5 rounded-full">
+                {getWritingModeLabel(writingMode)}
+              </span>
+            </div>
+
             <p className="text-gray-500 mb-6">
-              This mock test runs in order: selected Listening part(s) → Prepare for Reading → Reading section(s) → Prepare for Writing → Writing Task 1 → Writing Task 2 → Review.
+              {isMiniMock
+                ? `This Mini Mock runs in order: one Listening → one Reading → ${getWritingModeLabel(writingMode)} → Review.`
+                : `This Full Mock runs in order: selected Listening part(s) → three Reading passages → ${getWritingModeLabel(writingMode)} → Review.`}
             </p>
 
-            <div className="grid grid-cols-3 gap-3 mb-8 text-left">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-8 text-left">
               <div className="bg-purple-50 rounded-xl p-4">
                 <p className="text-xs text-gray-500 mb-1">Listening</p>
-                <p className="text-2xl font-bold text-purple-600">35 min</p>
+                <p className="text-2xl font-bold text-purple-600">
+                  {getMockSectionMinutes(mock, 'listening')} min
+                </p>
               </div>
 
               <div className="bg-blue-50 rounded-xl p-4">
                 <p className="text-xs text-gray-500 mb-1">Reading</p>
-                <p className="text-2xl font-bold text-blue-600">60 min</p>
+                <p className="text-2xl font-bold text-blue-600">
+                  {getMockSectionMinutes(mock, 'reading')} min
+                </p>
               </div>
 
               <div className="bg-amber-50 rounded-xl p-4">
                 <p className="text-xs text-gray-500 mb-1">Writing</p>
-                <p className="text-2xl font-bold text-amber-600">60 min</p>
+                <p className="text-2xl font-bold text-amber-600">
+                  {getMockSectionMinutes(mock, 'writing')} min
+                </p>
               </div>
             </div>
 
@@ -5637,7 +5811,7 @@ export default function DoMockTest() {
               onClick={nextSection}
               className="bg-purple-600 text-white rounded-xl px-8 py-4 text-sm font-medium hover:bg-purple-700"
             >
-              Start Mock Test
+              Start {mockTypeLabel}
             </button>
           </div>
         )}

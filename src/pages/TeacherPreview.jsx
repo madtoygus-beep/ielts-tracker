@@ -29,13 +29,61 @@ const TYPE_CONFIG = {
   },
   mock: {
     collection: 'mockTests',
-    label: 'Full Mock',
+    label: 'Mock',
     editPath: id => `/edit-mock/${id}`
   }
 }
 
 function toArray(value) {
   return Array.isArray(value) ? value : []
+}
+
+function getMockType(mock) {
+  return mock?.mockType || mock?.contentType || 'full_mock'
+}
+
+function getMockTypeLabel(mock) {
+  return getMockType(mock) === 'mini_mock'
+    ? 'Mini Mock'
+    : 'Full Mock'
+}
+
+function getMockSectionTimes(mock) {
+  const isMini = getMockType(mock) === 'mini_mock'
+  const defaults = isMini
+    ? { listening: 15, reading: 30, writing: 30 }
+    : { listening: 35, reading: 60, writing: 60 }
+  const stored = mock?.sectionTimeLimits || {}
+
+  return {
+    listening: Number(stored.listening) || defaults.listening,
+    reading: Number(stored.reading) || defaults.reading,
+    writing: Number(stored.writing) || defaults.writing
+  }
+}
+
+function getMockTotalTime(mock) {
+  const times = getMockSectionTimes(mock)
+
+  return times.listening + times.reading + times.writing
+}
+
+function getMockWritingMode(mock, writing) {
+  return (
+    mock?.writingMode ||
+    writing?.contentType ||
+    writing?.writingMode ||
+    'full_writing'
+  )
+}
+
+function getMockWritingLabel(mock, writing) {
+  const mode = getMockWritingMode(mock, writing)
+
+  if (mode === 'task1_only') return 'Writing Task 1'
+  if (mode === 'task2_only') return 'Writing Task 2'
+
+  return 'Full Writing'
 }
 
 function getText(value) {
@@ -1655,16 +1703,24 @@ export default function TeacherPreview() {
         ? [
             {
               key: 'writing',
-              label: 'Writing',
+              label: getMockWritingLabel(
+                content,
+                mockResources.writing
+              ),
               type: 'writing',
               item: mockResources.writing
             }
           ]
         : [])
     ]
-  }, [mockResources, type])
+  }, [mockResources, type, content])
 
   const activeMockItem = mockTabs.find(tab => tab.key === activeMockTab)
+
+  const previewLabel =
+    type === 'mock'
+      ? getMockTypeLabel(content)
+      : config?.label || 'Content'
 
   if (loading) {
     return (
@@ -1753,11 +1809,11 @@ export default function TeacherPreview() {
           <div className="flex items-start justify-between gap-4 flex-wrap">
             <div>
               <p className="text-xs uppercase tracking-wider text-purple-600 font-semibold mb-2">
-                {config.label} Preview
+                {previewLabel} Preview
               </p>
 
               <h1 className="text-2xl font-bold text-gray-900">
-                {content.title || `Untitled ${config.label}`}
+                {content.title || `Untitled ${previewLabel}`}
               </h1>
 
               {content.instructions && type !== 'listening' && (
@@ -1768,6 +1824,29 @@ export default function TeacherPreview() {
             </div>
 
             <div className="flex gap-2 flex-wrap">
+              {type === 'mock' && (
+                <>
+                  <span className={`text-xs px-3 py-1.5 rounded-full ${
+                    getMockType(content) === 'mini_mock'
+                      ? 'bg-blue-50 text-blue-700'
+                      : 'bg-purple-50 text-purple-700'
+                  }`}>
+                    {getMockTypeLabel(content)}
+                  </span>
+
+                  <span className="text-xs bg-amber-50 text-amber-700 px-3 py-1.5 rounded-full">
+                    {getMockWritingLabel(
+                      content,
+                      mockResources.writing
+                    )}
+                  </span>
+
+                  <span className="text-xs bg-gray-100 text-gray-600 px-3 py-1.5 rounded-full">
+                    {getMockTotalTime(content)} minutes
+                  </span>
+                </>
+              )}
+
               {content.archived === true && (
                 <span className="text-xs bg-amber-50 text-amber-700 px-3 py-1.5 rounded-full">
                   Archived content
@@ -1867,10 +1946,15 @@ export default function TeacherPreview() {
 
                 <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm">
                   <p className="text-xs text-gray-400 mb-1">
-                    Writing resource
+                    Writing format
                   </p>
-                  <p className="text-3xl font-bold text-amber-600">
-                    {mockResources.writing ? '1' : '0'}
+                  <p className="text-lg font-bold text-amber-600">
+                    {mockResources.writing
+                      ? getMockWritingLabel(
+                          content,
+                          mockResources.writing
+                        )
+                      : 'Missing'}
                   </p>
                 </div>
 
@@ -1880,8 +1964,26 @@ export default function TeacherPreview() {
                   </h2>
 
                   <p className="text-sm text-gray-600 leading-6">
-                    All mock sections are unlocked. Timers, auto-submit, listening replay restrictions, section locks, submissions and score records are disabled. Use the tabs above to inspect every linked resource.
+                    {getMockTypeLabel(content)} · {getMockTotalTime(content)} minutes total · {getMockWritingLabel(content, mockResources.writing)}. All sections are unlocked in Preview. Timers, auto-submit, listening replay restrictions, section locks, submissions and score records are disabled.
                   </p>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4">
+                    {Object.entries(getMockSectionTimes(content)).map(
+                      ([section, minutes]) => (
+                        <div
+                          key={section}
+                          className="bg-gray-50 rounded-xl p-4"
+                        >
+                          <p className="text-xs text-gray-400 capitalize">
+                            {section}
+                          </p>
+                          <p className="text-xl font-bold text-gray-800 mt-1">
+                            {minutes} min
+                          </p>
+                        </div>
+                      )
+                    )}
+                  </div>
                 </div>
               </div>
             )}

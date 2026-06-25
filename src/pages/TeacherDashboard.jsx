@@ -1056,7 +1056,10 @@ export default function TeacherDashboard() {
     profile?.role === 'admin' || isAssignedToTeacher(item, user?.uid)
 
   const getLibraryContentType = (item, fallback = 'full') =>
-    item?.contentType || item?.practiceType || fallback
+    item?.contentType ||
+    item?.mockType ||
+    item?.practiceType ||
+    fallback
 
   const getLibraryVisibilityLabel = item =>
     isSchoolLibraryItem(item) ? 'School Library' : 'My Library'
@@ -1086,6 +1089,7 @@ export default function TeacherDashboard() {
       topic_vocabulary: 'Topic Vocabulary',
       academic_vocabulary: 'Academic Vocabulary',
       full_mock: 'Full Mock',
+      mini_mock: 'Mini Mock',
       reading_mock: 'Reading Mock',
       listening_mock: 'Listening Mock',
       writing_mock: 'Writing Mock'
@@ -3608,10 +3612,10 @@ Continue permanent delete?`
 
 
   const getWritingMode = (writing, submission = {}) =>
-    submission?.contentType ||
     submission?.writingMode ||
-    writing?.contentType ||
+    submission?.contentType ||
     writing?.writingMode ||
+    writing?.contentType ||
     'full_writing'
 
   const isWritingTask1Enabled = (writing, submission = {}) => {
@@ -3726,11 +3730,17 @@ Continue permanent delete?`
     : true
 
   const currentWritingReviewTask1Enabled = selectedMockWritingReview
-    ? true
+    ? isWritingTask1Enabled(
+        selectedMockWritingReview.mock,
+        selectedMockWritingReview.submission
+      )
     : currentNormalWritingReviewTask1Enabled
 
   const currentWritingReviewTask2Enabled = selectedMockWritingReview
-    ? true
+    ? isWritingTask2Enabled(
+        selectedMockWritingReview.mock,
+        selectedMockWritingReview.submission
+      )
     : currentNormalWritingReviewTask2Enabled
 
   const suggestedTask1Band = currentWritingReviewTask1Enabled
@@ -3887,8 +3897,8 @@ Continue permanent delete?`
             ...(result.writing || {}),
             status: 'reviewed',
             band: writingReviewForm.overall,
-            task1Band: writingReviewForm.task1Band,
-            task2Band: writingReviewForm.task2Band,
+            task1Band: review.task1Band,
+            task2Band: review.task2Band,
             review
           },
           finalOverall,
@@ -3973,6 +3983,58 @@ Continue permanent delete?`
     return mockTest.assignTo?.length || 0
   }
 
+  const getMockType = mockTest =>
+    mockTest?.mockType ||
+    mockTest?.contentType ||
+    'full_mock'
+
+  const getMockSectionTimes = mockTest => {
+    const isMini = getMockType(mockTest) === 'mini_mock'
+    const defaults = isMini
+      ? { listening: 15, reading: 30, writing: 30 }
+      : { listening: 35, reading: 60, writing: 60 }
+    const stored = mockTest?.sectionTimeLimits || {}
+
+    return {
+      listening: Number(stored.listening) || defaults.listening,
+      reading: Number(stored.reading) || defaults.reading,
+      writing: Number(stored.writing) || defaults.writing
+    }
+  }
+
+  const getMockWritingLabel = mockTest => {
+    const mode = mockTest?.writingMode || 'full_writing'
+
+    if (mode === 'task1_only') return 'Writing Task 1'
+    if (mode === 'task2_only') return 'Writing Task 2'
+
+    return 'Full Writing'
+  }
+
+  const getMockFlowSummary = mockTest => {
+    const isMini = getMockType(mockTest) === 'mini_mock'
+    const listeningCount = Array.isArray(mockTest?.listeningIds)
+      ? mockTest.listeningIds.filter(Boolean).length
+      : mockTest?.listeningId
+        ? 1
+        : 0
+    const readingCount = Array.isArray(mockTest?.readingIds)
+      ? mockTest.readingIds.filter(Boolean).length
+      : mockTest?.readingId
+        ? 1
+        : 0
+
+    return isMini
+      ? `${listeningCount || 1} Listening · ${readingCount || 1} Reading · ${getMockWritingLabel(mockTest)}`
+      : `${listeningCount || 1} Listening resource(s) · ${readingCount || 3} Reading passages · ${getMockWritingLabel(mockTest)}`
+  }
+
+  const getMockTotalTime = mockTest => {
+    const times = getMockSectionTimes(mockTest)
+
+    return times.listening + times.reading + times.writing
+  }
+
   const renderMockTestCard = (mockTest, archived = false, index = null) => (
     <div
       key={mockTest.id}
@@ -4001,7 +4063,7 @@ Continue permanent delete?`
         </p>
 
         <p className="text-xs text-gray-400 mt-1">
-          Listening + Reading + Writing full mock flow
+          {getMockFlowSummary(mockTest)} · {getMockTotalTime(mockTest)} min
         </p>
 
         {archived && (
@@ -5589,7 +5651,7 @@ Continue permanent delete?`
                   </h2>
 
                   <p className="text-xs text-gray-400 mt-1">
-                    Manage full mock tests and monitor student submissions.
+                    Manage Full Mock and Mini Mock tests and monitor student submissions.
                   </p>
                 </div>
 
@@ -5610,6 +5672,7 @@ Continue permanent delete?`
                 >
                   <option value="all">All Mock Types</option>
                   <option value="full_mock">Full Mock</option>
+                  <option value="mini_mock">Mini Mock</option>
                   <option value="reading_mock">Reading Mock</option>
                   <option value="listening_mock">Listening Mock</option>
                   <option value="writing_mock">Writing Mock</option>

@@ -1835,6 +1835,53 @@
       )
     }
 
+    const getMockType = mock =>
+      mock?.mockType ||
+      mock?.contentType ||
+      'full_mock'
+
+    const getMockTypeLabel = mock =>
+      getMockType(mock) === 'mini_mock'
+        ? 'Mini Mock'
+        : 'Full Mock'
+
+    const getMockWritingLabel = mock => {
+      const mode = mock?.writingMode || 'full_writing'
+
+      if (mode === 'task1_only') return 'Writing Task 1'
+      if (mode === 'task2_only') return 'Writing Task 2'
+
+      return 'Full Writing'
+    }
+
+    const getMockSectionTimes = mock => {
+      const isMini = getMockType(mock) === 'mini_mock'
+      const defaults = isMini
+        ? { listening: 15, reading: 30, writing: 30 }
+        : { listening: 35, reading: 60, writing: 60 }
+      const stored = mock?.sectionTimeLimits || {}
+
+      return {
+        listening: Number(stored.listening) || defaults.listening,
+        reading: Number(stored.reading) || defaults.reading,
+        writing: Number(stored.writing) || defaults.writing
+      }
+    }
+
+    const getMockTotalTime = mock => {
+      const times = getMockSectionTimes(mock)
+
+      return times.listening + times.reading + times.writing
+    }
+
+    const getMockFlowLabel = mock => {
+      if (getMockType(mock) === 'mini_mock') {
+        return `1 Listening · 1 Reading · ${getMockWritingLabel(mock)}`
+      }
+
+      return `Listening · 3 Reading passages · ${getMockWritingLabel(mock)}`
+    }
+
     const hasSavedMockProgress = mockId => {
       if (!user?.uid || !mockId) return false
 
@@ -1892,7 +1939,7 @@
     return (
       <div className="mt-8 mb-8">
         <h2 className="font-semibold text-gray-800 mb-4">
-          🧠 Full Mock Tests
+          🧠 Mock Tests
         </h2>
 
         {todoMocks.length > 0 && (
@@ -1916,12 +1963,16 @@
                       </p>
 
                       <p className="text-xs text-gray-400 mt-0.5">
-                        Listening + Reading Passage 1, 2, 3 + Writing
+                        {getMockFlowLabel(mock)} · {getMockTotalTime(mock)} min
                       </p>
 
                       <div className="flex gap-2 mt-2 flex-wrap">
-                        <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1 rounded-full">
-                          Full IELTS Mock
+                        <span className={`text-xs px-3 py-1 rounded-full ${
+                          getMockType(mock) === 'mini_mock'
+                            ? 'bg-blue-50 text-blue-600'
+                            : 'bg-purple-50 text-purple-600'
+                        }`}>
+                          {getMockTypeLabel(mock)}
                         </span>
 
                         <span className={`text-xs px-3 py-1 rounded-full ${badge.style}`}>
@@ -1977,10 +2028,22 @@
                       </p>
 
                       <p className="text-xs text-gray-400 mt-0.5">
+                        {getMockFlowLabel(mock)} · {getMockTotalTime(mock)} min
+                      </p>
+
+                      <p className="text-xs text-gray-400 mt-1">
                         Submitted {submission?.submittedAt ? new Date(submission.submittedAt).toLocaleDateString() : ''}
                       </p>
 
                       <div className="flex gap-2 mt-2 flex-wrap">
+                        <span className={`text-xs px-3 py-1 rounded-full ${
+                          getMockType(mock) === 'mini_mock'
+                            ? 'bg-blue-50 text-blue-600'
+                            : 'bg-purple-50 text-purple-600'
+                        }`}>
+                          {getMockTypeLabel(mock)}
+                        </span>
+
                         <span className="text-xs bg-green-50 text-green-600 px-3 py-1 rounded-full">
                           Completed
                         </span>
