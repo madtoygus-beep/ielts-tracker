@@ -3988,21 +3988,65 @@ Continue permanent delete?`
     mockTest?.contentType ||
     'full_mock'
 
+  const getMockEnabledSections = mockTest => {
+    if (getMockType(mockTest) !== 'mini_mock') {
+      return { listening: true, reading: true, writing: true }
+    }
+
+    if (
+      mockTest?.enabledSections &&
+      typeof mockTest.enabledSections === 'object'
+    ) {
+      const stored = {
+        listening: mockTest.enabledSections.listening === true,
+        reading: mockTest.enabledSections.reading === true,
+        writing: mockTest.enabledSections.writing === true
+      }
+
+      if (Object.values(stored).some(Boolean)) return stored
+    }
+
+    const inferred = {
+      listening: Boolean(
+        mockTest?.listeningId ||
+        mockTest?.listeningIds?.filter(Boolean).length
+      ),
+      reading: Boolean(
+        mockTest?.readingId ||
+        mockTest?.readingIds?.filter(Boolean).length
+      ),
+      writing: Boolean(mockTest?.writingId)
+    }
+
+    return Object.values(inferred).some(Boolean)
+      ? inferred
+      : { listening: true, reading: true, writing: true }
+  }
+
   const getMockSectionTimes = mockTest => {
     const isMini = getMockType(mockTest) === 'mini_mock'
+    const enabled = getMockEnabledSections(mockTest)
     const defaults = isMini
       ? { listening: 15, reading: 30, writing: 30 }
       : { listening: 35, reading: 60, writing: 60 }
     const stored = mockTest?.sectionTimeLimits || {}
 
     return {
-      listening: Number(stored.listening) || defaults.listening,
-      reading: Number(stored.reading) || defaults.reading,
-      writing: Number(stored.writing) || defaults.writing
+      listening: enabled.listening
+        ? Number(stored.listening) || defaults.listening
+        : 0,
+      reading: enabled.reading
+        ? Number(stored.reading) || defaults.reading
+        : 0,
+      writing: enabled.writing
+        ? Number(stored.writing) || defaults.writing
+        : 0
     }
   }
 
   const getMockWritingLabel = mockTest => {
+    if (!getMockEnabledSections(mockTest).writing) return 'No Writing'
+
     const mode = mockTest?.writingMode || 'full_writing'
 
     if (mode === 'task1_only') return 'Writing Task 1'
@@ -4013,6 +4057,7 @@ Continue permanent delete?`
 
   const getMockFlowSummary = mockTest => {
     const isMini = getMockType(mockTest) === 'mini_mock'
+    const enabled = getMockEnabledSections(mockTest)
     const listeningCount = Array.isArray(mockTest?.listeningIds)
       ? mockTest.listeningIds.filter(Boolean).length
       : mockTest?.listeningId
@@ -4024,9 +4069,21 @@ Continue permanent delete?`
         ? 1
         : 0
 
-    return isMini
-      ? `${listeningCount || 1} Listening · ${readingCount || 1} Reading · ${getMockWritingLabel(mockTest)}`
-      : `${listeningCount || 1} Listening resource(s) · ${readingCount || 3} Reading passages · ${getMockWritingLabel(mockTest)}`
+    const parts = [
+      enabled.listening
+        ? isMini
+          ? 'Listening'
+          : `${listeningCount || 1} Listening resource(s)`
+        : null,
+      enabled.reading
+        ? isMini
+          ? 'Reading'
+          : `${readingCount || 3} Reading passages`
+        : null,
+      enabled.writing ? getMockWritingLabel(mockTest) : null
+    ].filter(Boolean)
+
+    return parts.join(' · ')
   }
 
   const getMockTotalTime = mockTest => {

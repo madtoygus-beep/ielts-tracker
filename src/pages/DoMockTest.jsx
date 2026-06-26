@@ -36,7 +36,56 @@ function getMockTypeLabel(mock) {
     : 'Full Mock'
 }
 
+function getMockEnabledSections(mock) {
+  if (getMockType(mock) !== 'mini_mock') {
+    return {
+      listening: true,
+      reading: true,
+      writing: true
+    }
+  }
+
+  if (mock?.enabledSections && typeof mock.enabledSections === 'object') {
+    const stored = {
+      listening: mock.enabledSections.listening === true,
+      reading: mock.enabledSections.reading === true,
+      writing: mock.enabledSections.writing === true
+    }
+
+    if (Object.values(stored).some(Boolean)) {
+      return stored
+    }
+  }
+
+  const listeningIds = Array.isArray(mock?.listeningIds)
+    ? mock.listeningIds.filter(Boolean)
+    : mock?.listeningId
+      ? [mock.listeningId]
+      : []
+  const readingIds = Array.isArray(mock?.readingIds)
+    ? mock.readingIds.filter(Boolean)
+    : mock?.readingId
+      ? [mock.readingId]
+      : []
+  const inferred = {
+    listening: listeningIds.length > 0,
+    reading: readingIds.length > 0,
+    writing: Boolean(mock?.writingId)
+  }
+
+  return Object.values(inferred).some(Boolean)
+    ? inferred
+    : {
+        listening: true,
+        reading: true,
+        writing: true
+      }
+}
+
 function getMockSectionMinutes(mock, section) {
+  const enabledSections = getMockEnabledSections(mock)
+
+  if (!enabledSections[section]) return 0
   const isMiniMock = getMockType(mock) === 'mini_mock'
   const fullDefaults = {
     listening: LISTENING_DURATION / 60,
@@ -63,6 +112,8 @@ function getMockSectionSeconds(mock, section) {
 }
 
 function getMockWritingMode(mock, writing) {
+  if (!getMockEnabledSections(mock).writing) return 'none'
+
   return (
     mock?.writingMode ||
     writing?.contentType ||
@@ -73,10 +124,23 @@ function getMockWritingMode(mock, writing) {
 }
 
 function getWritingModeLabel(mode) {
+  if (mode === 'none') return 'No Writing'
   if (mode === 'task1_only') return 'Writing Task 1'
   if (mode === 'task2_only') return 'Writing Task 2'
 
   return 'Writing Task 1 + Task 2'
+}
+
+function getMockFlowLabel(mock, writingMode) {
+  const enabled = getMockEnabledSections(mock)
+
+  return [
+    enabled.listening ? 'Listening' : null,
+    enabled.reading ? 'Reading' : null,
+    enabled.writing ? getWritingModeLabel(writingMode) : null
+  ]
+    .filter(Boolean)
+    .join(' → ')
 }
 
 function normalize(value) {
@@ -952,37 +1016,63 @@ export default function DoMockTest() {
           localStorage.removeItem(key)
         }
 
-        const readingIds = Array.isArray(mockData.readingIds)
-          ? mockData.readingIds.filter(Boolean)
-          : mockData.readingId
-            ? [mockData.readingId]
-            : []
+        const enabledSections = getMockEnabledSections(mockData)
 
-        const listeningIds = Array.isArray(mockData.listeningIds)
-          ? mockData.listeningIds.filter(Boolean)
-          : mockData.listeningId
-            ? [mockData.listeningId]
-            : []
-
-        if (listeningIds.length === 0) {
-          throw new Error('Mock test is missing listeningIds.')
+        if (!Object.values(enabledSections).some(Boolean)) {
+          throw new Error('Mini Mock does not include any enabled section.')
         }
 
-        if (readingIds.length === 0) {
-          throw new Error('Mock test is missing readingIds.')
+        setListeningLocked(!enabledSections.listening)
+        setReadingLocked(!enabledSections.reading)
+        setWritingLocked(!enabledSections.writing)
+        setAudioLocked(!enabledSections.listening)
+
+        const readingIds = enabledSections.reading
+          ? Array.isArray(mockData.readingIds)
+            ? mockData.readingIds.filter(Boolean)
+            : mockData.readingId
+              ? [mockData.readingId]
+              : []
+          : []
+
+        const listeningIds = enabledSections.listening
+          ? Array.isArray(mockData.listeningIds)
+            ? mockData.listeningIds.filter(Boolean)
+            : mockData.listeningId
+              ? [mockData.listeningId]
+              : []
+          : []
+
+        if (enabledSections.listening && listeningIds.length === 0) {
+          throw new Error('Mock test is missing a Listening resource.')
         }
 
-        if (!mockData.writingId) {
-          throw new Error('Mock test is missing writingId.')
+        if (enabledSections.reading && readingIds.length === 0) {
+          throw new Error('Mock test is missing a Reading resource.')
         }
 
-        const [listeningDocs, writingSnap] = await Promise.all([
-          Promise.all(
-            listeningIds.map(listeningId =>
-              getDoc(doc(db, 'listenings', listeningId))
-            )
-          ),
-          getDoc(doc(db, 'writingHomeworks', mockData.writingId))
+        if (enabledSections.writing && !mockData.writingId) {
+          throw new Error('Mock test is missing a Writing resource.')
+        }
+
+        const [listeningDocs, readingDocs, writingSnap] = await Promise.all([
+          enabledSections.listening
+            ? Promise.all(
+                listeningIds.map(listeningId =>
+                  getDoc(doc(db, 'listenings', listeningId))
+                )
+              )
+            : Promise.resolve([]),
+          enabledSections.reading
+            ? Promise.all(
+                readingIds.map(readingId =>
+                  getDoc(doc(db, 'readings', readingId))
+                )
+              )
+            : Promise.resolve([]),
+          enabledSections.writing
+            ? getDoc(doc(db, 'writingHomeworks', mockData.writingId))
+            : Promise.resolve(null)
         ])
 
         if (!isActive) return
@@ -991,36 +1081,42 @@ export default function DoMockTest() {
           .filter(snap => snap.exists())
           .map(snap => ({ id: snap.id, ...snap.data() }))
 
-        if (loadedListenings.length !== listeningIds.length) {
+        if (
+          enabledSections.listening &&
+          loadedListenings.length !== listeningIds.length
+        ) {
           throw new Error(
             'One or more Listening tests linked to this mock could not be loaded.'
           )
         }
 
-        if (!writingSnap.exists()) {
-          throw new Error('Writing test was not found.')
-        }
-
-        setListenings(loadedListenings)
-        setWriting({ id: writingSnap.id, ...writingSnap.data() })
-
-        const readingDocs = await Promise.all(
-          readingIds.map(readingId => getDoc(doc(db, 'readings', readingId)))
-        )
-
-        if (!isActive) return
-
         const loadedReadings = readingDocs
           .filter(snap => snap.exists())
           .map(snap => ({ id: snap.id, ...snap.data() }))
 
-        if (loadedReadings.length !== readingIds.length) {
+        if (
+          enabledSections.reading &&
+          loadedReadings.length !== readingIds.length
+        ) {
           throw new Error(
             'One or more Reading passages linked to this mock could not be loaded.'
           )
         }
 
+        if (
+          enabledSections.writing &&
+          (!writingSnap || !writingSnap.exists())
+        ) {
+          throw new Error('Writing test was not found.')
+        }
+
+        setListenings(loadedListenings)
         setReadings(loadedReadings)
+        setWriting(
+          writingSnap && writingSnap.exists()
+            ? { id: writingSnap.id, ...writingSnap.data() }
+            : null
+        )
 
         setLoading(false)
       } catch (error) {
@@ -1065,16 +1161,22 @@ export default function DoMockTest() {
       ? Math.max(0, Math.floor((Date.now() - savedAt) / 1000))
       : 0
 
+    const enabledSections = getMockEnabledSections(mock)
+
     const savedListeningLocked =
+      !enabledSections.listening ||
       Boolean(saved.listeningLocked) ||
       restoredReadingStarted ||
       restoredWritingStarted
 
     const savedReadingLocked =
+      !enabledSections.reading ||
       Boolean(saved.readingLocked) ||
       restoredWritingStarted
 
-    const savedWritingLocked = Boolean(saved.writingLocked)
+    const savedWritingLocked =
+      !enabledSections.writing ||
+      Boolean(saved.writingLocked)
 
     const restoredListeningTime =
       restoredListeningStarted && !savedListeningLocked
@@ -1107,9 +1209,15 @@ export default function DoMockTest() {
     setReadingTimeLeft(restoredReadingTime)
     setWritingTimeLeft(restoredWritingTime)
 
-    setListeningStarted(restoredListeningStarted)
-    setReadingStarted(restoredReadingStarted)
-    setWritingStarted(restoredWritingStarted)
+    setListeningStarted(
+      enabledSections.listening && restoredListeningStarted
+    )
+    setReadingStarted(
+      enabledSections.reading && restoredReadingStarted
+    )
+    setWritingStarted(
+      enabledSections.writing && restoredWritingStarted
+    )
 
     setListeningLocked(savedListeningLocked || restoredListeningTime <= 0)
     setReadingLocked(savedReadingLocked || restoredReadingTime <= 0)
@@ -1224,55 +1332,90 @@ export default function DoMockTest() {
     })
   }, [listenings])
 
+  const enabledSections = useMemo(
+    () => getMockEnabledSections(mock),
+    [mock]
+  )
+
   const writingMode = useMemo(
     () => getMockWritingMode(mock, writing),
     [mock, writing]
   )
 
-  const hasWritingTask1 = writingMode !== 'task2_only'
-  const hasWritingTask2 = writingMode !== 'task1_only'
+  const hasWritingTask1 =
+    enabledSections.writing && writingMode !== 'task2_only'
+  const hasWritingTask2 =
+    enabledSections.writing && writingMode !== 'task1_only'
   const mockTypeLabel = getMockTypeLabel(mock)
   const isMiniMock = getMockType(mock) === 'mini_mock'
+  const mockFlowLabel = getMockFlowLabel(mock, writingMode)
 
   const sections = useMemo(() => {
-    const writingSections = []
+    const flow = [{ key: 'intro', label: 'Start' }]
 
-    if (hasWritingTask1) {
-      writingSections.push({
-        key: 'writing-task1',
-        label: 'Writing T1'
-      })
+    if (enabledSections.listening) {
+      flow.push(
+        ...listeningParts.map((part, index) => ({
+          key: `listening-${index}`,
+          label: `L${index + 1}`,
+          listeningPart: part,
+          listeningPartIndex: index
+        }))
+      )
     }
 
-    if (hasWritingTask2) {
-      writingSections.push({
-        key: 'writing-task2',
-        label: 'Writing T2'
-      })
+    if (enabledSections.reading) {
+      if (enabledSections.listening) {
+        flow.push({
+          key: 'prepare-reading',
+          label: 'Prepare Reading',
+          transitionFrom: 'listening'
+        })
+      }
+
+      flow.push(
+        ...readings.map((reading, index) => ({
+          key: `reading-${index}`,
+          label: `Reading ${index + 1}`,
+          reading,
+          readingIndex: index
+        }))
+      )
     }
 
-    return [
-      { key: 'intro', label: 'Start' },
-      ...listeningParts.map((part, index) => ({
-        key: `listening-${index}`,
-        label: `L${index + 1}`,
-        listeningPart: part,
-        listeningPartIndex: index
-      })),
-      { key: 'prepare-reading', label: 'Prepare Reading' },
-      ...readings.map((reading, index) => ({
-        key: `reading-${index}`,
-        label: `Reading ${index + 1}`,
-        reading,
-        readingIndex: index
-      })),
-      { key: 'prepare-writing', label: 'Prepare Writing' },
-      ...writingSections,
-      { key: 'review', label: 'Review' }
-    ]
+    if (enabledSections.writing) {
+      if (enabledSections.reading || enabledSections.listening) {
+        flow.push({
+          key: 'prepare-writing',
+          label: 'Prepare Writing',
+          transitionFrom: enabledSections.reading
+            ? 'reading'
+            : 'listening'
+        })
+      }
+
+      if (hasWritingTask1) {
+        flow.push({
+          key: 'writing-task1',
+          label: 'Writing T1'
+        })
+      }
+
+      if (hasWritingTask2) {
+        flow.push({
+          key: 'writing-task2',
+          label: 'Writing T2'
+        })
+      }
+    }
+
+    flow.push({ key: 'review', label: 'Review' })
+
+    return flow
   }, [
     readings,
     listeningParts,
+    enabledSections,
     hasWritingTask1,
     hasWritingTask2
   ])
@@ -1733,11 +1876,13 @@ export default function DoMockTest() {
       return
     }
 
-    const prepareReadingIndex = sections.findIndex(
-      section => section.key === 'prepare-reading'
+    const nextSectionIndex = sections.findIndex(
+      (section, index) =>
+        index > sectionIndex &&
+        !section.key.startsWith('listening-')
     )
 
-    if (prepareReadingIndex < 0) return
+    if (nextSectionIndex < 0) return
 
     setListeningLocked(true)
     setAudioLocked(true)
@@ -1746,15 +1891,16 @@ export default function DoMockTest() {
       audioRef.current.pause()
     }
 
-    setSectionIndex(prepareReadingIndex)
+    setSectionIndex(nextSectionIndex)
     setMaxUnlockedSectionIndex(previous =>
-      Math.max(previous, prepareReadingIndex)
+      Math.max(previous, nextSectionIndex)
     )
   }, [
     listeningStarted,
     listeningTimeLeft,
     activeSection.key,
-    sections
+    sections,
+    sectionIndex
   ])
 
   useEffect(() => {
@@ -1766,22 +1912,25 @@ export default function DoMockTest() {
       return
     }
 
-    const prepareWritingIndex = sections.findIndex(
-      section => section.key === 'prepare-writing'
+    const nextSectionIndex = sections.findIndex(
+      (section, index) =>
+        index > sectionIndex &&
+        !section.key.startsWith('reading-')
     )
 
-    if (prepareWritingIndex < 0) return
+    if (nextSectionIndex < 0) return
 
     setReadingLocked(true)
-    setSectionIndex(prepareWritingIndex)
+    setSectionIndex(nextSectionIndex)
     setMaxUnlockedSectionIndex(previous =>
-      Math.max(previous, prepareWritingIndex)
+      Math.max(previous, nextSectionIndex)
     )
   }, [
     readingStarted,
     readingTimeLeft,
     activeSection.key,
-    sections
+    sections,
+    sectionIndex
   ])
 
   useEffect(() => {
@@ -1807,7 +1956,8 @@ export default function DoMockTest() {
     writingStarted,
     listeningLocked,
     readingLocked,
-    writingLocked
+    writingLocked,
+    enabledSections
   ])
 
   const handleListeningAnswer = (questionId, value) => {
@@ -2411,13 +2561,22 @@ export default function DoMockTest() {
   }
 
   const getMockResult = () => {
-    const listeningResult = scoreListening()
+    const listeningResult = enabledSections.listening
+      ? scoreListening()
+      : {
+          enabled: false,
+          correct: 0,
+          total: 0,
+          band: null
+        }
 
-    const readingResults = readings.map(reading => ({
-      readingId: reading.id,
-      title: reading.title,
-      ...scoreReading(reading)
-    }))
+    const readingResults = enabledSections.reading
+      ? readings.map(reading => ({
+          readingId: reading.id,
+          title: reading.title,
+          ...scoreReading(reading)
+        }))
+      : []
 
     const totalReadingCorrect = readingResults.reduce(
       (sum, item) => sum + item.correct,
@@ -2429,31 +2588,50 @@ export default function DoMockTest() {
       0
     )
 
-    const readingBand = getReadingBand(
-      totalReadingCorrect,
-      totalReadingQuestions
-    )
+    const readingBand = enabledSections.reading
+      ? getReadingBand(
+          totalReadingCorrect,
+          totalReadingQuestions
+        )
+      : null
 
-    const availableBands = [listeningResult.band, readingBand].filter(Boolean)
+    const availableBands = [
+      enabledSections.listening ? listeningResult.band : null,
+      enabledSections.reading ? readingBand : null
+    ].filter(
+      value =>
+        value !== null &&
+        value !== undefined &&
+        value !== '' &&
+        Number.isFinite(Number(value))
+    )
 
     const overallEstimate = availableBands.length
       ? Math.round(
-          (availableBands.reduce((sum, band) => sum + band, 0) /
+          (availableBands.reduce((sum, band) => sum + Number(band), 0) /
             availableBands.length) *
             2
         ) / 2
       : null
 
     return {
-      listening: listeningResult,
+      enabledSections: { ...enabledSections },
+      listening: {
+        ...listeningResult,
+        enabled: enabledSections.listening
+      },
       reading: {
+        enabled: enabledSections.reading,
         correct: totalReadingCorrect,
         total: totalReadingQuestions,
         band: readingBand,
         passages: readingResults
       },
       writing: {
-        status: 'pending_review',
+        enabled: enabledSections.writing,
+        status: enabledSections.writing
+          ? 'pending_review'
+          : 'not_included',
         writingMode,
         task1Enabled: hasWritingTask1,
         task2Enabled: hasWritingTask2,
@@ -2578,7 +2756,7 @@ export default function DoMockTest() {
       }
 
       const ok = window.confirm(
-        'Submit the full mock test? You cannot edit it after submission.'
+        `Submit this ${mockTypeLabel}? You cannot edit it after submission.`
       )
 
       if (!ok) return
@@ -2655,6 +2833,7 @@ export default function DoMockTest() {
         title: mock.title || 'Untitled Mock Test',
         mockType: getMockType(mock),
         contentType: getMockType(mock),
+        enabledSections: { ...enabledSections },
         writingMode,
         task1Enabled: hasWritingTask1,
         task2Enabled: hasWritingTask2,
@@ -2699,8 +2878,12 @@ export default function DoMockTest() {
           date: submittedAt.slice(0, 10),
           source: 'mock_test',
           mockTestId: mock.id,
-          listening: result.listening?.band || '',
-          reading: result.reading?.band || '',
+          listening: enabledSections.listening
+            ? result.listening?.band || ''
+            : '',
+          reading: enabledSections.reading
+            ? result.reading?.band || ''
+            : '',
           writing: '',
           speaking: '',
           overall: result.overallEstimate ?? '',
@@ -2754,7 +2937,9 @@ export default function DoMockTest() {
     writingLocked,
     writingMode,
     hasWritingTask1,
-    hasWritingTask2
+    hasWritingTask2,
+    enabledSections,
+    mockTypeLabel
   ])
 
   useEffect(() => {
@@ -2793,7 +2978,12 @@ export default function DoMockTest() {
     if (loading || alreadySubmitted || finalResult) return
     if (!listeningStarted && !readingStarted && !writingStarted) return
 
-    if (listeningLocked && readingLocked && writingLocked) {
+    const allEnabledSectionsLocked =
+      (!enabledSections.listening || listeningLocked) &&
+      (!enabledSections.reading || readingLocked) &&
+      (!enabledSections.writing || writingLocked)
+
+    if (allEnabledSectionsLocked) {
       handleSubmitMockRef.current?.({ auto: true })
     }
   }, [
@@ -2805,7 +2995,8 @@ export default function DoMockTest() {
     writingStarted,
     listeningLocked,
     readingLocked,
-    writingLocked
+    writingLocked,
+    enabledSections
   ])
 
   const handleExitMock = () => {
@@ -2878,26 +3069,32 @@ export default function DoMockTest() {
   }
 
   const nextSection = () => {
-    if (activeSection.key === 'prepare-reading') {
+    if (
+      activeSection.key === 'prepare-reading' ||
+      activeSection.key === 'prepare-writing'
+    ) {
+      const targetLabel =
+        activeSection.key === 'prepare-reading'
+          ? 'Reading'
+          : 'Writing'
+      const previousLabel =
+        activeSection.transitionFrom === 'reading'
+          ? 'Reading'
+          : 'Listening'
       const confirmed = window.confirm(
-        'Start Reading now?\n\nListening will be permanently locked and you will not be able to return to it.'
+        `Start ${targetLabel} now?
+
+${previousLabel} will be permanently locked and you will not be able to return to it.`
       )
 
       if (!confirmed) return
 
-      lockListeningSection()
-      goToSection(sectionIndex + 1)
-      return
-    }
+      if (activeSection.transitionFrom === 'reading') {
+        lockReadingSection()
+      } else {
+        lockListeningSection()
+      }
 
-    if (activeSection.key === 'prepare-writing') {
-      const confirmed = window.confirm(
-        'Start Writing now?\n\nReading will be permanently locked and you will not be able to return to it.'
-      )
-
-      if (!confirmed) return
-
-      lockReadingSection()
       goToSection(sectionIndex + 1)
       return
     }
@@ -4672,11 +4869,11 @@ export default function DoMockTest() {
     const title = isReading
       ? 'Now prepare for the Reading Part'
       : 'Now prepare for the Writing Part'
-
-    const description = isReading
-      ? `The Listening section is complete. Your ${getMockSectionMinutes(mock, 'reading')}-minute Reading timer has not started yet. When you click Start Reading, Listening will be locked.`
-      : `The Reading section is complete. Your ${getMockSectionMinutes(mock, 'writing')}-minute Writing timer has not started yet. When you click Start Writing, Reading will be locked.`
-
+    const previousSection = activeSection.transitionFrom === 'reading'
+      ? 'Reading'
+      : 'Listening'
+    const targetMinutes = getMockSectionMinutes(mock, type)
+    const description = `${previousSection} is complete. Your ${targetMinutes}-minute ${isReading ? 'Reading' : 'Writing'} timer has not started yet. When you continue, ${previousSection} will be locked.`
     const buttonLabel = isReading ? 'Start Reading →' : 'Start Writing →'
 
     return (
@@ -4692,29 +4889,6 @@ export default function DoMockTest() {
         <p className="text-gray-500 text-sm leading-7 mb-8">
           {description}
         </p>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-8 text-left">
-          <div className={`rounded-xl p-4 ${isReading ? 'bg-green-50' : 'bg-gray-50'}`}>
-            <p className="text-xs text-gray-500 mb-1">Listening</p>
-            <p className={`text-xl font-bold ${isReading ? 'text-green-600' : 'text-gray-500'}`}>
-              Completed
-            </p>
-          </div>
-
-          <div className={`rounded-xl p-4 ${isReading ? 'bg-blue-50' : 'bg-green-50'}`}>
-            <p className="text-xs text-gray-500 mb-1">Reading</p>
-            <p className={`text-xl font-bold ${isReading ? 'text-blue-600' : 'text-green-600'}`}>
-              {isReading ? 'Ready' : 'Completed'}
-            </p>
-          </div>
-
-          <div className={`rounded-xl p-4 ${isReading ? 'bg-gray-50' : 'bg-amber-50'}`}>
-            <p className="text-xs text-gray-500 mb-1">Writing</p>
-            <p className={`text-xl font-bold ${isReading ? 'text-gray-500' : 'text-amber-600'}`}>
-              {isReading ? 'Locked' : 'Ready'}
-            </p>
-          </div>
-        </div>
 
         <button
           onClick={nextSection}
@@ -4740,47 +4914,59 @@ export default function DoMockTest() {
           </h2>
 
           <p className="text-gray-500 text-sm mb-6">
-            Your answers are ready to submit. Scores and correct/incorrect counts will only be shown after final submission.
+            Your included sections are ready to submit. Scores and correct/incorrect counts will only be shown after final submission.
           </p>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="bg-purple-50 rounded-2xl p-5">
-              <p className="text-xs text-gray-500 mb-1">Listening</p>
-              <p className="text-xl font-bold text-purple-600">
-                {listeningProgress.answered}/{listeningProgress.total}
-              </p>
-              <p className="text-xs text-gray-500 mt-1">
-                {listeningProgress.answered >= listeningProgress.total
-                  ? 'All questions answered'
-                  : `${Math.max(
-                      listeningProgress.total - listeningProgress.answered,
-                      0
-                    )} unanswered`}
-              </p>
-            </div>
+          <div className={`grid grid-cols-1 ${
+            Object.values(enabledSections).filter(Boolean).length >= 3
+              ? 'md:grid-cols-3'
+              : Object.values(enabledSections).filter(Boolean).length === 2
+                ? 'md:grid-cols-2'
+                : 'max-w-md mx-auto'
+          } gap-4`}>
+            {enabledSections.listening && (
+              <div className="bg-purple-50 rounded-2xl p-5">
+                <p className="text-xs text-gray-500 mb-1">Listening</p>
+                <p className="text-xl font-bold text-purple-600">
+                  {listeningProgress.answered}/{listeningProgress.total}
+                </p>
+                <p className="text-xs text-gray-500 mt-1">
+                  {listeningProgress.answered >= listeningProgress.total
+                    ? 'All questions answered'
+                    : `${Math.max(
+                        listeningProgress.total - listeningProgress.answered,
+                        0
+                      )} unanswered`}
+                </p>
+              </div>
+            )}
 
-            <div className="bg-blue-50 rounded-2xl p-5">
-              <p className="text-xs text-gray-500 mb-1">Reading</p>
-              <p className="text-xl font-bold text-blue-600">
-                {readingProgress.answered}/{readingProgress.total}
-              </p>
-              <p className="text-xs text-gray-500 mt-1">
-                {readingProgress.answered >= readingProgress.total
-                  ? 'All questions answered'
-                  : `${Math.max(
-                      readingProgress.total - readingProgress.answered,
-                      0
-                    )} unanswered`}
-              </p>
-            </div>
+            {enabledSections.reading && (
+              <div className="bg-blue-50 rounded-2xl p-5">
+                <p className="text-xs text-gray-500 mb-1">Reading</p>
+                <p className="text-xl font-bold text-blue-600">
+                  {readingProgress.answered}/{readingProgress.total}
+                </p>
+                <p className="text-xs text-gray-500 mt-1">
+                  {readingProgress.answered >= readingProgress.total
+                    ? 'All questions answered'
+                    : `${Math.max(
+                        readingProgress.total - readingProgress.answered,
+                        0
+                      )} unanswered`}
+                </p>
+              </div>
+            )}
 
-            <div className="bg-amber-50 rounded-2xl p-5">
-              <p className="text-xs text-gray-500 mb-1">Writing</p>
-              <p className="text-xl font-bold text-amber-600">Pending</p>
-              <p className="text-xs text-gray-500 mt-1">
-                Teacher review required
-              </p>
-            </div>
+            {enabledSections.writing && (
+              <div className="bg-amber-50 rounded-2xl p-5">
+                <p className="text-xs text-gray-500 mb-1">Writing</p>
+                <p className="text-xl font-bold text-amber-600">Pending</p>
+                <p className="text-xs text-gray-500 mt-1">
+                  Teacher review required
+                </p>
+              </div>
+            )}
           </div>
         </div>
 
@@ -4790,53 +4976,51 @@ export default function DoMockTest() {
           </h3>
 
           <p className="text-sm text-amber-700 leading-6">
-            Once you submit, you cannot edit this mock test again. Listening and Reading scores will be calculated after submission. Writing will wait for teacher review.
+            Once you submit, you cannot edit this mock again. Included objective sections will be scored immediately. Included Writing tasks will wait for teacher review.
           </p>
         </div>
 
-        <div className="bg-white border border-gray-100 rounded-2xl p-5">
-          <h3 className="font-semibold text-gray-800 mb-3">
-            Writing Word Count
-          </h3>
+        {enabledSections.writing && (
+          <div className="bg-white border border-gray-100 rounded-2xl p-5">
+            <h3 className="font-semibold text-gray-800 mb-3">
+              Writing Word Count
+            </h3>
 
-          <div className={`grid grid-cols-1 ${
-            hasWritingTask1 && hasWritingTask2
-              ? 'md:grid-cols-2'
-              : ''
-          } gap-4`}>
-            {hasWritingTask1 && (
-              <div className="bg-gray-50 rounded-xl p-4">
-                <p className="text-xs text-gray-500 mb-1">Task 1</p>
-                <p className="text-xl font-bold text-gray-800">
-                  {t1Words} words
-                </p>
-                <p
-                  className={`text-xs mt-1 ${
+            <div className={`grid grid-cols-1 ${
+              hasWritingTask1 && hasWritingTask2
+                ? 'md:grid-cols-2'
+                : ''
+            } gap-4`}>
+              {hasWritingTask1 && (
+                <div className="bg-gray-50 rounded-xl p-4">
+                  <p className="text-xs text-gray-500 mb-1">Task 1</p>
+                  <p className="text-xl font-bold text-gray-800">
+                    {t1Words} words
+                  </p>
+                  <p className={`text-xs mt-1 ${
                     t1Words >= 150 ? 'text-green-600' : 'text-amber-600'
-                  }`}
-                >
-                  {t1Words >= 150 ? '✓ Above minimum' : 'Below 150 words'}
-                </p>
-              </div>
-            )}
+                  }`}>
+                    {t1Words >= 150 ? '✓ Above minimum' : 'Below 150 words'}
+                  </p>
+                </div>
+              )}
 
-            {hasWritingTask2 && (
-              <div className="bg-gray-50 rounded-xl p-4">
-                <p className="text-xs text-gray-500 mb-1">Task 2</p>
-                <p className="text-xl font-bold text-gray-800">
-                  {t2Words} words
-                </p>
-                <p
-                  className={`text-xs mt-1 ${
+              {hasWritingTask2 && (
+                <div className="bg-gray-50 rounded-xl p-4">
+                  <p className="text-xs text-gray-500 mb-1">Task 2</p>
+                  <p className="text-xl font-bold text-gray-800">
+                    {t2Words} words
+                  </p>
+                  <p className={`text-xs mt-1 ${
                     t2Words >= 250 ? 'text-green-600' : 'text-amber-600'
-                  }`}
-                >
-                  {t2Words >= 250 ? '✓ Above minimum' : 'Below 250 words'}
-                </p>
-              </div>
-            )}
+                  }`}>
+                    {t2Words >= 250 ? '✓ Above minimum' : 'Below 250 words'}
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
-        </div>
+        )}
 
         <button
           onClick={() => handleSubmitMock()}
@@ -5505,48 +5689,62 @@ export default function DoMockTest() {
             </p>
 
             <p className="text-sm text-gray-500">
-              Overall estimate without Writing review
+              {enabledSections.listening || enabledSections.reading
+                ? 'Overall estimate from included objective sections'
+                : 'Writing will be reviewed by your teacher'}
             </p>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-            <div className="bg-white border border-gray-100 rounded-2xl p-5">
-              <p className="text-xs text-gray-400 mb-1">Listening</p>
-              <p className="text-3xl font-bold text-purple-600">
-                {finalResult.listening.band}
-              </p>
-              <p className="text-xs text-gray-400 mt-1">
-                {finalResult.listening.correct}/{finalResult.listening.total}
-              </p>
-            </div>
+          <div className={`grid grid-cols-1 ${
+            Object.values(enabledSections).filter(Boolean).length >= 3
+              ? 'md:grid-cols-3'
+              : Object.values(enabledSections).filter(Boolean).length === 2
+                ? 'md:grid-cols-2'
+                : 'max-w-md mx-auto'
+          } gap-4 mb-6`}>
+            {enabledSections.listening && (
+              <div className="bg-white border border-gray-100 rounded-2xl p-5">
+                <p className="text-xs text-gray-400 mb-1">Listening</p>
+                <p className="text-3xl font-bold text-purple-600">
+                  {finalResult.listening.band ?? '-'}
+                </p>
+                <p className="text-xs text-gray-400 mt-1">
+                  {finalResult.listening.correct}/{finalResult.listening.total}
+                </p>
+              </div>
+            )}
 
-            <div className="bg-white border border-gray-100 rounded-2xl p-5">
-              <p className="text-xs text-gray-400 mb-1">Reading</p>
-              <p className="text-3xl font-bold text-blue-600">
-                {finalResult.reading.band}
-              </p>
-              <p className="text-xs text-gray-400 mt-1">
-                {finalResult.reading.correct}/{finalResult.reading.total}
-              </p>
-            </div>
+            {enabledSections.reading && (
+              <div className="bg-white border border-gray-100 rounded-2xl p-5">
+                <p className="text-xs text-gray-400 mb-1">Reading</p>
+                <p className="text-3xl font-bold text-blue-600">
+                  {finalResult.reading.band ?? '-'}
+                </p>
+                <p className="text-xs text-gray-400 mt-1">
+                  {finalResult.reading.correct}/{finalResult.reading.total}
+                </p>
+              </div>
+            )}
 
-            <div className="bg-white border border-gray-100 rounded-2xl p-5">
-              <p className="text-xs text-gray-400 mb-1">Writing</p>
-              <p className={`text-xl font-bold ${
-                writingStatus === 'reviewed'
-                  ? 'text-green-600'
-                  : 'text-amber-600'
-              }`}>
-                {writingStatus === 'reviewed'
-                  ? writingReview?.overall || 'Reviewed'
-                  : 'Pending'}
-              </p>
-              <p className="text-xs text-gray-400 mt-1">
-                {writingStatus === 'reviewed'
-                  ? 'Teacher feedback available'
-                  : 'Teacher review required'}
-              </p>
-            </div>
+            {enabledSections.writing && (
+              <div className="bg-white border border-gray-100 rounded-2xl p-5">
+                <p className="text-xs text-gray-400 mb-1">Writing</p>
+                <p className={`text-xl font-bold ${
+                  writingStatus === 'reviewed'
+                    ? 'text-green-600'
+                    : 'text-amber-600'
+                }`}>
+                  {writingStatus === 'reviewed'
+                    ? writingReview?.overall || 'Reviewed'
+                    : 'Pending'}
+                </p>
+                <p className="text-xs text-gray-400 mt-1">
+                  {writingStatus === 'reviewed'
+                    ? 'Teacher feedback available'
+                    : 'Teacher review required'}
+                </p>
+              </div>
+            )}
           </div>
 
           <div className="bg-blue-50 border border-blue-100 rounded-2xl p-5 mb-6">
@@ -5556,7 +5754,8 @@ export default function DoMockTest() {
           </div>
 
           <div className="space-y-5">
-            <details open className="bg-white border border-gray-100 rounded-2xl overflow-hidden">
+            {enabledSections.listening && (
+              <details open className="bg-white border border-gray-100 rounded-2xl overflow-hidden">
               <summary className="cursor-pointer px-6 py-5 font-semibold text-gray-900 flex items-center justify-between gap-3">
                 <span>Listening Mistakes</span>
                 <span className="text-xs bg-red-50 text-red-600 px-3 py-1 rounded-full">
@@ -5573,9 +5772,11 @@ export default function DoMockTest() {
                   </div>
                 )}
               </div>
-            </details>
+              </details>
+            )}
 
-            <details open className="bg-white border border-gray-100 rounded-2xl overflow-hidden">
+            {enabledSections.reading && (
+              <details open className="bg-white border border-gray-100 rounded-2xl overflow-hidden">
               <summary className="cursor-pointer px-6 py-5 font-semibold text-gray-900 flex items-center justify-between gap-3">
                 <span>Reading Mistakes</span>
                 <span className="text-xs bg-red-50 text-red-600 px-3 py-1 rounded-full">
@@ -5592,9 +5793,11 @@ export default function DoMockTest() {
                   </div>
                 )}
               </div>
-            </details>
+              </details>
+            )}
 
-            <details className="bg-white border border-gray-100 rounded-2xl overflow-hidden">
+            {enabledSections.writing && (
+              <details className="bg-white border border-gray-100 rounded-2xl overflow-hidden">
               <summary className="cursor-pointer px-6 py-5 font-semibold text-gray-900">
                 Writing Submission & Feedback
               </summary>
@@ -5671,7 +5874,8 @@ export default function DoMockTest() {
                   </div>
                 )}
               </div>
-            </details>
+              </details>
+            )}
           </div>
         </div>
       </div>
@@ -5776,31 +5980,43 @@ export default function DoMockTest() {
 
             <p className="text-gray-500 mb-6">
               {isMiniMock
-                ? `This Mini Mock runs in order: one Listening → one Reading → ${getWritingModeLabel(writingMode)} → Review.`
+                ? `This Mini Mock runs in order: ${mockFlowLabel} → Review.`
                 : `This Full Mock runs in order: selected Listening part(s) → three Reading passages → ${getWritingModeLabel(writingMode)} → Review.`}
             </p>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-8 text-left">
-              <div className="bg-purple-50 rounded-xl p-4">
-                <p className="text-xs text-gray-500 mb-1">Listening</p>
-                <p className="text-2xl font-bold text-purple-600">
-                  {getMockSectionMinutes(mock, 'listening')} min
-                </p>
-              </div>
+            <div className={`grid grid-cols-1 ${
+              Object.values(enabledSections).filter(Boolean).length >= 3
+                ? 'sm:grid-cols-3'
+                : Object.values(enabledSections).filter(Boolean).length === 2
+                  ? 'sm:grid-cols-2'
+                  : 'max-w-md mx-auto'
+            } gap-3 mb-8 text-left`}>
+              {enabledSections.listening && (
+                <div className="bg-purple-50 rounded-xl p-4">
+                  <p className="text-xs text-gray-500 mb-1">Listening</p>
+                  <p className="text-2xl font-bold text-purple-600">
+                    {getMockSectionMinutes(mock, 'listening')} min
+                  </p>
+                </div>
+              )}
 
-              <div className="bg-blue-50 rounded-xl p-4">
-                <p className="text-xs text-gray-500 mb-1">Reading</p>
-                <p className="text-2xl font-bold text-blue-600">
-                  {getMockSectionMinutes(mock, 'reading')} min
-                </p>
-              </div>
+              {enabledSections.reading && (
+                <div className="bg-blue-50 rounded-xl p-4">
+                  <p className="text-xs text-gray-500 mb-1">Reading</p>
+                  <p className="text-2xl font-bold text-blue-600">
+                    {getMockSectionMinutes(mock, 'reading')} min
+                  </p>
+                </div>
+              )}
 
-              <div className="bg-amber-50 rounded-xl p-4">
-                <p className="text-xs text-gray-500 mb-1">Writing</p>
-                <p className="text-2xl font-bold text-amber-600">
-                  {getMockSectionMinutes(mock, 'writing')} min
-                </p>
-              </div>
+              {enabledSections.writing && (
+                <div className="bg-amber-50 rounded-xl p-4">
+                  <p className="text-xs text-gray-500 mb-1">Writing</p>
+                  <p className="text-2xl font-bold text-amber-600">
+                    {getMockSectionMinutes(mock, 'writing')} min
+                  </p>
+                </div>
+              )}
             </div>
 
             <p className="text-xs text-gray-400 mb-6">

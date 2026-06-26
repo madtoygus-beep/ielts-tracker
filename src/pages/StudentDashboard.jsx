@@ -1845,7 +1845,41 @@
         ? 'Mini Mock'
         : 'Full Mock'
 
+    const getMockEnabledSections = mock => {
+      if (getMockType(mock) !== 'mini_mock') {
+        return { listening: true, reading: true, writing: true }
+      }
+
+      if (mock?.enabledSections && typeof mock.enabledSections === 'object') {
+        const stored = {
+          listening: mock.enabledSections.listening === true,
+          reading: mock.enabledSections.reading === true,
+          writing: mock.enabledSections.writing === true
+        }
+
+        if (Object.values(stored).some(Boolean)) return stored
+      }
+
+      const inferred = {
+        listening: Boolean(
+          mock?.listeningId ||
+          mock?.listeningIds?.filter(Boolean).length
+        ),
+        reading: Boolean(
+          mock?.readingId ||
+          mock?.readingIds?.filter(Boolean).length
+        ),
+        writing: Boolean(mock?.writingId)
+      }
+
+      return Object.values(inferred).some(Boolean)
+        ? inferred
+        : { listening: true, reading: true, writing: true }
+    }
+
     const getMockWritingLabel = mock => {
+      if (!getMockEnabledSections(mock).writing) return 'No Writing'
+
       const mode = mock?.writingMode || 'full_writing'
 
       if (mode === 'task1_only') return 'Writing Task 1'
@@ -1856,15 +1890,22 @@
 
     const getMockSectionTimes = mock => {
       const isMini = getMockType(mock) === 'mini_mock'
+      const enabled = getMockEnabledSections(mock)
       const defaults = isMini
         ? { listening: 15, reading: 30, writing: 30 }
         : { listening: 35, reading: 60, writing: 60 }
       const stored = mock?.sectionTimeLimits || {}
 
       return {
-        listening: Number(stored.listening) || defaults.listening,
-        reading: Number(stored.reading) || defaults.reading,
-        writing: Number(stored.writing) || defaults.writing
+        listening: enabled.listening
+          ? Number(stored.listening) || defaults.listening
+          : 0,
+        reading: enabled.reading
+          ? Number(stored.reading) || defaults.reading
+          : 0,
+        writing: enabled.writing
+          ? Number(stored.writing) || defaults.writing
+          : 0
       }
     }
 
@@ -1875,11 +1916,18 @@
     }
 
     const getMockFlowLabel = mock => {
-      if (getMockType(mock) === 'mini_mock') {
-        return `1 Listening · 1 Reading · ${getMockWritingLabel(mock)}`
-      }
+      const enabled = getMockEnabledSections(mock)
+      const parts = [
+        enabled.listening ? 'Listening' : null,
+        enabled.reading
+          ? getMockType(mock) === 'mini_mock'
+            ? 'Reading'
+            : '3 Reading passages'
+          : null,
+        enabled.writing ? getMockWritingLabel(mock) : null
+      ].filter(Boolean)
 
-      return `Listening · 3 Reading passages · ${getMockWritingLabel(mock)}`
+      return parts.join(' · ')
     }
 
     const hasSavedMockProgress = mockId => {

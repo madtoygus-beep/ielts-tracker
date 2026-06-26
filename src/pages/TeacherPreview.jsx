@@ -48,17 +48,56 @@ function getMockTypeLabel(mock) {
     : 'Full Mock'
 }
 
+function getMockEnabledSections(mock) {
+  if (getMockType(mock) !== 'mini_mock') {
+    return { listening: true, reading: true, writing: true }
+  }
+
+  if (mock?.enabledSections && typeof mock.enabledSections === 'object') {
+    const stored = {
+      listening: mock.enabledSections.listening === true,
+      reading: mock.enabledSections.reading === true,
+      writing: mock.enabledSections.writing === true
+    }
+
+    if (Object.values(stored).some(Boolean)) return stored
+  }
+
+  const inferred = {
+    listening: Boolean(
+      mock?.listeningId ||
+      mock?.listeningIds?.filter(Boolean).length
+    ),
+    reading: Boolean(
+      mock?.readingId ||
+      mock?.readingIds?.filter(Boolean).length
+    ),
+    writing: Boolean(mock?.writingId)
+  }
+
+  return Object.values(inferred).some(Boolean)
+    ? inferred
+    : { listening: true, reading: true, writing: true }
+}
+
 function getMockSectionTimes(mock) {
   const isMini = getMockType(mock) === 'mini_mock'
+  const enabled = getMockEnabledSections(mock)
   const defaults = isMini
     ? { listening: 15, reading: 30, writing: 30 }
     : { listening: 35, reading: 60, writing: 60 }
   const stored = mock?.sectionTimeLimits || {}
 
   return {
-    listening: Number(stored.listening) || defaults.listening,
-    reading: Number(stored.reading) || defaults.reading,
-    writing: Number(stored.writing) || defaults.writing
+    listening: enabled.listening
+      ? Number(stored.listening) || defaults.listening
+      : 0,
+    reading: enabled.reading
+      ? Number(stored.reading) || defaults.reading
+      : 0,
+    writing: enabled.writing
+      ? Number(stored.writing) || defaults.writing
+      : 0
   }
 }
 
@@ -69,6 +108,8 @@ function getMockTotalTime(mock) {
 }
 
 function getMockWritingMode(mock, writing) {
+  if (!getMockEnabledSections(mock).writing) return 'none'
+
   return (
     mock?.writingMode ||
     writing?.contentType ||
@@ -80,10 +121,24 @@ function getMockWritingMode(mock, writing) {
 function getMockWritingLabel(mock, writing) {
   const mode = getMockWritingMode(mock, writing)
 
+  if (mode === 'none') return 'No Writing'
   if (mode === 'task1_only') return 'Writing Task 1'
   if (mode === 'task2_only') return 'Writing Task 2'
 
   return 'Full Writing'
+}
+
+
+function getMockFlowLabel(mock, writing) {
+  const enabled = getMockEnabledSections(mock)
+
+  return [
+    enabled.listening ? 'Listening' : null,
+    enabled.reading ? 'Reading' : null,
+    enabled.writing ? getMockWritingLabel(mock, writing) : null
+  ]
+    .filter(Boolean)
+    .join(' · ')
 }
 
 function getText(value) {
@@ -1834,12 +1889,14 @@ export default function TeacherPreview() {
                     {getMockTypeLabel(content)}
                   </span>
 
-                  <span className="text-xs bg-amber-50 text-amber-700 px-3 py-1.5 rounded-full">
-                    {getMockWritingLabel(
-                      content,
-                      mockResources.writing
-                    )}
-                  </span>
+                  {getMockEnabledSections(content).writing && (
+                    <span className="text-xs bg-amber-50 text-amber-700 px-3 py-1.5 rounded-full">
+                      {getMockWritingLabel(
+                        content,
+                        mockResources.writing
+                      )}
+                    </span>
+                  )}
 
                   <span className="text-xs bg-gray-100 text-gray-600 px-3 py-1.5 rounded-full">
                     {getMockTotalTime(content)} minutes
@@ -1925,51 +1982,64 @@ export default function TeacherPreview() {
             </div>
 
             {activeMockTab === 'overview' && (
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm">
-                  <p className="text-xs text-gray-400 mb-1">
-                    Listening resources
-                  </p>
-                  <p className="text-3xl font-bold text-purple-600">
-                    {mockResources.listenings.length}
-                  </p>
-                </div>
+              <div className={`grid grid-cols-1 ${
+                Object.values(getMockEnabledSections(content)).filter(Boolean).length >= 3
+                  ? 'md:grid-cols-3'
+                  : Object.values(getMockEnabledSections(content)).filter(Boolean).length === 2
+                    ? 'md:grid-cols-2'
+                    : ''
+              } gap-4`}>
+                {getMockEnabledSections(content).listening && (
+                  <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm">
+                    <p className="text-xs text-gray-400 mb-1">
+                      Listening resources
+                    </p>
+                    <p className="text-3xl font-bold text-purple-600">
+                      {mockResources.listenings.length}
+                    </p>
+                  </div>
+                )}
 
-                <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm">
-                  <p className="text-xs text-gray-400 mb-1">
-                    Reading resources
-                  </p>
-                  <p className="text-3xl font-bold text-blue-600">
-                    {mockResources.readings.length}
-                  </p>
-                </div>
+                {getMockEnabledSections(content).reading && (
+                  <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm">
+                    <p className="text-xs text-gray-400 mb-1">
+                      Reading resources
+                    </p>
+                    <p className="text-3xl font-bold text-blue-600">
+                      {mockResources.readings.length}
+                    </p>
+                  </div>
+                )}
 
-                <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm">
-                  <p className="text-xs text-gray-400 mb-1">
-                    Writing format
-                  </p>
-                  <p className="text-lg font-bold text-amber-600">
-                    {mockResources.writing
-                      ? getMockWritingLabel(
-                          content,
-                          mockResources.writing
-                        )
-                      : 'Missing'}
-                  </p>
-                </div>
+                {getMockEnabledSections(content).writing && (
+                  <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm">
+                    <p className="text-xs text-gray-400 mb-1">
+                      Writing format
+                    </p>
+                    <p className="text-lg font-bold text-amber-600">
+                      {mockResources.writing
+                        ? getMockWritingLabel(
+                            content,
+                            mockResources.writing
+                          )
+                        : 'Missing'}
+                    </p>
+                  </div>
+                )}
 
-                <div className="md:col-span-3 bg-white border border-gray-100 rounded-2xl p-6 shadow-sm">
+                <div className="md:col-span-full bg-white border border-gray-100 rounded-2xl p-6 shadow-sm">
                   <h2 className="font-semibold text-gray-900 mb-3">
                     Preview behaviour
                   </h2>
 
                   <p className="text-sm text-gray-600 leading-6">
-                    {getMockTypeLabel(content)} · {getMockTotalTime(content)} minutes total · {getMockWritingLabel(content, mockResources.writing)}. All sections are unlocked in Preview. Timers, auto-submit, listening replay restrictions, section locks, submissions and score records are disabled.
+                    {getMockTypeLabel(content)} · {getMockFlowLabel(content, mockResources.writing)} · {getMockTotalTime(content)} minutes total. All included sections are unlocked in Preview. Timers, auto-submit, listening replay restrictions, section locks, submissions and score records are disabled.
                   </p>
 
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4">
-                    {Object.entries(getMockSectionTimes(content)).map(
-                      ([section, minutes]) => (
+                    {Object.entries(getMockSectionTimes(content))
+                      .filter(([, minutes]) => minutes > 0)
+                      .map(([section, minutes]) => (
                         <div
                           key={section}
                           className="bg-gray-50 rounded-xl p-4"
