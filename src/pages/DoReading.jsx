@@ -2191,9 +2191,9 @@ export default function DoReading() {
       </nav>
 
       <div className="max-w-[1500px] mx-auto px-4 md:px-6 py-6">
-        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)] gap-6">
-          <div className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden lg:sticky lg:top-24 lg:h-[calc(100vh-8rem)]">
-            <div className="px-5 py-4 border-b border-gray-100 bg-white sticky top-0 z-10">
+        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)] gap-6 min-w-0">
+          <div className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden flex flex-col min-h-0 h-[72vh] lg:sticky lg:top-24 lg:h-[calc(100vh-8rem)]">
+            <div className="px-5 py-4 border-b border-gray-100 bg-white shrink-0 z-10">
               <div className="flex items-center justify-between gap-3 flex-wrap">
                 <div>
                   <h2 className="font-semibold text-gray-800">
@@ -2237,7 +2237,7 @@ export default function DoReading() {
             <div
               onMouseUp={captureHighlightSelection}
               onTouchEnd={() => setTimeout(captureHighlightSelection, 0)}
-              className="p-5 md:p-7 overflow-y-auto h-[65vh] lg:h-[calc(100vh-12rem)] select-text"
+              className="p-5 md:p-7 pb-24 md:pb-28 flex-1 min-h-0 overflow-y-auto overscroll-contain scroll-pb-24 select-text"
             >
               {reading.passageMode === 'sections' ? (
                 <div className="space-y-8">
@@ -2258,23 +2258,33 @@ export default function DoReading() {
                       </p>
                     </div>
                   ))}
+
+                  <div className="pt-5 border-t border-gray-100 text-center text-xs font-medium text-gray-400">
+                    End of passage
+                  </div>
                 </div>
               ) : (
-                <div
-                  data-highlight-block="standard-passage"
-                  className="text-sm md:text-[15px] text-gray-700 leading-8 whitespace-pre-wrap"
-                >
-                  {renderHighlightedText(
-                    reading.passage,
-                    'standard-passage'
-                  )}
+                <div>
+                  <div
+                    data-highlight-block="standard-passage"
+                    className="text-sm md:text-[15px] text-gray-700 leading-8 whitespace-pre-wrap"
+                  >
+                    {renderHighlightedText(
+                      reading.passage,
+                      'standard-passage'
+                    )}
+                  </div>
+
+                  <div className="mt-8 pt-5 border-t border-gray-100 text-center text-xs font-medium text-gray-400">
+                    End of passage
+                  </div>
                 </div>
               )}
             </div>
           </div>
 
-          <div className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden lg:h-[calc(100vh-8rem)]">
-            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 bg-white sticky top-0 z-10">
+          <div className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden flex flex-col min-h-0 h-[72vh] lg:h-[calc(100vh-8rem)]">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 bg-white shrink-0 z-10">
               <div>
                 <h2 className="font-semibold text-gray-800">
                   Questions ({getTotalQuestionCount()})
@@ -2294,7 +2304,7 @@ export default function DoReading() {
               </button>
             </div>
 
-            <div className="p-5 md:p-7 overflow-y-auto h-[65vh] lg:h-[calc(100vh-12rem)]">
+            <div className="p-5 md:p-7 pb-24 md:pb-28 flex-1 min-h-0 overflow-y-auto overscroll-contain scroll-pb-24">
               {showQuestionMap && (
                 <div className="bg-white border border-purple-100 rounded-2xl p-4 mb-6 shadow-sm">
                   <div className="flex items-center justify-between gap-3 mb-3">

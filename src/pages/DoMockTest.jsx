@@ -4095,9 +4095,9 @@ ${previousLabel} will be permanently locked and you will not be able to return t
       )}
 
       <fieldset disabled={readingLocked} className={readingLocked ? 'opacity-60' : ''}>
-        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)] gap-6">
-          <div className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden lg:sticky lg:top-[150px] lg:h-[calc(100vh-12rem)]">
-            <div className="flex items-center justify-between gap-4 px-5 py-4 border-b border-gray-100 bg-white sticky top-0 z-10">
+        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)] gap-6 min-w-0">
+          <div className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden flex flex-col min-h-0 h-[72vh] lg:sticky lg:top-[150px] lg:h-[calc(100vh-11rem)]">
+            <div className="flex items-center justify-between gap-4 px-5 py-4 border-b border-gray-100 bg-white shrink-0 z-10">
               <div className="min-w-0">
                 <h2 className="font-semibold text-gray-900 truncate">
                   {reading.title}
@@ -4115,7 +4115,7 @@ ${previousLabel} will be permanently locked and you will not be able to return t
 
             <div
               ref={readingPassageScrollRef}
-              className="p-5 md:p-7 overflow-y-auto h-[65vh] lg:h-[calc(100vh-16rem)]"
+              className="p-5 md:p-7 pb-24 md:pb-28 flex-1 min-h-0 overflow-y-auto overscroll-contain scroll-pb-24"
             >
               {reading.passageMode === 'sections' ? (
                 <div className="space-y-8">
@@ -4130,17 +4130,27 @@ ${previousLabel} will be permanently locked and you will not be able to return t
                       </p>
                     </div>
                   ))}
+
+                  <div className="pt-5 border-t border-gray-100 text-center text-xs font-medium text-gray-400">
+                    End of passage
+                  </div>
                 </div>
               ) : (
-                <div className="text-sm md:text-[15px] text-gray-700 leading-8 whitespace-pre-wrap">
-                  {reading.passage}
+                <div>
+                  <div className="text-sm md:text-[15px] text-gray-700 leading-8 whitespace-pre-wrap">
+                    {reading.passage}
+                  </div>
+
+                  <div className="mt-8 pt-5 border-t border-gray-100 text-center text-xs font-medium text-gray-400">
+                    End of passage
+                  </div>
                 </div>
               )}
             </div>
           </div>
 
-          <div className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden lg:h-[calc(100vh-12rem)]">
-            <div className="flex items-center justify-between gap-4 px-5 py-4 border-b border-gray-100 bg-white sticky top-0 z-10">
+          <div className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden flex flex-col min-h-0 h-[72vh] lg:h-[calc(100vh-11rem)]">
+            <div className="flex items-center justify-between gap-4 px-5 py-4 border-b border-gray-100 bg-white shrink-0 z-10">
               <h2 className="font-semibold text-gray-800">
                 Questions ({getTotalReadingQuestionCount(reading)})
               </h2>
@@ -4152,7 +4162,7 @@ ${previousLabel} will be permanently locked and you will not be able to return t
 
             <div
               ref={readingQuestionsScrollRef}
-              className="p-5 md:p-7 overflow-y-auto h-[65vh] lg:h-[calc(100vh-16rem)]"
+              className="p-5 md:p-7 pb-24 md:pb-28 flex-1 min-h-0 overflow-y-auto overscroll-contain scroll-pb-24"
             >
               <div className="space-y-5">
                 {reading.questions?.map((question, index) => (
