@@ -891,6 +891,11 @@ export default function CreateMockTest() {
 
     const now = new Date().toISOString()
 
+    const savedTotalTimeMinutes =
+      (activeSections.listening ? cleanSectionTimeLimits.listening : 0) +
+      (activeSections.reading ? cleanSectionTimeLimits.reading : 0) +
+      (activeSections.writing ? cleanSectionTimeLimits.writing : 0)
+
     const payload = {
       title: cleanTitle,
       module: 'mock',
@@ -905,10 +910,7 @@ export default function CreateMockTest() {
       writingId: cleanWritingId,
       writingMode: selectedWritingMode,
       sectionTimeLimits: cleanSectionTimeLimits,
-      totalTimeMinutes:
-        cleanSectionTimeLimits.listening +
-        cleanSectionTimeLimits.reading +
-        cleanSectionTimeLimits.writing,
+      totalTimeMinutes: savedTotalTimeMinutes,
       assignTo,
       assignedStudentIds: selectedStudents.map(student => student.id),
       assignedEmails: selectedStudents
