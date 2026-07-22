@@ -2744,12 +2744,32 @@ export default function DoMockTest() {
     if (!user || !mock) return
 
     if (!auto) {
-      const task1Words = countWords(writingAnswers.task1)
-      const task2Words = countWords(writingAnswers.task2)
+      const shortWritingChecks = [
+        hasWritingTask1
+          ? {
+              label: 'Task 1',
+              words: countWords(writingAnswers.task1),
+              minimum: 50
+            }
+          : null,
+        hasWritingTask2
+          ? {
+              label: 'Task 2',
+              words: countWords(writingAnswers.task2),
+              minimum: 100
+            }
+          : null
+      ]
+        .filter(Boolean)
+        .filter(item => item.words < item.minimum)
 
-      if (task1Words < 50 || task2Words < 100) {
+      if (shortWritingChecks.length > 0) {
+        const warningLines = shortWritingChecks
+          .map(item => `${item.label}: ${item.words} words`)
+          .join('\n')
+
         const continueAnyway = window.confirm(
-          `Your writing answers look very short.\n\nTask 1: ${task1Words} words\nTask 2: ${task2Words} words\n\nSubmit anyway?`
+          `Your writing answer looks very short.\n\n${warningLines}\n\nSubmit anyway?`
         )
 
         if (!continueAnyway) return
