@@ -884,6 +884,7 @@ export default function DoMockTest() {
   const audioRef = useRef(null)
   const audioLastTimeRef = useRef(0)
   const audioSeekLockRef = useRef(false)
+  const activeAudioKeyRef = useRef('')
   const listeningTickRef = useRef(null)
   const readingTickRef = useRef(null)
   const writingTickRef = useRef(null)
@@ -1421,6 +1422,9 @@ export default function DoMockTest() {
   ])
 
   const activeSection = sections[sectionIndex] || sections[0]
+  const activeListeningAudioKey = activeSection.key?.startsWith('listening-')
+    ? `${activeSection.listeningPart?.listeningId || ''}::${activeSection.listeningPart?.listeningAudioUrl || ''}`
+    : ''
 
   const hasAnswerValue = value => {
     if (Array.isArray(value)) {
@@ -1721,7 +1725,13 @@ export default function DoMockTest() {
   }, [sectionIndex])
 
   useEffect(() => {
-    if (!activeSection.key?.startsWith('listening-')) return
+    if (!activeListeningAudioKey) return
+
+    if (activeAudioKeyRef.current === activeListeningAudioKey) {
+      return
+    }
+
+    activeAudioKeyRef.current = activeListeningAudioKey
 
     setAudioStarted(false)
     setAudioLocked(false)
@@ -1735,7 +1745,7 @@ export default function DoMockTest() {
       audioRef.current.pause()
       audioRef.current.currentTime = 0
     }
-  }, [activeSection.key])
+  }, [activeListeningAudioKey])
 
   useEffect(() => {
     if (!activeSection.key?.startsWith('listening-')) return
