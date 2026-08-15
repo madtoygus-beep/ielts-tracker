@@ -630,7 +630,7 @@ export default function CreateMockTest() {
     ? enabledSections
     : ALL_MOCK_SECTIONS
   const enabledSectionCount = Object.values(activeSections).filter(Boolean).length
-  const listeningSlotCount = isMiniMock ? miniListeningCount : 4
+  const listeningSlotCount = isMiniMock ? miniListeningCount : 1
   const readingSlotCount = isMiniMock ? miniReadingCount : 3
   const requiredReadingCount = readingSlotCount
   const activeListeningIds = listeningIds.slice(0, listeningSlotCount)
@@ -741,16 +741,38 @@ export default function CreateMockTest() {
     })
   }
 
-  const updateMiniListeningCount = value => {
-    setMiniListeningCount(
-      normalizeMiniSectionCount(value, miniListeningCount, 4)
-    )
+  const addMiniListeningSlot = () => {
+    if (!isMiniMock) return
+    setMiniListeningCount(prev => Math.min(4, prev + 1))
   }
 
-  const updateMiniReadingCount = value => {
-    setMiniReadingCount(
-      normalizeMiniSectionCount(value, miniReadingCount, 3)
-    )
+  const removeMiniListeningSlot = index => {
+    if (!isMiniMock || miniListeningCount <= 1) return
+
+    setListeningIds(prev => {
+      const copy = [...prev]
+      copy.splice(index, 1)
+      return [...copy, '', '', '', ''].slice(0, 4)
+    })
+
+    setMiniListeningCount(prev => Math.max(1, prev - 1))
+  }
+
+  const addMiniReadingSlot = () => {
+    if (!isMiniMock) return
+    setMiniReadingCount(prev => Math.min(3, prev + 1))
+  }
+
+  const removeMiniReadingSlot = index => {
+    if (!isMiniMock || miniReadingCount <= 1) return
+
+    setReadingIds(prev => {
+      const copy = [...prev]
+      copy.splice(index, 1)
+      return [...copy, '', '', ''].slice(0, 3)
+    })
+
+    setMiniReadingCount(prev => Math.max(1, prev - 1))
   }
 
   const updateSectionTimeLimit = (section, value) => {
@@ -851,7 +873,7 @@ export default function CreateMockTest() {
       !isMiniMock &&
       cleanListeningIds.length === 0
     ) {
-      alert('Please select at least one Listening part/test.')
+      alert('Please select one full Listening test.')
       return
     }
 
@@ -862,7 +884,7 @@ export default function CreateMockTest() {
       alert(
         isMiniMock
           ? 'Please select different Listening resources.'
-          : 'Please select different Listening tests or leave unused parts empty.'
+          : 'Full Mock uses only one full Listening resource.'
       )
       return
     }
@@ -949,7 +971,7 @@ export default function CreateMockTest() {
             reading: activeSections.reading ? readingSlotCount : 0
           }
         : {
-            listening: 4,
+            listening: 1,
             reading: 3
           },
       visibility,
@@ -1045,7 +1067,7 @@ export default function CreateMockTest() {
         <p className="text-gray-500 mb-8">
           {isMiniMock
             ? 'Mini Mock format: choose any combination of Listening, Reading and Writing. You can also add extra Listening resources or Reading passages.'
-            : 'Full Mock format: selected Listening part(s) → Reading Passage 1, 2, 3 → Writing inside a single controlled flow.'}
+            : 'Full Mock format: one full Listening test → Reading Passage 1, 2, 3 → Writing inside a single controlled flow.'}
         </p>
 
         {saved && (
@@ -1108,7 +1130,7 @@ export default function CreateMockTest() {
                   </select>
 
                   <p className="text-[11px] text-gray-400 mt-1">
-                    Full Mock keeps the complete IELTS structure. Mini Mock lets you switch Listening, Reading and Writing on or off.
+                    Full Mock uses one complete Listening resource. Mini Mock lets you switch Listening, Reading and Writing on or off.
                   </p>
                 </div>
               </div>
@@ -1157,52 +1179,8 @@ export default function CreateMockTest() {
                   </div>
 
                   <p className="text-[11px] text-gray-400 mt-2">
-                    Select any combination. At least one section must remain included.
+                    Select any combination. At least one section must remain included. Extra Listening and Reading are added below with the + buttons.
                   </p>
-
-                  {(enabledSections.listening || enabledSections.reading) && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4">
-                      {enabledSections.listening && (
-                        <div>
-                          <label className="text-xs text-gray-400 mb-1 block">
-                            Listening resources
-                          </label>
-
-                          <select
-                            value={miniListeningCount}
-                            onChange={e => updateMiniListeningCount(e.target.value)}
-                            className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm bg-white text-gray-700 outline-none focus:border-purple-400"
-                          >
-                            {[1, 2, 3, 4].map(count => (
-                              <option key={count} value={count}>
-                                {count} Listening resource{count === 1 ? '' : 's'}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      )}
-
-                      {enabledSections.reading && (
-                        <div>
-                          <label className="text-xs text-gray-400 mb-1 block">
-                            Reading passages
-                          </label>
-
-                          <select
-                            value={miniReadingCount}
-                            onChange={e => updateMiniReadingCount(e.target.value)}
-                            className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm bg-white text-gray-700 outline-none focus:border-purple-400"
-                          >
-                            {[1, 2, 3].map(count => (
-                              <option key={count} value={count}>
-                                {count} Reading passage{count === 1 ? '' : 's'}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      )}
-                    </div>
-                  )}
                 </div>
               )}
 
@@ -1279,12 +1257,12 @@ export default function CreateMockTest() {
                   <div className="flex items-start justify-between gap-4 mb-3">
                     <div>
                       <h3 className="text-sm font-semibold text-gray-800">
-                        Listening Parts
+                        {isMiniMock ? 'Listening Parts' : 'Full Listening Test'}
                       </h3>
 
                       <p className="text-xs text-gray-500 mt-1">
                         {isMiniMock
-                          ? `Select exactly ${listeningSlotCount} Listening resource${listeningSlotCount === 1 ? '' : 's'}.`
+                          ? `Select exactly ${listeningSlotCount} Listening resource${listeningSlotCount === 1 ? '' : 's'}. Add extra resources with the button below.`
                           : 'Select at least one Listening resource. You may leave unused slots empty.'}
                       </p>
                     </div>
@@ -1296,75 +1274,151 @@ export default function CreateMockTest() {
 
                   <div className="grid grid-cols-1 gap-3">
                     {Array.from({ length: listeningSlotCount }, (_, index) => index).map(index => (
-                      <div key={index}>
-                        <label className="text-xs text-gray-400 mb-1 block">
-                          {isMiniMock
-                            ? `Listening ${index + 1} / required`
-                            : `Listening Slot ${index + 1} ${index === 0 ? '/ required' : '/ optional'}`}
-                        </label>
+                      <div
+                        key={index}
+                        className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_auto] gap-2 sm:items-end"
+                      >
+                        <div>
+                          <label className="text-xs text-gray-400 mb-1 block">
+                            {isMiniMock
+                              ? `${index === 0 ? 'Main' : 'Extra'} Listening ${index + 1} / required`
+                              : 'Full Listening Test / required'}
+                          </label>
 
-                        <select
-                          value={listeningIds[index]}
-                          onChange={e => updateListeningId(index, e.target.value)}
-                          className={`w-full border rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white ${
-                            hasDuplicateListenings && listeningIds[index]
-                              ? 'border-red-300'
-                              : 'border-gray-200'
-                          }`}
-                        >
-                          <option value="">
-                            {isMiniMock || index === 0
-                              ? 'Select Listening resource'
-                              : 'Optional: select Listening resource'}
-                          </option>
-
-                          {listenings.map(item => (
-                            <option key={item.id} value={item.id}>
-                              {item.title}
+                          <select
+                            value={listeningIds[index]}
+                            onChange={e => updateListeningId(index, e.target.value)}
+                            className={`w-full border rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white ${
+                              hasDuplicateListenings && listeningIds[index]
+                                ? 'border-red-300'
+                                : 'border-gray-200'
+                            }`}
+                          >
+                            <option value="">
+                              {isMiniMock
+                                ? 'Select Listening resource'
+                                : 'Select full Listening test'}
                             </option>
-                          ))}
-                        </select>
+
+                            {listenings.map(item => (
+                              <option key={item.id} value={item.id}>
+                                {item.title}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        {isMiniMock && index > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => removeMiniListeningSlot(index)}
+                            className="bg-white border border-red-100 text-red-500 rounded-xl px-4 py-3 text-xs font-medium hover:bg-red-50"
+                          >
+                            Remove
+                          </button>
+                        )}
                       </div>
                     ))}
+
+                    {isMiniMock && listeningSlotCount < 4 && (
+                      <button
+                        type="button"
+                        onClick={addMiniListeningSlot}
+                        className="border border-dashed border-purple-300 bg-white text-purple-600 rounded-xl px-4 py-3 text-sm font-medium hover:bg-purple-50"
+                      >
+                        + Add extra Listening
+                      </button>
+                    )}
                   </div>
 
                   {hasDuplicateListenings && (
                     <p className="text-xs text-red-500 mt-3">
                       {isMiniMock
                         ? 'Please choose different listening resources.'
-                        : 'Please choose different listening tests or leave unused parts empty.'}
+                        : 'Full Mock uses only one full Listening resource.'}
                     </p>
                   )}
                   </div>
                 )}
 
-                {activeSections.reading && Array.from({ length: readingSlotCount }, (_, index) => index).map(index => (
-                  <div key={index}>
-                    <label className="text-xs text-gray-400 mb-1 block">
-                      {isMiniMock ? `Reading Passage ${index + 1} / required` : `Reading Passage ${index + 1}`}
-                    </label>
+                {activeSections.reading && (
+                  <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4">
+                    <div className="flex items-start justify-between gap-4 mb-3">
+                      <div>
+                        <h3 className="text-sm font-semibold text-gray-800">
+                          Reading Passages
+                        </h3>
 
-                    <select
-                      value={readingIds[index]}
-                      onChange={e => updateReadingId(index, e.target.value)}
-                      className={`w-full border rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white ${
-                        hasDuplicateReadings && readingIds[index]
-                          ? 'border-red-300'
-                          : 'border-gray-200'
-                      }`}
-                    >
-                      <option value="">
-                        {isMiniMock ? `Select Reading passage ${index + 1}` : `Select Reading passage ${index + 1}`}
-                      </option>
+                        <p className="text-xs text-gray-500 mt-1">
+                          {isMiniMock
+                            ? `Select exactly ${readingSlotCount} Reading passage${readingSlotCount === 1 ? '' : 's'}. Add extra passages with the button below.`
+                            : 'Select Reading Passage 1, 2 and 3.'}
+                        </p>
+                      </div>
 
-                      {readings.map(item => (
-                        <option key={item.id} value={item.id}>
-                          {item.title}
-                        </option>
+                      <span className="text-xs bg-white text-blue-600 px-3 py-1 rounded-full">
+                        {selectedReadingIds.length}/{readingSlotCount} selected
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3">
+                      {Array.from({ length: readingSlotCount }, (_, index) => index).map(index => (
+                        <div
+                          key={index}
+                          className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_auto] gap-2 sm:items-end"
+                        >
+                          <div>
+                            <label className="text-xs text-gray-400 mb-1 block">
+                              {isMiniMock
+                                ? `${index === 0 ? 'Main' : 'Extra'} Reading Passage ${index + 1} / required`
+                                : `Reading Passage ${index + 1}`}
+                            </label>
+
+                            <select
+                              value={readingIds[index]}
+                              onChange={e => updateReadingId(index, e.target.value)}
+                              className={`w-full border rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white ${
+                                hasDuplicateReadings && readingIds[index]
+                                  ? 'border-red-300'
+                                  : 'border-gray-200'
+                              }`}
+                            >
+                              <option value="">
+                                Select Reading passage {index + 1}
+                              </option>
+
+                              {readings.map(item => (
+                                <option key={item.id} value={item.id}>
+                                  {item.title}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          {isMiniMock && index > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => removeMiniReadingSlot(index)}
+                              className="bg-white border border-red-100 text-red-500 rounded-xl px-4 py-3 text-xs font-medium hover:bg-red-50"
+                            >
+                              Remove
+                            </button>
+                          )}
+                        </div>
                       ))}
-                    </select>
+
+                      {isMiniMock && readingSlotCount < 3 && (
+                        <button
+                          type="button"
+                          onClick={addMiniReadingSlot}
+                          className="border border-dashed border-blue-300 bg-white text-blue-600 rounded-xl px-4 py-3 text-sm font-medium hover:bg-blue-50"
+                        >
+                          + Add extra Reading passage
+                        </button>
+                      )}
+                    </div>
                   </div>
-                ))}
+                )}
 
                 {hasDuplicateReadings && (
                   <p className="text-xs text-red-500">
@@ -1407,7 +1461,7 @@ export default function CreateMockTest() {
               <p className="text-sm text-gray-500 leading-6">
                 {isMiniMock
                   ? `Students complete ${flowSummary || 'the selected section'} in order. Extra Listening resources and Reading passages are included in the same section timer. The current total time is ${totalTimeMinutes} minutes.`
-                  : 'Students move through the selected Listening part(s), three Reading passages and Writing with controlled section transitions.'}
+                  : 'Students move through one full Listening resource, three Reading passages and Writing with controlled section transitions.'}
               </p>
             </div>
           </div>
