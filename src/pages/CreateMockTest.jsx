@@ -304,6 +304,7 @@ export default function CreateMockTest() {
   })
   const [miniListeningCount, setMiniListeningCount] = useState(1)
   const [miniReadingCount, setMiniReadingCount] = useState(1)
+  const [fullMockListeningMode, setFullMockListeningMode] = useState('separate')
   const [assignTo, setAssignTo] = useState([])
 
   const [search, setSearch] = useState('')
@@ -424,6 +425,14 @@ export default function CreateMockTest() {
           : data.readingId
             ? [data.readingId]
             : []
+
+        if (existingMockType === 'full_mock') {
+          setFullMockListeningMode(
+            data.fullMockListeningMode === 'single'
+              ? 'single'
+              : 'separate'
+          )
+        }
 
         const storedMiniCounts = data.miniSectionCounts || {}
 
@@ -630,7 +639,11 @@ export default function CreateMockTest() {
     ? enabledSections
     : ALL_MOCK_SECTIONS
   const enabledSectionCount = Object.values(activeSections).filter(Boolean).length
-  const listeningSlotCount = isMiniMock ? miniListeningCount : 1
+  const fullMockListeningSlotCount =
+    fullMockListeningMode === 'single' ? 1 : 4
+  const listeningSlotCount = isMiniMock
+    ? miniListeningCount
+    : fullMockListeningSlotCount
   const readingSlotCount = isMiniMock ? miniReadingCount : 3
   const requiredReadingCount = readingSlotCount
   const activeListeningIds = listeningIds.slice(0, listeningSlotCount)
@@ -719,6 +732,7 @@ export default function CreateMockTest() {
       return
     }
 
+    setFullMockListeningMode('separate')
     setEnabledSections({ ...ALL_MOCK_SECTIONS })
     setSectionTimeLimits({ ...FULL_MOCK_TIMES })
   }
@@ -739,6 +753,10 @@ export default function CreateMockTest() {
 
       return next
     })
+  }
+
+  const updateFullMockListeningMode = value => {
+    setFullMockListeningMode(value === 'single' ? 'single' : 'separate')
   }
 
   const addMiniListeningSlot = () => {
@@ -873,7 +891,11 @@ export default function CreateMockTest() {
       !isMiniMock &&
       cleanListeningIds.length === 0
     ) {
-      alert('Please select one full Listening test.')
+      alert(
+        fullMockListeningMode === 'single'
+          ? 'Please select one full Listening test.'
+          : 'Please select at least one separate Listening resource.'
+      )
       return
     }
 
@@ -884,7 +906,7 @@ export default function CreateMockTest() {
       alert(
         isMiniMock
           ? 'Please select different Listening resources.'
-          : 'Full Mock uses only one full Listening resource.'
+          : 'Please select different Listening resources or leave unused slots empty.'
       )
       return
     }
@@ -965,13 +987,14 @@ export default function CreateMockTest() {
       contentType,
       mockType: contentType,
       enabledSections: { ...activeSections },
+      fullMockListeningMode: isMiniMock ? '' : fullMockListeningMode,
       miniSectionCounts: isMiniMock
         ? {
             listening: activeSections.listening ? listeningSlotCount : 0,
             reading: activeSections.reading ? readingSlotCount : 0
           }
         : {
-            listening: 1,
+            listening: fullMockListeningSlotCount,
             reading: 3
           },
       visibility,
@@ -1067,7 +1090,7 @@ export default function CreateMockTest() {
         <p className="text-gray-500 mb-8">
           {isMiniMock
             ? 'Mini Mock format: choose any combination of Listening, Reading and Writing. You can also add extra Listening resources or Reading passages.'
-            : 'Full Mock format: one full Listening test → Reading Passage 1, 2, 3 → Writing inside a single controlled flow.'}
+            : 'Full Mock format: choose one complete Listening resource or separate Listening resources, then Reading Passage 1, 2, 3 and Writing.'}
         </p>
 
         {saved && (
@@ -1130,10 +1153,31 @@ export default function CreateMockTest() {
                   </select>
 
                   <p className="text-[11px] text-gray-400 mt-1">
-                    Full Mock uses one complete Listening resource. Mini Mock lets you switch Listening, Reading and Writing on or off.
+                    Full Mock can use one complete Listening resource or separate Listening resources. Mini Mock lets you switch Listening, Reading and Writing on or off.
                   </p>
                 </div>
               </div>
+
+              {!isMiniMock && (
+                <div className="mb-4 bg-purple-50 border border-purple-100 rounded-2xl p-4">
+                  <label className="text-xs text-purple-600 font-semibold mb-1 block">
+                    Full Mock Listening setup
+                  </label>
+
+                  <select
+                    value={fullMockListeningMode}
+                    onChange={e => updateFullMockListeningMode(e.target.value)}
+                    className="w-full border border-purple-200 rounded-xl px-4 py-3 text-sm bg-white text-gray-700 outline-none focus:border-purple-400"
+                  >
+                    <option value="single">One complete Listening resource</option>
+                    <option value="separate">Separate Listening resources</option>
+                  </select>
+
+                  <p className="text-[11px] text-purple-500 mt-2 leading-5">
+                    Use “one complete” when one audio file already contains Part 1–4. Use “separate” when you want to attach different Listening resources/audio files.
+                  </p>
+                </div>
+              )}
 
               {isMiniMock && (
                 <div className="mb-4">
@@ -1257,13 +1301,19 @@ export default function CreateMockTest() {
                   <div className="flex items-start justify-between gap-4 mb-3">
                     <div>
                       <h3 className="text-sm font-semibold text-gray-800">
-                        {isMiniMock ? 'Listening Parts' : 'Full Listening Test'}
+                        {isMiniMock
+                          ? 'Listening Parts'
+                          : fullMockListeningMode === 'single'
+                            ? 'Full Listening Test'
+                            : 'Separate Listening Resources'}
                       </h3>
 
                       <p className="text-xs text-gray-500 mt-1">
                         {isMiniMock
                           ? `Select exactly ${listeningSlotCount} Listening resource${listeningSlotCount === 1 ? '' : 's'}. Add extra resources with the button below.`
-                          : 'Select at least one Listening resource. You may leave unused slots empty.'}
+                          : fullMockListeningMode === 'single'
+                            ? 'Select one complete Listening resource that already contains Part 1–4 and one complete audio file.'
+                            : 'Select separate Listening resources. Slot 1 is required; other slots are optional.'}
                       </p>
                     </div>
 
@@ -1282,7 +1332,9 @@ export default function CreateMockTest() {
                           <label className="text-xs text-gray-400 mb-1 block">
                             {isMiniMock
                               ? `${index === 0 ? 'Main' : 'Extra'} Listening ${index + 1} / required`
-                              : 'Full Listening Test / required'}
+                              : fullMockListeningMode === 'single'
+                                ? 'Full Listening Test / required'
+                                : `Listening Slot ${index + 1} ${index === 0 ? '/ required' : '/ optional'}`}
                           </label>
 
                           <select
@@ -1297,7 +1349,11 @@ export default function CreateMockTest() {
                             <option value="">
                               {isMiniMock
                                 ? 'Select Listening resource'
-                                : 'Select full Listening test'}
+                                : fullMockListeningMode === 'single'
+                                  ? 'Select full Listening test'
+                                  : index === 0
+                                    ? 'Select Listening resource'
+                                    : 'Optional: select Listening resource'}
                             </option>
 
                             {listenings.map(item => (
@@ -1335,7 +1391,7 @@ export default function CreateMockTest() {
                     <p className="text-xs text-red-500 mt-3">
                       {isMiniMock
                         ? 'Please choose different listening resources.'
-                        : 'Full Mock uses only one full Listening resource.'}
+                        : 'Please choose different listening resources or leave unused slots empty.'}
                     </p>
                   )}
                   </div>
@@ -1461,7 +1517,9 @@ export default function CreateMockTest() {
               <p className="text-sm text-gray-500 leading-6">
                 {isMiniMock
                   ? `Students complete ${flowSummary || 'the selected section'} in order. Extra Listening resources and Reading passages are included in the same section timer. The current total time is ${totalTimeMinutes} minutes.`
-                  : 'Students move through one full Listening resource, three Reading passages and Writing with controlled section transitions.'}
+                  : fullMockListeningMode === 'single'
+                    ? 'Students move through the selected full Listening resource, three Reading passages and Writing with controlled section transitions. If the Listening resource has Part 1–4, the audio continues across its parts.'
+                    : 'Students move through the selected separate Listening resources, three Reading passages and Writing with controlled section transitions. Each separate Listening resource starts its own audio.'}
               </p>
             </div>
           </div>
