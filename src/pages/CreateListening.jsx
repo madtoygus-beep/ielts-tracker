@@ -22,8 +22,10 @@ const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
 const DEFAULT_SCHOOL_ID = 'maxima'
 const MAX_AUDIO_SIZE = 30 * 1024 * 1024
+const MAX_MAP_IMAGE_SIZE = 8 * 1024 * 1024
 
 const ACCEPTED_AUDIO_EXTENSIONS = ['mp3', 'm4a', 'wav', 'aac', 'mpeg', 'mp4']
+const ACCEPTED_IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp']
 
 function isAcceptedAudioFile(file) {
   if (!file) return false
@@ -32,6 +34,15 @@ function isAcceptedAudioFile(file) {
   const extension = file.name?.split('.').pop()?.toLowerCase() || ''
 
   return type.startsWith('audio/') || ACCEPTED_AUDIO_EXTENSIONS.includes(extension)
+}
+
+function isAcceptedImageFile(file) {
+  if (!file) return false
+
+  const type = file.type || ''
+  const extension = file.name?.split('.').pop()?.toLowerCase() || ''
+
+  return type.startsWith('image/') || ACCEPTED_IMAGE_EXTENSIONS.includes(extension)
 }
 
 function sanitizeFileName(name) {
@@ -273,6 +284,7 @@ export default function CreateListening() {
   const [audioStoragePath, setAudioStoragePath] = useState('')
   const [audioUploading, setAudioUploading] = useState(false)
   const [audioUploadProgress, setAudioUploadProgress] = useState(0)
+  const [mapImageUploads, setMapImageUploads] = useState({})
   const [instructions, setInstructions] = useState('')
   const [dueDate, setDueDate] = useState('')
   const [timeLimit, setTimeLimit] = useState(30)
@@ -923,6 +935,121 @@ export default function CreateListening() {
           alert('Audio uploaded, but the download URL could not be created.')
         } finally {
           setAudioUploading(false)
+          event.target.value = ''
+        }
+      }
+    )
+  }
+
+  const handleMapImageUpload = (questionId, event) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    if (!user) {
+      alert('User session expired. Please log in again.')
+      event.target.value = ''
+      return
+    }
+
+    if (!isAcceptedImageFile(file)) {
+      alert('Please upload an image file. Supported formats: JPG, PNG or WEBP.')
+      event.target.value = ''
+      return
+    }
+
+    if (file.size > MAX_MAP_IMAGE_SIZE) {
+      alert('Map image is too large. Maximum file size is 8 MB.')
+      event.target.value = ''
+      return
+    }
+
+    const safeFileName = sanitizeFileName(file.name)
+    const storagePath = `listening-map-images/${user.uid}/${Date.now()}-${crypto.randomUUID()}-${safeFileName}`
+    const imageRef = ref(storage, storagePath)
+
+    setMapImageUploads(prev => ({
+      ...prev,
+      [questionId]: {
+        uploading: true,
+        progress: 0
+      }
+    }))
+
+    const uploadTask = uploadBytesResumable(imageRef, file, {
+      contentType: file.type || 'image/png',
+      customMetadata: {
+        createdBy: user.uid,
+        schoolId: getProfileSchoolId(profile),
+        originalName: file.name,
+        module: 'listening-map'
+      }
+    })
+
+    uploadTask.on(
+      'state_changed',
+      snapshot => {
+        const progress = Math.round(
+          (snapshot.bytesTransferred / snapshot.totalBytes) * 100
+        )
+
+        setMapImageUploads(prev => ({
+          ...prev,
+          [questionId]: {
+            uploading: true,
+            progress
+          }
+        }))
+      },
+      error => {
+        console.error('Map image upload failed:', error)
+        alert('Could not upload map image. Please check Firebase Storage settings and try again.')
+
+        setMapImageUploads(prev => ({
+          ...prev,
+          [questionId]: {
+            uploading: false,
+            progress: 0
+          }
+        }))
+
+        event.target.value = ''
+      },
+      async () => {
+        try {
+          const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref)
+
+          setQuestions(prev =>
+            prev.map(question => {
+              if (question.id !== questionId) return question
+
+              return {
+                ...question,
+                mapImage: downloadUrl,
+                mapImageFileName: file.name,
+                mapImageStoragePath: storagePath
+              }
+            })
+          )
+
+          setMapImageUploads(prev => ({
+            ...prev,
+            [questionId]: {
+              uploading: false,
+              progress: 100
+            }
+          }))
+        } catch (error) {
+          console.error('Could not get map image URL:', error)
+          alert('Map image uploaded, but the download URL could not be created.')
+
+          setMapImageUploads(prev => ({
+            ...prev,
+            [questionId]: {
+              uploading: false,
+              progress: 0
+            }
+          }))
+        } finally {
           event.target.value = ''
         }
       }
@@ -1769,7 +1896,7 @@ export default function CreateListening() {
 
       if (question.type === 'map') {
         if (!question.mapImage?.trim()) {
-          alert('Map labeling needs a map image URL.')
+          alert('Map labeling needs a map image. Upload an image or paste a map image URL.')
           return false
         }
 
@@ -2857,21 +2984,65 @@ export default function CreateListening() {
                           />
                         </div>
 
-                        <div className="mb-4">
+                        <div className="mb-4 bg-white border border-gray-100 rounded-2xl p-4">
                           <label className="text-xs text-gray-400 mb-1 block">
-                            Map image URL
+                            Upload map image
                           </label>
 
                           <input
-                            value={question.mapImage || ''}
-                            onChange={e => updateQuestion(question.id, 'mapImage', e.target.value)}
-                            placeholder="https://.../map-image.png"
-                            className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white"
+                            type="file"
+                            accept="image/*,.jpg,.jpeg,.png,.webp"
+                            onChange={event => handleMapImageUpload(question.id, event)}
+                            disabled={mapImageUploads[question.id]?.uploading}
+                            className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm bg-white disabled:opacity-60"
                           />
 
                           <p className="text-xs text-gray-400 mt-2">
-                            Upload the map image somewhere public and paste the image URL here for now.
+                            Upload JPG, PNG or WEBP. Maximum file size: 8 MB. The uploaded image URL will be saved automatically.
                           </p>
+
+                          {mapImageUploads[question.id]?.uploading && (
+                            <div className="mt-3 bg-purple-50 border border-purple-100 rounded-xl p-3">
+                              <div className="flex justify-between text-xs text-purple-600 mb-2">
+                                <span>Uploading map image...</span>
+                                <span>{mapImageUploads[question.id]?.progress || 0}%</span>
+                              </div>
+
+                              <div className="h-2 bg-white rounded-full overflow-hidden">
+                                <div
+                                  className="h-full bg-purple-600 transition-all"
+                                  style={{ width: `${mapImageUploads[question.id]?.progress || 0}%` }}
+                                />
+                              </div>
+                            </div>
+                          )}
+
+                          {question.mapImageFileName && !mapImageUploads[question.id]?.uploading && (
+                            <p className="text-xs text-green-600 mt-2">
+                              Uploaded: {question.mapImageFileName}
+                            </p>
+                          )}
+
+                          <div className="mt-4">
+                            <label className="text-xs text-gray-400 mb-1 block">
+                              Map image URL / optional manual link
+                            </label>
+
+                            <input
+                              value={question.mapImage || ''}
+                              onChange={e => {
+                                updateQuestion(question.id, 'mapImage', e.target.value)
+                                updateQuestion(question.id, 'mapImageFileName', '')
+                                updateQuestion(question.id, 'mapImageStoragePath', '')
+                              }}
+                              placeholder="https://.../map-image.png or upload an image above"
+                              className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white"
+                            />
+
+                            <p className="text-xs text-gray-400 mt-2">
+                              Uploaded files automatically fill this field. You can still paste a browser-viewable image URL manually.
+                            </p>
+                          </div>
                         </div>
 
                         {question.mapImage && (
