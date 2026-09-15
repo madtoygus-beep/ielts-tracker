@@ -117,7 +117,8 @@ function emptyQuestion(type = 'mcq') {
     answerText: '',
     acceptedAnswers: '',
     grammarNote: '',
-    sectionTitle: ''
+    sectionTitle: '',
+    groupId: type === 'word_bank' ? makeId() : ''
   }
 }
 
@@ -148,7 +149,8 @@ function normalizeQuestion(question) {
     answerText: question?.answerText || question?.correctAnswer || '',
     acceptedAnswers: question?.acceptedAnswers || '',
     grammarNote: normalizeMultilineText(question?.grammarNote || ''),
-    sectionTitle: question?.sectionTitle || ''
+    sectionTitle: question?.sectionTitle || '',
+    groupId: question?.groupId || ''
   }
 }
 
@@ -185,7 +187,11 @@ export default function CreateVocabulary() {
   ])
   const [assignTo, setAssignTo] = useState([])
   const [studentSearch, setStudentSearch] = useState('')
-  const [bulkPaste, setBulkPaste] = useState({ type: '', text: '' })
+  const [bulkPaste, setBulkPaste] = useState({
+    type: '',
+    groupId: '',
+    text: ''
+  })
   const [quickBuilder, setQuickBuilder] = useState({
     type: 'word_bank',
     text: ''
@@ -299,9 +305,20 @@ export default function CreateVocabulary() {
           setInstructions(data.instructions || '')
           setTimeLimit(data.timeLimit || 20)
           setDueDate(data.dueDate || '')
+          const legacyWordBankGroupId = makeId()
+
           setQuestions(
             data.questions?.length
-              ? data.questions.map(normalizeQuestion)
+              ? data.questions.map(rawQuestion =>
+                  normalizeQuestion({
+                    ...rawQuestion,
+                    groupId:
+                      rawQuestion.groupId ||
+                      (rawQuestion.type === 'word_bank'
+                        ? legacyWordBankGroupId
+                        : '')
+                  })
+                )
               : [emptyQuestion('mcq')]
           )
           setAssignTo(
@@ -370,6 +387,29 @@ export default function CreateVocabulary() {
     grammar: questions.filter(question => question.type === 'grammar_form'),
     mcq: questions.filter(question => question.type === 'mcq' || !question.type)
   }), [questions])
+
+  const wordBankGroups = useMemo(() => {
+    const groups = []
+    const byId = new Map()
+
+    groupedQuestions.wordBank.forEach(question => {
+      const groupId = question.groupId || 'legacy-word-bank'
+
+      if (!byId.has(groupId)) {
+        const group = {
+          groupId,
+          questions: []
+        }
+
+        byId.set(groupId, group)
+        groups.push(group)
+      }
+
+      byId.get(groupId).questions.push(question)
+    })
+
+    return groups
+  }, [groupedQuestions.wordBank])
 
   const matchingQuestionCount = groupedQuestions.matching.length
   const wordBankStartNumber = matchingQuestionCount + 1
@@ -466,16 +506,18 @@ export default function CreateVocabulary() {
 
   const addQuestion = type => {
     setQuestions(prev => {
+      if (type === 'word_bank') {
+        return [...prev, emptyQuestion('word_bank')]
+      }
+
       const firstOfType = prev.find(question => question.type === type)
       const nextQuestion = emptyQuestion(type)
 
       if (firstOfType) {
-        nextQuestion.taskTitle = firstOfType.taskTitle || nextQuestion.taskTitle
-        nextQuestion.instruction = firstOfType.instruction || nextQuestion.instruction
-
-        if (type === 'word_bank') {
-          nextQuestion.wordBank = firstOfType.wordBank || ''
-        }
+        nextQuestion.taskTitle =
+          firstOfType.taskTitle || nextQuestion.taskTitle
+        nextQuestion.instruction =
+          firstOfType.instruction || nextQuestion.instruction
 
         if (type === 'grammar_form') {
           nextQuestion.grammarNote = firstOfType.grammarNote || ''
@@ -484,6 +526,47 @@ export default function CreateVocabulary() {
 
       return [...prev, nextQuestion]
     })
+  }
+
+  const addWordBankSentence = groupId => {
+    setQuestions(prev => {
+      const firstInGroup = prev.find(
+        question =>
+          question.type === 'word_bank' &&
+          (question.groupId || 'legacy-word-bank') === groupId
+      )
+
+      const nextQuestion = emptyQuestion('word_bank')
+      nextQuestion.groupId = groupId
+
+      if (firstInGroup) {
+        nextQuestion.taskTitle =
+          firstInGroup.taskTitle || nextQuestion.taskTitle
+        nextQuestion.instruction =
+          firstInGroup.instruction || nextQuestion.instruction
+        nextQuestion.wordBank = firstInGroup.wordBank || ''
+      }
+
+      return [...prev, nextQuestion]
+    })
+  }
+
+  const removeWordBankGroup = groupId => {
+    setQuestions(prev =>
+      prev.filter(
+        question =>
+          !(
+            question.type === 'word_bank' &&
+            (question.groupId || 'legacy-word-bank') === groupId
+          )
+      )
+    )
+
+    setBulkPaste(current =>
+      current.type === 'word_bank' && current.groupId === groupId
+        ? { type: '', groupId: '', text: '' }
+        : current
+    )
   }
 
   const duplicateQuestion = question => {
@@ -517,6 +600,31 @@ export default function CreateVocabulary() {
 
   const getGroupSharedValue = (type, key, fallback = '') => {
     const item = questions.find(question => question.type === type)
+    return item?.[key] || fallback
+  }
+
+  const updateWordBankGroupFields = (groupId, patch) => {
+    setQuestions(prev =>
+      prev.map(question =>
+        question.type === 'word_bank' &&
+        (question.groupId || 'legacy-word-bank') === groupId
+          ? { ...question, ...patch }
+          : question
+      )
+    )
+  }
+
+  const getWordBankGroupSharedValue = (
+    groupId,
+    key,
+    fallback = ''
+  ) => {
+    const item = questions.find(
+      question =>
+        question.type === 'word_bank' &&
+        (question.groupId || 'legacy-word-bank') === groupId
+    )
+
     return item?.[key] || fallback
   }
 
@@ -612,6 +720,9 @@ export default function CreateVocabulary() {
       return
     }
 
+    const quickWordBankGroupId =
+      type === 'word_bank' ? makeId() : ''
+
     const firstOfType = questions.find(question => question.type === type)
     const template = emptyQuestion(type)
     const sharedTitle = firstOfType?.taskTitle || template.taskTitle
@@ -648,6 +759,7 @@ export default function CreateVocabulary() {
         if (bracket.found) {
           imported.push({
             ...emptyQuestion(type),
+            groupId: quickWordBankGroupId,
             taskTitle: sharedTitle,
             instruction: sharedInstruction,
             sentence: bracket.sentence,
@@ -665,6 +777,7 @@ export default function CreateVocabulary() {
 
         imported.push({
           ...emptyQuestion(type),
+          groupId: quickWordBankGroupId,
           taskTitle: sharedTitle,
           instruction: sharedInstruction,
           sentence: columns[0],
@@ -745,27 +858,17 @@ export default function CreateVocabulary() {
       )
 
       if (type === 'word_bank') {
-        const existingAnswers = next
-          .filter(question => question.type === 'word_bank')
-          .map(question => question.answerText?.trim())
-          .filter(Boolean)
-
-        const importedAnswers = imported
-          .map(question => question.answerText?.trim())
-          .filter(Boolean)
-
         const wordBank = Array.from(
-          new Set([...existingAnswers, ...importedAnswers])
+          new Set(
+            imported
+              .map(question => question.answerText?.trim())
+              .filter(Boolean)
+          )
         ).join(' - ')
-
-        next = next.map(question =>
-          question.type === 'word_bank'
-            ? { ...question, wordBank }
-            : question
-        )
 
         imported.forEach(question => {
           question.wordBank = wordBank
+          question.groupId = quickWordBankGroupId
         })
       }
 
@@ -808,15 +911,15 @@ export default function CreateVocabulary() {
     }
   }
 
-  const openBulkPaste = type => {
+  const openBulkPaste = (type, groupId = '') => {
     setBulkPaste(current =>
-      current.type === type
-        ? { type: '', text: '' }
-        : { type, text: '' }
+      current.type === type && current.groupId === groupId
+        ? { type: '', groupId: '', text: '' }
+        : { type, groupId, text: '' }
     )
   }
 
-  const importBulkItems = type => {
+  const importBulkItems = (type, groupId = '') => {
     const lines = bulkPaste.text
       .split(/\r?\n/)
       .map(line => line.trim())
@@ -827,9 +930,19 @@ export default function CreateVocabulary() {
       return
     }
 
-    const firstOfType = questions.find(question => question.type === type)
-    const sharedTitle = firstOfType?.taskTitle || emptyQuestion(type).taskTitle
-    const sharedInstruction = firstOfType?.instruction || emptyQuestion(type).instruction
+    const firstOfType =
+      type === 'word_bank'
+        ? questions.find(
+            question =>
+              question.type === 'word_bank' &&
+              (question.groupId || 'legacy-word-bank') === groupId
+          )
+        : questions.find(question => question.type === type)
+
+    const sharedTitle =
+      firstOfType?.taskTitle || emptyQuestion(type).taskTitle
+    const sharedInstruction =
+      firstOfType?.instruction || emptyQuestion(type).instruction
     const sharedWordBank = firstOfType?.wordBank || ''
     const sharedGrammarNote = firstOfType?.grammarNote || ''
     const imported = []
@@ -860,8 +973,11 @@ export default function CreateVocabulary() {
           return
         }
 
+        const question = emptyQuestion(type)
+        question.groupId = groupId
+
         imported.push({
-          ...emptyQuestion(type),
+          ...question,
           taskTitle: sharedTitle,
           instruction: sharedInstruction,
           wordBank: sharedWordBank,
@@ -873,7 +989,12 @@ export default function CreateVocabulary() {
       }
 
       if (type === 'grammar_form') {
-        if (columns.length < 3 || !columns[0] || !columns[1] || !columns[2]) {
+        if (
+          columns.length < 3 ||
+          !columns[0] ||
+          !columns[1] ||
+          !columns[2]
+        ) {
           skipped.push(lineIndex + 1)
           return
         }
@@ -892,15 +1013,29 @@ export default function CreateVocabulary() {
     })
 
     if (imported.length === 0) {
-      alert('No valid rows were found. Check the example format and try again.')
+      alert(
+        'No valid rows were found. Check the example format and try again.'
+      )
       return
     }
 
     let generatedWordBank = sharedWordBank
 
     if (type === 'word_bank' && !generatedWordBank.trim()) {
+      const existingGroupAnswers = questions
+        .filter(
+          question =>
+            question.type === 'word_bank' &&
+            (question.groupId || 'legacy-word-bank') === groupId
+        )
+        .map(question => question.answerText?.trim())
+        .filter(Boolean)
+
       generatedWordBank = Array.from(
-        new Set(imported.map(item => item.answerText).filter(Boolean))
+        new Set([
+          ...existingGroupAnswers,
+          ...imported.map(item => item.answerText).filter(Boolean)
+        ])
       ).join(' - ')
 
       imported.forEach(item => {
@@ -909,14 +1044,24 @@ export default function CreateVocabulary() {
     }
 
     setQuestions(prev => {
-      const cleaned = prev.filter(question =>
-        !(question.type === type && isEmptyWorkbookQuestion(question))
-      )
+      const cleaned = prev.filter(question => {
+        if (!isEmptyWorkbookQuestion(question)) return true
+
+        if (type !== 'word_bank') {
+          return question.type !== type
+        }
+
+        return !(
+          question.type === 'word_bank' &&
+          (question.groupId || 'legacy-word-bank') === groupId
+        )
+      })
 
       const withSharedWordBank =
         type === 'word_bank' && generatedWordBank.trim()
           ? cleaned.map(question =>
-              question.type === 'word_bank'
+              question.type === 'word_bank' &&
+              (question.groupId || 'legacy-word-bank') === groupId
                 ? { ...question, wordBank: generatedWordBank }
                 : question
             )
@@ -925,10 +1070,12 @@ export default function CreateVocabulary() {
       return [...withSharedWordBank, ...imported]
     })
 
-    setBulkPaste({ type: '', text: '' })
+    setBulkPaste({ type: '', groupId: '', text: '' })
 
     if (skipped.length > 0) {
-      alert(`Imported ${imported.length} row(s). Skipped line(s): ${skipped.join(', ')}`)
+      alert(
+        `Imported ${imported.length} row(s). Skipped line(s): ${skipped.join(', ')}`
+      )
     }
   }
 
@@ -1020,12 +1167,18 @@ export default function CreateVocabulary() {
       }
 
       if (question.type === 'word_bank') {
+        const questionGroupId =
+          question.groupId || 'legacy-word-bank'
+
         const sharedWordBank = questions.find(
-          item => item.type === 'word_bank' && item.wordBank?.trim()
+          item =>
+            item.type === 'word_bank' &&
+            (item.groupId || 'legacy-word-bank') === questionGroupId &&
+            item.wordBank?.trim()
         )?.wordBank || ''
 
         if (!sharedWordBank.trim()) {
-          alert('Task B needs words in the box.')
+          alert('Each Complete the Sentences section needs its own word box.')
           return false
         }
 
@@ -1053,38 +1206,74 @@ export default function CreateVocabulary() {
 
   const cleanQuestions = () => {
     const sharedByType = {
-      match_definition: questions.find(item => item.type === 'match_definition'),
-      word_bank: questions.find(item => item.type === 'word_bank'),
-      grammar_form: questions.find(item => item.type === 'grammar_form'),
-      mcq: questions.find(item => item.type === 'mcq' || !item.type)
+      match_definition: questions.find(
+        item => item.type === 'match_definition'
+      ),
+      grammar_form: questions.find(
+        item => item.type === 'grammar_form'
+      ),
+      mcq: questions.find(
+        item => item.type === 'mcq' || !item.type
+      )
     }
 
+    const wordBankSharedByGroup = new Map()
+
+    questions
+      .filter(item => item.type === 'word_bank')
+      .forEach(item => {
+        const groupId = item.groupId || 'legacy-word-bank'
+
+        if (!wordBankSharedByGroup.has(groupId)) {
+          wordBankSharedByGroup.set(groupId, item)
+        }
+      })
+
     return questions.map(question => {
-      const shared = sharedByType[question.type] || question
+      const wordBankGroupId =
+        question.groupId || 'legacy-word-bank'
+
+      const shared =
+        question.type === 'word_bank'
+          ? wordBankSharedByGroup.get(wordBankGroupId) || question
+          : sharedByType[question.type] || question
 
       return {
         id: question.id,
         type: question.type,
-        taskTitle: (shared?.taskTitle || question.taskTitle || '').trim(),
-        instruction: (shared?.instruction || question.instruction || '').trim(),
+        groupId:
+          question.type === 'word_bank'
+            ? wordBankGroupId
+            : '',
+        taskTitle:
+          (shared?.taskTitle || question.taskTitle || '').trim(),
+        instruction:
+          (shared?.instruction || question.instruction || '').trim(),
         question: question.question.trim(),
         options: question.options.map(option => option.trim()),
         answer: question.answer,
         word: question.word.trim(),
         definition: question.definition.trim(),
-        wordBank: question.type === 'word_bank'
-          ? (sharedByType.word_bank?.wordBank || question.wordBank || '').trim()
-          : question.wordBank.trim(),
+        wordBank:
+          question.type === 'word_bank'
+            ? (shared?.wordBank || question.wordBank || '').trim()
+            : question.wordBank.trim(),
         sentence: question.sentence.trim(),
         baseWord: question.baseWord.trim(),
         answerText: question.answerText.trim(),
         acceptedAnswers: question.acceptedAnswers.trim(),
-        grammarNote: question.type === 'grammar_form'
-          ? (sharedByType.grammar_form?.grammarNote || question.grammarNote || '').trim()
-          : question.grammarNote.trim(),
-        sectionTitle: question.type === 'mcq'
-          ? (question.sectionTitle || '').trim()
-          : ''
+        grammarNote:
+          question.type === 'grammar_form'
+            ? (
+                sharedByType.grammar_form?.grammarNote ||
+                question.grammarNote ||
+                ''
+              ).trim()
+            : question.grammarNote.trim(),
+        sectionTitle:
+          question.type === 'mcq'
+            ? (question.sectionTitle || '').trim()
+            : ''
       }
     })
   }
@@ -1210,8 +1399,11 @@ export default function CreateVocabulary() {
     </>
   )
 
-  const renderBulkPasteBox = type => {
-    if (bulkPaste.type !== type) return null
+  const renderBulkPasteBox = (type, groupId = '') => {
+    if (
+      bulkPaste.type !== type ||
+      bulkPaste.groupId !== groupId
+    ) return null
 
     const help =
       type === 'match_definition'
@@ -1241,7 +1433,9 @@ export default function CreateVocabulary() {
 
           <button
             type="button"
-            onClick={() => setBulkPaste({ type: '', text: '' })}
+            onClick={() =>
+              setBulkPaste({ type: '', groupId: '', text: '' })
+            }
             className="text-xs text-amber-700 bg-white border border-amber-200 px-3 py-1.5 rounded-lg"
           >
             Close
@@ -1252,7 +1446,11 @@ export default function CreateVocabulary() {
           rows={7}
           value={bulkPaste.text}
           onChange={event =>
-            setBulkPaste({ type, text: event.target.value })
+            setBulkPaste({
+              type,
+              groupId,
+              text: event.target.value
+            })
           }
           placeholder={example}
           className="w-full border border-amber-200 rounded-xl px-3 py-3 text-sm outline-none focus:border-amber-400 resize-y bg-white font-mono"
@@ -1265,7 +1463,7 @@ export default function CreateVocabulary() {
 
           <button
             type="button"
-            onClick={() => importBulkItems(type)}
+            onClick={() => importBulkItems(type, groupId)}
             className="text-xs bg-amber-600 text-white px-4 py-2 rounded-xl hover:bg-amber-700"
           >
             Import lines
@@ -1414,187 +1612,258 @@ export default function CreateVocabulary() {
   }
 
   const renderWordBankGroup = () => {
-    if (groupedQuestions.wordBank.length === 0) return null
-
-    const sharedWordBank = getGroupSharedValue('word_bank', 'wordBank', '')
+    if (wordBankGroups.length === 0) return null
 
     return (
-      <div className="border border-blue-100 bg-blue-50/40 rounded-2xl p-5">
-        <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3 mb-4">
-          <div>
-            <h3 className="font-semibold text-gray-800">
-              Task B - Complete the sentences
-            </h3>
-            <p className="text-xs text-gray-400 mt-1">
-              {groupedQuestions.wordBank.length} sentence{groupedQuestions.wordBank.length === 1 ? '' : 's'}. One shared word box for the whole task.
-            </p>
-          </div>
+      <div className="space-y-5">
+        {wordBankGroups.map((group, groupIndex) => {
+          const groupId = group.groupId
+          const groupQuestions = group.questions
 
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                const words = Array.from(
-                  new Set(
-                    groupedQuestions.wordBank
-                      .map(question => question.answerText?.trim())
-                      .filter(Boolean)
-                  )
-                ).join(' - ')
+          const sharedWordBank = getWordBankGroupSharedValue(
+            groupId,
+            'wordBank',
+            ''
+          )
 
-                updateGroupFields('word_bank', { wordBank: words })
-              }}
-              className="text-xs bg-white border border-blue-200 text-blue-600 px-3 py-2 rounded-xl hover:bg-blue-50"
+          const firstQuestion = groupQuestions[0]
+          const flatStartIndex = groupedQuestions.wordBank.findIndex(
+            question => question.id === firstQuestion?.id
+          )
+
+          return (
+            <div
+              key={groupId}
+              className="border border-blue-100 bg-blue-50/40 rounded-2xl p-5"
             >
-              Build word box from answers
-            </button>
+              <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3 mb-4">
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-xs bg-blue-600 text-white px-2.5 py-1 rounded-full font-semibold">
+                      Section {groupIndex + 1}
+                    </span>
 
-            <button
-              type="button"
-              onClick={() => openBulkPaste('word_bank')}
-              className="text-xs bg-white border border-blue-200 text-blue-600 px-3 py-2 rounded-xl hover:bg-blue-50"
-            >
-              Paste Multiple
-            </button>
+                    <h3 className="font-semibold text-gray-800">
+                      Complete the sentences
+                    </h3>
+                  </div>
 
-            <button
-              type="button"
-              onClick={() => addQuestion('word_bank')}
-              className="text-xs bg-blue-600 text-white px-3 py-2 rounded-xl hover:bg-blue-700"
-            >
-              + Add Sentence
-            </button>
-          </div>
-        </div>
+                  <p className="text-xs text-gray-400 mt-1">
+                    {groupQuestions.length} question{groupQuestions.length === 1 ? '' : 's'} in this section. This section has its own heading, instruction and word box.
+                  </p>
+                </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
-          <div>
-            <label className="text-xs text-gray-400 mb-1 block">
-              Task heading
-            </label>
-            <input
-              value={getGroupSharedValue('word_bank', 'taskTitle', 'Task B - Complete the sentences')}
-              onChange={event =>
-                updateGroupFields('word_bank', {
-                  taskTitle: event.target.value
-                })
-              }
-              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-blue-400 bg-white"
-            />
-          </div>
-
-          <div>
-            <label className="text-xs text-gray-400 mb-1 block">
-              Instruction
-            </label>
-            <input
-              value={getGroupSharedValue('word_bank', 'instruction', 'Use the words in the box.')}
-              onChange={event =>
-                updateGroupFields('word_bank', {
-                  instruction: event.target.value
-                })
-              }
-              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-blue-400 bg-white"
-            />
-          </div>
-
-          <div className="md:col-span-2">
-            <label className="text-xs text-gray-400 mb-1 block">
-              Words in the box
-            </label>
-            <textarea
-              rows={3}
-              value={sharedWordBank}
-              onChange={event =>
-                updateGroupFields('word_bank', {
-                  wordBank: event.target.value
-                })
-              }
-              placeholder="independent - influence - patient - support - keep in touch - share"
-              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-blue-400 resize-y bg-white"
-            />
-          </div>
-        </div>
-
-        {renderBulkPasteBox('word_bank')}
-
-        <div className="space-y-3">
-          {groupedQuestions.wordBank.map((question, index) => (
-            <div key={question.id} className="bg-white border border-gray-100 rounded-2xl p-4">
-              <div className="flex items-start justify-between gap-3 mb-3">
-                <span className="text-xs bg-blue-50 text-blue-600 px-3 py-1.5 rounded-full font-semibold">
-                  Question {wordBankStartNumber + index}
-                </span>
-
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
-                    onClick={() => duplicateQuestion(question)}
-                    className="text-xs bg-gray-50 border border-gray-200 text-gray-500 px-3 py-1.5 rounded-lg"
+                    onClick={() => {
+                      const words = Array.from(
+                        new Set(
+                          groupQuestions
+                            .map(question =>
+                              question.answerText?.trim()
+                            )
+                            .filter(Boolean)
+                        )
+                      ).join(' - ')
+
+                      updateWordBankGroupFields(groupId, {
+                        wordBank: words
+                      })
+                    }}
+                    className="text-xs bg-white border border-blue-200 text-blue-600 px-3 py-2 rounded-xl hover:bg-blue-50"
                   >
-                    Duplicate
+                    Build word box
                   </button>
+
                   <button
                     type="button"
-                    onClick={() => removeQuestion(question.id)}
-                    disabled={questions.length <= 1}
-                    className="text-xs bg-red-50 text-red-500 px-3 py-1.5 rounded-lg disabled:opacity-40"
+                    onClick={() =>
+                      openBulkPaste('word_bank', groupId)
+                    }
+                    className="text-xs bg-white border border-blue-200 text-blue-600 px-3 py-2 rounded-xl hover:bg-blue-50"
                   >
-                    Delete
+                    Paste Multiple
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      addWordBankSentence(groupId)
+                    }
+                    className="text-xs bg-blue-600 text-white px-3 py-2 rounded-xl hover:bg-blue-700"
+                  >
+                    + Add Sentence
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => removeWordBankGroup(groupId)}
+                    className="text-xs bg-red-50 text-red-500 px-3 py-2 rounded-xl hover:bg-red-100"
+                  >
+                    Delete Section
                   </button>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 xl:grid-cols-[1fr_230px] gap-3">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
                 <div>
                   <label className="text-xs text-gray-400 mb-1 block">
-                    Sentence with blank
+                    Section heading
                   </label>
-                  <textarea
-                    rows={3}
-                    value={question.sentence}
-                    onChange={event =>
-                      updateQuestion(question.id, {
-                        sentence: event.target.value
-                      })
-                    }
-                    placeholder="Grandparents can have a strong ________ on the way children think about family life."
-                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-blue-400 resize-y bg-white"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <div>
-                    <label className="text-xs text-gray-400 mb-1 block">
-                      Correct answer
-                    </label>
-                    <input
-                      value={question.answerText}
-                      onChange={event =>
-                        updateQuestion(question.id, {
-                          answerText: event.target.value
-                        })
-                      }
-                      placeholder="influence"
-                      className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-blue-400 bg-white"
-                    />
-                  </div>
 
                   <input
-                    value={question.acceptedAnswers}
+                    value={getWordBankGroupSharedValue(
+                      groupId,
+                      'taskTitle',
+                      'Task B - Complete the sentences'
+                    )}
                     onChange={event =>
-                      updateQuestion(question.id, {
-                        acceptedAnswers: event.target.value
+                      updateWordBankGroupFields(groupId, {
+                        taskTitle: event.target.value
                       })
                     }
-                    placeholder="Alternative answers, comma separated"
                     className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-blue-400 bg-white"
                   />
                 </div>
+
+                <div>
+                  <label className="text-xs text-gray-400 mb-1 block">
+                    Instruction
+                  </label>
+
+                  <input
+                    value={getWordBankGroupSharedValue(
+                      groupId,
+                      'instruction',
+                      'Use the words in the box.'
+                    )}
+                    onChange={event =>
+                      updateWordBankGroupFields(groupId, {
+                        instruction: event.target.value
+                      })
+                    }
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-blue-400 bg-white"
+                  />
+                </div>
+
+                <div className="md:col-span-2">
+                  <label className="text-xs text-gray-400 mb-1 block">
+                    Words in the box
+                  </label>
+
+                  <textarea
+                    rows={3}
+                    value={sharedWordBank}
+                    onChange={event =>
+                      updateWordBankGroupFields(groupId, {
+                        wordBank: event.target.value
+                      })
+                    }
+                    placeholder="independent - influence - patient - support - keep in touch - share"
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-blue-400 resize-y bg-white"
+                  />
+                </div>
+              </div>
+
+              {renderBulkPasteBox('word_bank', groupId)}
+
+              <div className="space-y-3">
+                {groupQuestions.map((question, localIndex) => {
+                  const flatIndex =
+                    flatStartIndex + localIndex
+
+                  return (
+                    <div
+                      key={question.id}
+                      className="bg-white border border-gray-100 rounded-2xl p-4"
+                    >
+                      <div className="flex items-start justify-between gap-3 mb-3">
+                        <span className="text-xs bg-blue-50 text-blue-600 px-3 py-1.5 rounded-full font-semibold">
+                          Question {wordBankStartNumber + flatIndex}
+                        </span>
+
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              duplicateQuestion(question)
+                            }
+                            className="text-xs bg-gray-50 border border-gray-200 text-gray-500 px-3 py-1.5 rounded-lg"
+                          >
+                            Duplicate
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              removeQuestion(question.id)
+                            }
+                            disabled={questions.length <= 1}
+                            className="text-xs bg-red-50 text-red-500 px-3 py-1.5 rounded-lg disabled:opacity-40"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 xl:grid-cols-[1fr_230px] gap-3">
+                        <div>
+                          <label className="text-xs text-gray-400 mb-1 block">
+                            Sentence with blank
+                          </label>
+
+                          <textarea
+                            rows={3}
+                            value={question.sentence}
+                            onChange={event =>
+                              updateQuestion(question.id, {
+                                sentence: event.target.value
+                              })
+                            }
+                            placeholder="Grandparents can have a strong ________ on the way children think about family life."
+                            className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-blue-400 resize-y bg-white"
+                          />
+                        </div>
+
+                        <div className="space-y-2">
+                          <div>
+                            <label className="text-xs text-gray-400 mb-1 block">
+                              Correct answer
+                            </label>
+
+                            <input
+                              value={question.answerText}
+                              onChange={event =>
+                                updateQuestion(question.id, {
+                                  answerText: event.target.value
+                                })
+                              }
+                              placeholder="influence"
+                              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-blue-400 bg-white"
+                            />
+                          </div>
+
+                          <input
+                            value={question.acceptedAnswers}
+                            onChange={event =>
+                              updateQuestion(question.id, {
+                                acceptedAnswers:
+                                  event.target.value
+                              })
+                            }
+                            placeholder="Alternative answers, comma separated"
+                            className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-blue-400 bg-white"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
             </div>
-          ))}
-        </div>
+          )
+        })}
       </div>
     )
   }
@@ -2039,7 +2308,7 @@ export default function CreateVocabulary() {
                     onClick={() => addQuestion('word_bank')}
                     className="text-xs bg-blue-50 text-blue-600 px-3 py-2 rounded-xl hover:bg-blue-100"
                   >
-                    + Complete sentences
+                    + New sentence section
                   </button>
                   <button
                     type="button"

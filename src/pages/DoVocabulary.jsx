@@ -301,6 +301,29 @@ export default function DoVocabulary() {
     }
   }, [test])
 
+  const wordBankGroups = useMemo(() => {
+    const groups = []
+    const byId = new Map()
+
+    groupedQuestions.wordBank.forEach(question => {
+      const groupId = question.groupId || 'legacy-word-bank'
+
+      if (!byId.has(groupId)) {
+        const group = {
+          groupId,
+          questions: []
+        }
+
+        byId.set(groupId, group)
+        groups.push(group)
+      }
+
+      byId.get(groupId).questions.push(question)
+    })
+
+    return groups
+  }, [groupedQuestions.wordBank])
+
   const matchingDefinitionOrder = useMemo(() => {
     const items = groupedQuestions.matching
 
@@ -330,22 +353,34 @@ export default function DoVocabulary() {
     groupedQuestions.grammar.length +
     1
 
-  const getGlobalQuestionNumber = (question, localIndex) => {
+  const getGlobalQuestionNumber = question => {
     const type = getQuestionType(question)
 
     if (type === 'match_definition') {
-      return localIndex + 1
+      const index = groupedQuestions.matching.findIndex(
+        item => item.id === question.id
+      )
+      return index + 1
     }
 
     if (type === 'word_bank') {
-      return wordBankStartNumber + localIndex
+      const index = groupedQuestions.wordBank.findIndex(
+        item => item.id === question.id
+      )
+      return wordBankStartNumber + index
     }
 
     if (type === 'grammar_form') {
-      return grammarStartNumber + localIndex
+      const index = groupedQuestions.grammar.findIndex(
+        item => item.id === question.id
+      )
+      return grammarStartNumber + index
     }
 
-    return mcqStartNumber + localIndex
+    const index = groupedQuestions.mcq.findIndex(
+      item => item.id === question.id
+    )
+    return mcqStartNumber + index
   }
 
   useEffect(() => {
@@ -575,51 +610,90 @@ export default function DoVocabulary() {
   }
 
   const renderWordBankTask = () => {
-    if (groupedQuestions.wordBank.length === 0) return null
-
-    const heading = groupedQuestions.wordBank[0].taskTitle || 'Task B - Complete the sentences'
-    const instruction = groupedQuestions.wordBank[0].instruction || 'Use the words in the box.'
-    const words = Array.from(
-      new Set(
-        groupedQuestions.wordBank.flatMap(question => parseWordBank(question.wordBank))
-      )
-    )
+    if (wordBankGroups.length === 0) return null
 
     return (
-      <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm">
-        <h2 className="text-xl font-bold text-gray-900 mb-2">{heading}</h2>
-        <p className="text-sm text-gray-500 mb-4">{instruction}</p>
+      <>
+        {wordBankGroups.map(group => {
+          const groupQuestions = group.questions
+          const firstQuestion = groupQuestions[0]
 
-        {words.length > 0 && (
-          <div className="bg-purple-50 border border-purple-100 rounded-2xl p-4 mb-5">
-            <div className="flex flex-wrap gap-2">
-              {words.map((word, index) => (
-                <span key={`${word}-${index}`} className="text-sm bg-white border border-purple-100 text-purple-700 px-3 py-1.5 rounded-full">
-                  {word}
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
+          const heading =
+            firstQuestion?.taskTitle ||
+            'Task B - Complete the sentences'
 
-        <div className="space-y-4">
-          {groupedQuestions.wordBank.map((question, index) => (
-            <div key={question.id} className="border border-gray-100 rounded-2xl p-4">
-              <p className="text-sm text-gray-800 leading-7 mb-3">
-                <span className="font-semibold mr-2">{wordBankStartNumber + index}.</span>
-                {question.sentence || question.question}
+          const instruction =
+            firstQuestion?.instruction ||
+            'Use the words in the box.'
+
+          const words = Array.from(
+            new Set(
+              groupQuestions.flatMap(question =>
+                parseWordBank(question.wordBank)
+              )
+            )
+          )
+
+          return (
+            <div
+              key={group.groupId}
+              className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm"
+            >
+              <h2 className="text-xl font-bold text-gray-900 mb-2">
+                {heading}
+              </h2>
+
+              <p className="text-sm text-gray-500 mb-4">
+                {instruction}
               </p>
 
-              <input
-                value={answers[answerKey(question.id)] || ''}
-                onChange={event => handleAnswer(question.id, event.target.value)}
-                placeholder="Type the correct word or phrase..."
-                className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400"
-              />
+              {words.length > 0 && (
+                <div className="bg-purple-50 border border-purple-100 rounded-2xl p-4 mb-5">
+                  <div className="flex flex-wrap gap-2">
+                    {words.map((word, index) => (
+                      <span
+                        key={`${word}-${index}`}
+                        className="text-sm bg-white border border-purple-100 text-purple-700 px-3 py-1.5 rounded-full"
+                      >
+                        {word}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="space-y-4">
+                {groupQuestions.map(question => (
+                  <div
+                    key={question.id}
+                    className="border border-gray-100 rounded-2xl p-4"
+                  >
+                    <p className="text-sm text-gray-800 leading-7 mb-3">
+                      <span className="font-semibold mr-2">
+                        {getGlobalQuestionNumber(question)}.
+                      </span>
+
+                      {question.sentence || question.question}
+                    </p>
+
+                    <input
+                      value={answers[answerKey(question.id)] || ''}
+                      onChange={event =>
+                        handleAnswer(
+                          question.id,
+                          event.target.value
+                        )
+                      }
+                      placeholder="Type the correct word or phrase..."
+                      className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400"
+                    />
+                  </div>
+                ))}
+              </div>
             </div>
-          ))}
-        </div>
-      </div>
+          )
+        })}
+      </>
     )
   }
 
@@ -738,9 +812,13 @@ export default function DoVocabulary() {
       groups.push(['Task A - Matching', groupedQuestions.matching])
     }
 
-    if (groupedQuestions.wordBank.length > 0) {
-      groups.push(['Task B - Complete the sentences', groupedQuestions.wordBank])
-    }
+    wordBankGroups.forEach(group => {
+      const heading =
+        group.questions[0]?.taskTitle ||
+        'Task B - Complete the sentences'
+
+      groups.push([heading, group.questions])
+    })
 
     if (groupedQuestions.grammar.length > 0) {
       groups.push(['Task C - Grammar completion', groupedQuestions.grammar])
@@ -807,7 +885,7 @@ export default function DoVocabulary() {
                       >
                         <div className="flex items-center justify-between gap-3 mb-3">
                           <p className="text-xs font-semibold text-gray-400">
-                            Question {getGlobalQuestionNumber(question, index)}
+                            Question {getGlobalQuestionNumber(question)}
                           </p>
                           <span className={`text-xs font-semibold ${correct ? 'text-green-600' : 'text-red-600'}`}>
                             {correct ? 'Correct' : 'Wrong'}
