@@ -118,7 +118,8 @@ function emptyQuestion(type = 'mcq') {
     acceptedAnswers: '',
     grammarNote: '',
     sectionTitle: '',
-    groupId: type === 'word_bank' ? makeId() : ''
+    groupId: type === 'word_bank' ? makeId() : '',
+    sectionOrder: null
   }
 }
 
@@ -150,7 +151,11 @@ function normalizeQuestion(question) {
     acceptedAnswers: question?.acceptedAnswers || '',
     grammarNote: normalizeMultilineText(question?.grammarNote || ''),
     sectionTitle: question?.sectionTitle || '',
-    groupId: question?.groupId || ''
+    groupId: question?.groupId || '',
+    sectionOrder:
+      Number.isFinite(Number(question?.sectionOrder))
+        ? Number(question.sectionOrder)
+        : null
   }
 }
 
@@ -408,10 +413,9 @@ export default function CreateVocabulary() {
   }, [groupedQuestions.wordBank])
 
   const orderedSections = useMemo(() => {
-    const sections = []
-    const seen = new Set()
+    const byKey = new Map()
 
-    questions.forEach(question => {
+    questions.forEach((question, questionIndex) => {
       const type =
         question.type === 'match_definition'
           ? 'matching'
@@ -426,33 +430,65 @@ export default function CreateVocabulary() {
           ? `wordBank:${question.groupId || 'legacy-word-bank'}`
           : type
 
-      if (seen.has(key)) return
+      const explicitOrder = Number(question.sectionOrder)
+      const fallbackOrder = questionIndex + 1
+      const order =
+        Number.isFinite(explicitOrder) && explicitOrder > 0
+          ? explicitOrder
+          : fallbackOrder
 
-      seen.add(key)
-
-      if (type === 'wordBank') {
-        const groupId = question.groupId || 'legacy-word-bank'
-        const group = wordBankGroups.find(item => item.groupId === groupId)
-
-        if (group) {
-          sections.push({
-            key,
-            type,
-            group
-          })
-        }
-
+      if (!byKey.has(key)) {
+        byKey.set(key, {
+          key,
+          type,
+          order,
+          firstIndex: questionIndex,
+          groupId:
+            type === 'wordBank'
+              ? question.groupId || 'legacy-word-bank'
+              : ''
+        })
         return
       }
 
-      sections.push({
-        key,
-        type
-      })
+      const current = byKey.get(key)
+      current.order = Math.min(current.order, order)
+      current.firstIndex = Math.min(current.firstIndex, questionIndex)
     })
 
-    return sections
+    return Array.from(byKey.values())
+      .sort((a, b) => {
+        if (a.order !== b.order) return a.order - b.order
+        return a.firstIndex - b.firstIndex
+      })
+      .map(section => {
+        if (section.type !== 'wordBank') return section
+
+        return {
+          ...section,
+          group: wordBankGroups.find(
+            item => item.groupId === section.groupId
+          )
+        }
+      })
+      .filter(section =>
+        section.type !== 'wordBank' || Boolean(section.group)
+      )
   }, [questions, wordBankGroups])
+
+  const nextSectionOrder = useMemo(() => {
+    if (orderedSections.length === 0) return 1
+
+    return (
+      Math.max(
+        ...orderedSections.map((section, index) =>
+          Number.isFinite(Number(section.order))
+            ? Number(section.order)
+            : index + 1
+        )
+      ) + 1
+    )
+  }, [orderedSections])
 
   const orderedQuestions = useMemo(
     () =>
@@ -582,6 +618,7 @@ export default function CreateVocabulary() {
     if (type === 'word_bank') {
       const nextQuestion = emptyQuestion('word_bank')
       const newGroupId = nextQuestion.groupId
+      nextQuestion.sectionOrder = nextSectionOrder
 
       setQuestions(prev => [
         ...prev,
@@ -601,10 +638,13 @@ export default function CreateVocabulary() {
           firstOfType.taskTitle || nextQuestion.taskTitle
         nextQuestion.instruction =
           firstOfType.instruction || nextQuestion.instruction
+        nextQuestion.sectionOrder = firstOfType.sectionOrder
 
         if (type === 'grammar_form') {
           nextQuestion.grammarNote = firstOfType.grammarNote || ''
         }
+      } else {
+        nextQuestion.sectionOrder = nextSectionOrder
       }
 
       return [...prev, nextQuestion]
@@ -628,6 +668,7 @@ export default function CreateVocabulary() {
         nextQuestion.instruction =
           firstInGroup.instruction || nextQuestion.instruction
         nextQuestion.wordBank = firstInGroup.wordBank || ''
+        nextQuestion.sectionOrder = firstInGroup.sectionOrder
       }
 
       const lastIndexInGroup = prev.reduce(
@@ -1128,9 +1169,25 @@ export default function CreateVocabulary() {
         }
       })
 
+    const sectionOrderByKey = new Map(
+      orderedSections.map((section, index) => [
+        section.key,
+        index + 1
+      ])
+    )
+
     return questions.map(question => {
       const wordBankGroupId =
         question.groupId || 'legacy-word-bank'
+
+      const questionSectionKey =
+        question.type === 'match_definition'
+          ? 'matching'
+          : question.type === 'word_bank'
+            ? `wordBank:${wordBankGroupId}`
+            : question.type === 'grammar_form'
+              ? 'grammar'
+              : 'mcq'
 
       const shared =
         question.type === 'word_bank'
@@ -1172,7 +1229,9 @@ export default function CreateVocabulary() {
         sectionTitle:
           question.type === 'mcq'
             ? (question.sectionTitle || '').trim()
-            : ''
+            : '',
+        sectionOrder:
+          sectionOrderByKey.get(questionSectionKey) || 1
       }
     })
   }
@@ -1513,11 +1572,12 @@ export default function CreateVocabulary() {
   const renderWordBankGroup = group => {
     if (!group) return null
 
-    const groupIndex = wordBankGroups.findIndex(
-      item => item.groupId === group.groupId
-    )
-
     const groupId = group.groupId
+    const sectionIndex = orderedSections.findIndex(
+      section =>
+        section.type === 'wordBank' &&
+        section.groupId === groupId
+    )
     const groupQuestions = group.questions
 
     const sharedWordBank = getWordBankGroupSharedValue(
@@ -1536,7 +1596,7 @@ export default function CreateVocabulary() {
                 <div>
                   <div className="flex items-center gap-2 mb-1">
                     <span className="text-xs bg-blue-600 text-white px-2.5 py-1 rounded-full font-semibold">
-                      Section {groupIndex + 1}
+                      Section {sectionIndex + 1}
                     </span>
 
                     <h3 className="font-semibold text-gray-800">
@@ -2180,7 +2240,7 @@ export default function CreateVocabulary() {
                     Vocabulary Tasks
                   </h2>
                   <p className="text-xs text-gray-400 mt-1">
-                    Add separate sections, then add questions inside each section. New sentence sections are placed after the existing sentence sections.
+                    Add separate sections in the order you want. A new sentence section is always added after the current last section; existing sections never move.
                   </p>
                 </div>
 

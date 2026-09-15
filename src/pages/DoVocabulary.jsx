@@ -325,10 +325,9 @@ export default function DoVocabulary() {
   }, [groupedQuestions.wordBank])
 
   const orderedSections = useMemo(() => {
-    const sections = []
-    const seen = new Set()
+    const byKey = new Map()
 
-    ;(test?.questions || []).forEach(question => {
+    ;(test?.questions || []).forEach((question, questionIndex) => {
       const questionType = getQuestionType(question)
 
       const type =
@@ -345,32 +344,50 @@ export default function DoVocabulary() {
           ? `wordBank:${question.groupId || 'legacy-word-bank'}`
           : type
 
-      if (seen.has(key)) return
+      const explicitOrder = Number(question.sectionOrder)
+      const fallbackOrder = questionIndex + 1
+      const order =
+        Number.isFinite(explicitOrder) && explicitOrder > 0
+          ? explicitOrder
+          : fallbackOrder
 
-      seen.add(key)
-
-      if (type === 'wordBank') {
-        const groupId = question.groupId || 'legacy-word-bank'
-        const group = wordBankGroups.find(item => item.groupId === groupId)
-
-        if (group) {
-          sections.push({
-            key,
-            type,
-            group
-          })
-        }
-
+      if (!byKey.has(key)) {
+        byKey.set(key, {
+          key,
+          type,
+          order,
+          firstIndex: questionIndex,
+          groupId:
+            type === 'wordBank'
+              ? question.groupId || 'legacy-word-bank'
+              : ''
+        })
         return
       }
 
-      sections.push({
-        key,
-        type
-      })
+      const current = byKey.get(key)
+      current.order = Math.min(current.order, order)
+      current.firstIndex = Math.min(current.firstIndex, questionIndex)
     })
 
-    return sections
+    return Array.from(byKey.values())
+      .sort((a, b) => {
+        if (a.order !== b.order) return a.order - b.order
+        return a.firstIndex - b.firstIndex
+      })
+      .map(section => {
+        if (section.type !== 'wordBank') return section
+
+        return {
+          ...section,
+          group: wordBankGroups.find(
+            item => item.groupId === section.groupId
+          )
+        }
+      })
+      .filter(section =>
+        section.type !== 'wordBank' || Boolean(section.group)
+      )
   }, [test, wordBankGroups])
 
   const orderedQuestions = useMemo(
