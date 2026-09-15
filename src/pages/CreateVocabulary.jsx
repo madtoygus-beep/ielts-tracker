@@ -146,12 +146,16 @@ function normalizeQuestion(question) {
     baseWord: question?.baseWord || '',
     answerText: question?.answerText || question?.correctAnswer || '',
     acceptedAnswers: question?.acceptedAnswers || '',
-    grammarNote: question?.grammarNote || ''
+    grammarNote: normalizeMultilineText(question?.grammarNote || '')
   }
 }
 
 function getQuestionTypeLabel(type) {
   return questionTypes.find(item => item[0] === type)?.[1] || 'Question'
+}
+
+function normalizeMultilineText(value) {
+  return (value || '').replace(/\\n/g, '\n')
 }
 
 export default function CreateVocabulary() {
@@ -180,6 +184,10 @@ export default function CreateVocabulary() {
   const [assignTo, setAssignTo] = useState([])
   const [studentSearch, setStudentSearch] = useState('')
   const [bulkPaste, setBulkPaste] = useState({ type: '', text: '' })
+  const [quickBuilder, setQuickBuilder] = useState({
+    type: 'word_bank',
+    text: ''
+  })
 
   useEffect(() => {
     let isActive = true
@@ -536,6 +544,258 @@ export default function CreateVocabulary() {
     return [line.trim()]
   }
 
+  const splitSmartColumns = line => {
+    if (line.includes('\t')) {
+      return line.split('\t').map(value => value.trim())
+    }
+
+    if (line.includes('=>')) {
+      return line.split('=>').map(value => value.trim())
+    }
+
+    if (line.includes('|')) {
+      return line.split('|').map(value => value.trim())
+    }
+
+    const equalsMatch = line.match(/\s=\s/)
+
+    if (equalsMatch) {
+      const index = equalsMatch.index
+      return [
+        line.slice(0, index).trim(),
+        line.slice(index + equalsMatch[0].length).trim()
+      ]
+    }
+
+    return [line.trim()]
+  }
+
+  const extractBracketAnswer = text => {
+    const match = text.match(/\[([^\]]+)\]/)
+
+    if (!match) {
+      return {
+        found: false,
+        answer: '',
+        sentence: text.trim()
+      }
+    }
+
+    return {
+      found: true,
+      answer: match[1].trim(),
+      sentence: text.replace(match[0], '________').trim()
+    }
+  }
+
+  const importQuickBuilder = () => {
+    const type = quickBuilder.type
+    const lines = quickBuilder.text
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(Boolean)
+
+    if (lines.length === 0) {
+      alert('Write or paste at least one line first.')
+      return
+    }
+
+    const firstOfType = questions.find(question => question.type === type)
+    const template = emptyQuestion(type)
+    const sharedTitle = firstOfType?.taskTitle || template.taskTitle
+    const sharedInstruction = firstOfType?.instruction || template.instruction
+    const sharedGrammarNote = normalizeMultilineText(
+      firstOfType?.grammarNote || ''
+    )
+
+    const imported = []
+    const skipped = []
+
+    lines.forEach((line, lineIndex) => {
+      if (type === 'match_definition') {
+        const columns = splitSmartColumns(line)
+
+        if (columns.length < 2 || !columns[0] || !columns[1]) {
+          skipped.push(lineIndex + 1)
+          return
+        }
+
+        imported.push({
+          ...emptyQuestion(type),
+          taskTitle: sharedTitle,
+          instruction: sharedInstruction,
+          word: columns[0],
+          definition: columns.slice(1).join(' | ')
+        })
+        return
+      }
+
+      if (type === 'word_bank') {
+        const bracket = extractBracketAnswer(line)
+
+        if (bracket.found) {
+          imported.push({
+            ...emptyQuestion(type),
+            taskTitle: sharedTitle,
+            instruction: sharedInstruction,
+            sentence: bracket.sentence,
+            answerText: bracket.answer
+          })
+          return
+        }
+
+        const columns = splitSmartColumns(line)
+
+        if (columns.length < 2 || !columns[0] || !columns[1]) {
+          skipped.push(lineIndex + 1)
+          return
+        }
+
+        imported.push({
+          ...emptyQuestion(type),
+          taskTitle: sharedTitle,
+          instruction: sharedInstruction,
+          sentence: columns[0],
+          answerText: columns[1],
+          acceptedAnswers: columns.slice(2).join(', ')
+        })
+        return
+      }
+
+      if (type === 'grammar_form') {
+        const pipeColumns = splitSmartColumns(line)
+        const bracket = extractBracketAnswer(pipeColumns[0] || line)
+
+        if (bracket.found) {
+          let baseWord = pipeColumns[1] || ''
+          let sentence = bracket.sentence
+
+          if (!baseWord) {
+            const baseMatch = sentence.match(/\(([^()]+)\)\s*$/)
+
+            if (baseMatch) {
+              baseWord = baseMatch[1].trim()
+              sentence = sentence.replace(baseMatch[0], '').trim()
+            }
+          }
+
+          if (!baseWord) {
+            skipped.push(lineIndex + 1)
+            return
+          }
+
+          imported.push({
+            ...emptyQuestion(type),
+            taskTitle: sharedTitle,
+            instruction: sharedInstruction,
+            grammarNote: sharedGrammarNote,
+            sentence,
+            baseWord,
+            answerText: bracket.answer,
+            acceptedAnswers: pipeColumns.slice(2).join(', ')
+          })
+          return
+        }
+
+        const columns = splitSmartColumns(line)
+
+        if (
+          columns.length < 3 ||
+          !columns[0] ||
+          !columns[1] ||
+          !columns[2]
+        ) {
+          skipped.push(lineIndex + 1)
+          return
+        }
+
+        imported.push({
+          ...emptyQuestion(type),
+          taskTitle: sharedTitle,
+          instruction: sharedInstruction,
+          grammarNote: sharedGrammarNote,
+          sentence: columns[0],
+          baseWord: columns[1],
+          answerText: columns[2],
+          acceptedAnswers: columns.slice(3).join(', ')
+        })
+      }
+    })
+
+    if (imported.length === 0) {
+      alert('No valid lines were found. Check the example under Quick Builder.')
+      return
+    }
+
+    setQuestions(prev => {
+      let next = prev.filter(question =>
+        !(question.type === type && isEmptyWorkbookQuestion(question))
+      )
+
+      if (type === 'word_bank') {
+        const existingAnswers = next
+          .filter(question => question.type === 'word_bank')
+          .map(question => question.answerText?.trim())
+          .filter(Boolean)
+
+        const importedAnswers = imported
+          .map(question => question.answerText?.trim())
+          .filter(Boolean)
+
+        const wordBank = Array.from(
+          new Set([...existingAnswers, ...importedAnswers])
+        ).join(' - ')
+
+        next = next.map(question =>
+          question.type === 'word_bank'
+            ? { ...question, wordBank }
+            : question
+        )
+
+        imported.forEach(question => {
+          question.wordBank = wordBank
+        })
+      }
+
+      return [...next, ...imported]
+    })
+
+    setQuickBuilder(current => ({
+      ...current,
+      text: ''
+    }))
+
+    if (skipped.length > 0) {
+      alert(
+        `Added ${imported.length} item(s). Could not understand line(s): ${skipped.join(', ')}`
+      )
+    }
+  }
+
+  const getQuickBuilderHelp = () => {
+    if (quickBuilder.type === 'match_definition') {
+      return {
+        title: 'Matching — write one pair per line',
+        example:
+          'extended family = a family that includes grandparents, aunts and uncles\\nclose-knit = having strong and friendly relationships with each other'
+      }
+    }
+
+    if (quickBuilder.type === 'grammar_form') {
+      return {
+        title: 'Grammar — put the correct form in [brackets]',
+        example:
+          'Old glass bottles [are collected] at recycling centres. (collect)\\nThe bottles [are sorted] according to colour. (sort)'
+      }
+    }
+
+    return {
+      title: 'Complete sentences — put the answer in [brackets]',
+      example:
+        'Grandparents can have a strong [influence] on the way children think about family life.\\nAlthough Marta lives in another city, she tries to [keep in touch] with her cousins.'
+    }
+  }
+
   const openBulkPaste = type => {
     setBulkPaste(current =>
       current.type === type
@@ -834,6 +1094,7 @@ export default function CreateVocabulary() {
       questions: preparedQuestions,
       questionCount: preparedQuestions.length,
       hasWorkbookTasks: preparedQuestions.some(question => question.type !== 'mcq'),
+      matchingShuffle: true,
       assignTo,
       assignedStudentIds: selectedStudents.map(student => student.id),
       assignedEmails: selectedStudents
@@ -1394,7 +1655,9 @@ export default function CreateVocabulary() {
             </label>
             <textarea
               rows={5}
-              value={getGroupSharedValue('grammar_form', 'grammarNote', '')}
+              value={normalizeMultilineText(
+                getGroupSharedValue('grammar_form', 'grammarNote', '')
+              )}
               onChange={event =>
                 updateGroupFields('grammar_form', {
                   grammarNote: event.target.value
@@ -1755,6 +2018,75 @@ export default function CreateVocabulary() {
                     className="text-xs bg-gray-100 text-gray-700 px-3 py-2 rounded-xl hover:bg-gray-200"
                   >
                     + MCQ
+                  </button>
+                </div>
+              </div>
+
+              <div className="bg-gradient-to-br from-purple-50 to-white border border-purple-100 rounded-2xl p-5 mb-6">
+                <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4 mb-4">
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-lg">⚡</span>
+                      <h3 className="font-semibold text-gray-900">
+                        Quick Builder
+                      </h3>
+                    </div>
+
+                    <p className="text-xs text-gray-500 leading-5">
+                      Write the exercise naturally. Put the answer in [brackets] and the system creates the blank and answer key automatically.
+                    </p>
+                  </div>
+
+                  <select
+                    value={quickBuilder.type}
+                    onChange={event =>
+                      setQuickBuilder({
+                        type: event.target.value,
+                        text: ''
+                      })
+                    }
+                    className="border border-purple-200 rounded-xl px-3 py-2.5 text-sm bg-white text-gray-700 outline-none focus:border-purple-400"
+                  >
+                    <option value="word_bank">Complete sentences</option>
+                    <option value="match_definition">Matching</option>
+                    <option value="grammar_form">Grammar form</option>
+                  </select>
+                </div>
+
+                <div className="bg-white border border-purple-100 rounded-2xl p-4 mb-3">
+                  <p className="text-xs font-semibold text-purple-700 mb-2">
+                    {getQuickBuilderHelp().title}
+                  </p>
+
+                  <pre className="text-[11px] leading-5 text-gray-500 whitespace-pre-wrap font-mono">
+                    {getQuickBuilderHelp().example}
+                  </pre>
+                </div>
+
+                <textarea
+                  rows={7}
+                  value={quickBuilder.text}
+                  onChange={event =>
+                    setQuickBuilder(current => ({
+                      ...current,
+                      text: event.target.value
+                    }))
+                  }
+                  placeholder={getQuickBuilderHelp().example}
+                  className="w-full border border-purple-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 resize-y bg-white"
+                />
+
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mt-3">
+                  <p className="text-[11px] text-gray-500">
+                    Matching also accepts Excel columns, | or =&gt;. Detailed fields remain below for corrections.
+                  </p>
+
+                  <button
+                    type="button"
+                    onClick={importQuickBuilder}
+                    className="bg-purple-600 text-white px-5 py-2.5 rounded-xl text-sm font-medium hover:bg-purple-700"
+                  >
+                    Create items from text
                   </button>
                 </div>
               </div>

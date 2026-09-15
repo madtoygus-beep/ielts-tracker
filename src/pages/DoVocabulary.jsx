@@ -167,6 +167,17 @@ function getQuestionPrompt(question) {
   return question.question
 }
 
+function stableHash(value) {
+  return Array.from(value || '').reduce(
+    (hash, character) => ((hash * 31) + character.charCodeAt(0)) >>> 0,
+    7
+  )
+}
+
+function normalizeMultilineText(value) {
+  return (value || '').replace(/\\n/g, '\n')
+}
+
 export default function DoVocabulary() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -290,6 +301,25 @@ export default function DoVocabulary() {
     }
   }, [test])
 
+  const matchingDefinitionOrder = useMemo(() => {
+    const items = groupedQuestions.matching
+
+    if (
+      test?.matchingShuffle !== true ||
+      items.length <= 1
+    ) {
+      return items
+    }
+
+    const shift =
+      (stableHash(test?.id || test?.title || 'vocabulary') % (items.length - 1)) + 1
+
+    return [
+      ...items.slice(shift),
+      ...items.slice(0, shift)
+    ]
+  }, [groupedQuestions.matching, test])
+
   useEffect(() => {
     if (timeLeft === null || submitted) return
 
@@ -325,7 +355,11 @@ export default function DoVocabulary() {
     const selected = answers[answerKey(question.id)]
 
     if (type === 'match_definition') {
-      return selected === letters[groupIndex]
+      const selectedIndex = letters.indexOf(selected)
+
+      if (selectedIndex < 0) return false
+
+      return matchingDefinitionOrder[selectedIndex]?.id === question.id
     }
 
     if (type === 'word_bank' || type === 'grammar_form') {
@@ -343,18 +377,11 @@ export default function DoVocabulary() {
     const questions = test?.questions || []
     let correct = 0
     let total = 0
-    const matchingIndexMap = new Map()
-
-    groupedQuestions.matching.forEach((question, index) => {
-      matchingIndexMap.set(question.id, index)
-    })
 
     questions.forEach(question => {
       total++
 
-      const groupIndex = matchingIndexMap.get(question.id) ?? 0
-
-      if (isCorrect(question, groupIndex)) {
+      if (isCorrect(question)) {
         correct++
       }
     })
@@ -429,7 +456,7 @@ export default function DoVocabulary() {
     if (type === 'match_definition') {
       if (!selected) return 'No answer'
       const selectedIndex = letters.indexOf(selected)
-      const definition = groupedQuestions.matching[selectedIndex]?.definition || ''
+      const definition = matchingDefinitionOrder[selectedIndex]?.definition || ''
       return `${selected}. ${definition}`
     }
 
@@ -444,7 +471,15 @@ export default function DoVocabulary() {
     const type = getQuestionType(question)
 
     if (type === 'match_definition') {
-      return `${letters[groupIndex]}. ${question.definition}`
+      const correctIndex = matchingDefinitionOrder.findIndex(
+        item => item.id === question.id
+      )
+
+      const letter = correctIndex >= 0
+        ? letters[correctIndex]
+        : '?'
+
+      return `${letter}. ${question.definition}`
     }
 
     if (type === 'word_bank' || type === 'grammar_form') {
@@ -476,7 +511,7 @@ export default function DoVocabulary() {
           </div>
 
           <div className="space-y-2">
-            {groupedQuestions.matching.map((question, index) => (
+            {matchingDefinitionOrder.map((question, index) => (
               <p key={question.id} className="text-sm text-gray-700">
                 <span className="font-semibold mr-2">{letters[index]}.</span>
                 {question.definition}
@@ -565,7 +600,9 @@ export default function DoVocabulary() {
 
     const heading = groupedQuestions.grammar[0].taskTitle || 'Task C - Grammar Focus'
     const instruction = groupedQuestions.grammar[0].instruction || 'Complete the sentences using the correct form.'
-    const grammarNote = groupedQuestions.grammar.find(question => question.grammarNote)?.grammarNote || ''
+    const grammarNote = normalizeMultilineText(
+      groupedQuestions.grammar.find(question => question.grammarNote)?.grammarNote || ''
+    )
 
     return (
       <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm">
@@ -719,7 +756,7 @@ export default function DoVocabulary() {
 
                 <div className="flex flex-col gap-4">
                   {items.map((question, index) => {
-                    const correct = isCorrect(question, getQuestionType(question) === 'match_definition' ? index : 0)
+                    const correct = isCorrect(question)
 
                     return (
                       <div
