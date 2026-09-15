@@ -407,6 +407,11 @@ export default function CreateVocabulary() {
     return groups
   }, [groupedQuestions.wordBank])
 
+  const orderedWordBankQuestions = useMemo(
+    () => wordBankGroups.flatMap(group => group.questions),
+    [wordBankGroups]
+  )
+
   const matchingQuestionCount = groupedQuestions.matching.length
   const wordBankStartNumber = matchingQuestionCount + 1
   const grammarStartNumber =
@@ -500,11 +505,25 @@ export default function CreateVocabulary() {
     )
   }
 
-  const addQuestion = type => {
-    setQuestions(prev => {
-      if (type === 'word_bank') {
-        const nextQuestion = emptyQuestion('word_bank')
+  const scrollToCreatedItem = elementId => {
+    window.setTimeout(() => {
+      const element = document.getElementById(elementId)
 
+      if (element) {
+        element.scrollIntoView({
+          behavior: 'smooth',
+          block: 'center'
+        })
+      }
+    }, 80)
+  }
+
+  const addQuestion = type => {
+    if (type === 'word_bank') {
+      const nextQuestion = emptyQuestion('word_bank')
+      const newGroupId = nextQuestion.groupId
+
+      setQuestions(prev => {
         const lastWordBankIndex = prev.reduce(
           (lastIndex, question, index) =>
             question.type === 'word_bank'
@@ -514,15 +533,33 @@ export default function CreateVocabulary() {
         )
 
         if (lastWordBankIndex === -1) {
-          return [...prev, nextQuestion]
+          const firstNonMatchingIndex = prev.findIndex(
+            question => question.type !== 'match_definition'
+          )
+
+          if (firstNonMatchingIndex === -1) {
+            return [...prev, nextQuestion]
+          }
+
+          return [
+            ...prev.slice(0, firstNonMatchingIndex),
+            nextQuestion,
+            ...prev.slice(firstNonMatchingIndex)
+          ]
         }
 
-        const before = prev.slice(0, lastWordBankIndex + 1)
-        const after = prev.slice(lastWordBankIndex + 1)
+        return [
+          ...prev.slice(0, lastWordBankIndex + 1),
+          nextQuestion,
+          ...prev.slice(lastWordBankIndex + 1)
+        ]
+      })
 
-        return [...before, nextQuestion, ...after]
-      }
+      scrollToCreatedItem(`word-bank-section-${newGroupId}`)
+      return
+    }
 
+    setQuestions(prev => {
       const firstOfType = prev.find(question => question.type === type)
       const nextQuestion = emptyQuestion(type)
 
@@ -542,15 +579,15 @@ export default function CreateVocabulary() {
   }
 
   const addWordBankSentence = groupId => {
+    const nextQuestion = emptyQuestion('word_bank')
+    nextQuestion.groupId = groupId
+
     setQuestions(prev => {
       const firstInGroup = prev.find(
         question =>
           question.type === 'word_bank' &&
           (question.groupId || 'legacy-word-bank') === groupId
       )
-
-      const nextQuestion = emptyQuestion('word_bank')
-      nextQuestion.groupId = groupId
 
       if (firstInGroup) {
         nextQuestion.taskTitle =
@@ -560,8 +597,27 @@ export default function CreateVocabulary() {
         nextQuestion.wordBank = firstInGroup.wordBank || ''
       }
 
-      return [...prev, nextQuestion]
+      const lastIndexInGroup = prev.reduce(
+        (lastIndex, question, index) =>
+          question.type === 'word_bank' &&
+          (question.groupId || 'legacy-word-bank') === groupId
+            ? index
+            : lastIndex,
+        -1
+      )
+
+      if (lastIndexInGroup === -1) {
+        return [...prev, nextQuestion]
+      }
+
+      return [
+        ...prev.slice(0, lastIndexInGroup + 1),
+        nextQuestion,
+        ...prev.slice(lastIndexInGroup + 1)
+      ]
     })
+
+    scrollToCreatedItem(`word-bank-question-${nextQuestion.id}`)
   }
 
   const removeWordBankGroup = groupId => {
@@ -583,13 +639,30 @@ export default function CreateVocabulary() {
   }
 
   const duplicateQuestion = question => {
-    setQuestions(prev => [
-      ...prev,
-      {
-        ...JSON.parse(JSON.stringify(question)),
-        id: makeId()
+    const duplicated = {
+      ...JSON.parse(JSON.stringify(question)),
+      id: makeId()
+    }
+
+    setQuestions(prev => {
+      const originalIndex = prev.findIndex(
+        item => item.id === question.id
+      )
+
+      if (originalIndex === -1) {
+        return [...prev, duplicated]
       }
-    ])
+
+      return [
+        ...prev.slice(0, originalIndex + 1),
+        duplicated,
+        ...prev.slice(originalIndex + 1)
+      ]
+    })
+
+    if (question.type === 'word_bank') {
+      scrollToCreatedItem(`word-bank-question-${duplicated.id}`)
+    }
   }
 
   const removeQuestion = questionId => {
@@ -833,10 +906,37 @@ export default function CreateVocabulary() {
             )
           : cleaned
 
-      return [...withSharedWordBank, ...imported]
+      if (type !== 'word_bank') {
+        return [...withSharedWordBank, ...imported]
+      }
+
+      const lastIndexInGroup = withSharedWordBank.reduce(
+        (lastIndex, question, index) =>
+          question.type === 'word_bank' &&
+          (question.groupId || 'legacy-word-bank') === groupId
+            ? index
+            : lastIndex,
+        -1
+      )
+
+      if (lastIndexInGroup === -1) {
+        return [...withSharedWordBank, ...imported]
+      }
+
+      return [
+        ...withSharedWordBank.slice(0, lastIndexInGroup + 1),
+        ...imported,
+        ...withSharedWordBank.slice(lastIndexInGroup + 1)
+      ]
     })
 
     setBulkPaste({ type: '', groupId: '', text: '' })
+
+    if (type === 'word_bank' && imported.length > 0) {
+      scrollToCreatedItem(
+        `word-bank-question-${imported[imported.length - 1].id}`
+      )
+    }
 
     if (skipped.length > 0) {
       alert(
@@ -1392,15 +1492,11 @@ export default function CreateVocabulary() {
             ''
           )
 
-          const firstQuestion = groupQuestions[0]
-          const flatStartIndex = groupedQuestions.wordBank.findIndex(
-            question => question.id === firstQuestion?.id
-          )
-
           return (
             <div
+              id={`word-bank-section-${groupId}`}
               key={groupId}
-              className="border border-blue-100 bg-blue-50/40 rounded-2xl p-5"
+              className="border border-blue-100 bg-blue-50/40 rounded-2xl p-5 scroll-mt-24"
             >
               <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3 mb-4">
                 <div>
@@ -1535,14 +1631,16 @@ export default function CreateVocabulary() {
               {renderBulkPasteBox('word_bank', groupId)}
 
               <div className="space-y-3">
-                {groupQuestions.map((question, localIndex) => {
-                  const flatIndex =
-                    flatStartIndex + localIndex
+                {groupQuestions.map(question => {
+                  const flatIndex = orderedWordBankQuestions.findIndex(
+                    item => item.id === question.id
+                  )
 
                   return (
                     <div
+                      id={`word-bank-question-${question.id}`}
                       key={question.id}
-                      className="bg-white border border-gray-100 rounded-2xl p-4"
+                      className="bg-white border border-gray-100 rounded-2xl p-4 scroll-mt-24"
                     >
                       <div className="flex items-start justify-between gap-3 mb-3">
                         <span className="text-xs bg-blue-50 text-blue-600 px-3 py-1.5 rounded-full font-semibold">
