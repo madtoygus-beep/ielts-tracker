@@ -116,7 +116,8 @@ function emptyQuestion(type = 'mcq') {
     baseWord: '',
     answerText: '',
     acceptedAnswers: '',
-    grammarNote: ''
+    grammarNote: '',
+    sectionTitle: ''
   }
 }
 
@@ -146,7 +147,8 @@ function normalizeQuestion(question) {
     baseWord: question?.baseWord || '',
     answerText: question?.answerText || question?.correctAnswer || '',
     acceptedAnswers: question?.acceptedAnswers || '',
-    grammarNote: normalizeMultilineText(question?.grammarNote || '')
+    grammarNote: normalizeMultilineText(question?.grammarNote || ''),
+    sectionTitle: question?.sectionTitle || ''
   }
 }
 
@@ -368,6 +370,16 @@ export default function CreateVocabulary() {
     grammar: questions.filter(question => question.type === 'grammar_form'),
     mcq: questions.filter(question => question.type === 'mcq' || !question.type)
   }), [questions])
+
+  const matchingQuestionCount = groupedQuestions.matching.length
+  const wordBankStartNumber = matchingQuestionCount + 1
+  const grammarStartNumber =
+    matchingQuestionCount + groupedQuestions.wordBank.length + 1
+  const mcqStartNumber =
+    matchingQuestionCount +
+    groupedQuestions.wordBank.length +
+    groupedQuestions.grammar.length +
+    1
 
   const updateQuestion = (questionId, patch) => {
     setQuestions(prev =>
@@ -1069,7 +1081,10 @@ export default function CreateVocabulary() {
         acceptedAnswers: question.acceptedAnswers.trim(),
         grammarNote: question.type === 'grammar_form'
           ? (sharedByType.grammar_form?.grammarNote || question.grammarNote || '').trim()
-          : question.grammarNote.trim()
+          : question.grammarNote.trim(),
+        sectionTitle: question.type === 'mcq'
+          ? (question.sectionTitle || '').trim()
+          : ''
       }
     })
   }
@@ -1508,7 +1523,7 @@ export default function CreateVocabulary() {
             <div key={question.id} className="bg-white border border-gray-100 rounded-2xl p-4">
               <div className="flex items-start justify-between gap-3 mb-3">
                 <span className="text-xs bg-blue-50 text-blue-600 px-3 py-1.5 rounded-full font-semibold">
-                  Sentence {index + 1}
+                  Question {wordBankStartNumber + index}
                 </span>
 
                 <div className="flex gap-2">
@@ -1676,7 +1691,7 @@ export default function CreateVocabulary() {
             <div key={question.id} className="bg-white border border-gray-100 rounded-2xl p-4">
               <div className="flex items-start justify-between gap-3 mb-3">
                 <span className="text-xs bg-green-50 text-green-600 px-3 py-1.5 rounded-full font-semibold">
-                  Item {index + 1}
+                  Question {grammarStartNumber + index}
                 </span>
 
                 <div className="flex gap-2">
@@ -1779,7 +1794,7 @@ export default function CreateVocabulary() {
               Vocabulary Multiple Choice
             </h3>
             <p className="text-xs text-gray-400 mt-1">
-              {groupedQuestions.mcq.length} question{groupedQuestions.mcq.length === 1 ? '' : 's'}.
+              {groupedQuestions.mcq.length} question{groupedQuestions.mcq.length === 1 ? '' : 's'}. You can optionally start a new sub-section before any question.
             </p>
           </div>
 
@@ -1829,7 +1844,7 @@ export default function CreateVocabulary() {
             <div key={question.id} className="bg-white border border-gray-100 rounded-2xl p-4">
               <div className="flex items-center justify-between gap-3 mb-4">
                 <p className="text-sm font-semibold text-gray-800">
-                  Question {index + 1}
+                  Question {mcqStartNumber + index}
                 </p>
 
                 <div className="flex gap-2">
@@ -1849,6 +1864,27 @@ export default function CreateVocabulary() {
                     Delete
                   </button>
                 </div>
+              </div>
+
+              <div className="mb-4">
+                <label className="text-xs text-gray-400 mb-1 block">
+                  New section heading / optional
+                </label>
+
+                <input
+                  value={question.sectionTitle || ''}
+                  onChange={event =>
+                    updateQuestion(question.id, {
+                      sectionTitle: event.target.value
+                    })
+                  }
+                  placeholder="e.g. Synonyms, Collocations, Academic Vocabulary..."
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 bg-white"
+                />
+
+                <p className="text-[11px] text-gray-400 mt-1">
+                  Leave blank to continue the current section. Add a title only to the first question of a new section.
+                </p>
               </div>
 
               {renderMcqEditor(question)}
@@ -2238,7 +2274,7 @@ export default function CreateVocabulary() {
             <div className="bg-white border border-gray-100 rounded-2xl p-5 sticky top-6">
               <h2 className="font-semibold text-gray-800 mb-2">Summary</h2>
               <div className="space-y-2 text-sm text-gray-500 mb-5">
-                <p>{questions.length} scored item{questions.length === 1 ? '' : 's'}</p>
+                <p>{questions.length} total question{questions.length === 1 ? '' : 's'}</p>
                 <p>{selectedStudents.length} student{selectedStudents.length === 1 ? '' : 's'} selected</p>
               </div>
 

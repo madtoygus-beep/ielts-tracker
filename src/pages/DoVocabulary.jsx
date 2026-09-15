@@ -320,6 +320,34 @@ export default function DoVocabulary() {
     ]
   }, [groupedQuestions.matching, test])
 
+  const matchingQuestionCount = groupedQuestions.matching.length
+  const wordBankStartNumber = matchingQuestionCount + 1
+  const grammarStartNumber =
+    matchingQuestionCount + groupedQuestions.wordBank.length + 1
+  const mcqStartNumber =
+    matchingQuestionCount +
+    groupedQuestions.wordBank.length +
+    groupedQuestions.grammar.length +
+    1
+
+  const getGlobalQuestionNumber = (question, localIndex) => {
+    const type = getQuestionType(question)
+
+    if (type === 'match_definition') {
+      return localIndex + 1
+    }
+
+    if (type === 'word_bank') {
+      return wordBankStartNumber + localIndex
+    }
+
+    if (type === 'grammar_form') {
+      return grammarStartNumber + localIndex
+    }
+
+    return mcqStartNumber + localIndex
+  }
+
   useEffect(() => {
     if (timeLeft === null || submitted) return
 
@@ -578,7 +606,7 @@ export default function DoVocabulary() {
           {groupedQuestions.wordBank.map((question, index) => (
             <div key={question.id} className="border border-gray-100 rounded-2xl p-4">
               <p className="text-sm text-gray-800 leading-7 mb-3">
-                <span className="font-semibold mr-2">{index + 1}.</span>
+                <span className="font-semibold mr-2">{wordBankStartNumber + index}.</span>
                 {question.sentence || question.question}
               </p>
 
@@ -619,7 +647,7 @@ export default function DoVocabulary() {
           {groupedQuestions.grammar.map((question, index) => (
             <div key={question.id} className="border border-gray-100 rounded-2xl p-4">
               <p className="text-sm text-gray-800 leading-7 mb-2">
-                <span className="font-semibold mr-2">{index + 1}.</span>
+                <span className="font-semibold mr-2">{grammarStartNumber + index}.</span>
                 {question.sentence || question.question}
               </p>
 
@@ -652,35 +680,49 @@ export default function DoVocabulary() {
 
         <div className="flex flex-col gap-6">
           {groupedQuestions.mcq.map((question, index) => (
-            <div key={question.id} className="border border-gray-100 rounded-2xl p-5">
-              <div className="flex items-center gap-2 mb-4">
-                <span className="text-xs font-medium text-gray-400">Q{index + 1}</span>
-                <span className="text-xs px-2 py-1 rounded-full bg-purple-50 text-purple-600">Vocabulary MCQ</span>
-              </div>
+            <div key={question.id}>
+              {question.sectionTitle?.trim() && (
+                <div className="mb-3 pt-1">
+                  <div className="flex items-center gap-3">
+                    <div className="h-px flex-1 bg-gray-200" />
+                    <h3 className="text-sm font-semibold text-gray-700 px-2 text-center">
+                      {question.sectionTitle}
+                    </h3>
+                    <div className="h-px flex-1 bg-gray-200" />
+                  </div>
+                </div>
+              )}
 
-              <p className="text-sm text-gray-800 mb-4">{question.question}</p>
+              <div className="border border-gray-100 rounded-2xl p-5">
+                <div className="flex items-center gap-2 mb-4">
+                  <span className="text-xs font-medium text-gray-400">Q{mcqStartNumber + index}</span>
+                  <span className="text-xs px-2 py-1 rounded-full bg-purple-50 text-purple-600">Vocabulary MCQ</span>
+                </div>
 
-              <div className="flex flex-col gap-2">
-                {question.options?.map((option, optionIndex) => {
-                  const letter = letters[optionIndex]
-                  const isSelected = answers[answerKey(question.id)] === letter
+                <p className="text-sm text-gray-800 mb-4">{question.question}</p>
 
-                  return (
-                    <button
-                      key={optionIndex}
-                      type="button"
-                      onClick={() => handleAnswer(question.id, letter)}
-                      className={`text-left px-4 py-3 rounded-xl text-sm border transition-all ${
-                        isSelected
-                          ? 'bg-purple-600 text-white border-purple-600'
-                          : 'border-gray-200 text-gray-700 hover:border-purple-300'
-                      }`}
-                    >
-                      <span className="font-semibold mr-2">{letter}.</span>
-                      {option}
-                    </button>
-                  )
-                })}
+                <div className="flex flex-col gap-2">
+                  {question.options?.map((option, optionIndex) => {
+                    const letter = letters[optionIndex]
+                    const isSelected = answers[answerKey(question.id)] === letter
+
+                    return (
+                      <button
+                        key={optionIndex}
+                        type="button"
+                        onClick={() => handleAnswer(question.id, letter)}
+                        className={`text-left px-4 py-3 rounded-xl text-sm border transition-all ${
+                          isSelected
+                            ? 'bg-purple-600 text-white border-purple-600'
+                            : 'border-gray-200 text-gray-700 hover:border-purple-300'
+                        }`}
+                      >
+                        <span className="font-semibold mr-2">{letter}.</span>
+                        {option}
+                      </button>
+                    )
+                  })}
+                </div>
               </div>
             </div>
           ))}
@@ -764,11 +806,19 @@ export default function DoVocabulary() {
                         className={`border rounded-xl p-5 ${correct ? 'bg-green-50 border-green-100' : 'bg-red-50 border-red-100'}`}
                       >
                         <div className="flex items-center justify-between gap-3 mb-3">
-                          <p className="text-xs font-semibold text-gray-400">Item {index + 1}</p>
+                          <p className="text-xs font-semibold text-gray-400">
+                            Question {getGlobalQuestionNumber(question, index)}
+                          </p>
                           <span className={`text-xs font-semibold ${correct ? 'text-green-600' : 'text-red-600'}`}>
                             {correct ? 'Correct' : 'Wrong'}
                           </span>
                         </div>
+
+                        {question.sectionTitle?.trim() && (
+                          <p className="text-xs font-semibold text-purple-600 mb-2">
+                            {question.sectionTitle}
+                          </p>
+                        )}
 
                         <p className="text-sm font-medium text-gray-800 mb-4">
                           {getQuestionPrompt(question)}
