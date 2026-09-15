@@ -324,6 +324,75 @@ export default function DoVocabulary() {
     return groups
   }, [groupedQuestions.wordBank])
 
+  const orderedSections = useMemo(() => {
+    const sections = []
+    const seen = new Set()
+
+    ;(test?.questions || []).forEach(question => {
+      const questionType = getQuestionType(question)
+
+      const type =
+        questionType === 'match_definition'
+          ? 'matching'
+          : questionType === 'word_bank'
+            ? 'wordBank'
+            : questionType === 'grammar_form'
+              ? 'grammar'
+              : 'mcq'
+
+      const key =
+        type === 'wordBank'
+          ? `wordBank:${question.groupId || 'legacy-word-bank'}`
+          : type
+
+      if (seen.has(key)) return
+
+      seen.add(key)
+
+      if (type === 'wordBank') {
+        const groupId = question.groupId || 'legacy-word-bank'
+        const group = wordBankGroups.find(item => item.groupId === groupId)
+
+        if (group) {
+          sections.push({
+            key,
+            type,
+            group
+          })
+        }
+
+        return
+      }
+
+      sections.push({
+        key,
+        type
+      })
+    })
+
+    return sections
+  }, [test, wordBankGroups])
+
+  const orderedQuestions = useMemo(
+    () =>
+      orderedSections.flatMap(section => {
+        if (section.type === 'matching') {
+          return groupedQuestions.matching
+        }
+
+        if (section.type === 'wordBank') {
+          return section.group?.questions || []
+        }
+
+        if (section.type === 'grammar') {
+          return groupedQuestions.grammar
+        }
+
+        return groupedQuestions.mcq
+      }),
+    [orderedSections, groupedQuestions]
+  )
+
   const matchingDefinitionOrder = useMemo(() => {
     const items = groupedQuestions.matching
 
@@ -343,44 +412,12 @@ export default function DoVocabulary() {
     ]
   }, [groupedQuestions.matching, test])
 
-  const matchingQuestionCount = groupedQuestions.matching.length
-  const wordBankStartNumber = matchingQuestionCount + 1
-  const grammarStartNumber =
-    matchingQuestionCount + groupedQuestions.wordBank.length + 1
-  const mcqStartNumber =
-    matchingQuestionCount +
-    groupedQuestions.wordBank.length +
-    groupedQuestions.grammar.length +
-    1
-
   const getGlobalQuestionNumber = question => {
-    const type = getQuestionType(question)
-
-    if (type === 'match_definition') {
-      const index = groupedQuestions.matching.findIndex(
-        item => item.id === question.id
-      )
-      return index + 1
-    }
-
-    if (type === 'word_bank') {
-      const index = groupedQuestions.wordBank.findIndex(
-        item => item.id === question.id
-      )
-      return wordBankStartNumber + index
-    }
-
-    if (type === 'grammar_form') {
-      const index = groupedQuestions.grammar.findIndex(
-        item => item.id === question.id
-      )
-      return grammarStartNumber + index
-    }
-
-    const index = groupedQuestions.mcq.findIndex(
+    const index = orderedQuestions.findIndex(
       item => item.id === question.id
     )
-    return mcqStartNumber + index
+
+    return index >= 0 ? index + 1 : 0
   }
 
   useEffect(() => {
@@ -567,7 +604,7 @@ export default function DoVocabulary() {
           <div className="space-y-2">
             {groupedQuestions.matching.map((question, index) => (
               <p key={question.id} className="text-sm text-gray-800">
-                <span className="font-semibold mr-2">{index + 1}.</span>
+                <span className="font-semibold mr-2">{getGlobalQuestionNumber(question)}.</span>
                 {question.word || question.question}
               </p>
             ))}
@@ -587,7 +624,7 @@ export default function DoVocabulary() {
           {groupedQuestions.matching.map((question, index) => (
             <div key={question.id} className="grid grid-cols-1 md:grid-cols-[1fr_180px] gap-3 items-center">
               <p className="text-sm text-gray-800">
-                {index + 1}. {question.word || question.question}
+                {getGlobalQuestionNumber(question)}. {question.word || question.question}
               </p>
 
               <select
@@ -609,91 +646,85 @@ export default function DoVocabulary() {
     )
   }
 
-  const renderWordBankTask = () => {
-    if (wordBankGroups.length === 0) return null
+  const renderWordBankTask = group => {
+    if (!group) return null
+
+    const groupQuestions = group.questions
+    const firstQuestion = groupQuestions[0]
+
+    const heading =
+      firstQuestion?.taskTitle ||
+      'Task B - Complete the sentences'
+
+    const instruction =
+      firstQuestion?.instruction ||
+      'Use the words in the box.'
+
+    const words = Array.from(
+      new Set(
+        groupQuestions.flatMap(question =>
+          parseWordBank(question.wordBank)
+        )
+      )
+    )
 
     return (
-      <>
-        {wordBankGroups.map(group => {
-          const groupQuestions = group.questions
-          const firstQuestion = groupQuestions[0]
+      <div
+        key={group.groupId}
+        className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm"
+      >
+        <h2 className="text-xl font-bold text-gray-900 mb-2">
+          {heading}
+        </h2>
 
-          const heading =
-            firstQuestion?.taskTitle ||
-            'Task B - Complete the sentences'
+        <p className="text-sm text-gray-500 mb-4">
+          {instruction}
+        </p>
 
-          const instruction =
-            firstQuestion?.instruction ||
-            'Use the words in the box.'
+        {words.length > 0 && (
+          <div className="bg-purple-50 border border-purple-100 rounded-2xl p-4 mb-5">
+            <div className="flex flex-wrap gap-2">
+              {words.map((word, index) => (
+                <span
+                  key={`${word}-${index}`}
+                  className="text-sm bg-white border border-purple-100 text-purple-700 px-3 py-1.5 rounded-full"
+                >
+                  {word}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
 
-          const words = Array.from(
-            new Set(
-              groupQuestions.flatMap(question =>
-                parseWordBank(question.wordBank)
-              )
-            )
-          )
-
-          return (
+        <div className="space-y-4">
+          {groupQuestions.map(question => (
             <div
-              key={group.groupId}
-              className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm"
+              key={question.id}
+              className="border border-gray-100 rounded-2xl p-4"
             >
-              <h2 className="text-xl font-bold text-gray-900 mb-2">
-                {heading}
-              </h2>
+              <p className="text-sm text-gray-800 leading-7 mb-3">
+                <span className="font-semibold mr-2">
+                  {getGlobalQuestionNumber(question)}.
+                </span>
 
-              <p className="text-sm text-gray-500 mb-4">
-                {instruction}
+                {question.sentence || question.question}
               </p>
 
-              {words.length > 0 && (
-                <div className="bg-purple-50 border border-purple-100 rounded-2xl p-4 mb-5">
-                  <div className="flex flex-wrap gap-2">
-                    {words.map((word, index) => (
-                      <span
-                        key={`${word}-${index}`}
-                        className="text-sm bg-white border border-purple-100 text-purple-700 px-3 py-1.5 rounded-full"
-                      >
-                        {word}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <div className="space-y-4">
-                {groupQuestions.map(question => (
-                  <div
-                    key={question.id}
-                    className="border border-gray-100 rounded-2xl p-4"
-                  >
-                    <p className="text-sm text-gray-800 leading-7 mb-3">
-                      <span className="font-semibold mr-2">
-                        {getGlobalQuestionNumber(question)}.
-                      </span>
-
-                      {question.sentence || question.question}
-                    </p>
-
-                    <input
-                      value={answers[answerKey(question.id)] || ''}
-                      onChange={event =>
-                        handleAnswer(
-                          question.id,
-                          event.target.value
-                        )
-                      }
-                      placeholder="Type the correct word or phrase..."
-                      className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400"
-                    />
-                  </div>
-                ))}
-              </div>
+              <input
+                value={answers[answerKey(question.id)] || ''}
+                onChange={event =>
+                  handleAnswer(
+                    question.id,
+                    event.target.value
+                  )
+                }
+                placeholder="Type the correct word or phrase..."
+                className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400"
+              />
             </div>
-          )
-        })}
-      </>
+          ))}
+        </div>
+      </div>
     )
   }
 
@@ -721,7 +752,7 @@ export default function DoVocabulary() {
           {groupedQuestions.grammar.map((question, index) => (
             <div key={question.id} className="border border-gray-100 rounded-2xl p-4">
               <p className="text-sm text-gray-800 leading-7 mb-2">
-                <span className="font-semibold mr-2">{grammarStartNumber + index}.</span>
+                <span className="font-semibold mr-2">{getGlobalQuestionNumber(question)}.</span>
                 {question.sentence || question.question}
               </p>
 
@@ -769,7 +800,7 @@ export default function DoVocabulary() {
 
               <div className="border border-gray-100 rounded-2xl p-5">
                 <div className="flex items-center gap-2 mb-4">
-                  <span className="text-xs font-medium text-gray-400">Q{mcqStartNumber + index}</span>
+                  <span className="text-xs font-medium text-gray-400">Q{getGlobalQuestionNumber(question)}</span>
                   <span className="text-xs px-2 py-1 rounded-full bg-purple-50 text-purple-600">Vocabulary MCQ</span>
                 </div>
 
@@ -806,29 +837,37 @@ export default function DoVocabulary() {
   }
 
   const reviewGroups = () => {
-    const groups = []
+    return orderedSections.map(section => {
+      if (section.type === 'matching') {
+        return [
+          groupedQuestions.matching[0]?.taskTitle ||
+            'Task A - Matching',
+          groupedQuestions.matching
+        ]
+      }
 
-    if (groupedQuestions.matching.length > 0) {
-      groups.push(['Task A - Matching', groupedQuestions.matching])
-    }
+      if (section.type === 'wordBank') {
+        return [
+          section.group?.questions?.[0]?.taskTitle ||
+            'Task B - Complete the sentences',
+          section.group?.questions || []
+        ]
+      }
 
-    wordBankGroups.forEach(group => {
-      const heading =
-        group.questions[0]?.taskTitle ||
-        'Task B - Complete the sentences'
+      if (section.type === 'grammar') {
+        return [
+          groupedQuestions.grammar[0]?.taskTitle ||
+            'Task C - Grammar completion',
+          groupedQuestions.grammar
+        ]
+      }
 
-      groups.push([heading, group.questions])
+      return [
+        groupedQuestions.mcq[0]?.taskTitle ||
+          'Vocabulary Multiple Choice',
+        groupedQuestions.mcq
+      ]
     })
-
-    if (groupedQuestions.grammar.length > 0) {
-      groups.push(['Task C - Grammar completion', groupedQuestions.grammar])
-    }
-
-    if (groupedQuestions.mcq.length > 0) {
-      groups.push(['Vocabulary Multiple Choice', groupedQuestions.mcq])
-    }
-
-    return groups
   }
 
   if (!test) {
@@ -972,10 +1011,37 @@ export default function DoVocabulary() {
         </div>
 
         <div className="space-y-6">
-          {renderMatchingTask()}
-          {renderWordBankTask()}
-          {renderGrammarTask()}
-          {renderMcqTask()}
+          {orderedSections.map(section => {
+            if (section.type === 'matching') {
+              return (
+                <div key={section.key}>
+                  {renderMatchingTask()}
+                </div>
+              )
+            }
+
+            if (section.type === 'wordBank') {
+              return (
+                <div key={section.key}>
+                  {renderWordBankTask(section.group)}
+                </div>
+              )
+            }
+
+            if (section.type === 'grammar') {
+              return (
+                <div key={section.key}>
+                  {renderGrammarTask()}
+                </div>
+              )
+            }
+
+            return (
+              <div key={section.key}>
+                {renderMcqTask()}
+              </div>
+            )
+          })}
         </div>
 
         <button

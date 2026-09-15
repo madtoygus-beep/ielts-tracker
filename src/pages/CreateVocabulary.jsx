@@ -407,20 +407,80 @@ export default function CreateVocabulary() {
     return groups
   }, [groupedQuestions.wordBank])
 
-  const orderedWordBankQuestions = useMemo(
-    () => wordBankGroups.flatMap(group => group.questions),
-    [wordBankGroups]
+  const orderedSections = useMemo(() => {
+    const sections = []
+    const seen = new Set()
+
+    questions.forEach(question => {
+      const type =
+        question.type === 'match_definition'
+          ? 'matching'
+          : question.type === 'word_bank'
+            ? 'wordBank'
+            : question.type === 'grammar_form'
+              ? 'grammar'
+              : 'mcq'
+
+      const key =
+        type === 'wordBank'
+          ? `wordBank:${question.groupId || 'legacy-word-bank'}`
+          : type
+
+      if (seen.has(key)) return
+
+      seen.add(key)
+
+      if (type === 'wordBank') {
+        const groupId = question.groupId || 'legacy-word-bank'
+        const group = wordBankGroups.find(item => item.groupId === groupId)
+
+        if (group) {
+          sections.push({
+            key,
+            type,
+            group
+          })
+        }
+
+        return
+      }
+
+      sections.push({
+        key,
+        type
+      })
+    })
+
+    return sections
+  }, [questions, wordBankGroups])
+
+  const orderedQuestions = useMemo(
+    () =>
+      orderedSections.flatMap(section => {
+        if (section.type === 'matching') {
+          return groupedQuestions.matching
+        }
+
+        if (section.type === 'wordBank') {
+          return section.group?.questions || []
+        }
+
+        if (section.type === 'grammar') {
+          return groupedQuestions.grammar
+        }
+
+        return groupedQuestions.mcq
+      }),
+    [orderedSections, groupedQuestions]
   )
 
-  const matchingQuestionCount = groupedQuestions.matching.length
-  const wordBankStartNumber = matchingQuestionCount + 1
-  const grammarStartNumber =
-    matchingQuestionCount + groupedQuestions.wordBank.length + 1
-  const mcqStartNumber =
-    matchingQuestionCount +
-    groupedQuestions.wordBank.length +
-    groupedQuestions.grammar.length +
-    1
+  const getQuestionNumber = questionId => {
+    const index = orderedQuestions.findIndex(
+      question => question.id === questionId
+    )
+
+    return index >= 0 ? index + 1 : 0
+  }
 
   const updateQuestion = (questionId, patch) => {
     setQuestions(prev =>
@@ -523,37 +583,10 @@ export default function CreateVocabulary() {
       const nextQuestion = emptyQuestion('word_bank')
       const newGroupId = nextQuestion.groupId
 
-      setQuestions(prev => {
-        const lastWordBankIndex = prev.reduce(
-          (lastIndex, question, index) =>
-            question.type === 'word_bank'
-              ? index
-              : lastIndex,
-          -1
-        )
-
-        if (lastWordBankIndex === -1) {
-          const firstNonMatchingIndex = prev.findIndex(
-            question => question.type !== 'match_definition'
-          )
-
-          if (firstNonMatchingIndex === -1) {
-            return [...prev, nextQuestion]
-          }
-
-          return [
-            ...prev.slice(0, firstNonMatchingIndex),
-            nextQuestion,
-            ...prev.slice(firstNonMatchingIndex)
-          ]
-        }
-
-        return [
-          ...prev.slice(0, lastWordBankIndex + 1),
-          nextQuestion,
-          ...prev.slice(lastWordBankIndex + 1)
-        ]
-      })
+      setQuestions(prev => [
+        ...prev,
+        nextQuestion
+      ])
 
       scrollToCreatedItem(`word-bank-section-${newGroupId}`)
       return
@@ -1477,27 +1510,28 @@ export default function CreateVocabulary() {
     )
   }
 
-  const renderWordBankGroup = () => {
-    if (wordBankGroups.length === 0) return null
+  const renderWordBankGroup = group => {
+    if (!group) return null
+
+    const groupIndex = wordBankGroups.findIndex(
+      item => item.groupId === group.groupId
+    )
+
+    const groupId = group.groupId
+    const groupQuestions = group.questions
+
+    const sharedWordBank = getWordBankGroupSharedValue(
+      groupId,
+      'wordBank',
+      ''
+    )
 
     return (
-      <div className="space-y-5">
-        {wordBankGroups.map((group, groupIndex) => {
-          const groupId = group.groupId
-          const groupQuestions = group.questions
-
-          const sharedWordBank = getWordBankGroupSharedValue(
-            groupId,
-            'wordBank',
-            ''
-          )
-
-          return (
-            <div
-              id={`word-bank-section-${groupId}`}
-              key={groupId}
-              className="border border-blue-100 bg-blue-50/40 rounded-2xl p-5 scroll-mt-24"
-            >
+      <div
+        id={`word-bank-section-${groupId}`}
+        key={groupId}
+        className="border border-blue-100 bg-blue-50/40 rounded-2xl p-5 scroll-mt-24"
+      >
               <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3 mb-4">
                 <div>
                   <div className="flex items-center gap-2 mb-1">
@@ -1631,12 +1665,7 @@ export default function CreateVocabulary() {
               {renderBulkPasteBox('word_bank', groupId)}
 
               <div className="space-y-3">
-                {groupQuestions.map(question => {
-                  const flatIndex = orderedWordBankQuestions.findIndex(
-                    item => item.id === question.id
-                  )
-
-                  return (
+                {groupQuestions.map(question => (
                     <div
                       id={`word-bank-question-${question.id}`}
                       key={question.id}
@@ -1644,7 +1673,7 @@ export default function CreateVocabulary() {
                     >
                       <div className="flex items-start justify-between gap-3 mb-3">
                         <span className="text-xs bg-blue-50 text-blue-600 px-3 py-1.5 rounded-full font-semibold">
-                          Question {wordBankStartNumber + flatIndex}
+                          Question {getQuestionNumber(question.id)}
                         </span>
 
                         <div className="flex gap-2">
@@ -1722,12 +1751,8 @@ export default function CreateVocabulary() {
                         </div>
                       </div>
                     </div>
-                  )
-                })}
+                ))}
               </div>
-            </div>
-          )
-        })}
       </div>
     )
   }
@@ -1824,7 +1849,7 @@ export default function CreateVocabulary() {
             <div key={question.id} className="bg-white border border-gray-100 rounded-2xl p-4">
               <div className="flex items-start justify-between gap-3 mb-3">
                 <span className="text-xs bg-green-50 text-green-600 px-3 py-1.5 rounded-full font-semibold">
-                  Question {grammarStartNumber + index}
+                  Question {getQuestionNumber(question.id)}
                 </span>
 
                 <div className="flex gap-2">
@@ -1977,7 +2002,7 @@ export default function CreateVocabulary() {
             <div key={question.id} className="bg-white border border-gray-100 rounded-2xl p-4">
               <div className="flex items-center justify-between gap-3 mb-4">
                 <p className="text-sm font-semibold text-gray-800">
-                  Question {mcqStartNumber + index}
+                  Question {getQuestionNumber(question.id)}
                 </p>
 
                 <div className="flex gap-2">
@@ -2192,10 +2217,37 @@ export default function CreateVocabulary() {
               </div>
 
               <div className="space-y-6">
-                {renderMatchingGroup()}
-                {renderWordBankGroup()}
-                {renderGrammarGroup()}
-                {renderMcqGroup()}
+                {orderedSections.map(section => {
+                  if (section.type === 'matching') {
+                    return (
+                      <div key={section.key}>
+                        {renderMatchingGroup()}
+                      </div>
+                    )
+                  }
+
+                  if (section.type === 'wordBank') {
+                    return (
+                      <div key={section.key}>
+                        {renderWordBankGroup(section.group)}
+                      </div>
+                    )
+                  }
+
+                  if (section.type === 'grammar') {
+                    return (
+                      <div key={section.key}>
+                        {renderGrammarGroup()}
+                      </div>
+                    )
+                  }
+
+                  return (
+                    <div key={section.key}>
+                      {renderMcqGroup()}
+                    </div>
+                  )
+                })}
               </div>
             </div>
           </div>
