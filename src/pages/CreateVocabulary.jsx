@@ -80,11 +80,32 @@ function makeId() {
 }
 
 function emptyQuestion(type = 'mcq') {
+  const defaults =
+    type === 'match_definition'
+      ? {
+          taskTitle: 'Task A - Match the words with their definitions',
+          instruction: 'Match the words with their definitions.'
+        }
+      : type === 'word_bank'
+        ? {
+            taskTitle: 'Task B - Complete the sentences',
+            instruction: 'Use the words in the box.'
+          }
+        : type === 'grammar_form'
+          ? {
+              taskTitle: 'Task C - Grammar Focus',
+              instruction: 'Complete the sentences using the correct form.'
+            }
+          : {
+              taskTitle: 'Vocabulary Multiple Choice',
+              instruction: 'Choose the best answer.'
+            }
+
   return {
     id: makeId(),
     type,
-    taskTitle: '',
-    instruction: '',
+    taskTitle: defaults.taskTitle,
+    instruction: defaults.instruction,
     question: '',
     options: ['', '', '', ''],
     answer: '',
@@ -158,6 +179,7 @@ export default function CreateVocabulary() {
   ])
   const [assignTo, setAssignTo] = useState([])
   const [studentSearch, setStudentSearch] = useState('')
+  const [bulkPaste, setBulkPaste] = useState({ type: '', text: '' })
 
   useEffect(() => {
     let isActive = true
@@ -332,6 +354,13 @@ export default function CreateVocabulary() {
     [students, assignTo]
   )
 
+  const groupedQuestions = useMemo(() => ({
+    matching: questions.filter(question => question.type === 'match_definition'),
+    wordBank: questions.filter(question => question.type === 'word_bank'),
+    grammar: questions.filter(question => question.type === 'grammar_form'),
+    mcq: questions.filter(question => question.type === 'mcq' || !question.type)
+  }), [questions])
+
   const updateQuestion = (questionId, patch) => {
     setQuestions(prev =>
       prev.map(question =>
@@ -416,7 +445,25 @@ export default function CreateVocabulary() {
   }
 
   const addQuestion = type => {
-    setQuestions(prev => [...prev, emptyQuestion(type)])
+    setQuestions(prev => {
+      const firstOfType = prev.find(question => question.type === type)
+      const nextQuestion = emptyQuestion(type)
+
+      if (firstOfType) {
+        nextQuestion.taskTitle = firstOfType.taskTitle || nextQuestion.taskTitle
+        nextQuestion.instruction = firstOfType.instruction || nextQuestion.instruction
+
+        if (type === 'word_bank') {
+          nextQuestion.wordBank = firstOfType.wordBank || ''
+        }
+
+        if (type === 'grammar_form') {
+          nextQuestion.grammarNote = firstOfType.grammarNote || ''
+        }
+      }
+
+      return [...prev, nextQuestion]
+    })
   }
 
   const duplicateQuestion = question => {
@@ -435,6 +482,182 @@ export default function CreateVocabulary() {
         ? prev
         : prev.filter(question => question.id !== questionId)
     )
+  }
+
+
+  const updateGroupFields = (type, patch) => {
+    setQuestions(prev =>
+      prev.map(question =>
+        question.type === type
+          ? { ...question, ...patch }
+          : question
+      )
+    )
+  }
+
+  const getGroupSharedValue = (type, key, fallback = '') => {
+    const item = questions.find(question => question.type === type)
+    return item?.[key] || fallback
+  }
+
+  const isEmptyWorkbookQuestion = question => {
+    if (question.type === 'match_definition') {
+      return !question.word?.trim() && !question.definition?.trim()
+    }
+
+    if (question.type === 'word_bank') {
+      return !question.sentence?.trim() && !question.answerText?.trim()
+    }
+
+    if (question.type === 'grammar_form') {
+      return (
+        !question.sentence?.trim() &&
+        !question.baseWord?.trim() &&
+        !question.answerText?.trim()
+      )
+    }
+
+    return false
+  }
+
+  const splitBulkColumns = line => {
+    if (line.includes('\t')) {
+      return line.split('\t').map(value => value.trim())
+    }
+
+    if (line.includes('|')) {
+      return line.split('|').map(value => value.trim())
+    }
+
+    if (line.includes('=>')) {
+      return line.split('=>').map(value => value.trim())
+    }
+
+    return [line.trim()]
+  }
+
+  const openBulkPaste = type => {
+    setBulkPaste(current =>
+      current.type === type
+        ? { type: '', text: '' }
+        : { type, text: '' }
+    )
+  }
+
+  const importBulkItems = type => {
+    const lines = bulkPaste.text
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(Boolean)
+
+    if (lines.length === 0) {
+      alert('Paste at least one line first.')
+      return
+    }
+
+    const firstOfType = questions.find(question => question.type === type)
+    const sharedTitle = firstOfType?.taskTitle || emptyQuestion(type).taskTitle
+    const sharedInstruction = firstOfType?.instruction || emptyQuestion(type).instruction
+    const sharedWordBank = firstOfType?.wordBank || ''
+    const sharedGrammarNote = firstOfType?.grammarNote || ''
+    const imported = []
+    const skipped = []
+
+    lines.forEach((line, lineIndex) => {
+      const columns = splitBulkColumns(line)
+
+      if (type === 'match_definition') {
+        if (columns.length < 2 || !columns[0] || !columns[1]) {
+          skipped.push(lineIndex + 1)
+          return
+        }
+
+        imported.push({
+          ...emptyQuestion(type),
+          taskTitle: sharedTitle,
+          instruction: sharedInstruction,
+          word: columns[0],
+          definition: columns.slice(1).join(' | ')
+        })
+        return
+      }
+
+      if (type === 'word_bank') {
+        if (columns.length < 2 || !columns[0] || !columns[1]) {
+          skipped.push(lineIndex + 1)
+          return
+        }
+
+        imported.push({
+          ...emptyQuestion(type),
+          taskTitle: sharedTitle,
+          instruction: sharedInstruction,
+          wordBank: sharedWordBank,
+          sentence: columns[0],
+          answerText: columns[1],
+          acceptedAnswers: columns.slice(2).join(', ')
+        })
+        return
+      }
+
+      if (type === 'grammar_form') {
+        if (columns.length < 3 || !columns[0] || !columns[1] || !columns[2]) {
+          skipped.push(lineIndex + 1)
+          return
+        }
+
+        imported.push({
+          ...emptyQuestion(type),
+          taskTitle: sharedTitle,
+          instruction: sharedInstruction,
+          grammarNote: sharedGrammarNote,
+          sentence: columns[0],
+          baseWord: columns[1],
+          answerText: columns[2],
+          acceptedAnswers: columns.slice(3).join(', ')
+        })
+      }
+    })
+
+    if (imported.length === 0) {
+      alert('No valid rows were found. Check the example format and try again.')
+      return
+    }
+
+    let generatedWordBank = sharedWordBank
+
+    if (type === 'word_bank' && !generatedWordBank.trim()) {
+      generatedWordBank = Array.from(
+        new Set(imported.map(item => item.answerText).filter(Boolean))
+      ).join(' - ')
+
+      imported.forEach(item => {
+        item.wordBank = generatedWordBank
+      })
+    }
+
+    setQuestions(prev => {
+      const cleaned = prev.filter(question =>
+        !(question.type === type && isEmptyWorkbookQuestion(question))
+      )
+
+      const withSharedWordBank =
+        type === 'word_bank' && generatedWordBank.trim()
+          ? cleaned.map(question =>
+              question.type === 'word_bank'
+                ? { ...question, wordBank: generatedWordBank }
+                : question
+            )
+          : cleaned
+
+      return [...withSharedWordBank, ...imported]
+    })
+
+    setBulkPaste({ type: '', text: '' })
+
+    if (skipped.length > 0) {
+      alert(`Imported ${imported.length} row(s). Skipped line(s): ${skipped.join(', ')}`)
+    }
   }
 
   const toggleStudent = studentId => {
@@ -525,8 +748,12 @@ export default function CreateVocabulary() {
       }
 
       if (question.type === 'word_bank') {
-        if (!question.wordBank.trim()) {
-          alert(`${label} needs words in the box.`)
+        const sharedWordBank = questions.find(
+          item => item.type === 'word_bank' && item.wordBank?.trim()
+        )?.wordBank || ''
+
+        if (!sharedWordBank.trim()) {
+          alert('Task B needs words in the box.')
           return false
         }
 
@@ -552,24 +779,40 @@ export default function CreateVocabulary() {
     return true
   }
 
-  const cleanQuestions = () =>
-    questions.map(question => ({
-      id: question.id,
-      type: question.type,
-      taskTitle: question.taskTitle.trim(),
-      instruction: question.instruction.trim(),
-      question: question.question.trim(),
-      options: question.options.map(option => option.trim()),
-      answer: question.answer,
-      word: question.word.trim(),
-      definition: question.definition.trim(),
-      wordBank: question.wordBank.trim(),
-      sentence: question.sentence.trim(),
-      baseWord: question.baseWord.trim(),
-      answerText: question.answerText.trim(),
-      acceptedAnswers: question.acceptedAnswers.trim(),
-      grammarNote: question.grammarNote.trim()
-    }))
+  const cleanQuestions = () => {
+    const sharedByType = {
+      match_definition: questions.find(item => item.type === 'match_definition'),
+      word_bank: questions.find(item => item.type === 'word_bank'),
+      grammar_form: questions.find(item => item.type === 'grammar_form'),
+      mcq: questions.find(item => item.type === 'mcq' || !item.type)
+    }
+
+    return questions.map(question => {
+      const shared = sharedByType[question.type] || question
+
+      return {
+        id: question.id,
+        type: question.type,
+        taskTitle: (shared?.taskTitle || question.taskTitle || '').trim(),
+        instruction: (shared?.instruction || question.instruction || '').trim(),
+        question: question.question.trim(),
+        options: question.options.map(option => option.trim()),
+        answer: question.answer,
+        word: question.word.trim(),
+        definition: question.definition.trim(),
+        wordBank: question.type === 'word_bank'
+          ? (sharedByType.word_bank?.wordBank || question.wordBank || '').trim()
+          : question.wordBank.trim(),
+        sentence: question.sentence.trim(),
+        baseWord: question.baseWord.trim(),
+        answerText: question.answerText.trim(),
+        acceptedAnswers: question.acceptedAnswers.trim(),
+        grammarNote: question.type === 'grammar_form'
+          ? (sharedByType.grammar_form?.grammarNote || question.grammarNote || '').trim()
+          : question.grammarNote.trim()
+      }
+    })
+  }
 
   const handleSave = async () => {
     if (!user || saving) return
@@ -691,126 +934,666 @@ export default function CreateVocabulary() {
     </>
   )
 
-  const renderMatchingEditor = question => (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-      <div>
-        <label className="text-xs text-gray-400 mb-1 block">Word / phrase</label>
-        <input
-          value={question.word}
-          onChange={event => updateQuestion(question.id, { word: event.target.value })}
-          placeholder="extended family"
-          className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 bg-white"
-        />
-      </div>
+  const renderBulkPasteBox = type => {
+    if (bulkPaste.type !== type) return null
 
-      <div>
-        <label className="text-xs text-gray-400 mb-1 block">Definition</label>
-        <input
-          value={question.definition}
-          onChange={event => updateQuestion(question.id, { definition: event.target.value })}
-          placeholder="a family that includes relatives such as grandparents, aunts and uncles"
-          className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 bg-white"
-        />
-      </div>
-    </div>
-  )
+    const help =
+      type === 'match_definition'
+        ? 'One line per pair: word | definition. You can also paste two Excel columns.'
+        : type === 'word_bank'
+          ? 'One line per sentence: sentence | correct answer | optional alternatives.'
+          : 'One line per item: sentence | base word | correct form | optional alternatives.'
 
-  const renderWordBankEditor = question => (
-    <div className="space-y-3">
-      <div>
-        <label className="text-xs text-gray-400 mb-1 block">Words in the box</label>
+    const example =
+      type === 'match_definition'
+        ? 'extended family | a family that includes relatives such as grandparents, aunts and uncles\nclose-knit | having strong and friendly relationships with each other'
+        : type === 'word_bank'
+          ? 'Grandparents can have a strong ________ on family life. | influence\nMarta tries to ________ with her cousins. | keep in touch'
+          : 'Old glass bottles ________ at recycling centres. | collect | are collected\nThe bottles ________ according to colour. | sort | are sorted'
+
+    return (
+      <div className="bg-amber-50 border border-amber-100 rounded-2xl p-4 mb-4">
+        <div className="flex items-start justify-between gap-3 mb-3">
+          <div>
+            <p className="text-sm font-semibold text-amber-800">
+              Paste Multiple
+            </p>
+            <p className="text-xs text-amber-600 mt-1">
+              {help}
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setBulkPaste({ type: '', text: '' })}
+            className="text-xs text-amber-700 bg-white border border-amber-200 px-3 py-1.5 rounded-lg"
+          >
+            Close
+          </button>
+        </div>
+
         <textarea
-          rows={2}
-          value={question.wordBank}
-          onChange={event => updateQuestion(question.id, { wordBank: event.target.value })}
-          placeholder="independent - influence - patient - support - keep in touch - share"
-          className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 resize-none bg-white"
+          rows={7}
+          value={bulkPaste.text}
+          onChange={event =>
+            setBulkPaste({ type, text: event.target.value })
+          }
+          placeholder={example}
+          className="w-full border border-amber-200 rounded-xl px-3 py-3 text-sm outline-none focus:border-amber-400 resize-y bg-white font-mono"
         />
+
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mt-3">
+          <p className="text-[11px] text-amber-600">
+            Accepted separators: Excel tab, | or =&gt;
+          </p>
+
+          <button
+            type="button"
+            onClick={() => importBulkItems(type)}
+            className="text-xs bg-amber-600 text-white px-4 py-2 rounded-xl hover:bg-amber-700"
+          >
+            Import lines
+          </button>
+        </div>
       </div>
+    )
+  }
 
-      <div>
-        <label className="text-xs text-gray-400 mb-1 block">Sentence with blank</label>
-        <textarea
-          rows={2}
-          value={question.sentence}
-          onChange={event => updateQuestion(question.id, { sentence: event.target.value })}
-          placeholder="Grandparents can have a strong ________ on the way children think about family life."
-          className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 resize-none bg-white"
-        />
+  const renderMatchingGroup = () => {
+    if (groupedQuestions.matching.length === 0) return null
+
+    return (
+      <div className="border border-purple-100 bg-purple-50/40 rounded-2xl p-5">
+        <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3 mb-4">
+          <div>
+            <h3 className="font-semibold text-gray-800">
+              Task A - Match words with definitions
+            </h3>
+            <p className="text-xs text-gray-400 mt-1">
+              {groupedQuestions.matching.length} pair{groupedQuestions.matching.length === 1 ? '' : 's'}. Task settings are entered once.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => openBulkPaste('match_definition')}
+              className="text-xs bg-white border border-purple-200 text-purple-600 px-3 py-2 rounded-xl hover:bg-purple-50"
+            >
+              Paste Multiple
+            </button>
+
+            <button
+              type="button"
+              onClick={() => addQuestion('match_definition')}
+              className="text-xs bg-purple-600 text-white px-3 py-2 rounded-xl hover:bg-purple-700"
+            >
+              + Add Pair
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+          <div>
+            <label className="text-xs text-gray-400 mb-1 block">
+              Task heading
+            </label>
+            <input
+              value={getGroupSharedValue('match_definition', 'taskTitle', 'Task A - Match the words with their definitions')}
+              onChange={event =>
+                updateGroupFields('match_definition', {
+                  taskTitle: event.target.value
+                })
+              }
+              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 bg-white"
+            />
+          </div>
+
+          <div>
+            <label className="text-xs text-gray-400 mb-1 block">
+              Instruction
+            </label>
+            <input
+              value={getGroupSharedValue('match_definition', 'instruction', 'Match the words with their definitions.')}
+              onChange={event =>
+                updateGroupFields('match_definition', {
+                  instruction: event.target.value
+                })
+              }
+              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 bg-white"
+            />
+          </div>
+        </div>
+
+        {renderBulkPasteBox('match_definition')}
+
+        <div className="space-y-3">
+          {groupedQuestions.matching.map((question, index) => (
+            <div
+              key={question.id}
+              className="bg-white border border-gray-100 rounded-2xl p-4"
+            >
+              <div className="grid grid-cols-1 lg:grid-cols-[44px_0.9fr_1.6fr_auto] gap-3 items-start">
+                <div className="h-10 flex items-center justify-center rounded-xl bg-purple-50 text-purple-600 text-sm font-semibold">
+                  {index + 1}
+                </div>
+
+                <div>
+                  <label className="text-xs text-gray-400 mb-1 block">
+                    Word / phrase
+                  </label>
+                  <input
+                    value={question.word}
+                    onChange={event =>
+                      updateQuestion(question.id, {
+                        word: event.target.value
+                      })
+                    }
+                    placeholder="extended family"
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 bg-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs text-gray-400 mb-1 block">
+                    Definition
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={question.definition}
+                    onChange={event =>
+                      updateQuestion(question.id, {
+                        definition: event.target.value
+                      })
+                    }
+                    placeholder="a family that includes relatives such as grandparents, aunts and uncles"
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 resize-y bg-white"
+                  />
+                </div>
+
+                <div className="flex lg:flex-col gap-2 lg:pt-6">
+                  <button
+                    type="button"
+                    onClick={() => duplicateQuestion(question)}
+                    className="text-xs bg-gray-50 border border-gray-200 text-gray-500 px-3 py-2 rounded-xl hover:bg-gray-100"
+                  >
+                    Duplicate
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => removeQuestion(question.id)}
+                    disabled={questions.length <= 1}
+                    className="text-xs bg-red-50 text-red-500 px-3 py-2 rounded-xl hover:bg-red-100 disabled:opacity-40"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
+    )
+  }
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        <input
-          value={question.answerText}
-          onChange={event => updateQuestion(question.id, { answerText: event.target.value })}
-          placeholder="Correct answer"
-          className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 bg-white"
-        />
+  const renderWordBankGroup = () => {
+    if (groupedQuestions.wordBank.length === 0) return null
 
-        <input
-          value={question.acceptedAnswers}
-          onChange={event => updateQuestion(question.id, { acceptedAnswers: event.target.value })}
-          placeholder="Alternative answers, comma separated"
-          className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 bg-white"
-        />
+    const sharedWordBank = getGroupSharedValue('word_bank', 'wordBank', '')
+
+    return (
+      <div className="border border-blue-100 bg-blue-50/40 rounded-2xl p-5">
+        <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3 mb-4">
+          <div>
+            <h3 className="font-semibold text-gray-800">
+              Task B - Complete the sentences
+            </h3>
+            <p className="text-xs text-gray-400 mt-1">
+              {groupedQuestions.wordBank.length} sentence{groupedQuestions.wordBank.length === 1 ? '' : 's'}. One shared word box for the whole task.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                const words = Array.from(
+                  new Set(
+                    groupedQuestions.wordBank
+                      .map(question => question.answerText?.trim())
+                      .filter(Boolean)
+                  )
+                ).join(' - ')
+
+                updateGroupFields('word_bank', { wordBank: words })
+              }}
+              className="text-xs bg-white border border-blue-200 text-blue-600 px-3 py-2 rounded-xl hover:bg-blue-50"
+            >
+              Build word box from answers
+            </button>
+
+            <button
+              type="button"
+              onClick={() => openBulkPaste('word_bank')}
+              className="text-xs bg-white border border-blue-200 text-blue-600 px-3 py-2 rounded-xl hover:bg-blue-50"
+            >
+              Paste Multiple
+            </button>
+
+            <button
+              type="button"
+              onClick={() => addQuestion('word_bank')}
+              className="text-xs bg-blue-600 text-white px-3 py-2 rounded-xl hover:bg-blue-700"
+            >
+              + Add Sentence
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+          <div>
+            <label className="text-xs text-gray-400 mb-1 block">
+              Task heading
+            </label>
+            <input
+              value={getGroupSharedValue('word_bank', 'taskTitle', 'Task B - Complete the sentences')}
+              onChange={event =>
+                updateGroupFields('word_bank', {
+                  taskTitle: event.target.value
+                })
+              }
+              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-blue-400 bg-white"
+            />
+          </div>
+
+          <div>
+            <label className="text-xs text-gray-400 mb-1 block">
+              Instruction
+            </label>
+            <input
+              value={getGroupSharedValue('word_bank', 'instruction', 'Use the words in the box.')}
+              onChange={event =>
+                updateGroupFields('word_bank', {
+                  instruction: event.target.value
+                })
+              }
+              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-blue-400 bg-white"
+            />
+          </div>
+
+          <div className="md:col-span-2">
+            <label className="text-xs text-gray-400 mb-1 block">
+              Words in the box
+            </label>
+            <textarea
+              rows={3}
+              value={sharedWordBank}
+              onChange={event =>
+                updateGroupFields('word_bank', {
+                  wordBank: event.target.value
+                })
+              }
+              placeholder="independent - influence - patient - support - keep in touch - share"
+              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-blue-400 resize-y bg-white"
+            />
+          </div>
+        </div>
+
+        {renderBulkPasteBox('word_bank')}
+
+        <div className="space-y-3">
+          {groupedQuestions.wordBank.map((question, index) => (
+            <div key={question.id} className="bg-white border border-gray-100 rounded-2xl p-4">
+              <div className="flex items-start justify-between gap-3 mb-3">
+                <span className="text-xs bg-blue-50 text-blue-600 px-3 py-1.5 rounded-full font-semibold">
+                  Sentence {index + 1}
+                </span>
+
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => duplicateQuestion(question)}
+                    className="text-xs bg-gray-50 border border-gray-200 text-gray-500 px-3 py-1.5 rounded-lg"
+                  >
+                    Duplicate
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => removeQuestion(question.id)}
+                    disabled={questions.length <= 1}
+                    className="text-xs bg-red-50 text-red-500 px-3 py-1.5 rounded-lg disabled:opacity-40"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 xl:grid-cols-[1fr_230px] gap-3">
+                <div>
+                  <label className="text-xs text-gray-400 mb-1 block">
+                    Sentence with blank
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={question.sentence}
+                    onChange={event =>
+                      updateQuestion(question.id, {
+                        sentence: event.target.value
+                      })
+                    }
+                    placeholder="Grandparents can have a strong ________ on the way children think about family life."
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-blue-400 resize-y bg-white"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <div>
+                    <label className="text-xs text-gray-400 mb-1 block">
+                      Correct answer
+                    </label>
+                    <input
+                      value={question.answerText}
+                      onChange={event =>
+                        updateQuestion(question.id, {
+                          answerText: event.target.value
+                        })
+                      }
+                      placeholder="influence"
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-blue-400 bg-white"
+                    />
+                  </div>
+
+                  <input
+                    value={question.acceptedAnswers}
+                    onChange={event =>
+                      updateQuestion(question.id, {
+                        acceptedAnswers: event.target.value
+                      })
+                    }
+                    placeholder="Alternative answers, comma separated"
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-blue-400 bg-white"
+                  />
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
-    </div>
-  )
+    )
+  }
 
-  const renderGrammarEditor = question => (
-    <div className="space-y-3">
-      <div>
-        <label className="text-xs text-gray-400 mb-1 block">Grammar note / optional</label>
-        <textarea
-          rows={4}
-          value={question.grammarNote}
-          onChange={event => updateQuestion(question.id, { grammarNote: event.target.value })}
-          placeholder="We often use the Present Simple Passive when describing a process."
-          className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 resize-none bg-white"
-        />
+  const renderGrammarGroup = () => {
+    if (groupedQuestions.grammar.length === 0) return null
+
+    return (
+      <div className="border border-green-100 bg-green-50/40 rounded-2xl p-5">
+        <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3 mb-4">
+          <div>
+            <h3 className="font-semibold text-gray-800">
+              Task C - Grammar form completion
+            </h3>
+            <p className="text-xs text-gray-400 mt-1">
+              {groupedQuestions.grammar.length} grammar item{groupedQuestions.grammar.length === 1 ? '' : 's'}. Grammar note is entered once.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => openBulkPaste('grammar_form')}
+              className="text-xs bg-white border border-green-200 text-green-600 px-3 py-2 rounded-xl hover:bg-green-50"
+            >
+              Paste Multiple
+            </button>
+
+            <button
+              type="button"
+              onClick={() => addQuestion('grammar_form')}
+              className="text-xs bg-green-600 text-white px-3 py-2 rounded-xl hover:bg-green-700"
+            >
+              + Add Grammar Item
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+          <div>
+            <label className="text-xs text-gray-400 mb-1 block">
+              Task heading
+            </label>
+            <input
+              value={getGroupSharedValue('grammar_form', 'taskTitle', 'Task C - Grammar Focus')}
+              onChange={event =>
+                updateGroupFields('grammar_form', {
+                  taskTitle: event.target.value
+                })
+              }
+              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-green-400 bg-white"
+            />
+          </div>
+
+          <div>
+            <label className="text-xs text-gray-400 mb-1 block">
+              Instruction
+            </label>
+            <input
+              value={getGroupSharedValue('grammar_form', 'instruction', 'Complete the sentences using the correct form.')}
+              onChange={event =>
+                updateGroupFields('grammar_form', {
+                  instruction: event.target.value
+                })
+              }
+              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-green-400 bg-white"
+            />
+          </div>
+
+          <div className="md:col-span-2">
+            <label className="text-xs text-gray-400 mb-1 block">
+              Grammar explanation / optional
+            </label>
+            <textarea
+              rows={5}
+              value={getGroupSharedValue('grammar_form', 'grammarNote', '')}
+              onChange={event =>
+                updateGroupFields('grammar_form', {
+                  grammarNote: event.target.value
+                })
+              }
+              placeholder="We often use the Present Simple Passive when describing a process.\n\nActive: Workers wash the bottles.\nPassive: The bottles are washed."
+              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-green-400 resize-y bg-white"
+            />
+          </div>
+        </div>
+
+        {renderBulkPasteBox('grammar_form')}
+
+        <div className="space-y-3">
+          {groupedQuestions.grammar.map((question, index) => (
+            <div key={question.id} className="bg-white border border-gray-100 rounded-2xl p-4">
+              <div className="flex items-start justify-between gap-3 mb-3">
+                <span className="text-xs bg-green-50 text-green-600 px-3 py-1.5 rounded-full font-semibold">
+                  Item {index + 1}
+                </span>
+
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => duplicateQuestion(question)}
+                    className="text-xs bg-gray-50 border border-gray-200 text-gray-500 px-3 py-1.5 rounded-lg"
+                  >
+                    Duplicate
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => removeQuestion(question.id)}
+                    disabled={questions.length <= 1}
+                    className="text-xs bg-red-50 text-red-500 px-3 py-1.5 rounded-lg disabled:opacity-40"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 xl:grid-cols-[1fr_170px_230px] gap-3">
+                <div>
+                  <label className="text-xs text-gray-400 mb-1 block">
+                    Sentence with blank
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={question.sentence}
+                    onChange={event =>
+                      updateQuestion(question.id, {
+                        sentence: event.target.value
+                      })
+                    }
+                    placeholder="Old glass bottles ________ at recycling centres."
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-green-400 resize-y bg-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs text-gray-400 mb-1 block">
+                    Base word
+                  </label>
+                  <input
+                    value={question.baseWord}
+                    onChange={event =>
+                      updateQuestion(question.id, {
+                        baseWord: event.target.value
+                      })
+                    }
+                    placeholder="collect"
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-green-400 bg-white"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <div>
+                    <label className="text-xs text-gray-400 mb-1 block">
+                      Correct form
+                    </label>
+                    <input
+                      value={question.answerText}
+                      onChange={event =>
+                        updateQuestion(question.id, {
+                          answerText: event.target.value
+                        })
+                      }
+                      placeholder="are collected"
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-green-400 bg-white"
+                    />
+                  </div>
+
+                  <input
+                    value={question.acceptedAnswers}
+                    onChange={event =>
+                      updateQuestion(question.id, {
+                        acceptedAnswers: event.target.value
+                      })
+                    }
+                    placeholder="Alternative answers, comma separated"
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-green-400 bg-white"
+                  />
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
+    )
+  }
 
-      <div>
-        <label className="text-xs text-gray-400 mb-1 block">Sentence with blank</label>
-        <textarea
-          rows={2}
-          value={question.sentence}
-          onChange={event => updateQuestion(question.id, { sentence: event.target.value })}
-          placeholder="Old glass bottles ________ at recycling centres."
-          className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 resize-none bg-white"
-        />
+  const renderMcqGroup = () => {
+    if (groupedQuestions.mcq.length === 0) return null
+
+    return (
+      <div className="border border-gray-200 bg-gray-50 rounded-2xl p-5">
+        <div className="flex items-start justify-between gap-3 mb-4">
+          <div>
+            <h3 className="font-semibold text-gray-800">
+              Vocabulary Multiple Choice
+            </h3>
+            <p className="text-xs text-gray-400 mt-1">
+              {groupedQuestions.mcq.length} question{groupedQuestions.mcq.length === 1 ? '' : 's'}.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => addQuestion('mcq')}
+            className="text-xs bg-gray-900 text-white px-3 py-2 rounded-xl hover:bg-gray-800"
+          >
+            + Add MCQ
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+          <div>
+            <label className="text-xs text-gray-400 mb-1 block">
+              Section heading
+            </label>
+            <input
+              value={getGroupSharedValue('mcq', 'taskTitle', 'Vocabulary Multiple Choice')}
+              onChange={event =>
+                updateGroupFields('mcq', {
+                  taskTitle: event.target.value
+                })
+              }
+              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 bg-white"
+            />
+          </div>
+
+          <div>
+            <label className="text-xs text-gray-400 mb-1 block">
+              Instruction
+            </label>
+            <input
+              value={getGroupSharedValue('mcq', 'instruction', 'Choose the best answer.')}
+              onChange={event =>
+                updateGroupFields('mcq', {
+                  instruction: event.target.value
+                })
+              }
+              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 bg-white"
+            />
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          {groupedQuestions.mcq.map((question, index) => (
+            <div key={question.id} className="bg-white border border-gray-100 rounded-2xl p-4">
+              <div className="flex items-center justify-between gap-3 mb-4">
+                <p className="text-sm font-semibold text-gray-800">
+                  Question {index + 1}
+                </p>
+
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => duplicateQuestion(question)}
+                    className="text-xs bg-gray-50 border border-gray-200 text-gray-500 px-3 py-1.5 rounded-lg"
+                  >
+                    Duplicate
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => removeQuestion(question.id)}
+                    disabled={questions.length <= 1}
+                    className="text-xs bg-red-50 text-red-500 px-3 py-1.5 rounded-lg disabled:opacity-40"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+
+              {renderMcqEditor(question)}
+            </div>
+          ))}
+        </div>
       </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        <input
-          value={question.baseWord}
-          onChange={event => updateQuestion(question.id, { baseWord: event.target.value })}
-          placeholder="Base word, e.g. collect"
-          className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 bg-white"
-        />
-
-        <input
-          value={question.answerText}
-          onChange={event => updateQuestion(question.id, { answerText: event.target.value })}
-          placeholder="Correct form, e.g. are collected"
-          className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 bg-white"
-        />
-
-        <input
-          value={question.acceptedAnswers}
-          onChange={event => updateQuestion(question.id, { acceptedAnswers: event.target.value })}
-          placeholder="Alternatives, comma separated"
-          className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 bg-white"
-        />
-      </div>
-    </div>
-  )
-
-  const renderQuestionEditor = question => {
-    if (question.type === 'match_definition') return renderMatchingEditor(question)
-    if (question.type === 'word_bank') return renderWordBankEditor(question)
-    if (question.type === 'grammar_form') return renderGrammarEditor(question)
-    return renderMcqEditor(question)
+    )
   }
 
   if (loading) {
@@ -936,97 +1719,51 @@ export default function CreateVocabulary() {
             <div className="bg-white border border-gray-100 rounded-2xl p-6">
               <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-5">
                 <div>
-                  <h2 className="font-semibold text-gray-800">Task Items</h2>
+                  <h2 className="font-semibold text-gray-800">
+                    Vocabulary Tasks
+                  </h2>
                   <p className="text-xs text-gray-400 mt-1">
-                    Each item is scored automatically. Add as many as you need.
+                    Task heading and instructions are entered once. Add rows quickly or paste many at once.
                   </p>
                 </div>
 
                 <div className="flex flex-wrap gap-2">
-                  {questionTypes.map(([type, label]) => (
-                    <button
-                      key={type}
-                      type="button"
-                      onClick={() => addQuestion(type)}
-                      className="text-xs bg-purple-50 text-purple-600 px-3 py-2 rounded-xl hover:bg-purple-100"
-                    >
-                      + {label.replace('Task A - ', '').replace('Task B - ', '').replace('Task C - ', '')}
-                    </button>
-                  ))}
+                  <button
+                    type="button"
+                    onClick={() => addQuestion('match_definition')}
+                    className="text-xs bg-purple-50 text-purple-600 px-3 py-2 rounded-xl hover:bg-purple-100"
+                  >
+                    + Matching
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => addQuestion('word_bank')}
+                    className="text-xs bg-blue-50 text-blue-600 px-3 py-2 rounded-xl hover:bg-blue-100"
+                  >
+                    + Complete sentences
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => addQuestion('grammar_form')}
+                    className="text-xs bg-green-50 text-green-600 px-3 py-2 rounded-xl hover:bg-green-100"
+                  >
+                    + Grammar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => addQuestion('mcq')}
+                    className="text-xs bg-gray-100 text-gray-700 px-3 py-2 rounded-xl hover:bg-gray-200"
+                  >
+                    + MCQ
+                  </button>
                 </div>
               </div>
 
-              <div className="space-y-5">
-                {questions.map((question, questionIndex) => (
-                  <div key={question.id} className="border border-gray-100 bg-gray-50 rounded-2xl p-5">
-                    <div className="flex items-start justify-between gap-3 mb-4">
-                      <div>
-                        <p className="text-sm font-semibold text-gray-800">
-                          Item {questionIndex + 1}
-                        </p>
-                        <p className="text-xs text-gray-400 mt-1">
-                          {getQuestionTypeLabel(question.type)}
-                        </p>
-                      </div>
-
-                      <div className="flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => duplicateQuestion(question)}
-                          className="text-xs bg-white border border-gray-200 text-gray-500 px-3 py-1.5 rounded-lg hover:bg-gray-50"
-                        >
-                          Duplicate
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => removeQuestion(question.id)}
-                          disabled={questions.length <= 1}
-                          className="text-xs bg-red-50 text-red-600 px-3 py-1.5 rounded-lg hover:bg-red-100 disabled:opacity-40"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
-                      <div>
-                        <label className="text-xs text-gray-400 mb-1 block">Question type</label>
-                        <select
-                          value={question.type}
-                          onChange={event => changeQuestionType(question.id, event.target.value)}
-                          className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 bg-white"
-                        >
-                          {questionTypes.map(([type, label]) => (
-                            <option key={type} value={type}>{label}</option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div>
-                        <label className="text-xs text-gray-400 mb-1 block">Task heading / optional</label>
-                        <input
-                          value={question.taskTitle}
-                          onChange={event => updateQuestion(question.id, { taskTitle: event.target.value })}
-                          placeholder="Task A - Match the words with their definitions"
-                          className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 bg-white"
-                        />
-                      </div>
-
-                      <div className="md:col-span-2">
-                        <label className="text-xs text-gray-400 mb-1 block">Instruction / optional</label>
-                        <input
-                          value={question.instruction}
-                          onChange={event => updateQuestion(question.id, { instruction: event.target.value })}
-                          placeholder="Use the words in the box."
-                          className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 bg-white"
-                        />
-                      </div>
-                    </div>
-
-                    {renderQuestionEditor(question)}
-                  </div>
-                ))}
+              <div className="space-y-6">
+                {renderMatchingGroup()}
+                {renderWordBankGroup()}
+                {renderGrammarGroup()}
+                {renderMcqGroup()}
               </div>
             </div>
           </div>
