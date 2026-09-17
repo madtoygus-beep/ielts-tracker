@@ -75,6 +75,7 @@ function filterClassStudentIds(classItem, visibleStudents) {
 }
 
 export default function CreateReading() {
+  // PACKAGE 46: Reading assignment controls live in the RIGHT SIDEBAR.
   const { id } = useParams()
   const isEditMode = Boolean(id)
 
@@ -89,6 +90,7 @@ export default function CreateReading() {
   const [timeLimit, setTimeLimit] = useState(60)
   const [dueDate, setDueDate] = useState('')
   const [assignTo, setAssignTo] = useState([])
+  const [studentSearch, setStudentSearch] = useState('')
 
   const [passageMode, setPassageMode] = useState('standard')
   const [fullPassage, setFullPassage] = useState('')
@@ -669,6 +671,17 @@ export default function CreateReading() {
     const student = students.find(item => item.id === studentId)
     return student?.name || student?.email || 'Unknown student'
   }
+
+  const filteredStudents = students.filter(student => {
+    const term = studentSearch.trim().toLowerCase()
+
+    if (!term) return true
+
+    const name = student.name?.toLowerCase() || ''
+    const email = student.email?.toLowerCase() || ''
+
+    return name.includes(term) || email.includes(term)
+  })
 
   // ============================================================
   // Paragraph helpers
@@ -1946,7 +1959,7 @@ export default function CreateReading() {
         </button>
       </nav>
 
-      <div className="max-w-5xl mx-auto px-6 py-10">
+      <div className="max-w-7xl mx-auto px-6 py-10">
         <h1 className="text-2xl font-bold text-gray-900 mb-1">
           {isEditMode ? 'Edit IELTS Reading' : 'Create IELTS Reading'}
         </h1>
@@ -1970,6 +1983,8 @@ export default function CreateReading() {
           </div>
         )}
 
+        <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_360px] gap-6 items-start">
+          <main className="min-w-0">
         {/* Reading Details */}
         <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-5">
           <h2 className="font-semibold text-gray-800 mb-4">Reading Details</h2>
@@ -2034,135 +2049,6 @@ export default function CreateReading() {
               className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400"
             />
           </div>
-        </div>
-
-        {/* Students */}
-        <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-5">
-          <div className="flex items-center justify-between gap-4 mb-4">
-            <div>
-              <h2 className="font-semibold text-gray-800">Assign Students</h2>
-              <p className="text-xs text-gray-400 mt-1">
-                Select students one by one or add a whole class.
-              </p>
-            </div>
-
-            {assignTo.length > 0 && (
-              <button
-                onClick={() => setAssignTo([])}
-                className="text-xs bg-red-50 text-red-500 px-3 py-2 rounded-xl hover:bg-red-100"
-              >
-                Clear all ({assignTo.length})
-              </button>
-            )}
-          </div>
-
-          {classes.length > 0 && (
-            <div className="bg-purple-50 border border-purple-100 rounded-2xl p-4 mb-5">
-              <div className="flex items-center justify-between gap-3 mb-3">
-                <div>
-                  <p className="text-sm font-semibold text-purple-800">
-                    Assign by Class
-                  </p>
-                  <p className="text-xs text-purple-500">
-                    Click Add to select all students in that class.
-                  </p>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                {classes.map(classItem => {
-                  const classStudentIds = classItem.studentIds || []
-                  const fullyAssigned = isClassFullyAssigned(classItem)
-                  const partlyAssigned = isClassPartlyAssigned(classItem)
-
-                  return (
-                    <div
-                      key={classItem.id}
-                      className={`bg-white border rounded-xl p-3 ${
-                        fullyAssigned
-                          ? 'border-purple-300'
-                          : partlyAssigned
-                            ? 'border-amber-200'
-                            : 'border-gray-100'
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium text-gray-800 truncate">
-                            {classItem.name}
-                          </p>
-
-                          <p className="text-xs text-gray-400 mt-0.5">
-                            {classStudentIds.length} student{classStudentIds.length === 1 ? '' : 's'}
-                            {partlyAssigned && !fullyAssigned ? ' · partly selected' : ''}
-                            {fullyAssigned ? ' · selected' : ''}
-                          </p>
-
-                          {classStudentIds.length > 0 && (
-                            <p className="text-[11px] text-gray-400 mt-1 truncate">
-                              {classStudentIds.slice(0, 3).map(getStudentName).join(', ')}
-                              {classStudentIds.length > 3
-                                ? ` +${classStudentIds.length - 3} more`
-                                : ''}
-                            </p>
-                          )}
-                        </div>
-
-                        {fullyAssigned ? (
-                          <button
-                            onClick={() => removeClassFromReading(classItem)}
-                            className="text-xs bg-red-50 text-red-500 px-3 py-1.5 rounded-lg hover:bg-red-100 flex-shrink-0"
-                          >
-                            Remove
-                          </button>
-                        ) : (
-                          <button
-                            onClick={() => assignClassToReading(classItem)}
-                            className="text-xs bg-purple-600 text-white px-3 py-1.5 rounded-lg hover:bg-purple-700 flex-shrink-0"
-                          >
-                            Add
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
-          )}
-
-          {students.length === 0 ? (
-            <p className="text-sm text-gray-400">No students found.</p>
-          ) : (
-            <div>
-              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
-                Individual Students ({assignTo.length} selected)
-              </p>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                {students.map(student => (
-                  <label
-                    key={student.id}
-                    className={`flex items-center gap-2 cursor-pointer rounded-xl border px-3 py-2 ${
-                      assignTo.includes(student.id)
-                        ? 'bg-purple-50 border-purple-200'
-                        : 'bg-white border-gray-100 hover:bg-gray-50'
-                    }`}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={assignTo.includes(student.id)}
-                      onChange={() => toggleStudent(student.id)}
-                      className="accent-purple-600"
-                    />
-                    <span className="text-sm text-gray-700 truncate">
-                      {student.name} — {student.email}
-                    </span>
-                  </label>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
 
         {/* Passage */}
@@ -3617,6 +3503,177 @@ export default function CreateReading() {
               ? 'Save Changes'
               : 'Save & Assign Reading'}
         </button>
+          </main>
+
+
+          <aside
+            data-reading-assignment-sidebar
+            className="space-y-5 xl:sticky xl:top-6"
+          >
+            {classes.length > 0 && (
+              <div className="bg-purple-50 border border-purple-100 rounded-2xl p-5">
+                <div className="flex items-start justify-between gap-3 mb-4">
+                  <div>
+                    <h2 className="font-semibold text-purple-800">
+                      Assign by Class
+                    </h2>
+                    <p className="text-xs text-purple-500 mt-1">
+                      Add or remove all students from a class.
+                    </p>
+                  </div>
+
+                  <span className="text-xs bg-white text-purple-600 px-3 py-1 rounded-full flex-shrink-0">
+                    {assignTo.length} selected
+                  </span>
+                </div>
+
+                <div className="space-y-2">
+                  {classes.map(classItem => {
+                    const classStudentIds = filterClassStudentIds(
+                      classItem,
+                      students
+                    )
+                    const fullyAssigned = isClassFullyAssigned(classItem)
+                    const partlyAssigned = isClassPartlyAssigned(classItem)
+
+                    return (
+                      <div
+                        key={classItem.id}
+                        className={`bg-white border rounded-xl p-3 ${
+                          fullyAssigned
+                            ? 'border-purple-300'
+                            : partlyAssigned
+                              ? 'border-amber-200'
+                              : 'border-gray-100'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium text-gray-800 truncate">
+                              {classItem.name}
+                            </p>
+
+                            <p className="text-xs text-gray-400 mt-0.5">
+                              {classStudentIds.length} student{classStudentIds.length === 1 ? '' : 's'}
+                              {fullyAssigned
+                                ? ' · selected'
+                                : partlyAssigned
+                                  ? ' · partly selected'
+                                  : ''}
+                            </p>
+
+                            {classStudentIds.length > 0 && (
+                              <p className="text-[11px] text-gray-400 mt-1 truncate">
+                                {classStudentIds
+                                  .slice(0, 2)
+                                  .map(getStudentName)
+                                  .join(', ')}
+                                {classStudentIds.length > 2
+                                  ? ` +${classStudentIds.length - 2} more`
+                                  : ''}
+                              </p>
+                            )}
+                          </div>
+
+                          {fullyAssigned ? (
+                            <button
+                              type="button"
+                              onClick={() => removeClassFromReading(classItem)}
+                              className="text-xs bg-red-50 text-red-500 px-3 py-1.5 rounded-lg hover:bg-red-100 flex-shrink-0"
+                            >
+                              Remove
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => assignClassToReading(classItem)}
+                              className="text-xs bg-purple-600 text-white px-3 py-1.5 rounded-lg hover:bg-purple-700 flex-shrink-0"
+                            >
+                              Add
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            <div className="bg-white border border-gray-100 rounded-2xl p-5">
+              <div className="flex items-center justify-between gap-3 mb-4">
+                <div>
+                  <h2 className="font-semibold text-gray-800">
+                    Assign Students
+                  </h2>
+                  <p className="text-xs text-gray-400 mt-1">
+                    Select individual students.
+                  </p>
+                </div>
+
+                {assignTo.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setAssignTo([])}
+                    className="text-xs bg-gray-100 text-gray-500 px-3 py-1.5 rounded-lg hover:bg-gray-200 flex-shrink-0"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+
+              <input
+                value={studentSearch}
+                onChange={event => setStudentSearch(event.target.value)}
+                placeholder="Search students..."
+                className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-purple-400 mb-3"
+              />
+
+              <div className="space-y-2 max-h-[620px] overflow-y-auto pr-1">
+                {filteredStudents.map(student => (
+                  <label
+                    key={student.id}
+                    className={`flex items-center justify-between gap-3 border rounded-xl p-3 cursor-pointer ${
+                      assignTo.includes(student.id)
+                        ? 'bg-purple-50 border-purple-200'
+                        : 'bg-white border-gray-100 hover:bg-gray-50'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <input
+                        type="checkbox"
+                        checked={assignTo.includes(student.id)}
+                        onChange={() => toggleStudent(student.id)}
+                        className="accent-purple-600"
+                      />
+
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-gray-800 truncate">
+                          {student.name || student.email}
+                        </p>
+                        <p className="text-xs text-gray-400 truncate">
+                          {student.email}
+                        </p>
+                      </div>
+                    </div>
+
+                    {assignTo.includes(student.id) && (
+                      <span className="text-[11px] bg-white text-purple-600 px-2 py-1 rounded-full flex-shrink-0">
+                        Assigned
+                      </span>
+                    )}
+                  </label>
+                ))}
+
+                {filteredStudents.length === 0 && (
+                  <p className="text-sm text-gray-400 bg-gray-50 rounded-xl p-4">
+                    No approved students found.
+                  </p>
+                )}
+              </div>
+            </div>
+          </aside>
+        </div>
       </div>
     </div>
   )
