@@ -123,6 +123,10 @@ export default function CreateReading() {
       return question.items?.length || 0
     }
 
+    if (question.type === 'shortAnswer') {
+      return question.items?.length || 0
+    }
+
     if (question.type === 'summaryOptions') {
       return question.items?.length || 0
     }
@@ -218,6 +222,7 @@ export default function CreateReading() {
     if (question.type === 'matching') return 'Matching Headings'
     if (question.type === 'matchingInformation') return 'Matching Information'
     if (question.type === 'sentenceEndings') return 'Matching Sentence Endings'
+    if (question.type === 'shortAnswer') return 'Short-answer Questions'
     if (question.type === 'noteCompletion') {
       return question.mode === 'choose'
         ? 'Note Completion (Choose A-H)'
@@ -592,6 +597,33 @@ export default function CreateReading() {
           }
         }
 
+        if (question.type === 'shortAnswer') {
+          return {
+            id: question.id || crypto.randomUUID(),
+            type: 'shortAnswer',
+            title: question.title || 'Short-answer Questions',
+            instruction:
+              question.instruction ||
+              'Choose NO MORE THAN THREE WORDS from the passage for each answer.',
+            maxWords: Number(question.maxWords) || 3,
+            items: question.items?.length
+              ? question.items.map(item => ({
+                  id: item.id || crypto.randomUUID(),
+                  question: item.question || '',
+                  answer: item.answer || '',
+                  acceptedAnswers: item.acceptedAnswers || ''
+                }))
+              : [
+                  {
+                    id: crypto.randomUUID(),
+                    question: '',
+                    answer: '',
+                    acceptedAnswers: ''
+                  }
+                ]
+          }
+        }
+
         return {
           id: question.id || crypto.randomUUID(),
           type: question.type,
@@ -875,6 +907,29 @@ export default function CreateReading() {
       return
     }
 
+    if (type === 'shortAnswer') {
+      setQuestions(prev => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          type: 'shortAnswer',
+          title: 'Short-answer Questions',
+          instruction:
+            'Choose NO MORE THAN THREE WORDS from the passage for each answer.',
+          maxWords: 3,
+          items: [
+            {
+              id: crypto.randomUUID(),
+              question: '',
+              answer: '',
+              acceptedAnswers: ''
+            }
+          ]
+        }
+      ])
+      return
+    }
+
     // Legacy types (only via showLegacyTypes toggle)
     if (type === 'fitb') {
       setQuestions(prev => [
@@ -1067,6 +1122,61 @@ export default function CreateReading() {
       prev.map(q => {
         if (q.id !== questionId) return q
         if (q.items.length <= 1) return q
+        return {
+          ...q,
+          items: q.items.filter(item => item.id !== itemId)
+        }
+      })
+    )
+  }
+
+  // ============================================================
+  // Short-answer Questions helpers
+  // ============================================================
+  const updateShortAnswerItem = (questionId, itemId, field, value) => {
+    setQuestions(prev =>
+      prev.map(q => {
+        if (q.id !== questionId) return q
+
+        return {
+          ...q,
+          items: q.items.map(item =>
+            item.id === itemId
+              ? { ...item, [field]: value }
+              : item
+          )
+        }
+      })
+    )
+  }
+
+  const addShortAnswerItem = questionId => {
+    setQuestions(prev =>
+      prev.map(q => {
+        if (q.id !== questionId) return q
+
+        return {
+          ...q,
+          items: [
+            ...q.items,
+            {
+              id: crypto.randomUUID(),
+              question: '',
+              answer: '',
+              acceptedAnswers: ''
+            }
+          ]
+        }
+      })
+    )
+  }
+
+  const removeShortAnswerItem = (questionId, itemId) => {
+    setQuestions(prev =>
+      prev.map(q => {
+        if (q.id !== questionId) return q
+        if (q.items.length <= 1) return q
+
         return {
           ...q,
           items: q.items.filter(item => item.id !== itemId)
@@ -1669,6 +1779,25 @@ export default function CreateReading() {
         }
       }
 
+      if (question.type === 'shortAnswer') {
+        if (!question.instruction?.trim()) {
+          alert('Please add instructions for Short-answer Questions.')
+          return false
+        }
+
+        if (!Number(question.maxWords) || Number(question.maxWords) < 1) {
+          alert('Short-answer Questions need a valid maximum word limit.')
+          return false
+        }
+
+        for (const item of question.items || []) {
+          if (!item.question?.trim() || !item.answer?.trim()) {
+            alert('Please fill all Short-answer Questions and correct answers.')
+            return false
+          }
+        }
+      }
+
       if (question.type === 'summaryOptions') {
         if (!question.instruction?.trim()) {
           alert('Please add instructions for Summary Options.')
@@ -1886,6 +2015,22 @@ export default function CreateReading() {
             answer: item.answer || ''
           })),
           endings: question.endings.filter(ending => ending.trim())
+        }
+      }
+
+      if (question.type === 'shortAnswer') {
+        return {
+          id: question.id,
+          type: 'shortAnswer',
+          title: question.title || 'Short-answer Questions',
+          instruction: question.instruction || '',
+          maxWords: Number(question.maxWords) || 3,
+          items: (question.items || []).map(item => ({
+            id: item.id,
+            question: item.question || '',
+            answer: item.answer || '',
+            acceptedAnswers: item.acceptedAnswers || ''
+          }))
         }
       }
 
@@ -2177,6 +2322,12 @@ export default function CreateReading() {
                 className="text-xs bg-blue-50 text-blue-600 px-3 py-2 rounded-lg hover:bg-blue-100"
               >
                 + T/F/NG
+              </button>
+              <button
+                onClick={() => addQuestion('shortAnswer')}
+                className="text-xs bg-sky-50 text-sky-600 px-3 py-2 rounded-lg hover:bg-sky-100 font-semibold"
+              >
+                + Short Answer
               </button>
               <button
                 onClick={() => addQuestion('matching')}
@@ -2684,6 +2835,178 @@ export default function CreateReading() {
                   </div>
                 )}
 
+
+                {/* ============ SHORT-ANSWER QUESTIONS ============ */}
+                {question.type === 'shortAnswer' && (
+                  <div>
+                    <div className="grid grid-cols-1 md:grid-cols-[1fr_160px] gap-3 mb-4">
+                      <div>
+                        <label className="text-xs text-gray-400 mb-1 block">
+                          Section title
+                        </label>
+                        <input
+                          value={question.title || ''}
+                          onChange={e =>
+                            updateQuestion(
+                              question.id,
+                              'title',
+                              e.target.value
+                            )
+                          }
+                          placeholder="Short-answer Questions"
+                          className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-sky-400"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="text-xs text-gray-400 mb-1 block">
+                          Maximum words
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          max="10"
+                          value={question.maxWords || 3}
+                          onChange={e =>
+                            updateQuestion(
+                              question.id,
+                              'maxWords',
+                              Number(e.target.value)
+                            )
+                          }
+                          className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-sky-400"
+                        />
+                      </div>
+                    </div>
+
+                    <label className="text-xs text-gray-400 mb-1 block">
+                      Instruction
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={question.instruction || ''}
+                      onChange={e =>
+                        updateQuestion(
+                          question.id,
+                          'instruction',
+                          e.target.value
+                        )
+                      }
+                      placeholder="Choose NO MORE THAN THREE WORDS from the passage for each answer."
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-sky-400 mb-4 resize-none"
+                    />
+
+                    <div className="bg-sky-50 border border-sky-100 rounded-xl p-4 mb-4">
+                      <p className="text-xs font-semibold text-sky-700 mb-1">
+                        IELTS Short-answer Questions
+                      </p>
+                      <p className="text-xs text-sky-600">
+                        Students type a short answer. The system checks the word limit and accepted alternatives automatically.
+                      </p>
+                    </div>
+
+                    <div className="flex items-center justify-between mb-3">
+                      <p className="text-sm font-medium text-gray-800">
+                        Questions
+                      </p>
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          addShortAnswerItem(question.id)
+                        }
+                        className="text-xs bg-sky-50 text-sky-600 px-3 py-1.5 rounded-lg hover:bg-sky-100"
+                      >
+                        + Add question
+                      </button>
+                    </div>
+
+                    <div className="space-y-3">
+                      {(question.items || []).map((item, itemIndex) => (
+                        <div
+                          key={item.id}
+                          className="bg-white border border-gray-100 rounded-xl p-4"
+                        >
+                          <div className="flex items-center justify-between gap-3 mb-3">
+                            <p className="text-xs font-semibold text-gray-500">
+                              Question {getQuestionStartNumber(index) + itemIndex}
+                            </p>
+
+                            {(question.items || []).length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  removeShortAnswerItem(
+                                    question.id,
+                                    item.id
+                                  )
+                                }
+                                className="text-xs text-red-400 hover:text-red-600"
+                              >
+                                Remove
+                              </button>
+                            )}
+                          </div>
+
+                          <textarea
+                            rows={2}
+                            value={item.question || ''}
+                            onChange={e =>
+                              updateShortAnswerItem(
+                                question.id,
+                                item.id,
+                                'question',
+                                e.target.value
+                              )
+                            }
+                            placeholder="e.g. What can help family members stay emotionally connected despite busy lives?"
+                            className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-sky-400 resize-y mb-3"
+                          />
+
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <div>
+                              <label className="text-xs text-gray-400 mb-1 block">
+                                Correct answer
+                              </label>
+                              <input
+                                value={item.answer || ''}
+                                onChange={e =>
+                                  updateShortAnswerItem(
+                                    question.id,
+                                    item.id,
+                                    'answer',
+                                    e.target.value
+                                  )
+                                }
+                                placeholder="e.g. regular communication"
+                                className="w-full border border-sky-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-sky-400"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="text-xs text-gray-400 mb-1 block">
+                                Accepted alternatives / optional
+                              </label>
+                              <input
+                                value={item.acceptedAnswers || ''}
+                                onChange={e =>
+                                  updateShortAnswerItem(
+                                    question.id,
+                                    item.id,
+                                    'acceptedAnswers',
+                                    e.target.value
+                                  )
+                                }
+                                placeholder="comma separated"
+                                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-sky-400"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* ============ NOTE COMPLETION (NEW) ============ */}
                 {question.type === 'noteCompletion' && (

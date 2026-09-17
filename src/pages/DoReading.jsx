@@ -412,6 +412,10 @@ export default function DoReading() {
       return question.items?.length || 0
     }
 
+    if (question.type === 'shortAnswer') {
+      return question.items?.length || 0
+    }
+
     if (question.type === 'summaryOptions') {
       return question.items?.length || 0
     }
@@ -528,6 +532,7 @@ export default function DoReading() {
     if (question.type === 'matching') return 'Matching Headings'
     if (question.type === 'matchingInformation') return 'Matching Information'
     if (question.type === 'sentenceEndings') return 'Sentence Endings'
+    if (question.type === 'shortAnswer') return 'Short-answer Questions'
     if (question.type === 'summaryOptions') return 'Summary Completion with Options'
     if (question.type === 'noteCompletion') {
       return question.mode === 'choose'
@@ -564,6 +569,10 @@ export default function DoReading() {
         hasAnswerValue(answers[question.id]?.[item.id])
       ).length
     } else if (question.type === 'sentenceEndings') {
+      answered = (question.items || []).filter(item =>
+        hasAnswerValue(answers[question.id]?.[item.id])
+      ).length
+    } else if (question.type === 'shortAnswer') {
       answered = (question.items || []).filter(item =>
         hasAnswerValue(answers[question.id]?.[item.id])
       ).length
@@ -942,6 +951,16 @@ export default function DoReading() {
     }))
   }
 
+  const handleShortAnswer = (questionId, itemId, value) => {
+    setAnswers(prev => ({
+      ...prev,
+      [questionId]: {
+        ...(prev[questionId] || {}),
+        [itemId]: value
+      }
+    }))
+  }
+
   const handleSummaryOption = (questionId, itemId, value) => {
     setAnswers(prev => ({
       ...prev,
@@ -1109,6 +1128,15 @@ export default function DoReading() {
     return userAnswer === correctAnswer
   }
 
+  const isShortAnswerCorrect = (question, item) => {
+    return isBlankAnswerCorrect(
+      answers[question.id]?.[item.id],
+      item.answer,
+      item.acceptedAnswers,
+      question.maxWords || 3
+    )
+  }
+
   const isSummaryOptionCorrect = (question, item) => {
     const userAnswer = answers[question.id]?.[item.id]?.toString()
     const correctAnswer = item.answer?.toString()
@@ -1195,6 +1223,18 @@ export default function DoReading() {
           total++
 
           if (isSentenceEndingCorrect(question, item)) {
+            correct++
+          }
+        })
+
+        return
+      }
+
+      if (question.type === 'shortAnswer') {
+        question.items?.forEach(item => {
+          total++
+
+          if (isShortAnswerCorrect(question, item)) {
             correct++
           }
         })
@@ -1884,7 +1924,155 @@ export default function DoReading() {
                       </div>
                     )}
 
-                    {question.type === 'summaryOptions' && (
+                    {question.type === 'shortAnswer' && (
+                      <div>
+                        <p className="font-medium text-sm text-gray-800 mb-2">
+                          {question.title || 'Short-answer Questions'}
+                        </p>
+
+                        {question.instruction && (
+                          <p className="text-sm text-gray-600 mb-4">
+                            {question.instruction}
+                          </p>
+                        )}
+
+                        <div className="flex flex-col gap-3">
+                          {(question.items || []).map((item, itemIndex) => {
+                            const userAnswer =
+                              answers[question.id]?.[item.id]
+
+                            const correct =
+                              isShortAnswerCorrect(question, item)
+
+                            return (
+                              <div
+                                key={item.id}
+                                className={`rounded-xl p-4 border ${
+                                  correct
+                                    ? 'bg-green-50 border-green-100'
+                                    : 'bg-red-50 border-red-100'
+                                }`}
+                              >
+                                <div className="flex items-start justify-between gap-3 mb-2">
+                                  <p className="text-sm font-semibold text-gray-800">
+                                    {getQuestionStartNumber(index) + itemIndex}. {item.question}
+                                  </p>
+
+                                  <span
+                                    className={`text-xs font-semibold ${
+                                      correct
+                                        ? 'text-green-600'
+                                        : 'text-red-600'
+                                    }`}
+                                  >
+                                    {correct ? 'Correct' : 'Wrong'}
+                                  </span>
+                                </div>
+
+                                <p className="text-xs text-gray-500 mb-1">
+                                  Your answer:
+                                </p>
+                                <p className="text-sm text-gray-800 mb-3">
+                                  {userAnswer || 'No answer'}
+                                </p>
+
+                                {!correct && (
+                                  <>
+                                    <p className="text-xs text-gray-500 mb-1">
+                                      Correct answer:
+                                    </p>
+                                    <p className="text-sm font-medium text-green-700">
+                                      {item.answer}
+                                    </p>
+                                  </>
+                                )}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {question.type === 'shortAnswer' && (
+                  <div>
+                    <div className="mb-5">
+                      <p className="text-base font-bold text-gray-900 mb-2">
+                        {question.title || 'Short-answer Questions'}
+                      </p>
+
+                      {question.instruction && (
+                        <p className="text-sm font-semibold text-gray-700">
+                          {question.instruction}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="space-y-5">
+                      {(question.items || []).map((item, itemIndex) => {
+                        const questionNumber =
+                          getQuestionStartNumber(index) + itemIndex
+
+                        const currentAnswer =
+                          answers[question.id]?.[item.id] || ''
+
+                        const overLimit =
+                          countWords(currentAnswer) >
+                          Number(question.maxWords || 3)
+
+                        return (
+                          <div
+                            key={item.id}
+                            className="bg-white border border-gray-100 rounded-xl p-4"
+                          >
+                            <p className="text-sm text-gray-800 leading-7 mb-3">
+                              <span className="font-semibold mr-2">
+                                {questionNumber}.
+                              </span>
+                              {item.question}
+                            </p>
+
+                            <input
+                              value={currentAnswer}
+                              onChange={e =>
+                                handleShortAnswer(
+                                  question.id,
+                                  item.id,
+                                  e.target.value
+                                )
+                              }
+                              placeholder="Type your answer..."
+                              className={`w-full border rounded-xl px-3 py-2.5 text-sm outline-none ${
+                                overLimit
+                                  ? 'border-red-300 focus:border-red-400 bg-red-50'
+                                  : 'border-gray-200 focus:border-purple-400 bg-white'
+                              }`}
+                            />
+
+                            <div className="flex items-center justify-between gap-3 mt-2">
+                              <span
+                                className={`text-xs ${
+                                  overLimit
+                                    ? 'text-red-500 font-semibold'
+                                    : 'text-gray-400'
+                                }`}
+                              >
+                                {overLimit
+                                  ? `Too many words — maximum ${question.maxWords || 3}`
+                                  : `Maximum ${question.maxWords || 3} words`}
+                              </span>
+
+                              <span className="text-xs text-gray-400">
+                                {countWords(currentAnswer)} word{countWords(currentAnswer) === 1 ? '' : 's'}
+                              </span>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {question.type === 'summaryOptions' && (
                       <div>
                         <p className="font-medium text-sm text-gray-800 mb-2">
                           {question.title}
@@ -2084,7 +2272,7 @@ export default function DoReading() {
                       </div>
                     )}
 
-                    {question.type !== 'matching' && question.type !== 'matchingInformation' && question.type !== 'sentenceEndings' && question.type !== 'summaryOptions' && question.type !== 'noteCompletion' && question.type !== 'table' && question.type !== 'summary' && (
+                    {question.type !== 'matching' && question.type !== 'matchingInformation' && question.type !== 'sentenceEndings' && question.type !== 'shortAnswer' && question.type !== 'summaryOptions' && question.type !== 'noteCompletion' && question.type !== 'table' && question.type !== 'summary' && (
                       <div>
                         <p className="text-sm text-gray-800 mb-4">
                           {question.question}
