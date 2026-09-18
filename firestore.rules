@@ -477,5 +477,43 @@ service cloud.firestore {
         || teacherListedOn(resource.data)
         || teacherOwnsVocabularyParent(resource.data);
     }
+    // ============================================================
+    // VOCABULARY DRAFTS / SAVE & CONTINUE LATER
+    // ============================================================
+
+    match /vocabularyDrafts/{draftId} {
+      // Students can only read their own saved draft.
+      // Admin can read drafts for support/maintenance if needed.
+      allow read: if isAdmin()
+        || (
+          isStudent()
+          && resource.data.get('uid', '') == request.auth.uid
+          && resource.data.get('studentId', '') == request.auth.uid
+          && draftId == request.auth.uid + '_' + resource.data.get('vocabularyTestId', '')
+        );
+
+      // Package 49 uses setDoc(..., { merge: true }), so create and update
+      // both validate the complete resulting document against the assigned
+      // vocabulary test.
+      allow create, update: if vocabularyParentExists(request.resource.data)
+        && validStudentSubmissionBase(
+          request.resource.data,
+          get(
+            /databases/$(database)/documents/vocabularyTests/$(request.resource.data.vocabularyTestId)
+          ).data
+        )
+        && draftId == request.auth.uid + '_' + request.resource.data.vocabularyTestId
+        && request.resource.data.get('timeLeft', -1) >= 0;
+
+      // Final submission removes the student's draft.
+      allow delete: if isAdmin()
+        || (
+          isStudent()
+          && resource.data.get('uid', '') == request.auth.uid
+          && resource.data.get('studentId', '') == request.auth.uid
+          && draftId == request.auth.uid + '_' + resource.data.get('vocabularyTestId', '')
+        );
+    }
+
   }
 }

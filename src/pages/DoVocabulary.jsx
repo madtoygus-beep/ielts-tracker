@@ -7,7 +7,9 @@ import {
   getDoc,
   getDocs,
   query,
-  where
+  where,
+  setDoc,
+  deleteDoc
 } from 'firebase/firestore'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -191,6 +193,8 @@ export default function DoVocabulary() {
   const [submitting, setSubmitting] = useState(false)
   const [alreadyDone, setAlreadyDone] = useState(false)
   const [result, setResult] = useState(null)
+  const [draftSaving, setDraftSaving] = useState(false)
+  const [draftRestored, setDraftRestored] = useState(false)
 
   const timerRef = useRef(null)
   const submittingRef = useRef(false)
@@ -279,6 +283,33 @@ export default function DoVocabulary() {
           setAnswers(submission.answers || {})
           setResult(submission.result || null)
           setSubmitted(true)
+        } else {
+          try {
+            const draftSnap = await getDoc(
+              doc(
+                db,
+                'vocabularyDrafts',
+                `${currentUser.uid}_${id}`
+              )
+            )
+
+            if (draftSnap.exists()) {
+              const draft = draftSnap.data()
+
+              setAnswers(draft.answers || {})
+              setTimeLeft(
+                Number.isFinite(Number(draft.timeLeft))
+                  ? Math.max(Number(draft.timeLeft), 0)
+                  : (data.timeLimit || 20) * 60
+              )
+              setDraftRestored(true)
+            }
+          } catch (draftError) {
+            console.warn(
+              'Could not restore vocabulary draft:',
+              draftError
+            )
+          }
         }
       } catch (error) {
         console.error(error)
@@ -555,6 +586,64 @@ export default function DoVocabulary() {
     }
   }
 
+  const handleSaveAndContinueLater = async () => {
+    if (
+      !test ||
+      !user ||
+      submitted ||
+      alreadyDone ||
+      draftSaving
+    ) return
+
+    setDraftSaving(true)
+    clearInterval(timerRef.current)
+
+    const submissionTeacherIds = getSourceTeacherIds(test)
+
+    try {
+      await setDoc(
+        doc(
+          db,
+          'vocabularyDrafts',
+          `${user.uid}_${id}`
+        ),
+        {
+          uid: user.uid,
+          studentId: user.uid,
+          studentEmail: user.email || profile?.email || '',
+          studentName:
+            profile?.name ||
+            profile?.fullName ||
+            user.email ||
+            '',
+          vocabularyTestId: id,
+          vocabularyId: id,
+          testId: id,
+          homeworkId: id,
+          vocabularyTitle: test.title || '',
+          teacherId: submissionTeacherIds[0] || '',
+          teacherIds: submissionTeacherIds,
+          schoolId:
+            test.schoolId ||
+            profile?.schoolId ||
+            'maxima',
+          answers,
+          timeLeft: Math.max(Number(timeLeft) || 0, 0),
+          updatedAt: new Date().toISOString()
+        },
+        { merge: true }
+      )
+
+      navigate('/student')
+    } catch (error) {
+      console.error(error)
+      alert(
+        'Could not save your progress. Please try again.'
+      )
+      setDraftSaving(false)
+    }
+  }
+
   const handleSubmit = async (autoSubmit = false) => {
     if (submittingRef.current || submitted || alreadyDone || !test || !user) return
 
@@ -593,8 +682,24 @@ export default function DoVocabulary() {
         autoSubmitted: autoSubmit
       })
 
+      try {
+        await deleteDoc(
+          doc(
+            db,
+            'vocabularyDrafts',
+            `${user.uid}_${id}`
+          )
+        )
+      } catch (draftCleanupError) {
+        console.warn(
+          'Could not delete vocabulary draft after submit:',
+          draftCleanupError
+        )
+      }
+
       setResult(res)
       setSubmitted(true)
+      setDraftRestored(false)
     } catch (error) {
       console.error(error)
       alert('Could not submit your vocabulary practice. Please try again.')
@@ -1117,6 +1222,12 @@ export default function DoVocabulary() {
           <p className="text-xs text-purple-600 mt-3 font-medium">
             Complete all vocabulary tasks below.
           </p>
+
+          {draftRestored && (
+            <div className="mt-4 bg-blue-50 border border-blue-100 text-blue-700 rounded-xl px-4 py-3 text-sm">
+              ✓ Your saved progress has been restored. Continue where you left off.
+            </div>
+          )}
         </div>
 
         <div className="space-y-6">
@@ -1153,13 +1264,30 @@ export default function DoVocabulary() {
           })}
         </div>
 
-        <button
-          onClick={() => handleSubmit(false)}
-          disabled={submitting}
-          className="w-full bg-purple-600 text-white rounded-xl py-4 text-sm font-medium hover:bg-purple-700 mt-8 disabled:opacity-60"
-        >
-          {submitting ? 'Submitting...' : 'Submit answers'}
-        </button>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-8">
+          <button
+            type="button"
+            onClick={handleSaveAndContinueLater}
+            disabled={
+              draftSaving ||
+              submitting ||
+              timeLeft <= 0
+            }
+            className="w-full bg-white border border-purple-200 text-purple-700 rounded-xl py-4 text-sm font-medium hover:bg-purple-50 disabled:opacity-60"
+          >
+            {draftSaving
+              ? 'Saving...'
+              : 'Save & Continue Later'}
+          </button>
+
+          <button
+            onClick={() => handleSubmit(false)}
+            disabled={submitting || draftSaving}
+            className="w-full bg-purple-600 text-white rounded-xl py-4 text-sm font-medium hover:bg-purple-700 disabled:opacity-60"
+          >
+            {submitting ? 'Submitting...' : 'Submit answers'}
+          </button>
+        </div>
       </div>
     </div>
   )
