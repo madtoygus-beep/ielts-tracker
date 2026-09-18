@@ -467,6 +467,48 @@ export default function DoVocabulary() {
     }))
   }
 
+  const getWordSelectedForDefinition = definitionIndex => {
+    const definitionLetter = letters[definitionIndex]
+
+    return groupedQuestions.matching.find(
+      question =>
+        answers[answerKey(question.id)] === definitionLetter
+    )?.id || ''
+  }
+
+  const getUsedMatchingWordIds = () => {
+    return new Set(
+      groupedQuestions.matching
+        .filter(question =>
+          Boolean(answers[answerKey(question.id)])
+        )
+        .map(question => question.id)
+    )
+  }
+
+  const handleDefinitionWordMatch = (
+    definitionIndex,
+    selectedQuestionId
+  ) => {
+    const definitionLetter = letters[definitionIndex]
+
+    setAnswers(prev => {
+      const next = { ...prev }
+
+      groupedQuestions.matching.forEach(question => {
+        if (next[answerKey(question.id)] === definitionLetter) {
+          delete next[answerKey(question.id)]
+        }
+      })
+
+      if (selectedQuestionId) {
+        next[answerKey(selectedQuestionId)] = definitionLetter
+      }
+
+      return next
+    })
+  }
+
   const isCorrect = (question, groupIndex = 0) => {
     const type = getQuestionType(question)
     const selected = answers[answerKey(question.id)]
@@ -573,8 +615,10 @@ export default function DoVocabulary() {
     if (type === 'match_definition') {
       if (!selected) return 'No answer'
       const selectedIndex = letters.indexOf(selected)
-      const definition = matchingDefinitionOrder[selectedIndex]?.definition || ''
-      return `${selected}. ${definition}`
+      const definition =
+        matchingDefinitionOrder[selectedIndex]?.definition || ''
+
+      return `${question.word || question.question} → ${definition}`
     }
 
     if (type === 'word_bank' || type === 'grammar_form') {
@@ -588,15 +632,7 @@ export default function DoVocabulary() {
     const type = getQuestionType(question)
 
     if (type === 'match_definition') {
-      const correctIndex = matchingDefinitionOrder.findIndex(
-        item => item.id === question.id
-      )
-
-      const letter = correctIndex >= 0
-        ? letters[correctIndex]
-        : '?'
-
-      return `${letter}. ${question.definition}`
+      return `${question.word || question.question} → ${question.definition}`
     }
 
     if (type === 'word_bank' || type === 'grammar_form') {
@@ -609,55 +645,111 @@ export default function DoVocabulary() {
   const renderMatchingTask = () => {
     if (groupedQuestions.matching.length === 0) return null
 
-    const heading = groupedQuestions.matching[0].taskTitle || 'Task A - Match the words with their definitions'
-    const instruction = groupedQuestions.matching[0].instruction || `Match 1-${groupedQuestions.matching.length} with A-${letters[groupedQuestions.matching.length - 1]}.`
+    const heading =
+      groupedQuestions.matching[0].taskTitle ||
+      'Task A - Match the words with their definitions'
+
+    const instruction =
+      groupedQuestions.matching[0].instruction ||
+      'Match the words with their definitions.'
+
+    const matchingStartNumber =
+      getGlobalQuestionNumber(groupedQuestions.matching[0])
+
+    const usedWordIds = getUsedMatchingWordIds()
 
     return (
       <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm">
-        <h2 className="text-xl font-bold text-gray-900 mb-2">{heading}</h2>
-        <p className="text-sm text-gray-500 mb-6">{instruction}</p>
+        <h2 className="text-xl font-bold text-gray-900 mb-2">
+          {heading}
+        </h2>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-          <div className="space-y-2">
-            {groupedQuestions.matching.map((question, index) => (
-              <p key={question.id} className="text-sm text-gray-800">
-                <span className="font-semibold mr-2">{getGlobalQuestionNumber(question)}.</span>
-                {question.word || question.question}
-              </p>
-            ))}
-          </div>
+        <p className="text-sm text-gray-500">
+          {instruction}
+        </p>
 
-          <div className="space-y-2">
-            {matchingDefinitionOrder.map((question, index) => (
-              <p key={question.id} className="text-sm text-gray-700">
-                <span className="font-semibold mr-2">{letters[index]}.</span>
-                {question.definition}
-              </p>
-            ))}
+        <p className="text-xs text-purple-600 font-medium mt-2 mb-5">
+          Choose the correct word for each definition. Each word can be used once.
+        </p>
+
+        <div className="bg-purple-50 border border-purple-100 rounded-2xl p-4 mb-6">
+          <p className="text-xs font-semibold text-purple-600 uppercase tracking-wider mb-3">
+            Words
+          </p>
+
+          <div className="flex flex-wrap gap-2">
+            {groupedQuestions.matching.map(question => {
+              const isUsed = usedWordIds.has(question.id)
+
+              return (
+                <span
+                  key={question.id}
+                  className={`text-sm px-3 py-1.5 rounded-full border ${
+                    isUsed
+                      ? 'bg-green-50 border-green-200 text-green-700'
+                      : 'bg-white border-purple-100 text-purple-700'
+                  }`}
+                >
+                  {question.word || question.question}
+                  {isUsed ? ' ✓' : ''}
+                </span>
+              )
+            })}
           </div>
         </div>
 
-        <div className="space-y-3 border-t border-gray-100 pt-4">
-          {groupedQuestions.matching.map((question, index) => (
-            <div key={question.id} className="grid grid-cols-1 md:grid-cols-[1fr_180px] gap-3 items-center">
-              <p className="text-sm text-gray-800">
-                {getGlobalQuestionNumber(question)}. {question.word || question.question}
-              </p>
+        <div className="space-y-3">
+          {matchingDefinitionOrder.map((definitionQuestion, definitionIndex) => {
+            const selectedQuestionId =
+              getWordSelectedForDefinition(definitionIndex)
 
-              <select
-                value={answers[answerKey(question.id)] || ''}
-                onChange={event => handleAnswer(question.id, event.target.value)}
-                className="border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 bg-white"
+            return (
+              <div
+                key={definitionQuestion.id}
+                className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_260px] gap-4 items-center border border-gray-100 rounded-2xl p-4"
               >
-                <option value="">Choose</option>
-                {groupedQuestions.matching.map((_, optionIndex) => (
-                  <option key={optionIndex} value={letters[optionIndex]}>
-                    {letters[optionIndex]}
-                  </option>
-                ))}
-              </select>
-            </div>
-          ))}
+                <div className="flex items-start gap-3">
+                  <span className="flex-shrink-0 w-8 h-8 rounded-full bg-purple-50 text-purple-600 text-sm font-semibold flex items-center justify-center">
+                    {matchingStartNumber + definitionIndex}
+                  </span>
+
+                  <p className="text-sm text-gray-800 leading-7">
+                    {definitionQuestion.definition}
+                  </p>
+                </div>
+
+                <select
+                  value={selectedQuestionId}
+                  onChange={event =>
+                    handleDefinitionWordMatch(
+                      definitionIndex,
+                      event.target.value
+                    )
+                  }
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 bg-white"
+                >
+                  <option value="">Select word</option>
+
+                  {groupedQuestions.matching.map(wordQuestion => {
+                    const usedElsewhere =
+                      usedWordIds.has(wordQuestion.id) &&
+                      wordQuestion.id !== selectedQuestionId
+
+                    return (
+                      <option
+                        key={wordQuestion.id}
+                        value={wordQuestion.id}
+                        disabled={usedElsewhere}
+                      >
+                        {wordQuestion.word || wordQuestion.question}
+                        {usedElsewhere ? ' — Used' : ''}
+                      </option>
+                    )
+                  })}
+                </select>
+              </div>
+            )
+          })}
         </div>
       </div>
     )
