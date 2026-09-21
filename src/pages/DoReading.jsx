@@ -1993,85 +1993,6 @@ export default function DoReading() {
                       </div>
                     )}
 
-                    {question.type === 'shortAnswer' && (
-                  <div>
-                    <div className="mb-5">
-                      <p className="text-base font-bold text-gray-900 mb-2">
-                        {question.title || 'Short-answer Questions'}
-                      </p>
-
-                      {question.instruction && (
-                        <p className="text-sm font-semibold text-gray-700">
-                          {question.instruction}
-                        </p>
-                      )}
-                    </div>
-
-                    <div className="space-y-5">
-                      {(question.items || []).map((item, itemIndex) => {
-                        const questionNumber =
-                          getQuestionStartNumber(index) + itemIndex
-
-                        const currentAnswer =
-                          answers[question.id]?.[item.id] || ''
-
-                        const overLimit =
-                          countWords(currentAnswer) >
-                          Number(question.maxWords || 3)
-
-                        return (
-                          <div
-                            key={item.id}
-                            className="bg-white border border-gray-100 rounded-xl p-4"
-                          >
-                            <p className="text-sm text-gray-800 leading-7 mb-3">
-                              <span className="font-semibold mr-2">
-                                {questionNumber}.
-                              </span>
-                              {item.question}
-                            </p>
-
-                            <input
-                              value={currentAnswer}
-                              onChange={e =>
-                                handleShortAnswer(
-                                  question.id,
-                                  item.id,
-                                  e.target.value
-                                )
-                              }
-                              placeholder="Type your answer..."
-                              className={`w-full border rounded-xl px-3 py-2.5 text-sm outline-none ${
-                                overLimit
-                                  ? 'border-red-300 focus:border-red-400 bg-red-50'
-                                  : 'border-gray-200 focus:border-purple-400 bg-white'
-                              }`}
-                            />
-
-                            <div className="flex items-center justify-between gap-3 mt-2">
-                              <span
-                                className={`text-xs ${
-                                  overLimit
-                                    ? 'text-red-500 font-semibold'
-                                    : 'text-gray-400'
-                                }`}
-                              >
-                                {overLimit
-                                  ? `Too many words — maximum ${question.maxWords || 3}`
-                                  : `Maximum ${question.maxWords || 3} words`}
-                              </span>
-
-                              <span className="text-xs text-gray-400">
-                                {countWords(currentAnswer)} word{countWords(currentAnswer) === 1 ? '' : 's'}
-                              </span>
-                            </div>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  </div>
-                )}
-
                 {question.type === 'summaryOptions' && (
                       <div>
                         <p className="font-medium text-sm text-gray-800 mb-2">
@@ -2844,6 +2765,85 @@ export default function DoReading() {
                         </div>
                       ))}
                     </div>
+                  </div>
+                )}
+
+                {question.type === 'shortAnswer' && (
+                  <div>
+                <div className="mb-5">
+                  <p className="text-base font-bold text-gray-900 mb-2">
+                    {question.title || 'Short-answer Questions'}
+                  </p>
+
+                  {question.instruction && (
+                    <p className="text-sm font-semibold text-gray-700">
+                      {question.instruction}
+                    </p>
+                  )}
+                </div>
+
+                <div className="space-y-5">
+                  {(question.items || []).map((item, itemIndex) => {
+                    const questionNumber =
+                      getQuestionStartNumber(index) + itemIndex
+
+                    const currentAnswer =
+                      answers[question.id]?.[item.id] || ''
+
+                    const overLimit =
+                      countWords(currentAnswer) >
+                      Number(question.maxWords || 3)
+
+                    return (
+                      <div
+                        key={item.id}
+                        className="bg-white border border-gray-100 rounded-xl p-4"
+                      >
+                        <p className="text-sm text-gray-800 leading-7 mb-3">
+                          <span className="font-semibold mr-2">
+                            {questionNumber}.
+                          </span>
+                          {item.question}
+                        </p>
+
+                        <input
+                          value={currentAnswer}
+                          onChange={e =>
+                            handleShortAnswer(
+                              question.id,
+                              item.id,
+                              e.target.value
+                            )
+                          }
+                          placeholder="Type your answer..."
+                          className={`w-full border rounded-xl px-3 py-2.5 text-sm outline-none ${
+                            overLimit
+                              ? 'border-red-300 focus:border-red-400 bg-red-50'
+                              : 'border-gray-200 focus:border-purple-400 bg-white'
+                          }`}
+                        />
+
+                        <div className="flex items-center justify-between gap-3 mt-2">
+                          <span
+                            className={`text-xs ${
+                              overLimit
+                                ? 'text-red-500 font-semibold'
+                                : 'text-gray-400'
+                            }`}
+                          >
+                            {overLimit
+                              ? `Too many words — maximum ${question.maxWords || 3}`
+                              : `Maximum ${question.maxWords || 3} words`}
+                          </span>
+
+                          <span className="text-xs text-gray-400">
+                            {countWords(currentAnswer)} word{countWords(currentAnswer) === 1 ? '' : 's'}
+                          </span>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
                   </div>
                 )}
 
