@@ -1,7 +1,8 @@
   import { useState, useEffect } from 'react'
-  import { auth, db } from '../firebase'
-  import { collection, query, where, onSnapshot, doc, getDoc } from 'firebase/firestore'
+  import { auth, db, storage } from '../firebase'
+  import { collection, query, where, onSnapshot, doc, getDoc, updateDoc, arrayUnion } from 'firebase/firestore'
   import { signOut, onAuthStateChanged, updatePassword } from 'firebase/auth'
+  import { ref as storageRef, getDownloadURL } from 'firebase/storage'
   import { useNavigate } from 'react-router-dom'
 
   function uniqueCleanValues(values) {
@@ -954,7 +955,31 @@
           </span>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-5">
+        <div className="bg-purple-50 border border-purple-100 rounded-2xl p-5 mb-5">
+          <div className="flex items-center justify-between gap-4 mb-3">
+            <div>
+              <p className="text-xs text-purple-500 mb-1">Overall Homework Completion</p>
+              <p className="text-sm text-gray-600">
+                {completedCount}/{totalAssigned} active assignments completed
+              </p>
+            </div>
+            <p className="text-3xl font-bold text-purple-600">{completionRate}%</p>
+          </div>
+          <div className="w-full bg-white rounded-full h-3 overflow-hidden">
+            <div
+              className="bg-purple-600 h-3 rounded-full"
+              style={{ width: `${completionRate}%` }}
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-5">
+          <div className="bg-green-50 rounded-2xl p-5">
+            <p className="text-xs text-gray-500 mb-1">Completed</p>
+            <p className="text-3xl font-bold text-green-600">{completedCount}</p>
+            <p className="text-xs text-gray-500 mt-2">Finished assignments</p>
+          </div>
+
           <div className="bg-gray-900 text-white rounded-2xl p-5">
             <p className="text-xs text-gray-400 mb-1">
               Average Accuracy
@@ -1696,11 +1721,25 @@
       return unsub
     }, [user])
 
+    const isVocabularySubmissionForTest = (submission, vocabularyTestId) =>
+      [
+        submission?.vocabularyTestId,
+        submission?.vocabularyId,
+        submission?.testId,
+        submission?.homeworkId
+      ]
+        .map(normalizeId)
+        .includes(normalizeId(vocabularyTestId))
+
     const isDone = vocabularyTestId =>
-      submissions.some(s => s.vocabularyTestId === vocabularyTestId)
+      submissions.some(submission =>
+        isVocabularySubmissionForTest(submission, vocabularyTestId)
+      )
 
     const getResult = vocabularyTestId =>
-      submissions.find(s => s.vocabularyTestId === vocabularyTestId)?.result
+      submissions.find(submission =>
+        isVocabularySubmissionForTest(submission, vocabularyTestId)
+      )?.result
 
     const todoVocabularyTests = vocabularyTests.filter(item => !isDone(item.id))
     const completedVocabularyTests = vocabularyTests.filter(item => isDone(item.id))
@@ -2936,7 +2975,16 @@
       writingSubmissions.some(submission => submission.writingId === writingId)
 
     const hasVocabularySubmission = vocabularyTestId =>
-      vocabularySubmissions.some(submission => submission.vocabularyTestId === vocabularyTestId)
+      vocabularySubmissions.some(submission =>
+        [
+          submission?.vocabularyTestId,
+          submission?.vocabularyId,
+          submission?.testId,
+          submission?.homeworkId
+        ]
+          .map(normalizeId)
+          .includes(normalizeId(vocabularyTestId))
+      )
 
     const hasMockSubmission = mockId =>
       mockSubmissions.some(submission => submission.mockTestId === mockId)
@@ -2994,6 +3042,18 @@
       const days = daysUntilDue(item.dueDate)
       return days !== null && days >= 0 && days <= 3
     }).length
+
+    const totalAssigned =
+      readings.length +
+      listenings.length +
+      writings.length +
+      vocabularyTests.length +
+      mocks.length
+
+    const completedCount = Math.max(totalAssigned - todoItems.length, 0)
+    const completionRate = totalAssigned
+      ? Math.round((completedCount / totalAssigned) * 100)
+      : 0
 
     const getTypeBadgeStyle = type => {
       if (type === 'Reading') return 'bg-blue-50 text-blue-600'
@@ -3122,6 +3182,195 @@
             )}
           </div>
         )}
+      </div>
+    )
+  }
+
+  function StudentCommunicationCenter({ user }) {
+    const [messages, setMessages] = useState([])
+    const [materials, setMaterials] = useState([])
+    const [openingMaterialId, setOpeningMaterialId] = useState('')
+
+    useEffect(() => {
+      if (!user) return
+
+      const messagesQuery = query(
+        collection(db, 'messages'),
+        where('recipientIds', 'array-contains', user.uid)
+      )
+
+      const materialsQuery = query(
+        collection(db, 'materials'),
+        where('recipientIds', 'array-contains', user.uid)
+      )
+
+      const unsubMessages = onSnapshot(messagesQuery, snap => {
+        const items = snap.docs
+          .map(item => ({ id: item.id, ...item.data() }))
+          .filter(item => item.archived !== true)
+          .sort(
+            (a, b) =>
+              new Date(b.createdAt || 0) - new Date(a.createdAt || 0)
+          )
+
+        setMessages(items)
+      })
+
+      const unsubMaterials = onSnapshot(materialsQuery, snap => {
+        const items = snap.docs
+          .map(item => ({ id: item.id, ...item.data() }))
+          .filter(item => item.archived !== true)
+          .sort(
+            (a, b) =>
+              new Date(b.createdAt || 0) - new Date(a.createdAt || 0)
+          )
+
+        setMaterials(items)
+      })
+
+      return () => {
+        unsubMessages()
+        unsubMaterials()
+      }
+    }, [user])
+
+    const unreadCount = messages.filter(
+      message => !(message.readBy || []).includes(user?.uid)
+    ).length
+
+    const markMessageRead = async message => {
+      if (!user || (message.readBy || []).includes(user.uid)) return
+
+      try {
+        await updateDoc(doc(db, 'messages', message.id), {
+          readBy: arrayUnion(user.uid)
+        })
+      } catch (error) {
+        console.warn('Could not mark message as read:', error)
+      }
+    }
+
+    const openMaterial = async material => {
+      if (!material?.storagePath) return
+
+      setOpeningMaterialId(material.id)
+
+      try {
+        const url = await getDownloadURL(
+          storageRef(storage, material.storagePath)
+        )
+        window.open(url, '_blank', 'noopener,noreferrer')
+      } catch (error) {
+        console.error('Could not open material:', error)
+        alert('Could not open this file.')
+      } finally {
+        setOpeningMaterialId('')
+      }
+    }
+
+    return (
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+        <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm">
+          <div className="flex items-center justify-between gap-3 mb-5">
+            <div>
+              <h2 className="font-semibold text-gray-800">💬 Messages</h2>
+              <p className="text-xs text-gray-400 mt-1">Messages from your teacher.</p>
+            </div>
+            <span className={`text-xs px-3 py-1.5 rounded-full ${unreadCount > 0 ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'}`}>
+              {unreadCount > 0 ? `${unreadCount} unread` : 'All read'}
+            </span>
+          </div>
+
+          {messages.length === 0 ? (
+            <div className="bg-gray-50 rounded-xl p-5 text-sm text-gray-400">
+              No messages yet.
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {messages.map(message => {
+                const isUnread = !(message.readBy || []).includes(user?.uid)
+
+                return (
+                  <button
+                    key={message.id}
+                    type="button"
+                    onClick={() => markMessageRead(message)}
+                    className={`w-full text-left border rounded-xl p-4 transition-all ${isUnread ? 'border-purple-200 bg-purple-50' : 'border-gray-100 bg-white hover:bg-gray-50'}`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className={`text-sm ${isUnread ? 'font-bold text-gray-900' : 'font-semibold text-gray-800'}`}>
+                          {message.title}
+                        </p>
+                        <p className="text-xs text-purple-600 mt-1">
+                          From {message.senderName || 'Teacher'}
+                        </p>
+                      </div>
+                      {isUnread && (
+                        <span className="text-[10px] bg-purple-600 text-white px-2 py-1 rounded-full">NEW</span>
+                      )}
+                    </div>
+
+                    <p className="text-sm text-gray-600 leading-6 mt-3 whitespace-pre-wrap">
+                      {message.body}
+                    </p>
+
+                    <p className="text-[11px] text-gray-400 mt-3">
+                      {message.createdAt ? new Date(message.createdAt).toLocaleString() : ''}
+                    </p>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </div>
+
+        <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm">
+          <div className="flex items-center justify-between gap-3 mb-5">
+            <div>
+              <h2 className="font-semibold text-gray-800">📚 Materials</h2>
+              <p className="text-xs text-gray-400 mt-1">Lesson notes, PDFs and worksheets shared with you.</p>
+            </div>
+            <span className="text-xs bg-gray-100 text-gray-500 px-3 py-1.5 rounded-full">
+              {materials.length} file{materials.length === 1 ? '' : 's'}
+            </span>
+          </div>
+
+          {materials.length === 0 ? (
+            <div className="bg-gray-50 rounded-xl p-5 text-sm text-gray-400">
+              No materials shared yet.
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {materials.map(material => (
+                <div key={material.id} className="border border-gray-100 rounded-xl p-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-gray-800">📎 {material.title}</p>
+                      <p className="text-xs text-purple-600 mt-1">From {material.senderName || 'Teacher'}</p>
+                      <p className="text-xs text-gray-400 mt-1 truncate">{material.fileName}</p>
+                      {material.description && (
+                        <p className="text-sm text-gray-600 leading-6 mt-3 whitespace-pre-wrap">{material.description}</p>
+                      )}
+                      <p className="text-[11px] text-gray-400 mt-3">
+                        {material.createdAt ? new Date(material.createdAt).toLocaleString() : ''}
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => openMaterial(material)}
+                      disabled={openingMaterialId === material.id}
+                      className="flex-shrink-0 bg-purple-600 text-white px-4 py-2 rounded-xl text-xs font-medium hover:bg-purple-700 disabled:opacity-60"
+                    >
+                      {openingMaterialId === material.id ? 'Opening...' : 'Open File'}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     )
   }
@@ -3262,6 +3511,7 @@
       { key: 'writing', label: 'Writing', icon: '✍️' },
       { key: 'vocabulary', label: 'Vocabulary', icon: '🧩' },
       { key: 'mock', label: 'Mock Tests', icon: '🧠' },
+      { key: 'inbox', label: 'Messages & Files', icon: '💬' },
       { key: 'analytics', label: 'Analytics', icon: '📊' }
     ]
 
@@ -3529,6 +3779,10 @@
 
               <MockTestSection user={user} profile={profile} />
             </>
+          )}
+
+          {activeTab === 'inbox' && (
+            <StudentCommunicationCenter user={user} />
           )}
 
           {activeTab === 'analytics' && (

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { auth, db } from '../firebase'
+import { auth, db, storage } from '../firebase'
 import {
   collection,
   addDoc,
@@ -10,9 +10,11 @@ import {
   getDoc,
   getDocs,
   updateDoc,
-  deleteDoc
+  deleteDoc,
+  setDoc
 } from 'firebase/firestore'
 import { signOut, onAuthStateChanged, updatePassword } from 'firebase/auth'
+import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage'
 import { useNavigate } from 'react-router-dom'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
@@ -172,6 +174,18 @@ export default function TeacherDashboard() {
 
   const [vocabularyTests, setVocabularyTests] = useState([])
   const [vocabularySubmissions, setVocabularySubmissions] = useState([])
+
+  const [teacherMessages, setTeacherMessages] = useState([])
+  const [teacherMaterials, setTeacherMaterials] = useState([])
+  const [communicationMode, setCommunicationMode] = useState('message')
+  const [communicationAudience, setCommunicationAudience] = useState('student')
+  const [communicationStudentId, setCommunicationStudentId] = useState('')
+  const [communicationClassId, setCommunicationClassId] = useState('')
+  const [communicationTitle, setCommunicationTitle] = useState('')
+  const [communicationBody, setCommunicationBody] = useState('')
+  const [materialFile, setMaterialFile] = useState(null)
+  const [communicationSaving, setCommunicationSaving] = useState(false)
+  const [communicationStatus, setCommunicationStatus] = useState('')
   
   const [readingLibraryFilter, setReadingLibraryFilter] = useState('active')
   const [writingLibraryFilter, setWritingLibraryFilter] = useState('active')
@@ -502,6 +516,48 @@ export default function TeacherDashboard() {
             ),
             setVocabularySubmissions,
             'Vocabulary submission query'
+          )
+        )
+
+        const communicationQueries = collectionName =>
+          isAdminUser
+            ? [query(collection(db, collectionName))]
+            : [
+                query(
+                  collection(db, collectionName),
+                  where('teacherIds', 'array-contains', currentUser.uid)
+                ),
+                query(
+                  collection(db, collectionName),
+                  where('teacherId', '==', currentUser.uid)
+                )
+              ]
+
+        trackSnapshot(
+          listenMergedQueries(
+            communicationQueries('messages'),
+            items =>
+              setTeacherMessages(
+                [...items].sort(
+                  (a, b) =>
+                    new Date(b.createdAt || 0) - new Date(a.createdAt || 0)
+                )
+              ),
+            'Message query'
+          )
+        )
+
+        trackSnapshot(
+          listenMergedQueries(
+            communicationQueries('materials'),
+            items =>
+              setTeacherMaterials(
+                [...items].sort(
+                  (a, b) =>
+                    new Date(b.createdAt || 0) - new Date(a.createdAt || 0)
+                )
+              ),
+            'Material query'
           )
         )
 
@@ -846,6 +902,300 @@ export default function TeacherDashboard() {
         submissionBelongsToStudent(sub, student) &&
         isVocabularySubmissionForTest(sub, vocabularyTestId)
     )
+  }
+
+  const isPastDue = homework => {
+    if (!homework?.dueDate) return false
+
+    const due = new Date(homework.dueDate)
+    if (Number.isNaN(due.getTime())) return false
+
+    due.setHours(23, 59, 59, 999)
+    return due.getTime() < Date.now()
+  }
+
+  const getStudentHomeworkProgress = studentId => {
+    const student = getStudentByAnyId(studentId)
+
+    const typeGroups = [
+      {
+        key: 'reading',
+        label: 'Reading',
+        items: activeReadings.filter(item =>
+          isHomeworkAssignedToStudent(item, student)
+        ),
+        isDone: item => Boolean(getSubmission(studentId, item.id))
+      },
+      {
+        key: 'listening',
+        label: 'Listening',
+        items: activeListenings.filter(item =>
+          isHomeworkAssignedToStudent(item, student)
+        ),
+        isDone: item => Boolean(getListeningSubmission(studentId, item.id))
+      },
+      {
+        key: 'vocabulary',
+        label: 'Vocabulary',
+        items: activeVocabularyTests.filter(item =>
+          isHomeworkAssignedToStudent(item, student)
+        ),
+        isDone: item => Boolean(getVocabularySubmission(studentId, item.id))
+      },
+      {
+        key: 'writing',
+        label: 'Writing',
+        items: activeWritings.filter(item =>
+          isHomeworkAssignedToStudent(item, student)
+        ),
+        isDone: item => Boolean(getWritingSubmission(studentId, item.id))
+      },
+      {
+        key: 'mock',
+        label: 'Mock Tests',
+        items: activeMockTests.filter(item =>
+          isHomeworkAssignedToStudent(item, student)
+        ),
+        isDone: item =>
+          getStudentMockSubmissions(studentId).some(
+            submission => submission.mockTestId === item.id
+          )
+      }
+    ]
+
+    const summary = {
+      assigned: 0,
+      completed: 0,
+      notCompleted: 0,
+      overdue: 0,
+      rate: 0,
+      types: {}
+    }
+
+    typeGroups.forEach(group => {
+      const completed = group.items.filter(group.isDone).length
+      const assigned = group.items.length
+      const overdue = group.items.filter(
+        item => !group.isDone(item) && isPastDue(item)
+      ).length
+
+      summary.types[group.key] = {
+        label: group.label,
+        assigned,
+        completed,
+        notCompleted: Math.max(assigned - completed, 0),
+        overdue,
+        rate: assigned ? Math.round((completed / assigned) * 100) : 0
+      }
+
+      summary.assigned += assigned
+      summary.completed += completed
+      summary.overdue += overdue
+    })
+
+    summary.notCompleted = Math.max(summary.assigned - summary.completed, 0)
+    summary.rate = summary.assigned
+      ? Math.round((summary.completed / summary.assigned) * 100)
+      : 0
+
+    return summary
+  }
+
+  const getCommunicationRecipients = () => {
+    if (communicationAudience === 'student') {
+      const student = getStudentByAnyId(communicationStudentId)
+      return student ? [student] : []
+    }
+
+    const classItem = classes.find(item => item.id === communicationClassId)
+    if (!classItem) return []
+
+    return (classItem.studentIds || [])
+      .map(studentId => getStudentByAnyId(studentId))
+      .filter(Boolean)
+  }
+
+  const getCommunicationRecipientPayload = () => {
+    const recipientStudents = getCommunicationRecipients()
+    const classItem = communicationAudience === 'class'
+      ? classes.find(item => item.id === communicationClassId)
+      : null
+
+    return {
+      recipientStudents,
+      recipientIds: uniqueCleanValues(
+        recipientStudents.map(student => getStudentPrimaryAssignmentId(student))
+      ),
+      recipientNames: recipientStudents.map(
+        student => student.name || student.email || 'Student'
+      ),
+      classId: classItem?.id || '',
+      className: classItem?.name || ''
+    }
+  }
+
+  const resetCommunicationForm = () => {
+    setCommunicationTitle('')
+    setCommunicationBody('')
+    setMaterialFile(null)
+    setCommunicationStatus('')
+  }
+
+  const sendTeacherMessage = async () => {
+    const { recipientIds, recipientNames, classId, className } =
+      getCommunicationRecipientPayload()
+
+    if (recipientIds.length === 0) {
+      alert('Please select a student or class.')
+      return
+    }
+
+    if (!communicationTitle.trim() || !communicationBody.trim()) {
+      alert('Please add a title and message.')
+      return
+    }
+
+    setCommunicationSaving(true)
+    setCommunicationStatus('Sending...')
+
+    try {
+      await addDoc(collection(db, 'messages'), {
+        senderId: user.uid,
+        senderName:
+          profile?.name || profile?.fullName || user.email || 'Teacher',
+        teacherId: user.uid,
+        teacherIds: [user.uid],
+        schoolId: profile?.schoolId || DEFAULT_SCHOOL_ID,
+        recipientIds,
+        recipientNames,
+        classId,
+        className,
+        title: communicationTitle.trim(),
+        body: communicationBody.trim(),
+        readBy: [],
+        archived: false,
+        createdAt: new Date().toISOString()
+      })
+
+      resetCommunicationForm()
+      setCommunicationStatus('Message sent ✓')
+    } catch (error) {
+      console.error('Could not send message:', error)
+      setCommunicationStatus('Could not send message')
+    } finally {
+      setCommunicationSaving(false)
+    }
+  }
+
+  const sendTeacherMaterial = async () => {
+    const { recipientIds, recipientNames, classId, className } =
+      getCommunicationRecipientPayload()
+
+    if (recipientIds.length === 0) {
+      alert('Please select a student or class.')
+      return
+    }
+
+    if (!communicationTitle.trim()) {
+      alert('Please add a material title.')
+      return
+    }
+
+    if (!materialFile) {
+      alert('Please select a file.')
+      return
+    }
+
+    if (materialFile.size > 25 * 1024 * 1024) {
+      alert('The file must be 25 MB or smaller.')
+      return
+    }
+
+    setCommunicationSaving(true)
+    setCommunicationStatus('Uploading...')
+
+    const materialDocRef = doc(collection(db, 'materials'))
+    const safeFileName = materialFile.name.replace(/[^a-zA-Z0-9._-]+/g, '_')
+    const filePath = `materials/${user.uid}/${materialDocRef.id}/${Date.now()}_${safeFileName}`
+    const fileRef = storageRef(storage, filePath)
+    let uploaded = false
+
+    try {
+      await uploadBytes(fileRef, materialFile, {
+        contentType: materialFile.type || 'application/octet-stream'
+      })
+      uploaded = true
+
+      await setDoc(materialDocRef, {
+        ownerId: user.uid,
+        teacherId: user.uid,
+        teacherIds: [user.uid],
+        senderName:
+          profile?.name || profile?.fullName || user.email || 'Teacher',
+        schoolId: profile?.schoolId || DEFAULT_SCHOOL_ID,
+        recipientIds,
+        recipientNames,
+        classId,
+        className,
+        title: communicationTitle.trim(),
+        description: communicationBody.trim(),
+        fileName: materialFile.name,
+        fileType: materialFile.type || 'application/octet-stream',
+        fileSize: materialFile.size,
+        storagePath: filePath,
+        archived: false,
+        createdAt: new Date().toISOString()
+      })
+
+      resetCommunicationForm()
+      setCommunicationStatus('Material sent ✓')
+    } catch (error) {
+      console.error('Could not send material:', error)
+
+      if (uploaded) {
+        try {
+          await deleteObject(fileRef)
+        } catch (cleanupError) {
+          console.warn('Could not remove orphaned material file:', cleanupError)
+        }
+      }
+
+      setCommunicationStatus('Could not send material')
+    } finally {
+      setCommunicationSaving(false)
+    }
+  }
+
+  const openTeacherMaterial = async material => {
+    try {
+      const url = await getDownloadURL(storageRef(storage, material.storagePath))
+      window.open(url, '_blank', 'noopener,noreferrer')
+    } catch (error) {
+      console.error('Could not open material:', error)
+      alert('Could not open this material.')
+    }
+  }
+
+  const deleteTeacherMessage = async message => {
+    const ok = window.confirm(`Delete message "${message.title}"?`)
+    if (!ok) return
+
+    await deleteDoc(doc(db, 'messages', message.id))
+  }
+
+  const deleteTeacherMaterial = async material => {
+    const ok = window.confirm(`Delete material "${material.title}"?`)
+    if (!ok) return
+
+    try {
+      if (material.storagePath) {
+        await deleteObject(storageRef(storage, material.storagePath))
+      }
+    } catch (error) {
+      console.warn('Could not delete material file:', error)
+    }
+
+    await deleteDoc(doc(db, 'materials', material.id))
   }
 
   const getCompletedCount = readingId => {
@@ -4598,6 +4948,58 @@ Continue permanent delete?`
   )
 
 
+  const homeworkProgressByStudent = students.map(student => ({
+    student,
+    progress: getStudentHomeworkProgress(student.id)
+  }))
+
+  const overallHomeworkProgress = homeworkProgressByStudent.reduce(
+    (summary, item) => {
+      summary.assigned += item.progress.assigned
+      summary.completed += item.progress.completed
+      summary.notCompleted += item.progress.notCompleted
+      summary.overdue += item.progress.overdue
+
+      Object.entries(item.progress.types).forEach(([key, value]) => {
+        if (!summary.types[key]) {
+          summary.types[key] = {
+            label: value.label,
+            assigned: 0,
+            completed: 0,
+            overdue: 0,
+            rate: 0
+          }
+        }
+
+        summary.types[key].assigned += value.assigned
+        summary.types[key].completed += value.completed
+        summary.types[key].overdue += value.overdue
+      })
+
+      return summary
+    },
+    {
+      assigned: 0,
+      completed: 0,
+      notCompleted: 0,
+      overdue: 0,
+      rate: 0,
+      types: {}
+    }
+  )
+
+  overallHomeworkProgress.rate = overallHomeworkProgress.assigned
+    ? Math.round(
+        (overallHomeworkProgress.completed / overallHomeworkProgress.assigned) * 100
+      )
+    : 0
+
+  Object.values(overallHomeworkProgress.types).forEach(item => {
+    item.rate = item.assigned
+      ? Math.round((item.completed / item.assigned) * 100)
+      : 0
+  })
+
   const averageReadingEstimatedBand = getAverageReadingEstimatedBand()
   const readingCompletionStats = getReadingCompletionStats()
   const mostMissedReadingQuestions = getMostMissedReadingQuestions()
@@ -4676,6 +5078,7 @@ Continue permanent delete?`
     ['writing', 'Writing'],
     ['mock', 'Mock Tests'],
     ['analytics', 'Analytics'],
+    ['communication', 'Messages & Materials'],
     ['reviews', 'Reviews']
   ]
 
@@ -4777,6 +5180,49 @@ Continue permanent delete?`
 
 {activeTab === 'overview' && (
           <>
+        <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8 shadow-sm">
+          <div className="flex items-start justify-between gap-4 mb-5">
+            <div>
+              <h2 className="font-semibold text-gray-800">
+                📚 Homework Completion
+              </h2>
+              <p className="text-xs text-gray-400 mt-1">
+                Current active assignments across Reading, Listening, Vocabulary, Writing and Mock Tests.
+              </p>
+            </div>
+
+            <span className="text-2xl font-bold text-purple-600">
+              {overallHomeworkProgress.rate}%
+            </span>
+          </div>
+
+          <div className="w-full bg-gray-100 rounded-full h-3 overflow-hidden mb-5">
+            <div
+              className="bg-purple-600 h-3 rounded-full"
+              style={{ width: `${overallHomeworkProgress.rate}%` }}
+            />
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="bg-gray-50 rounded-xl p-4">
+              <p className="text-xs text-gray-400">Assigned</p>
+              <p className="text-2xl font-bold text-gray-800">{overallHomeworkProgress.assigned}</p>
+            </div>
+            <div className="bg-green-50 rounded-xl p-4">
+              <p className="text-xs text-gray-500">Completed</p>
+              <p className="text-2xl font-bold text-green-600">{overallHomeworkProgress.completed}</p>
+            </div>
+            <div className="bg-amber-50 rounded-xl p-4">
+              <p className="text-xs text-gray-500">Not completed</p>
+              <p className="text-2xl font-bold text-amber-600">{overallHomeworkProgress.notCompleted}</p>
+            </div>
+            <div className="bg-red-50 rounded-xl p-4">
+              <p className="text-xs text-gray-500">Overdue</p>
+              <p className="text-2xl font-bold text-red-600">{overallHomeworkProgress.overdue}</p>
+            </div>
+          </div>
+        </div>
+
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
           <div className="bg-gray-900 text-white rounded-2xl p-5">
             <p className="text-xs text-gray-400 mb-1">
@@ -4828,6 +5274,68 @@ Continue permanent delete?`
 
         {activeTab === 'analytics' && (
           <>
+            <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
+              <div className="flex items-start justify-between gap-4 mb-5">
+                <div>
+                  <h2 className="font-semibold text-gray-800">
+                    📚 Homework Completion Analytics
+                  </h2>
+                  <p className="text-xs text-gray-400 mt-1">
+                    Completion is calculated from active student × homework assignments.
+                  </p>
+                </div>
+                <span className="text-3xl font-bold text-purple-600">
+                  {overallHomeworkProgress.rate}%
+                </span>
+              </div>
+
+              <div className="w-full bg-gray-100 rounded-full h-3 overflow-hidden mb-5">
+                <div
+                  className="bg-purple-600 h-3 rounded-full"
+                  style={{ width: `${overallHomeworkProgress.rate}%` }}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+                <div className="bg-gray-50 rounded-xl p-4">
+                  <p className="text-xs text-gray-400">Assigned</p>
+                  <p className="text-2xl font-bold text-gray-800">{overallHomeworkProgress.assigned}</p>
+                </div>
+                <div className="bg-green-50 rounded-xl p-4">
+                  <p className="text-xs text-gray-500">Completed</p>
+                  <p className="text-2xl font-bold text-green-600">{overallHomeworkProgress.completed}</p>
+                </div>
+                <div className="bg-amber-50 rounded-xl p-4">
+                  <p className="text-xs text-gray-500">Not completed</p>
+                  <p className="text-2xl font-bold text-amber-600">{overallHomeworkProgress.notCompleted}</p>
+                </div>
+                <div className="bg-red-50 rounded-xl p-4">
+                  <p className="text-xs text-gray-500">Overdue</p>
+                  <p className="text-2xl font-bold text-red-600">{overallHomeworkProgress.overdue}</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                {Object.entries(overallHomeworkProgress.types).map(([key, item]) => (
+                  <div key={key} className="border border-gray-100 rounded-xl p-4">
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <p className="text-xs font-semibold text-gray-600">{item.label}</p>
+                      <p className="text-xs font-bold text-purple-600">{item.rate}%</p>
+                    </div>
+                    <div className="w-full bg-gray-100 rounded-full h-2 overflow-hidden">
+                      <div
+                        className="bg-purple-600 h-2 rounded-full"
+                        style={{ width: `${item.rate}%` }}
+                      />
+                    </div>
+                    <p className="text-[11px] text-gray-400 mt-2">
+                      {item.completed}/{item.assigned} completed
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
             <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
               <div className="flex items-start justify-between gap-4 mb-5">
                 <div>
@@ -5134,6 +5642,238 @@ Continue permanent delete?`
                   </div>
                 </>
               )}
+            </div>
+          </>
+        )}
+
+        {activeTab === 'communication' && (
+          <>
+            <div className="grid grid-cols-1 lg:grid-cols-[0.95fr_1.05fr] gap-6 mb-8">
+              <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm">
+                <div className="flex items-start justify-between gap-4 mb-5">
+                  <div>
+                    <h2 className="font-semibold text-gray-800">
+                      💬 Send to Students
+                    </h2>
+                    <p className="text-xs text-gray-400 mt-1">
+                      Send a message or share a lesson file with one student or a whole class.
+                    </p>
+                  </div>
+
+                  <div className="flex bg-gray-100 rounded-xl p-1">
+                    <button
+                      type="button"
+                      onClick={() => setCommunicationMode('message')}
+                      className={`px-3 py-2 rounded-lg text-xs font-medium ${communicationMode === 'message' ? 'bg-white text-purple-600 shadow-sm' : 'text-gray-500'}`}
+                    >
+                      Message
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCommunicationMode('material')}
+                      className={`px-3 py-2 rounded-lg text-xs font-medium ${communicationMode === 'material' ? 'bg-white text-purple-600 shadow-sm' : 'text-gray-500'}`}
+                    >
+                      Material
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+                  <div>
+                    <label className="text-xs text-gray-400 mb-1 block">Send to</label>
+                    <select
+                      value={communicationAudience}
+                      onChange={e => {
+                        setCommunicationAudience(e.target.value)
+                        setCommunicationStudentId('')
+                        setCommunicationClassId('')
+                      }}
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-white outline-none focus:border-purple-400"
+                    >
+                      <option value="student">Individual student</option>
+                      <option value="class">Class</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-xs text-gray-400 mb-1 block">
+                      {communicationAudience === 'student' ? 'Student' : 'Class'}
+                    </label>
+                    {communicationAudience === 'student' ? (
+                      <select
+                        value={communicationStudentId}
+                        onChange={e => setCommunicationStudentId(e.target.value)}
+                        className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-white outline-none focus:border-purple-400"
+                      >
+                        <option value="">Select student</option>
+                        {students.map(student => (
+                          <option key={student.id} value={student.id}>
+                            {student.name || student.email}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <select
+                        value={communicationClassId}
+                        onChange={e => setCommunicationClassId(e.target.value)}
+                        className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-white outline-none focus:border-purple-400"
+                      >
+                        <option value="">Select class</option>
+                        {classes.map(classItem => (
+                          <option key={classItem.id} value={classItem.id}>
+                            {classItem.name} ({classItem.studentIds?.length || 0})
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                </div>
+
+                <div className="mb-4">
+                  <label className="text-xs text-gray-400 mb-1 block">Title</label>
+                  <input
+                    value={communicationTitle}
+                    onChange={e => setCommunicationTitle(e.target.value)}
+                    placeholder={communicationMode === 'message' ? 'Homework reminder' : 'Unit 3 lesson notes'}
+                    className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400"
+                  />
+                </div>
+
+                <div className="mb-4">
+                  <label className="text-xs text-gray-400 mb-1 block">
+                    {communicationMode === 'message' ? 'Message' : 'Description / note'}
+                  </label>
+                  <textarea
+                    rows={5}
+                    value={communicationBody}
+                    onChange={e => setCommunicationBody(e.target.value)}
+                    placeholder={communicationMode === 'message' ? 'Write your message...' : 'Optional note about this material...'}
+                    className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 resize-y"
+                  />
+                </div>
+
+                {communicationMode === 'material' && (
+                  <div className="mb-4">
+                    <label className="text-xs text-gray-400 mb-1 block">File</label>
+                    <input
+                      key={materialFile?.name || 'material-file-empty'}
+                      type="file"
+                      accept=".pdf,.doc,.docx,.ppt,.pptx,.png,.jpg,.jpeg,.webp,.txt"
+                      onChange={e => setMaterialFile(e.target.files?.[0] || null)}
+                      className="w-full border border-dashed border-purple-200 bg-purple-50 rounded-xl px-4 py-4 text-sm text-gray-600"
+                    />
+                    <p className="text-[11px] text-gray-400 mt-2">
+                      PDF, Word, PowerPoint, image or text file · maximum 25 MB
+                    </p>
+                  </div>
+                )}
+
+                {communicationStatus && (
+                  <div className={`text-sm rounded-xl px-4 py-3 mb-4 ${communicationStatus.includes('✓') ? 'bg-green-50 text-green-600' : communicationStatus.includes('Could not') ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'}`}>
+                    {communicationStatus}
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={communicationMode === 'message' ? sendTeacherMessage : sendTeacherMaterial}
+                  disabled={communicationSaving}
+                  className="w-full bg-purple-600 text-white rounded-xl py-3.5 text-sm font-medium hover:bg-purple-700 disabled:opacity-60"
+                >
+                  {communicationSaving
+                    ? communicationMode === 'message' ? 'Sending...' : 'Uploading...'
+                    : communicationMode === 'message' ? 'Send Message' : 'Upload & Send Material'}
+                </button>
+              </div>
+
+              <div className="space-y-6">
+                <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm">
+                  <div className="flex items-center justify-between mb-4">
+                    <h2 className="font-semibold text-gray-800">Recent Messages</h2>
+                    <span className="text-xs bg-gray-100 text-gray-500 px-3 py-1 rounded-full">
+                      {teacherMessages.length}
+                    </span>
+                  </div>
+
+                  {teacherMessages.length === 0 ? (
+                    <p className="text-sm text-gray-400">No messages sent yet.</p>
+                  ) : (
+                    <div className="space-y-3 max-h-[360px] overflow-y-auto pr-1">
+                      {teacherMessages.slice(0, 20).map(message => (
+                        <div key={message.id} className="border border-gray-100 rounded-xl p-4">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="text-sm font-semibold text-gray-800">{message.title}</p>
+                              <p className="text-xs text-purple-600 mt-1 truncate">
+                                To: {message.className || message.recipientNames?.join(', ') || 'Student'}
+                              </p>
+                              <p className="text-sm text-gray-600 mt-2 whitespace-pre-wrap">{message.body}</p>
+                              <p className="text-[11px] text-gray-400 mt-2">
+                                {message.createdAt ? new Date(message.createdAt).toLocaleString() : ''} · Read by {message.readBy?.length || 0}/{message.recipientIds?.length || 0}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => deleteTeacherMessage(message)}
+                              className="text-xs text-red-500 hover:text-red-700"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm">
+                  <div className="flex items-center justify-between mb-4">
+                    <h2 className="font-semibold text-gray-800">Shared Materials</h2>
+                    <span className="text-xs bg-gray-100 text-gray-500 px-3 py-1 rounded-full">
+                      {teacherMaterials.length}
+                    </span>
+                  </div>
+
+                  {teacherMaterials.length === 0 ? (
+                    <p className="text-sm text-gray-400">No materials shared yet.</p>
+                  ) : (
+                    <div className="space-y-3 max-h-[360px] overflow-y-auto pr-1">
+                      {teacherMaterials.slice(0, 20).map(material => (
+                        <div key={material.id} className="border border-gray-100 rounded-xl p-4">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="text-sm font-semibold text-gray-800">📎 {material.title}</p>
+                              <p className="text-xs text-purple-600 mt-1 truncate">
+                                To: {material.className || material.recipientNames?.join(', ') || 'Student'}
+                              </p>
+                              <p className="text-xs text-gray-400 mt-1 truncate">{material.fileName}</p>
+                              {material.description && (
+                                <p className="text-sm text-gray-600 mt-2 whitespace-pre-wrap">{material.description}</p>
+                              )}
+                            </div>
+                            <div className="flex gap-2 flex-shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => openTeacherMaterial(material)}
+                                className="text-xs bg-purple-50 text-purple-600 px-3 py-2 rounded-lg hover:bg-purple-100"
+                              >
+                                Open
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => deleteTeacherMaterial(material)}
+                                className="text-xs bg-red-50 text-red-500 px-3 py-2 rounded-lg hover:bg-red-100"
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           </>
         )}
@@ -5800,6 +6540,8 @@ Continue permanent delete?`
               getVocabularySubmission(student.id, vocabularyTest.id)
             ).length
 
+            const homeworkProgress = getStudentHomeworkProgress(student.id)
+
             return (
               <div
                 key={student.id}
@@ -5839,31 +6581,28 @@ Continue permanent delete?`
                       </div>
                     )}
 
-                    <div className="text-right">
-                      <p className="text-xs text-gray-400">Reading done</p>
-                      <p className="text-sm font-semibold text-gray-700">
-                        {completedReadingCount}/{studentReadings.length}
+                    <div className="min-w-[170px]">
+                      <div className="flex items-center justify-between gap-3 mb-1">
+                        <p className="text-xs text-gray-400">Homework completion</p>
+                        <p className="text-sm font-bold text-purple-600">
+                          {homeworkProgress.rate}%
+                        </p>
+                      </div>
+                      <div className="w-full bg-gray-100 rounded-full h-2 overflow-hidden">
+                        <div
+                          className="bg-purple-600 h-2 rounded-full"
+                          style={{ width: `${homeworkProgress.rate}%` }}
+                        />
+                      </div>
+                      <p className="text-[11px] text-gray-400 mt-1">
+                        {homeworkProgress.completed}/{homeworkProgress.assigned} completed
                       </p>
                     </div>
 
-                    <div className="text-right">
-                      <p className="text-xs text-gray-400">Listening done</p>
-                      <p className="text-sm font-semibold text-gray-700">
-                        {completedListeningCount}/{studentListenings.length}
-                      </p>
-                    </div>
-
-                    <div className="text-right">
-                      <p className="text-xs text-gray-400">Vocabulary done</p>
-                      <p className="text-sm font-semibold text-gray-700">
-                        {completedVocabularyCount}/{studentVocabularyTests.length}
-                      </p>
-                    </div>
-
-                    <div className="text-right">
-                      <p className="text-xs text-gray-400">Writing done</p>
-                      <p className="text-sm font-semibold text-gray-700">
-                        {completedWritingCount}/{studentWritings.length}
+                    <div className="text-right min-w-[70px]">
+                      <p className="text-xs text-gray-400">Overdue</p>
+                      <p className={`text-sm font-semibold ${homeworkProgress.overdue > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                        {homeworkProgress.overdue}
                       </p>
                     </div>
 

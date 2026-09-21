@@ -515,5 +515,68 @@ service cloud.firestore {
         );
     }
 
+    // ============================================================
+    // MESSAGES
+    // ============================================================
+
+    function isMessageRecipient(data) {
+      return isStudent()
+        && data.get('recipientIds', []).hasAny([request.auth.uid]);
+    }
+
+    match /messages/{messageId} {
+      allow read: if isAdmin()
+        || teacherListedOn(resource.data)
+        || isMessageRecipient(resource.data);
+
+      allow create: if isAdmin()
+        || (
+          isTeacher()
+          && schoolIdOf(request.resource.data) == currentSchoolId()
+          && request.resource.data.get('teacherId', '') == request.auth.uid
+          && request.resource.data.get('teacherIds', []).hasAny([request.auth.uid])
+          && request.resource.data.get('recipientIds', []).size() > 0
+        );
+
+      allow update: if isAdmin()
+        || teacherListedOn(resource.data)
+        || (
+          isMessageRecipient(resource.data)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readBy'])
+          && request.resource.data.get('readBy', []).hasAll(resource.data.get('readBy', []))
+          && request.resource.data.get('readBy', []).hasAny([request.auth.uid])
+        );
+
+      allow delete: if isAdmin() || teacherListedOn(resource.data);
+    }
+
+    // ============================================================
+    // MATERIALS
+    // ============================================================
+
+    function isMaterialRecipient(data) {
+      return isStudent()
+        && data.get('recipientIds', []).hasAny([request.auth.uid]);
+    }
+
+    match /materials/{materialId} {
+      allow read: if isAdmin()
+        || teacherListedOn(resource.data)
+        || isMaterialRecipient(resource.data);
+
+      allow create: if isAdmin()
+        || (
+          isTeacher()
+          && schoolIdOf(request.resource.data) == currentSchoolId()
+          && request.resource.data.get('ownerId', '') == request.auth.uid
+          && request.resource.data.get('teacherId', '') == request.auth.uid
+          && request.resource.data.get('teacherIds', []).hasAny([request.auth.uid])
+          && request.resource.data.get('recipientIds', []).size() > 0
+          && request.resource.data.get('storagePath', '') != ''
+        );
+
+      allow update, delete: if isAdmin() || teacherListedOn(resource.data);
+    }
+
   }
 }

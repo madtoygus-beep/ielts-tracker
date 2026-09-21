@@ -26,6 +26,11 @@ service firebase.storage {
         && userDoc().data.role == 'teacher';
     }
 
+    function isStudent() {
+      return isApprovedUser()
+        && userDoc().data.role == 'student';
+    }
+
     function isTeacherOrAdmin() {
       return isAdmin() || isTeacher();
     }
@@ -33,6 +38,24 @@ service firebase.storage {
     function isAudioFile() {
       return request.resource != null
         && request.resource.contentType.matches('audio/.*');
+    }
+
+    function isMaterialFile() {
+      return request.resource != null
+        && (
+          request.resource.contentType.matches('application/pdf')
+          || request.resource.contentType.matches('image/.*')
+          || request.resource.contentType.matches('text/plain')
+          || request.resource.contentType.matches('application/msword')
+          || request.resource.contentType.matches('application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+          || request.resource.contentType.matches('application/vnd.ms-powerpoint')
+          || request.resource.contentType.matches('application/vnd.openxmlformats-officedocument.presentationml.presentation')
+          || request.resource.contentType.matches('application/octet-stream')
+        );
+    }
+
+    function materialDoc(materialId) {
+      return firestore.get(/databases/(default)/documents/materials/$(materialId));
     }
 
     match /listening-audios/{ownerId}/{fileName} {
@@ -44,6 +67,29 @@ service firebase.storage {
         && request.auth.uid == ownerId
         && isAudioFile()
         && request.resource.size <= 30 * 1024 * 1024
+      ) || (
+        request.resource == null
+        && (
+          isAdmin()
+          || (isTeacher() && request.auth.uid == ownerId)
+        )
+      );
+    }
+
+    match /materials/{ownerId}/{materialId}/{fileName} {
+      allow read: if isAdmin()
+        || (isTeacher() && request.auth.uid == ownerId)
+        || (
+          isStudent()
+          && materialDoc(materialId).data.get('recipientIds', []).hasAny([request.auth.uid])
+        );
+
+      allow write: if (
+        request.resource != null
+        && isTeacherOrAdmin()
+        && request.auth.uid == ownerId
+        && isMaterialFile()
+        && request.resource.size <= 25 * 1024 * 1024
       ) || (
         request.resource == null
         && (
