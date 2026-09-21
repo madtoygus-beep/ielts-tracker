@@ -421,25 +421,102 @@ export default function DoVocabulary() {
       )
   }, [test, wordBankGroups])
 
+  // Preserve the exact question order saved by the creator.
+  // Do not regroup all MCQs into one block because a vocabulary practice
+  // can contain more than one MCQ section (for example Q7-11 and Q21-25).
   const orderedQuestions = useMemo(
-    () =>
-      orderedSections.flatMap(section => {
-        if (section.type === 'matching') {
-          return groupedQuestions.matching
-        }
-
-        if (section.type === 'wordBank') {
-          return section.group?.questions || []
-        }
-
-        if (section.type === 'grammar') {
-          return groupedQuestions.grammar
-        }
-
-        return groupedQuestions.mcq
-      }),
-    [orderedSections, groupedQuestions]
+    () => Array.isArray(test?.questions) ? test.questions : [],
+    [test]
   )
+
+  const displayBlocks = useMemo(() => {
+    const sourceQuestions = Array.isArray(test?.questions)
+      ? test.questions
+      : []
+
+    const blocks = []
+    const emittedWordBankGroups = new Set()
+    let currentMcqBlock = null
+    let matchingAdded = false
+    let grammarAdded = false
+    let mcqBlockIndex = 0
+
+    sourceQuestions.forEach(question => {
+      const questionType = getQuestionType(question)
+
+      if (questionType === 'word_bank') {
+        currentMcqBlock = null
+
+        const groupId = question.groupId || 'legacy-word-bank'
+        if (emittedWordBankGroups.has(groupId)) return
+
+        emittedWordBankGroups.add(groupId)
+
+        const group = wordBankGroups.find(item => item.groupId === groupId)
+        if (group) {
+          blocks.push({
+            key: `wordBank:${groupId}`,
+            type: 'wordBank',
+            group
+          })
+        }
+
+        return
+      }
+
+      if (questionType === 'match_definition') {
+        currentMcqBlock = null
+
+        if (!matchingAdded) {
+          matchingAdded = true
+          blocks.push({
+            key: 'matching',
+            type: 'matching'
+          })
+        }
+
+        return
+      }
+
+      if (questionType === 'grammar_form') {
+        currentMcqBlock = null
+
+        if (!grammarAdded) {
+          grammarAdded = true
+          blocks.push({
+            key: 'grammar',
+            type: 'grammar'
+          })
+        }
+
+        return
+      }
+
+      // MCQ sections are intentionally split whenever a new section title
+      // appears, or whenever MCQs restart after another task type.
+      const startsNewSection = Boolean(question.sectionTitle?.trim())
+
+      if (!currentMcqBlock || startsNewSection) {
+        mcqBlockIndex += 1
+
+        currentMcqBlock = {
+          key: `mcq:${mcqBlockIndex}`,
+          type: 'mcq',
+          title:
+            question.sectionTitle?.trim() ||
+            question.taskTitle?.trim() ||
+            'Vocabulary Multiple Choice',
+          questions: []
+        }
+
+        blocks.push(currentMcqBlock)
+      }
+
+      currentMcqBlock.questions.push(question)
+    })
+
+    return blocks
+  }, [test, wordBankGroups])
 
   const matchingDefinitionOrder = useMemo(() => {
     const items = groupedQuestions.matching
@@ -987,20 +1064,31 @@ export default function DoVocabulary() {
     )
   }
 
-  const renderMcqTask = () => {
-    if (groupedQuestions.mcq.length === 0) return null
+  const renderMcqTask = (mcqQuestions = groupedQuestions.mcq, sectionHeading = '') => {
+    if (!mcqQuestions?.length) return null
+
+    const firstQuestion = mcqQuestions[0]
+    const heading =
+      sectionHeading ||
+      firstQuestion?.sectionTitle?.trim() ||
+      firstQuestion?.taskTitle?.trim() ||
+      'Vocabulary Multiple Choice'
+
+    const instruction =
+      firstQuestion?.instruction?.trim() ||
+      'Choose the best answer.'
 
     return (
       <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm">
         <h2 className="text-xl font-bold text-gray-900 mb-2">
-          Vocabulary Multiple Choice
+          {heading}
         </h2>
-        <p className="text-sm text-gray-500 mb-6">Choose the best answer.</p>
+        <p className="text-sm text-gray-500 mb-6">{instruction}</p>
 
         <div className="flex flex-col gap-6">
-          {groupedQuestions.mcq.map((question, index) => (
+          {mcqQuestions.map((question, index) => (
             <div key={question.id}>
-              {question.sectionTitle?.trim() && (
+              {question.sectionTitle?.trim() && question.sectionTitle.trim() !== heading && (
                 <div className="mb-3 pt-1">
                   <div className="flex items-center gap-3">
                     <div className="h-px flex-1 bg-gray-200" />
@@ -1051,7 +1139,7 @@ export default function DoVocabulary() {
   }
 
   const reviewGroups = () => {
-    return orderedSections.map(section => {
+    return displayBlocks.map(section => {
       if (section.type === 'matching') {
         return [
           groupedQuestions.matching[0]?.taskTitle ||
@@ -1077,9 +1165,10 @@ export default function DoVocabulary() {
       }
 
       return [
-        groupedQuestions.mcq[0]?.taskTitle ||
+        section.title ||
+          section.questions?.[0]?.taskTitle ||
           'Vocabulary Multiple Choice',
-        groupedQuestions.mcq
+        section.questions || []
       ]
     })
   }
@@ -1231,7 +1320,7 @@ export default function DoVocabulary() {
         </div>
 
         <div className="space-y-6">
-          {orderedSections.map(section => {
+          {displayBlocks.map(section => {
             if (section.type === 'matching') {
               return (
                 <div key={section.key}>
@@ -1258,7 +1347,7 @@ export default function DoVocabulary() {
 
             return (
               <div key={section.key}>
-                {renderMcqTask()}
+                {renderMcqTask(section.questions, section.title)}
               </div>
             )
           })}
