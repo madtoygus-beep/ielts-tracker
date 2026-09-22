@@ -186,6 +186,13 @@ export default function TeacherDashboard() {
   const [materialFile, setMaterialFile] = useState(null)
   const [communicationSaving, setCommunicationSaving] = useState(false)
   const [communicationStatus, setCommunicationStatus] = useState('')
+
+  const [materialShareTarget, setMaterialShareTarget] = useState(null)
+  const [materialShareAudience, setMaterialShareAudience] = useState('class')
+  const [materialShareStudentId, setMaterialShareStudentId] = useState('')
+  const [materialShareClassId, setMaterialShareClassId] = useState('')
+  const [materialShareSaving, setMaterialShareSaving] = useState(false)
+  const [materialShareStatus, setMaterialShareStatus] = useState('')
   
   const [readingLibraryFilter, setReadingLibraryFilter] = useState('active')
   const [writingLibraryFilter, setWritingLibraryFilter] = useState('active')
@@ -1126,6 +1133,28 @@ export default function TeacherDashboard() {
       })
       uploaded = true
 
+      const sharedAt = new Date().toISOString()
+      const initialShareTarget = {
+        type: communicationAudience,
+        classId: classId || '',
+        className: className || '',
+        studentId:
+          communicationAudience === 'student'
+            ? recipientIds[0] || ''
+            : '',
+        studentName:
+          communicationAudience === 'student'
+            ? recipientNames[0] || ''
+            : '',
+        label:
+          communicationAudience === 'class'
+            ? className || 'Class'
+            : recipientNames[0] || 'Student',
+        recipientIds,
+        recipientNames,
+        sharedAt
+      }
+
       await setDoc(materialDocRef, {
         ownerId: user.uid,
         teacherId: user.uid,
@@ -1137,6 +1166,7 @@ export default function TeacherDashboard() {
         recipientNames,
         classId,
         className,
+        shareTargets: [initialShareTarget],
         title: communicationTitle.trim(),
         description: communicationBody.trim(),
         fileName: materialFile.name,
@@ -1144,7 +1174,8 @@ export default function TeacherDashboard() {
         fileSize: materialFile.size,
         storagePath: filePath,
         archived: false,
-        createdAt: new Date().toISOString()
+        createdAt: sharedAt,
+        updatedAt: sharedAt
       })
 
       resetCommunicationForm()
@@ -1173,6 +1204,256 @@ export default function TeacherDashboard() {
     } catch (error) {
       console.error('Could not open material:', error)
       alert('Could not open this material.')
+    }
+  }
+
+  const getLegacyMaterialShareTarget = material => {
+    const recipientIds = Array.isArray(material?.recipientIds)
+      ? material.recipientIds
+      : []
+    const recipientNames = Array.isArray(material?.recipientNames)
+      ? material.recipientNames
+      : []
+
+    if (material?.classId || material?.className) {
+      return {
+        type: 'class',
+        classId: material.classId || '',
+        className: material.className || '',
+        studentId: '',
+        studentName: '',
+        label: material.className || 'Class',
+        recipientIds,
+        recipientNames,
+        sharedAt: material.createdAt || ''
+      }
+    }
+
+    if (recipientIds.length === 1) {
+      return {
+        type: 'student',
+        classId: '',
+        className: '',
+        studentId: recipientIds[0],
+        studentName: recipientNames[0] || '',
+        label: recipientNames[0] || 'Student',
+        recipientIds,
+        recipientNames,
+        sharedAt: material.createdAt || ''
+      }
+    }
+
+    if (recipientIds.length > 1) {
+      return {
+        type: 'students',
+        classId: '',
+        className: '',
+        studentId: '',
+        studentName: '',
+        label: `${recipientIds.length} students`,
+        recipientIds,
+        recipientNames,
+        sharedAt: material.createdAt || ''
+      }
+    }
+
+    return null
+  }
+
+  const getMaterialShareTargets = material => {
+    if (Array.isArray(material?.shareTargets) && material.shareTargets.length > 0) {
+      return material.shareTargets
+    }
+
+    const legacy = getLegacyMaterialShareTarget(material)
+    return legacy ? [legacy] : []
+  }
+
+  const getMaterialShareLabels = material => {
+    const labels = getMaterialShareTargets(material)
+      .map(target =>
+        target?.label ||
+        target?.className ||
+        target?.studentName ||
+        ''
+      )
+      .filter(Boolean)
+
+    return uniqueCleanValues(labels)
+  }
+
+  const openMaterialShareAgain = material => {
+    setMaterialShareTarget(material)
+    setMaterialShareAudience('class')
+    setMaterialShareStudentId('')
+    setMaterialShareClassId('')
+    setMaterialShareStatus('')
+  }
+
+  const closeMaterialShareAgain = () => {
+    if (materialShareSaving) return
+
+    setMaterialShareTarget(null)
+    setMaterialShareStudentId('')
+    setMaterialShareClassId('')
+    setMaterialShareStatus('')
+  }
+
+  const getMaterialShareRecipientPayload = () => {
+    if (materialShareAudience === 'student') {
+      const student = getStudentByAnyId(materialShareStudentId)
+
+      if (!student) {
+        return {
+          recipientIds: [],
+          recipientNames: [],
+          classId: '',
+          className: '',
+          studentId: '',
+          studentName: ''
+        }
+      }
+
+      const studentId = getStudentPrimaryAssignmentId(student)
+      const studentName = student.name || student.email || 'Student'
+
+      return {
+        recipientIds: studentId ? [studentId] : [],
+        recipientNames: [studentName],
+        classId: '',
+        className: '',
+        studentId,
+        studentName
+      }
+    }
+
+    const classItem = classes.find(item => item.id === materialShareClassId)
+
+    if (!classItem) {
+      return {
+        recipientIds: [],
+        recipientNames: [],
+        classId: '',
+        className: '',
+        studentId: '',
+        studentName: ''
+      }
+    }
+
+    const recipientStudents = (classItem.studentIds || [])
+      .map(studentId => getStudentByAnyId(studentId))
+      .filter(Boolean)
+
+    return {
+      recipientIds: uniqueCleanValues(
+        recipientStudents.map(student => getStudentPrimaryAssignmentId(student))
+      ),
+      recipientNames: recipientStudents.map(
+        student => student.name || student.email || 'Student'
+      ),
+      classId: classItem.id,
+      className: classItem.name || 'Class',
+      studentId: '',
+      studentName: ''
+    }
+  }
+
+  const shareExistingMaterial = async () => {
+    if (!materialShareTarget) return
+
+    const payload = getMaterialShareRecipientPayload()
+
+    if (payload.recipientIds.length === 0) {
+      alert('Please select a student or class with at least one student.')
+      return
+    }
+
+    setMaterialShareSaving(true)
+    setMaterialShareStatus('Sharing...')
+
+    try {
+      const currentTargets = getMaterialShareTargets(materialShareTarget)
+      const sharedAt = new Date().toISOString()
+      const nextTarget = {
+        type: materialShareAudience,
+        classId: payload.classId || '',
+        className: payload.className || '',
+        studentId: payload.studentId || '',
+        studentName: payload.studentName || '',
+        label:
+          materialShareAudience === 'class'
+            ? payload.className || 'Class'
+            : payload.studentName || 'Student',
+        recipientIds: payload.recipientIds,
+        recipientNames: payload.recipientNames,
+        sharedAt
+      }
+
+      const targetKey = target => {
+        if (target?.type === 'class') {
+          return `class:${target.classId || target.className || target.label || ''}`
+        }
+
+        if (target?.type === 'student') {
+          return `student:${target.studentId || target.studentName || target.label || ''}`
+        }
+
+        return `${target?.type || 'legacy'}:${target?.label || ''}`
+      }
+
+      const nextKey = targetKey(nextTarget)
+      const mergedTargets = []
+      let refreshedExistingTarget = false
+
+      currentTargets.forEach(target => {
+        if (targetKey(target) === nextKey) {
+          mergedTargets.push(nextTarget)
+          refreshedExistingTarget = true
+        } else {
+          mergedTargets.push(target)
+        }
+      })
+
+      if (!refreshedExistingTarget) {
+        mergedTargets.push(nextTarget)
+      }
+
+      const allRecipientIds = uniqueCleanValues(
+        mergedTargets.flatMap(target =>
+          Array.isArray(target?.recipientIds) ? target.recipientIds : []
+        )
+      )
+
+      const allRecipientNames = uniqueCleanValues(
+        mergedTargets.flatMap(target =>
+          Array.isArray(target?.recipientNames) ? target.recipientNames : []
+        )
+      )
+
+      await updateDoc(doc(db, 'materials', materialShareTarget.id), {
+        recipientIds: allRecipientIds,
+        recipientNames: allRecipientNames,
+        shareTargets: mergedTargets,
+        updatedAt: sharedAt
+      })
+
+      setMaterialShareStatus(
+        refreshedExistingTarget
+          ? 'Material access refreshed ✓'
+          : 'Material shared again ✓'
+      )
+
+      setTimeout(() => {
+        setMaterialShareTarget(null)
+        setMaterialShareStudentId('')
+        setMaterialShareClassId('')
+        setMaterialShareStatus('')
+      }, 700)
+    } catch (error) {
+      console.error('Could not share existing material:', error)
+      setMaterialShareStatus('Could not share material')
+    } finally {
+      setMaterialShareSaving(false)
     }
   }
 
@@ -5843,10 +6124,24 @@ Continue permanent delete?`
                           <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">
                               <p className="text-sm font-semibold text-gray-800">📎 {material.title}</p>
-                              <p className="text-xs text-purple-600 mt-1 truncate">
-                                To: {material.className || material.recipientNames?.join(', ') || 'Student'}
-                              </p>
-                              <p className="text-xs text-gray-400 mt-1 truncate">{material.fileName}</p>
+                              <div className="mt-1">
+                                <p className="text-xs text-gray-400 mb-1">Shared with:</p>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {getMaterialShareLabels(material).length > 0 ? (
+                                    getMaterialShareLabels(material).map(label => (
+                                      <span
+                                        key={label}
+                                        className="text-[11px] bg-purple-50 text-purple-600 px-2 py-1 rounded-full"
+                                      >
+                                        {label}
+                                      </span>
+                                    ))
+                                  ) : (
+                                    <span className="text-[11px] text-gray-400">Student</span>
+                                  )}
+                                </div>
+                              </div>
+                              <p className="text-xs text-gray-400 mt-2 truncate">{material.fileName}</p>
                               {material.description && (
                                 <p className="text-sm text-gray-600 mt-2 whitespace-pre-wrap">{material.description}</p>
                               )}
@@ -5858,6 +6153,13 @@ Continue permanent delete?`
                                 className="text-xs bg-purple-50 text-purple-600 px-3 py-2 rounded-lg hover:bg-purple-100"
                               >
                                 Open
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => openMaterialShareAgain(material)}
+                                className="text-xs bg-blue-50 text-blue-600 px-3 py-2 rounded-lg hover:bg-blue-100"
+                              >
+                                Share Again
                               </button>
                               <button
                                 type="button"
@@ -5875,6 +6177,118 @@ Continue permanent delete?`
                 </div>
               </div>
             </div>
+
+            {materialShareTarget && (
+              <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center px-4">
+                <div className="bg-white rounded-2xl w-full max-w-lg p-6 shadow-xl">
+                  <div className="flex items-start justify-between gap-4 mb-5">
+                    <div>
+                      <p className="text-xs font-semibold text-purple-600 uppercase tracking-wider mb-1">
+                        Reuse Material
+                      </p>
+                      <h2 className="text-lg font-bold text-gray-900">
+                        {materialShareTarget.title}
+                      </h2>
+                      <p className="text-xs text-gray-400 mt-1 truncate">
+                        {materialShareTarget.fileName}
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={closeMaterialShareAgain}
+                      disabled={materialShareSaving}
+                      className="text-sm text-gray-400 hover:text-gray-600 disabled:opacity-50"
+                    >
+                      Close
+                    </button>
+                  </div>
+
+                  <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 mb-5">
+                    <p className="text-sm text-blue-700 font-medium">
+                      The existing file will be reused. It will not be uploaded again.
+                    </p>
+                    <p className="text-xs text-blue-600 mt-1">
+                      Students in the new class will get access to the same PDF or lesson file.
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-5">
+                    <div>
+                      <label className="text-xs text-gray-400 mb-1 block">Share with</label>
+                      <select
+                        value={materialShareAudience}
+                        onChange={e => {
+                          setMaterialShareAudience(e.target.value)
+                          setMaterialShareStudentId('')
+                          setMaterialShareClassId('')
+                          setMaterialShareStatus('')
+                        }}
+                        className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-white outline-none focus:border-purple-400"
+                      >
+                        <option value="class">Class</option>
+                        <option value="student">Individual student</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="text-xs text-gray-400 mb-1 block">
+                        {materialShareAudience === 'class' ? 'Class' : 'Student'}
+                      </label>
+
+                      {materialShareAudience === 'class' ? (
+                        <select
+                          value={materialShareClassId}
+                          onChange={e => {
+                            setMaterialShareClassId(e.target.value)
+                            setMaterialShareStatus('')
+                          }}
+                          className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-white outline-none focus:border-purple-400"
+                        >
+                          <option value="">Select class</option>
+                          {classes.map(classItem => (
+                            <option key={classItem.id} value={classItem.id}>
+                              {classItem.name} ({classItem.studentIds?.length || 0})
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <select
+                          value={materialShareStudentId}
+                          onChange={e => {
+                            setMaterialShareStudentId(e.target.value)
+                            setMaterialShareStatus('')
+                          }}
+                          className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-white outline-none focus:border-purple-400"
+                        >
+                          <option value="">Select student</option>
+                          {students.map(student => (
+                            <option key={student.id} value={student.id}>
+                              {student.name || student.email}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+                  </div>
+
+                  {materialShareStatus && (
+                    <div className={`text-sm rounded-xl px-4 py-3 mb-4 ${materialShareStatus.includes('✓') ? 'bg-green-50 text-green-600' : materialShareStatus.includes('Could not') ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'}`}>
+                      {materialShareStatus}
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={shareExistingMaterial}
+                    disabled={materialShareSaving}
+                    className="w-full bg-purple-600 text-white rounded-xl py-3.5 text-sm font-medium hover:bg-purple-700 disabled:opacity-60"
+                  >
+                    {materialShareSaving ? 'Sharing...' : 'Share Existing Material'}
+                  </button>
+                </div>
+              </div>
+            )}
           </>
         )}
 
