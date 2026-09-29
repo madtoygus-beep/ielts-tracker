@@ -236,6 +236,8 @@ function getQuestionText(question) {
     question?.prompt ||
     question?.text ||
     question?.statement ||
+    question?.sentence ||
+    question?.word ||
     question?.title ||
     'Question'
   )
@@ -256,17 +258,34 @@ function getItemText(item) {
 }
 
 function getAcceptedAnswerText(item) {
-  const answers = [
-    item?.answer,
-    ...(item?.acceptedAnswers
+  const alternatives = Array.isArray(item?.acceptedAnswers)
+    ? item.acceptedAnswers
+    : item?.acceptedAnswers
       ? item.acceptedAnswers
+          .toString()
           .split(',')
           .map(answer => answer.trim())
           .filter(Boolean)
-      : [])
+      : []
+
+  const answers = [
+    item?.answerText || item?.answer,
+    ...alternatives
   ].filter(Boolean)
 
   return answers.join(' / ')
+}
+
+function getManualQuestionNumber(item) {
+  const value =
+    item?.questionNumber ||
+    item?.questionNo ||
+    item?.qNumber ||
+    item?.manualQuestionNumber ||
+    item?.displayNumber ||
+    ''
+
+  return value?.toString().trim() || null
 }
 
 function getQuestionCount(question) {
@@ -281,7 +300,8 @@ function getQuestionCount(question) {
   if (
     question?.type === 'matchingInformation' ||
     question?.type === 'sentenceEndings' ||
-    question?.type === 'summaryOptions'
+    question?.type === 'summaryOptions' ||
+    question?.type === 'shortAnswer'
   ) {
     return question.items?.length || 1
   }
@@ -346,6 +366,42 @@ function getRangeLabel(questions, index) {
   const count = getQuestionCount(questions[index])
   const end = start + count - 1
 
+  return count > 1 ? `Q${start}-${end}` : `Q${start}`
+}
+
+function getListeningRangeLabel(parts, partIndex, questionIndex) {
+  const part = parts?.[partIndex]
+  const question = part?.questions?.[questionIndex]
+
+  if (!question) return `Q${questionIndex + 1}`
+
+  const manualStart = getManualQuestionNumber(question)
+  const count = getQuestionCount(question)
+
+  if (manualStart) {
+    const numericStart = Number(manualStart)
+
+    if (Number.isFinite(numericStart) && count > 1) {
+      return `Q${numericStart}-${numericStart + count - 1}`
+    }
+
+    return `Q${manualStart}`
+  }
+
+  let start = 1
+
+  for (let p = 0; p < partIndex; p++) {
+    start += toArray(parts[p]?.questions).reduce(
+      (sum, item) => sum + getQuestionCount(item),
+      0
+    )
+  }
+
+  start += toArray(part?.questions)
+    .slice(0, questionIndex)
+    .reduce((sum, item) => sum + getQuestionCount(item), 0)
+
+  const end = start + count - 1
   return count > 1 ? `Q${start}-${end}` : `Q${start}`
 }
 
@@ -613,12 +669,14 @@ function ReadingPreview({
           }
 
           if (question.type === 'matchingInformation') {
-            const paragraphLetters = toArray(reading?.paragraphs).map(
-              paragraph => ({
-                value: paragraph.letter,
-                label: `Paragraph ${paragraph.letter}`
-              })
-            )
+            const sourceLetters = question.sectionLetters?.length
+              ? question.sectionLetters
+              : toArray(reading?.paragraphs).map(paragraph => paragraph.letter)
+
+            const paragraphLetters = toArray(sourceLetters).map(letter => ({
+              value: letter,
+              label: `Paragraph ${letter}`
+            }))
 
             return (
               <QuestionShell
@@ -738,6 +796,76 @@ function ReadingPreview({
                     </div>
                   </div>
                 )}
+              </QuestionShell>
+            )
+          }
+
+          if (question.type === 'shortAnswer') {
+            const items = toArray(question.items)
+            const startNumber =
+              questions
+                .slice(0, index)
+                .reduce((sum, item) => sum + getQuestionCount(item), 0) + 1
+
+            return (
+              <QuestionShell
+                key={keyBase}
+                label={label}
+                typeLabel="Short-answer Questions"
+                showAnswers={false}
+              >
+                {question.title && (
+                  <h3 className="font-semibold text-gray-900 mb-2">
+                    {question.title}
+                  </h3>
+                )}
+
+                {question.instruction && (
+                  <p className="text-sm text-gray-600 mb-4 whitespace-pre-wrap">
+                    {question.instruction}
+                  </p>
+                )}
+
+                <div className="space-y-4">
+                  {items.map((item, itemIndex) => {
+                    const itemId = item.id || itemIndex
+                    const fieldKey = `${keyBase}:${itemId}`
+                    const questionNumber =
+                      getManualQuestionNumber(item) || startNumber + itemIndex
+
+                    return (
+                      <div
+                        key={itemId}
+                        className="border border-gray-100 rounded-xl p-4 bg-gray-50"
+                      >
+                        <p className="text-sm font-medium text-gray-800 mb-3 whitespace-pre-wrap">
+                          <span className="font-bold text-purple-600 mr-2">
+                            Q{questionNumber}
+                          </span>
+                          {item.question || item.prompt || getItemText(item) || 'Question text is missing.'}
+                        </p>
+
+                        <TextAnswer
+                          value={answers[fieldKey]}
+                          onChange={value => setAnswer(fieldKey, value)}
+                          placeholder="Type your answer..."
+                        />
+
+                        {(item.maxWords || question.maxWords) && (
+                          <p className="text-xs text-gray-400 mt-2">
+                            Maximum {item.maxWords || question.maxWords} words
+                          </p>
+                        )}
+
+                        {showAnswers && (
+                          <AnswerBadge>
+                            {getAcceptedAnswerText(item)}
+                          </AnswerBadge>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
               </QuestionShell>
             )
           }
@@ -928,6 +1056,18 @@ function ReadingPreview({
                 }
                 showAnswers={false}
               >
+                {question.instruction && (
+                  <p className="text-sm text-gray-600 mb-4 whitespace-pre-wrap">
+                    {question.instruction}
+                  </p>
+                )}
+
+                {question.title && (
+                  <h3 className="font-semibold text-gray-900 mb-4">
+                    {question.title}
+                  </h3>
+                )}
+
                 <div className="overflow-x-auto">
                   <table className="min-w-[620px] w-full border-collapse">
                     <tbody>
@@ -1028,7 +1168,15 @@ function ReadingPreview({
 
                 <OptionButtons
                   options={['TRUE', 'FALSE', 'NOT GIVEN']}
-                  selected={answers[fieldKey]}
+                  selected={
+                    answers[fieldKey]
+                      ? letters[
+                          ['TRUE', 'FALSE', 'NOT GIVEN'].indexOf(
+                            answers[fieldKey]
+                          )
+                        ]
+                      : ''
+                  }
                   onSelect={letter => {
                     const values = ['TRUE', 'FALSE', 'NOT GIVEN']
                     setAnswer(fieldKey, values[letters.indexOf(letter)])
@@ -1145,7 +1293,7 @@ function ListeningPreview({
               {questions.map((question, index) => {
                 const keyBase =
                   `${answerPrefix}:${part.id || partIndex}:${question.id || index}`
-                const label = getRangeLabel(questions, index)
+                const label = getListeningRangeLabel(parts, partIndex, index)
 
                 if (
                   question.type === 'table' ||
@@ -1162,6 +1310,18 @@ function ListeningPreview({
                       }
                       showAnswers={false}
                     >
+                      {question.instruction && (
+                        <p className="text-sm text-gray-600 mb-4 whitespace-pre-wrap">
+                          {question.instruction}
+                        </p>
+                      )}
+
+                      {question.title && (
+                        <h4 className="font-semibold text-gray-900 mb-4">
+                          {question.title}
+                        </h4>
+                      )}
+
                       <div className="overflow-x-auto">
                         <table className="min-w-[620px] w-full border-collapse">
                           <tbody>
@@ -1216,12 +1376,24 @@ function ListeningPreview({
                       typeLabel="Listening Completion"
                       showAnswers={false}
                     >
+                      {question.instruction && (
+                        <p className="text-sm text-gray-600 mb-4 whitespace-pre-wrap">
+                          {question.instruction}
+                        </p>
+                      )}
+
+                      {(question.title || question.heading) && (
+                        <h4 className="font-semibold text-gray-900 mb-4">
+                          {question.title || question.heading}
+                        </h4>
+                      )}
+
                       <div className="space-y-5">
                         {toArray(question.sections).map((section, sectionIndex) => (
                           <div key={section.id || sectionIndex}>
-                            {section.title && (
+                            {(section.title || section.heading) && (
                               <h4 className="font-semibold text-gray-900 mb-3">
-                                {section.title}
+                                {section.title || section.heading}
                               </h4>
                             )}
 
@@ -1233,7 +1405,7 @@ function ListeningPreview({
                                       key={item.id || itemIndex}
                                       className="text-sm text-gray-700 whitespace-pre-wrap"
                                     >
-                                      {item.text}
+                                      {item.content || item.text || ''}
                                     </span>
                                   )
                                 }
@@ -1292,6 +1464,16 @@ function ListeningPreview({
                     question.imageUrl ||
                     ''
 
+                  const selectOptions =
+                    question.type === 'map'
+                      ? toArray(question.mapLocations).map((location, locationIndex) => ({
+                          value: location.label || letters[locationIndex],
+                          label: location.text
+                            ? `${location.label || letters[locationIndex]}. ${location.text}`
+                            : location.label || letters[locationIndex]
+                        }))
+                      : toArray(question.options)
+
                   return (
                     <QuestionShell
                       key={keyBase}
@@ -1303,6 +1485,18 @@ function ListeningPreview({
                       }
                       showAnswers={false}
                     >
+                      {question.instruction && (
+                        <p className="text-sm text-gray-600 mb-4 whitespace-pre-wrap">
+                          {question.instruction}
+                        </p>
+                      )}
+
+                      {question.matchingTitle && question.type === 'matching' && (
+                        <h4 className="font-semibold text-gray-900 mb-4">
+                          {question.matchingTitle}
+                        </h4>
+                      )}
+
                       {imageUrl && (
                         <img
                           src={imageUrl}
@@ -1322,13 +1516,13 @@ function ListeningPreview({
                                 {getItemText(item) || `Item ${itemIndex + 1}`}
                               </p>
 
-                              {question.options?.length ? (
+                              {selectOptions.length ? (
                                 <SelectAnswer
                                   value={answers[fieldKey]}
                                   onChange={value =>
                                     setAnswer(fieldKey, value)
                                   }
-                                  options={question.options}
+                                  options={selectOptions}
                                 />
                               ) : (
                                 <TextAnswer
@@ -1348,6 +1542,37 @@ function ListeningPreview({
                           )
                         })}
                       </div>
+                    </QuestionShell>
+                  )
+                }
+
+                if (question.type === 'tfng') {
+                  const fieldKey = keyBase
+                  const values = ['TRUE', 'FALSE', 'NOT GIVEN']
+
+                  return (
+                    <QuestionShell
+                      key={keyBase}
+                      label={label}
+                      typeLabel="True / False / Not Given"
+                      showAnswers={showAnswers}
+                      answer={question.answer}
+                    >
+                      <p className="text-sm text-gray-800 mb-4">
+                        {getQuestionText(question)}
+                      </p>
+
+                      <OptionButtons
+                        options={values}
+                        selected={
+                          answers[fieldKey]
+                            ? letters[values.indexOf(answers[fieldKey])]
+                            : ''
+                        }
+                        onSelect={letter =>
+                          setAnswer(fieldKey, values[letters.indexOf(letter)])
+                        }
+                      />
                     </QuestionShell>
                   )
                 }
@@ -1424,11 +1649,14 @@ function WritingPreview({
   writing,
   answerPrefix,
   answers,
-  setAnswer
+  setAnswer,
+  modeOverride = ''
 }) {
   const mode =
+    modeOverride ||
     writing?.contentType ||
     writing?.writingMode ||
+    writing?.writingType ||
     'full_writing'
 
   const hasTask1 = mode !== 'task2_only'
@@ -1542,10 +1770,172 @@ function VocabularyPreview({
   setAnswer,
   showAnswers
 }) {
+  const questions = toArray(test?.questions)
+  const matchingQuestions = questions.filter(
+    question => question?.type === 'match_definition'
+  )
+
+  const parseWordBank = value =>
+    (value || '')
+      .split(/\n|,/)
+      .map(item => item.trim())
+      .filter(Boolean)
+
   return (
     <div className="space-y-5">
-      {toArray(test?.questions).map((question, index) => {
+      {questions.map((question, index) => {
         const fieldKey = `${answerPrefix}:${question.id || index}`
+        const type = question?.type || 'mcq'
+
+        if (type === 'match_definition') {
+          const wordOptions = matchingQuestions.map(item => ({
+            value: item.id,
+            label: item.word || item.question || 'Word'
+          }))
+
+          return (
+            <QuestionShell
+              key={fieldKey}
+              label={`Q${index + 1}`}
+              typeLabel="Match Definition"
+              showAnswers={false}
+            >
+              {question.taskTitle && (
+                <h3 className="font-semibold text-gray-900 mb-2">
+                  {question.taskTitle}
+                </h3>
+              )}
+
+              {question.instruction && (
+                <p className="text-sm text-gray-600 mb-4 whitespace-pre-wrap">
+                  {question.instruction}
+                </p>
+              )}
+
+              <p className="text-sm text-gray-800 mb-3">
+                {question.definition || getQuestionText(question)}
+              </p>
+
+              <SelectAnswer
+                value={answers[fieldKey]}
+                onChange={value => setAnswer(fieldKey, value)}
+                options={wordOptions}
+                placeholder="Choose the matching word"
+              />
+
+              {showAnswers && (
+                <AnswerBadge>
+                  {question.word || question.question || 'Not set'}
+                </AnswerBadge>
+              )}
+            </QuestionShell>
+          )
+        }
+
+        if (type === 'word_bank') {
+          const words = parseWordBank(question.wordBank)
+
+          return (
+            <QuestionShell
+              key={fieldKey}
+              label={`Q${index + 1}`}
+              typeLabel="Word Bank"
+              showAnswers={false}
+            >
+              {(question.sectionTitle || question.taskTitle) && (
+                <h3 className="font-semibold text-gray-900 mb-2">
+                  {question.sectionTitle || question.taskTitle}
+                </h3>
+              )}
+
+              {question.instruction && (
+                <p className="text-sm text-gray-600 mb-4 whitespace-pre-wrap">
+                  {question.instruction}
+                </p>
+              )}
+
+              {words.length > 0 && (
+                <div className="flex flex-wrap gap-2 mb-4 bg-purple-50 border border-purple-100 rounded-xl p-3">
+                  {words.map((word, wordIndex) => (
+                    <span
+                      key={`${word}-${wordIndex}`}
+                      className="text-xs bg-white border border-purple-100 text-purple-700 px-3 py-1.5 rounded-full"
+                    >
+                      {word}
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              <p className="text-sm text-gray-800 mb-3 whitespace-pre-wrap">
+                {question.sentence || question.question || 'Sentence is missing.'}
+              </p>
+
+              <TextAnswer
+                value={answers[fieldKey]}
+                onChange={value => setAnswer(fieldKey, value)}
+                placeholder="Type the correct word or phrase..."
+              />
+
+              {showAnswers && (
+                <AnswerBadge>
+                  {getAcceptedAnswerText(question)}
+                </AnswerBadge>
+              )}
+            </QuestionShell>
+          )
+        }
+
+        if (type === 'grammar_form') {
+          return (
+            <QuestionShell
+              key={fieldKey}
+              label={`Q${index + 1}`}
+              typeLabel="Grammar Form"
+              showAnswers={false}
+            >
+              {question.taskTitle && (
+                <h3 className="font-semibold text-gray-900 mb-2">
+                  {question.taskTitle}
+                </h3>
+              )}
+
+              {question.instruction && (
+                <p className="text-sm text-gray-600 mb-4 whitespace-pre-wrap">
+                  {question.instruction}
+                </p>
+              )}
+
+              {question.grammarNote && (
+                <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 text-sm text-gray-700 leading-6 whitespace-pre-wrap mb-4">
+                  {question.grammarNote}
+                </div>
+              )}
+
+              <p className="text-sm text-gray-800 mb-2 whitespace-pre-wrap">
+                {question.sentence || question.question || 'Sentence is missing.'}
+              </p>
+
+              {question.baseWord && (
+                <p className="text-sm font-semibold text-gray-900 mb-3">
+                  {question.baseWord}
+                </p>
+              )}
+
+              <TextAnswer
+                value={answers[fieldKey]}
+                onChange={value => setAnswer(fieldKey, value)}
+                placeholder="Type the correct form..."
+              />
+
+              {showAnswers && (
+                <AnswerBadge>
+                  {getAcceptedAnswerText(question)}
+                </AnswerBadge>
+              )}
+            </QuestionShell>
+          )
+        }
 
         return (
           <QuestionShell
@@ -1555,6 +1945,12 @@ function VocabularyPreview({
             showAnswers={showAnswers}
             answer={question.answer}
           >
+            {question.sectionTitle && (
+              <h3 className="font-semibold text-gray-900 mb-3">
+                {question.sectionTitle}
+              </h3>
+            )}
+
             <p className="text-sm text-gray-800 mb-4">
               {getQuestionText(question)}
             </p>
@@ -1598,6 +1994,14 @@ export default function TeacherPreview() {
       [key]: value
     }))
   }
+
+  useEffect(() => {
+    setAnswers({})
+    setShowAnswers(false)
+    setActiveMockTab('overview')
+    setLoadError('')
+    setLoading(true)
+  }, [type, id])
 
   useEffect(() => {
     let active = true
@@ -1740,21 +2144,27 @@ export default function TeacherPreview() {
   const mockTabs = useMemo(() => {
     if (type !== 'mock') return []
 
+    const enabled = getMockEnabledSections(content)
+
     return [
       { key: 'overview', label: 'Overview' },
-      ...mockResources.listenings.map((item, index) => ({
-        key: `listening-${index}`,
-        label: `Listening ${index + 1}`,
-        type: 'listening',
-        item
-      })),
-      ...mockResources.readings.map((item, index) => ({
-        key: `reading-${index}`,
-        label: `Reading ${index + 1}`,
-        type: 'reading',
-        item
-      })),
-      ...(mockResources.writing
+      ...(enabled.listening
+        ? mockResources.listenings.map((item, index) => ({
+            key: `listening-${index}`,
+            label: `Listening ${index + 1}`,
+            type: 'listening',
+            item
+          }))
+        : []),
+      ...(enabled.reading
+        ? mockResources.readings.map((item, index) => ({
+            key: `reading-${index}`,
+            label: `Reading ${index + 1}`,
+            type: 'reading',
+            item
+          }))
+        : []),
+      ...(enabled.writing && mockResources.writing
         ? [
             {
               key: 'writing',
@@ -2084,6 +2494,10 @@ export default function TeacherPreview() {
                 answerPrefix={`mock:${content.id}:writing:${activeMockItem.item.id}`}
                 answers={answers}
                 setAnswer={setAnswer}
+                modeOverride={getMockWritingMode(
+                  content,
+                  activeMockItem.item
+                )}
               />
             )}
           </div>
