@@ -88,17 +88,18 @@ function getMockSectionTimes(mock) {
     : { listening: 35, reading: 60, writing: 60 }
   const stored = mock?.sectionTimeLimits || {}
 
-  return {
-    listening: enabled.listening
-      ? Number(stored.listening) || defaults.listening
-      : 0,
-    reading: enabled.reading
-      ? Number(stored.reading) || defaults.reading
-      : 0,
-    writing: enabled.writing
-      ? Number(stored.writing) || defaults.writing
-      : 0
+  const result = {}
+
+  for (const section of ['listening', 'reading', 'writing']) {
+    const value = Number(stored[section] ?? mock?.[`${section}TimeLimit`])
+    result[section] = !enabled[section]
+      ? 0
+      : !Number.isFinite(value) || value <= 0
+        ? defaults[section]
+        : Math.max(5, Math.min(180, Math.round(value)))
   }
+
+  return result
 }
 
 function getMockTotalTime(mock) {
@@ -114,6 +115,7 @@ function getMockWritingMode(mock, writing) {
     mock?.writingMode ||
     writing?.contentType ||
     writing?.writingMode ||
+    writing?.writingType ||
     'full_writing'
   )
 }
@@ -289,6 +291,10 @@ function getManualQuestionNumber(item) {
 }
 
 function getQuestionCount(question) {
+  if (question?.type === 'shortAnswer') {
+    return toArray(question.items).length
+  }
+
   if (question?.type === 'matching') {
     return (
       question.paragraphs?.length ||
@@ -300,8 +306,7 @@ function getQuestionCount(question) {
   if (
     question?.type === 'matchingInformation' ||
     question?.type === 'sentenceEndings' ||
-    question?.type === 'summaryOptions' ||
-    question?.type === 'shortAnswer'
+    question?.type === 'summaryOptions'
   ) {
     return question.items?.length || 1
   }
@@ -364,45 +369,59 @@ function getRangeLabel(questions, index) {
       .reduce((sum, question) => sum + getQuestionCount(question), 0) + 1
 
   const count = getQuestionCount(questions[index])
+  if (count === 0) return 'No questions'
   const end = start + count - 1
 
   return count > 1 ? `Q${start}-${end}` : `Q${start}`
 }
 
-function getListeningRangeLabel(parts, partIndex, questionIndex) {
+function getListeningQuestionNumbers(parts, partIndex, questionIndex, questionOffset = 0) {
   const part = parts?.[partIndex]
   const question = part?.questions?.[questionIndex]
+  if (!question) return []
 
-  if (!question) return `Q${questionIndex + 1}`
+  let start = questionOffset + 1
+  for (let p = 0; p < partIndex; p++) {
+    start += toArray(parts[p]?.questions).reduce(
+      (sum, item) => sum + getQuestionCount(item), 0
+    )
+  }
+  start += toArray(part?.questions).slice(0, questionIndex).reduce(
+    (sum, item) => sum + getQuestionCount(item), 0
+  )
+
+  let items = null
+  if (question.type === 'table' || question.type === 'note') {
+    items = toArray(question.rows).flatMap(row =>
+      toArray(row.cells).filter(cell => cell.type === 'blank')
+    )
+  } else if (question.type === 'listeningCompletion') {
+    items = toArray(question.sections).flatMap(section =>
+      toArray(section.parts).filter(item => item.type === 'blank')
+    )
+  } else if (question.type === 'map') {
+    items = toArray(question.mapItems)
+  } else if (question.type === 'matching') {
+    items = toArray(question.matchingItems)
+  }
+
+  if (items) {
+    return items.map((item, index) => getManualQuestionNumber(item) || start + index)
+  }
 
   const manualStart = getManualQuestionNumber(question)
   const count = getQuestionCount(question)
+  if (manualStart && !Number.isFinite(Number(manualStart))) return [manualStart]
+  const first = manualStart ? Number(manualStart) : start
+  return Array.from({ length: count }, (_, index) => first + index)
+}
 
-  if (manualStart) {
-    const numericStart = Number(manualStart)
-
-    if (Number.isFinite(numericStart) && count > 1) {
-      return `Q${numericStart}-${numericStart + count - 1}`
-    }
-
-    return `Q${manualStart}`
-  }
-
-  let start = 1
-
-  for (let p = 0; p < partIndex; p++) {
-    start += toArray(parts[p]?.questions).reduce(
-      (sum, item) => sum + getQuestionCount(item),
-      0
-    )
-  }
-
-  start += toArray(part?.questions)
-    .slice(0, questionIndex)
-    .reduce((sum, item) => sum + getQuestionCount(item), 0)
-
-  const end = start + count - 1
-  return count > 1 ? `Q${start}-${end}` : `Q${start}`
+function getListeningRangeLabel(parts, partIndex, questionIndex, questionOffset = 0) {
+  const numbers = getListeningQuestionNumbers(parts, partIndex, questionIndex, questionOffset)
+  if (numbers.length === 0) return 'No questions'
+  return numbers.length > 1
+    ? `Q${numbers[0]}-${numbers[numbers.length - 1]}`
+    : `Q${numbers[0]}`
 }
 
 function normalizeListeningParts(listening) {
@@ -447,6 +466,42 @@ function TextAnswer({
       disabled={disabled}
       className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 disabled:bg-gray-50"
     />
+  )
+}
+
+// Preview inputs are local only: no submission, score, timer or database write.
+function ShortAnswerPreviewInput({ inputId, value, onChange, maxWords }) {
+  const parsedLimit = Number(maxWords)
+  const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : 3
+  const wordCount = String(value ?? '').trim().split(/\s+/).filter(Boolean).length
+  const overLimit = wordCount > limit
+
+  return (
+    <div>
+      <input
+        id={inputId}
+        value={value ?? ''}
+        onChange={event => onChange(event.target.value)}
+        placeholder="Type your answer..."
+        autoComplete="off"
+        spellCheck={false}
+        aria-invalid={overLimit}
+        aria-describedby={`${inputId}-help`}
+        className={`w-full min-w-0 border rounded-xl px-3 py-2.5 text-sm outline-none ${
+          overLimit
+            ? 'border-red-300 focus:border-red-400 bg-red-50'
+            : 'border-gray-200 focus:border-purple-400 bg-white'
+        }`}
+      />
+      <div id={`${inputId}-help`} className="flex flex-wrap justify-between gap-2 mt-2">
+        <span className={`text-xs ${overLimit ? 'text-red-600 font-semibold' : 'text-gray-400'}`}>
+          {overLimit ? `Too many words - maximum ${limit}` : `Maximum ${limit} words`}
+        </span>
+        <span className="text-xs text-gray-400">
+          {wordCount} word{wordCount === 1 ? '' : 's'}
+        </span>
+      </div>
+    </div>
   )
 }
 
@@ -826,36 +881,36 @@ function ReadingPreview({
                   </p>
                 )}
 
+                {items.length === 0 && (
+                  <p className="text-sm text-amber-700 bg-amber-50 rounded-xl p-4">
+                    No short-answer questions are available in this section.
+                  </p>
+                )}
+
                 <div className="space-y-4">
                   {items.map((item, itemIndex) => {
                     const itemId = item.id || itemIndex
                     const fieldKey = `${keyBase}:${itemId}`
-                    const questionNumber =
-                      getManualQuestionNumber(item) || startNumber + itemIndex
+                    const questionNumber = startNumber + itemIndex
 
                     return (
                       <div
                         key={itemId}
                         className="border border-gray-100 rounded-xl p-4 bg-gray-50"
                       >
-                        <p className="text-sm font-medium text-gray-800 mb-3 whitespace-pre-wrap">
+                        <label htmlFor={fieldKey} className="block text-sm font-medium text-gray-800 mb-3 whitespace-pre-wrap">
                           <span className="font-bold text-purple-600 mr-2">
                             Q{questionNumber}
                           </span>
                           {item.question || item.prompt || getItemText(item) || 'Question text is missing.'}
-                        </p>
+                        </label>
 
-                        <TextAnswer
+                        <ShortAnswerPreviewInput
+                          inputId={fieldKey}
                           value={answers[fieldKey]}
                           onChange={value => setAnswer(fieldKey, value)}
-                          placeholder="Type your answer..."
+                          maxWords={question.maxWords}
                         />
-
-                        {(item.maxWords || question.maxWords) && (
-                          <p className="text-xs text-gray-400 mt-2">
-                            Maximum {item.maxWords || question.maxWords} words
-                          </p>
-                        )}
 
                         {showAnswers && (
                           <AnswerBadge>
@@ -1070,6 +1125,17 @@ function ReadingPreview({
 
                 <div className="overflow-x-auto">
                   <table className="min-w-[620px] w-full border-collapse">
+                    {toArray(question.columns).length > 0 && (
+                      <thead>
+                        <tr>
+                          {question.columns.map((column, columnIndex) => (
+                            <th key={columnIndex} scope="col" className="border border-gray-200 p-3 text-left text-sm font-semibold bg-gray-50">
+                              {getText(column)}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                    )}
                     <tbody>
                       {toArray(question.rows).map((row, rowIndex) => (
                         <tr key={row.id || rowIndex}>
@@ -1221,7 +1287,8 @@ function ListeningPreview({
   answerPrefix,
   answers,
   setAnswer,
-  showAnswers
+  showAnswers,
+  questionOffset = 0
 }) {
   const parts = normalizeListeningParts(listening)
 
@@ -1293,12 +1360,14 @@ function ListeningPreview({
               {questions.map((question, index) => {
                 const keyBase =
                   `${answerPrefix}:${part.id || partIndex}:${question.id || index}`
-                const label = getListeningRangeLabel(parts, partIndex, index)
+                const label = getListeningRangeLabel(parts, partIndex, index, questionOffset)
+                const displayNumbers = getListeningQuestionNumbers(parts, partIndex, index, questionOffset)
 
                 if (
                   question.type === 'table' ||
                   question.type === 'note'
                 ) {
+                  let blankIndex = 0
                   return (
                     <QuestionShell
                       key={keyBase}
@@ -1324,12 +1393,24 @@ function ListeningPreview({
 
                       <div className="overflow-x-auto">
                         <table className="min-w-[620px] w-full border-collapse">
+                          {toArray(question.columns).length > 0 && (
+                            <thead>
+                              <tr>
+                                {question.columns.map((column, columnIndex) => (
+                                  <th key={columnIndex} scope="col" className="border border-gray-200 p-3 text-left text-sm font-semibold bg-gray-50">
+                                    {getText(column)}
+                                  </th>
+                                ))}
+                              </tr>
+                            </thead>
+                          )}
                           <tbody>
                             {toArray(question.rows).map((row, rowIndex) => (
                               <tr key={row.id || rowIndex}>
                                 {toArray(row.cells).map((cell, cellIndex) => {
                                   const fieldKey =
                                     `${keyBase}:${row.id || rowIndex}:${cellIndex}`
+                                  const number = cell.type === 'blank' ? displayNumbers[blankIndex++] : null
 
                                   return (
                                     <td
@@ -1338,6 +1419,7 @@ function ListeningPreview({
                                     >
                                       {cell.type === 'blank' ? (
                                         <div>
+                                          <p className="text-xs font-semibold text-purple-600 mb-2">Q{number}</p>
                                           <TextAnswer
                                             value={answers[fieldKey]}
                                             onChange={value =>
@@ -1369,6 +1451,7 @@ function ListeningPreview({
                 }
 
                 if (question.type === 'listeningCompletion') {
+                  let blankIndex = 0
                   return (
                     <QuestionShell
                       key={keyBase}
@@ -1382,9 +1465,9 @@ function ListeningPreview({
                         </p>
                       )}
 
-                      {(question.title || question.heading) && (
+                      {(question.completionTitle || question.title || question.heading) && (
                         <h4 className="font-semibold text-gray-900 mb-4">
-                          {question.title || question.heading}
+                          {question.completionTitle || question.title || question.heading}
                         </h4>
                       )}
 
@@ -1412,9 +1495,11 @@ function ListeningPreview({
 
                                 const fieldKey =
                                   `${keyBase}:${section.id || sectionIndex}:${item.id || itemIndex}`
+                                const number = displayNumbers[blankIndex++]
 
                                 return (
                                   <div key={item.id || itemIndex}>
+                                    <p className="text-xs font-semibold text-purple-600 mb-2">Q{number}</p>
                                     {question.completionMode === 'choose' ? (
                                       <SelectAnswer
                                         value={answers[fieldKey]}
@@ -1513,6 +1598,7 @@ function ListeningPreview({
                           return (
                             <div key={itemId}>
                               <p className="text-sm text-gray-800 mb-2">
+                                <span className="font-semibold text-purple-600 mr-2">Q{displayNumbers[itemIndex]}</span>
                                 {getItemText(item) || `Item ${itemIndex + 1}`}
                               </p>
 
@@ -1777,7 +1863,7 @@ function VocabularyPreview({
 
   const parseWordBank = value =>
     (value || '')
-      .split(/\n|,/)
+      .split(/\r?\n|,|\s+[-\u2013\u2014]\s+/)
       .map(item => item.trim())
       .filter(Boolean)
 
@@ -1997,6 +2083,8 @@ export default function TeacherPreview() {
 
   useEffect(() => {
     setAnswers({})
+    setContent(null)
+    setMockResources({ listenings: [], readings: [], writing: null })
     setShowAnswers(false)
     setActiveMockTab('overview')
     setLoadError('')
@@ -2061,17 +2149,32 @@ export default function TeacherPreview() {
         setContent(loadedContent)
 
         if (type === 'mock') {
-          const readingIds = Array.isArray(loadedContent.readingIds)
+          const enabled = getMockEnabledSections(loadedContent)
+          const readingIds = !enabled.reading
+            ? []
+            : Array.isArray(loadedContent.readingIds)
             ? loadedContent.readingIds.filter(Boolean)
             : loadedContent.readingId
               ? [loadedContent.readingId]
               : []
 
-          const listeningIds = Array.isArray(loadedContent.listeningIds)
+          const listeningIds = !enabled.listening
+            ? []
+            : Array.isArray(loadedContent.listeningIds)
             ? loadedContent.listeningIds.filter(Boolean)
             : loadedContent.listeningId
               ? [loadedContent.listeningId]
               : []
+
+          if (enabled.reading && readingIds.length === 0) {
+            throw new Error('This mock includes Reading, but no Reading resource is linked.')
+          }
+          if (enabled.listening && listeningIds.length === 0) {
+            throw new Error('This mock includes Listening, but no Listening resource is linked.')
+          }
+          if (enabled.writing && !loadedContent.writingId) {
+            throw new Error('This mock includes Writing, but no Writing resource is linked.')
+          }
 
           const [readingDocs, listeningDocs, writingSnap] =
             await Promise.all([
@@ -2085,7 +2188,7 @@ export default function TeacherPreview() {
                   getDoc(doc(db, 'listenings', listeningId))
                 )
               ),
-              loadedContent.writingId
+              enabled.writing && loadedContent.writingId
                 ? getDoc(
                     doc(
                       db,
@@ -2097,6 +2200,16 @@ export default function TeacherPreview() {
             ])
 
           if (!active) return
+
+          if (readingDocs.some(snapshot => !snapshot.exists())) {
+            throw new Error('One or more Reading resources linked to this mock were not found. Check Edit Content.')
+          }
+          if (listeningDocs.some(snapshot => !snapshot.exists())) {
+            throw new Error('One or more Listening resources linked to this mock were not found. Check Edit Content.')
+          }
+          if (enabled.writing && (!writingSnap || !writingSnap.exists())) {
+            throw new Error('The Writing resource linked to this mock was not found. Check Edit Content.')
+          }
 
           setMockResources({
             readings: readingDocs
@@ -2153,6 +2266,13 @@ export default function TeacherPreview() {
             key: `listening-${index}`,
             label: `Listening ${index + 1}`,
             type: 'listening',
+            questionOffset: mockResources.listenings.slice(0, index).reduce(
+              (sum, resource) => sum + normalizeListeningParts(resource).reduce(
+                (total, part) => total + toArray(part.questions).reduce(
+                  (count, question) => count + getQuestionCount(question), 0
+                ), 0
+              ), 0
+            ),
             item
           }))
         : []),
@@ -2471,6 +2591,7 @@ export default function TeacherPreview() {
             {activeMockItem?.type === 'listening' && (
               <ListeningPreview
                 listening={activeMockItem.item}
+                questionOffset={activeMockItem.questionOffset || 0}
                 answerPrefix={`mock:${content.id}:listening:${activeMockItem.item.id}`}
                 answers={answers}
                 setAnswer={setAnswer}
