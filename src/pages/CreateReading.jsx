@@ -74,6 +74,58 @@ function filterClassStudentIds(classItem, visibleStudents) {
   )
 }
 
+// Repair 05: preserve answer metadata and the meaning of existing choice letters.
+function trimReadingTrailingOptions(options) {
+  const values = Array.isArray(options)
+    ? options.map(option => String(option ?? '').trim())
+    : []
+  let last = values.length - 1
+  while (last >= 0 && !values[last]) last--
+  return values.slice(0, last + 1)
+}
+
+function readingChoiceIssue(options, answers, label) {
+  const values = trimReadingTrailingOptions(options)
+  if (values.length < 2) return `${label}: enter at least two options.`
+  if (values.length > letters.length) return `${label}: at most 26 options are supported.`
+  const gap = values.findIndex(value => !value)
+  if (gap >= 0) {
+    return `${label}: option ${letters[gap]} is empty between filled options. Fill it or use its remove button; answers will not be silently relabelled on save.`
+  }
+  const selected = (Array.isArray(answers) ? answers : [answers])
+    .map(value => String(value ?? '').trim())
+  for (const answer of selected) {
+    const index = letters.indexOf(answer)
+    if (index < 0 || index >= values.length || !values[index]) {
+      return `${label}: choose a correct answer that points to a filled option.`
+    }
+  }
+  return ''
+}
+
+function readingAnswerAfterOptionRemoval(answer, removedIndex) {
+  const index = letters.indexOf(String(answer ?? '').trim())
+  if (index < 0 || index === removedIndex) return ''
+  return letters[index > removedIndex ? index - 1 : index] || ''
+}
+
+function readingWordLimitIssue(item, label, required = false) {
+  const raw = item?.maxWords
+  const hasLimit = raw !== undefined && raw !== null && String(raw).trim() !== ''
+  if (!hasLimit) return required ? `${label}: enter a maximum word limit.` : ''
+  const limit = Number(raw)
+  if (!Number.isSafeInteger(limit) || limit < 1) {
+    return `${label}: the word limit must be a positive whole number.`
+  }
+  const accepted = [item?.answer, ...String(item?.acceptedAnswers ?? '').split(',')]
+    .map(value => String(value ?? '').trim())
+    .filter(Boolean)
+  if (accepted.some(value => value.split(/\s+/).length > limit)) {
+    return `${label}: a correct or alternative answer exceeds the maximum of ${limit} words. Adjust the answer or the limit.`
+  }
+  return ''
+}
+
 export default function CreateReading() {
   // PACKAGE 46: Reading assignment controls live in the RIGHT SIDEBAR.
   const { id } = useParams()
@@ -104,6 +156,9 @@ export default function CreateReading() {
   const [saving, setSaving] = useState(false)
   const [hasSubmissions, setHasSubmissions] = useState(false)
   const [showLegacyTypes, setShowLegacyTypes] = useState(false)
+  const [readingLoading, setReadingLoading] = useState(isEditMode)
+  const [loadedReadingId, setLoadedReadingId] = useState(null)
+  const [readingLoadError, setReadingLoadError] = useState('')
 
   const navigate = useNavigate()
 
@@ -376,11 +431,15 @@ export default function CreateReading() {
   // ============================================================
   useEffect(() => {
     let unsubSubmissions = null
+    let isActive = true
 
     const loadReading = async () => {
-      if (!isEditMode) return
+      if (!isEditMode || !user || !profile) return
+      setReadingLoading(true)
+      setReadingLoadError('')
 
       const snap = await getDoc(doc(db, 'readings', id))
+      if (!isActive) return
 
       if (!snap.exists()) {
         alert('Reading homework not found.')
@@ -410,6 +469,7 @@ export default function CreateReading() {
       if (data.paragraphs?.length) {
         setParagraphs(
           data.paragraphs.map((p, index) => ({
+            ...p,
             id: p.id || crypto.randomUUID(),
             letter: p.letter || letters[index],
             text: p.text || ''
@@ -426,6 +486,7 @@ export default function CreateReading() {
       const loadedQuestions = (data.questions || []).map(question => {
         if (question.type === 'mcq') {
           return {
+            ...question,
             id: question.id || crypto.randomUUID(),
             type: 'mcq',
             mode: question.mode || 'single',
@@ -440,6 +501,7 @@ export default function CreateReading() {
 
         if (question.type === 'noteCompletion') {
           return {
+            ...question,
             id: question.id || crypto.randomUUID(),
             type: 'noteCompletion',
             mode: question.mode || 'type',
@@ -452,17 +514,21 @@ export default function CreateReading() {
               : ['', '', '', '', '', '', '', ''],
             paragraphs: question.paragraphs?.length
               ? question.paragraphs.map(p => ({
+                  ...p,
                   id: p.id || crypto.randomUUID(),
                   heading: p.heading || '',
                   parts: (p.parts || []).map(part =>
                     part.type === 'blank'
                       ? {
+                          ...part,
                           type: 'blank',
                           id: part.id || crypto.randomUUID(),
                           answer: part.answer || '',
-                          acceptedAnswers: part.acceptedAnswers || ''
+                          acceptedAnswers: part.acceptedAnswers || '',
+                          maxWords: part.maxWords ?? ''
                         }
                       : {
+                          ...part,
                           type: 'text',
                           content: part.content || ''
                         }
@@ -480,6 +546,7 @@ export default function CreateReading() {
 
         if (question.type === 'table' || question.type === 'summary') {
           return {
+            ...question,
             id: question.id || crypto.randomUUID(),
             type: question.type,
             instruction:
@@ -494,6 +561,7 @@ export default function CreateReading() {
                 : ['Column 1', 'Column 2', 'Column 3'],
             rows: question.rows?.length
               ? question.rows.map(row => ({
+                  ...row,
                   id: row.id || crypto.randomUUID(),
                   cells: row.cells || []
                 }))
@@ -518,6 +586,7 @@ export default function CreateReading() {
 
         if (question.type === 'summaryOptions') {
           return {
+            ...question,
             id: question.id || crypto.randomUUID(),
             type: 'summaryOptions',
             instruction:
@@ -531,6 +600,7 @@ export default function CreateReading() {
               : ['', '', '', '', '', '', '', ''],
             items: question.items?.length
               ? question.items.map(item => ({
+                  ...item,
                   id: item.id || crypto.randomUUID(),
                   number: item.number || '',
                   beforeText: item.beforeText || '',
@@ -551,6 +621,7 @@ export default function CreateReading() {
 
         if (question.type === 'matching') {
           return {
+            ...question,
             id: question.id || crypto.randomUUID(),
             type: 'matching',
             paragraphs: question.paragraphs || []
@@ -559,6 +630,7 @@ export default function CreateReading() {
 
         if (question.type === 'matchingInformation') {
           return {
+            ...question,
             id: question.id || crypto.randomUUID(),
             type: 'matchingInformation',
             instruction:
@@ -566,9 +638,10 @@ export default function CreateReading() {
               'Which section contains the following information?',
             sectionLetters: question.sectionLetters?.length
               ? question.sectionLetters
-              : paragraphs.map(p => p.letter),
+              : (data.paragraphs || []).map((p, index) => p.letter || letters[index]),
             items: question.items?.length
               ? question.items.map(item => ({
+                  ...item,
                   id: item.id || crypto.randomUUID(),
                   statement: item.statement || item.question || '',
                   answer: item.answer || ''
@@ -579,6 +652,7 @@ export default function CreateReading() {
 
         if (question.type === 'sentenceEndings') {
           return {
+            ...question,
             id: question.id || crypto.randomUUID(),
             type: 'sentenceEndings',
             instruction:
@@ -586,6 +660,7 @@ export default function CreateReading() {
               'Complete each sentence with the correct ending, A-G, below.',
             items: question.items?.length
               ? question.items.map(item => ({
+                  ...item,
                   id: item.id || crypto.randomUUID(),
                   sentence: item.sentence || '',
                   answer: item.answer || ''
@@ -599,6 +674,7 @@ export default function CreateReading() {
 
         if (question.type === 'shortAnswer') {
           return {
+            ...question,
             id: question.id || crypto.randomUUID(),
             type: 'shortAnswer',
             title: question.title || 'Short-answer Questions',
@@ -608,6 +684,7 @@ export default function CreateReading() {
             maxWords: Number(question.maxWords) || 3,
             items: question.items?.length
               ? question.items.map(item => ({
+                  ...item,
                   id: item.id || crypto.randomUUID(),
                   question: item.question || '',
                   answer: item.answer || '',
@@ -625,6 +702,7 @@ export default function CreateReading() {
         }
 
         return {
+          ...question,
           id: question.id || crypto.randomUUID(),
           type: question.type,
           question: question.question || '',
@@ -634,6 +712,8 @@ export default function CreateReading() {
       })
 
       setQuestions(loadedQuestions)
+      setLoadedReadingId(id)
+      setReadingLoading(false)
 
       // If any legacy questions exist, show legacy buttons by default
       if (loadedQuestions.some(q => isLegacyType(q.type))) {
@@ -646,16 +726,27 @@ export default function CreateReading() {
       )
 
       unsubSubmissions = onSnapshot(subQuery, subSnap => {
-        setHasSubmissions(!subSnap.empty)
+        if (isActive) setHasSubmissions(!subSnap.empty)
+      }, error => {
+        console.warn('Could not check existing reading submissions:', error)
+        // Preserve the existing edit warning when submission history is unavailable.
+        if (isActive) setHasSubmissions(true)
       })
     }
 
-    loadReading()
+    loadReading().catch(error => {
+      console.error('Could not load reading for editing:', error)
+      if (isActive) {
+        setReadingLoadError('Could not load this reading. Return to the dashboard and try again. No changes were saved.')
+        setReadingLoading(false)
+      }
+    })
 
     return () => {
+      isActive = false
       if (unsubSubmissions) unsubSubmissions()
     }
-  }, [id, isEditMode, navigate])
+  }, [id, isEditMode, navigate, user, profile])
 
   // ============================================================
   // Student assignment
@@ -763,6 +854,22 @@ export default function CreateReading() {
 
   const removeHeading = index => {
     setHeadings(prev => prev.filter((_, i) => i !== index))
+    setQuestions(prev => prev.map(question => {
+      if (question.type !== 'matching') return question
+      return {
+        ...question,
+        paragraphs: (question.paragraphs || []).map(paragraph => {
+          const answerNumber = Number(paragraph.answer)
+          if (!Number.isInteger(answerNumber) || answerNumber < 1) return paragraph
+          return {
+            ...paragraph,
+            answer: answerNumber === index + 1
+              ? ''
+              : String(answerNumber > index + 1 ? answerNumber - 1 : answerNumber)
+          }
+        })
+      }
+    }))
   }
 
   // ============================================================
@@ -1046,13 +1153,14 @@ export default function CreateReading() {
       prev.map(q => {
         if (q.id !== questionId) return q
         if (q.options.length <= 2) return q
-        const removedLetter = letters[optionIndex]
         const options = q.options.filter((_, index) => index !== optionIndex)
         return {
           ...q,
           options,
-          answer: q.answer === removedLetter ? '' : q.answer || '',
-          answers: (q.answers || []).filter(answer => answer !== removedLetter)
+          answer: readingAnswerAfterOptionRemoval(q.answer, optionIndex),
+          answers: (q.answers || [])
+            .map(answer => readingAnswerAfterOptionRemoval(answer, optionIndex))
+            .filter(Boolean)
         }
       })
     )
@@ -1322,15 +1430,14 @@ export default function CreateReading() {
       prev.map(q => {
         if (q.id !== questionId) return q
         if (q.options.length <= 2) return q
-        const removedLetter = letters[optionIndex]
         return {
           ...q,
           options: q.options.filter((_, index) => index !== optionIndex),
           paragraphs: q.paragraphs.map(p => ({
             ...p,
             parts: p.parts.map(part =>
-              part.type === 'blank' && part.answer === removedLetter
-                ? { ...part, answer: '' }
+              part.type === 'blank' && q.mode === 'choose'
+                ? { ...part, answer: readingAnswerAfterOptionRemoval(part.answer, optionIndex) }
                 : part
             )
           }))
@@ -1414,13 +1521,12 @@ export default function CreateReading() {
       prev.map(q => {
         if (q.id !== questionId) return q
         if (q.options.length <= 2) return q
-        const removedLetter = letters[optionIndex]
         return {
           ...q,
           options: q.options.filter((_, index) => index !== optionIndex),
           items: q.items.map(item => ({
             ...item,
-            answer: item.answer === removedLetter ? '' : item.answer
+            answer: readingAnswerAfterOptionRemoval(item.answer, optionIndex)
           }))
         }
       })
@@ -1497,13 +1603,12 @@ export default function CreateReading() {
       prev.map(q => {
         if (q.id !== questionId) return q
         if (q.endings.length <= 2) return q
-        const removedLetter = letters[endingIndex]
         return {
           ...q,
           endings: q.endings.filter((_, index) => index !== endingIndex),
           items: q.items.map(item => ({
             ...item,
-            answer: item.answer === removedLetter ? '' : item.answer
+            answer: readingAnswerAfterOptionRemoval(item.answer, endingIndex)
           }))
         }
       })
@@ -1621,8 +1726,8 @@ export default function CreateReading() {
               cells: row.cells.map((cell, index) => {
                 if (index !== cellIndex) return cell
                 return cell.type === 'blank'
-                  ? { type: 'text', text: cell.answer || '' }
-                  : { type: 'blank', answer: cell.text || '' }
+                  ? { ...cell, type: 'text', text: cell.answer || '' }
+                  : { ...cell, type: 'blank', answer: cell.text || '' }
               })
             }
           })
@@ -1633,6 +1738,7 @@ export default function CreateReading() {
 
   // Sync matching paragraphs when paragraphs change
   useEffect(() => {
+    if (readingLoading || readingLoadError || passageMode !== 'sections') return
     setQuestions(prev =>
       prev.map(q => {
         if (q.type === 'matching') {
@@ -1641,6 +1747,7 @@ export default function CreateReading() {
             paragraphs: paragraphs.map(p => {
               const existing = q.paragraphs.find(x => x.letter === p.letter)
               return {
+                ...existing,
                 letter: p.letter,
                 answer: existing?.answer || ''
               }
@@ -1658,13 +1765,70 @@ export default function CreateReading() {
         return q
       })
     )
-  }, [paragraphs])
+  }, [paragraphs, passageMode, readingLoading, readingLoadError])
 
   // ============================================================
   // Validation
   // ============================================================
   const validateQuestions = () => {
     for (const question of questions) {
+      // Reject missing references before serializing; trailing empty inputs are fine.
+      let choiceIssue = ''
+      if (question.type === 'mcq') {
+        const selected = question.mode === 'multi' ? question.answers || [] : [question.answer]
+        choiceIssue = readingChoiceIssue(question.options, selected, 'Multiple Choice')
+        if (question.mode === 'multi' && new Set(selected).size !== selected.length) {
+          choiceIssue = 'Choose TWO Answers needs two different correct options.'
+        }
+      } else if (question.type === 'noteCompletion' && question.mode === 'choose') {
+        const selected = (question.paragraphs || []).flatMap(paragraph =>
+          (paragraph.parts || []).filter(part => part.type === 'blank').map(part => part.answer)
+        )
+        choiceIssue = readingChoiceIssue(question.options, selected, 'Note Completion')
+      } else if (question.type === 'summaryOptions' || question.type === 'sentenceEndings') {
+        choiceIssue = readingChoiceIssue(
+          question.type === 'sentenceEndings' ? question.endings : question.options,
+          (question.items || []).map(item => item.answer),
+          question.type === 'sentenceEndings' ? 'Sentence Endings' : 'Summary Options'
+        )
+      }
+      if (choiceIssue) {
+        alert(choiceIssue)
+        return false
+      }
+
+      if (['shortAnswer', 'summaryOptions', 'sentenceEndings', 'matchingInformation'].includes(question.type)
+        && (!Array.isArray(question.items) || question.items.length === 0)) {
+        alert('Each question group needs at least one question.')
+        return false
+      }
+
+      let limitIssue = ''
+      if (question.type === 'shortAnswer') {
+        limitIssue = readingWordLimitIssue({ maxWords: question.maxWords }, 'Short Answer', true)
+        for (const item of question.items || []) {
+          limitIssue = limitIssue || readingWordLimitIssue(
+            { ...item, maxWords: question.maxWords }, 'Short Answer', true
+          )
+        }
+      } else if (question.type === 'noteCompletion' && question.mode !== 'choose') {
+        for (const paragraph of question.paragraphs || []) {
+          for (const part of paragraph.parts || []) {
+            if (part.type === 'blank') limitIssue = limitIssue || readingWordLimitIssue(part, 'Note Completion')
+          }
+        }
+      } else if (question.type === 'table' || question.type === 'summary') {
+        for (const row of question.rows || []) {
+          for (const cell of row.cells || []) {
+            if (cell.type === 'blank') limitIssue = limitIssue || readingWordLimitIssue(cell, 'Table / Summary Completion')
+          }
+        }
+      }
+      if (limitIssue) {
+        alert(limitIssue)
+        return false
+      }
+
       if (question.type === 'mcq') {
         const filledOptions = question.options.filter(option => option.trim())
 
@@ -1738,6 +1902,11 @@ export default function CreateReading() {
 
       if (question.type === 'matching') {
         for (const paragraph of question.paragraphs) {
+          const headingIndex = Number(paragraph.answer) - 1
+          if (!Number.isInteger(headingIndex) || headingIndex < 0 || !headings[headingIndex]?.trim()) {
+            alert('Each matching answer must refer to a filled heading.')
+            return false
+          }
           if (!paragraph.answer) {
             alert('Please select correct headings for all matching paragraphs.')
             return false
@@ -1862,6 +2031,10 @@ export default function CreateReading() {
   // ============================================================
   const handleSave = async () => {
     if (saving) return
+    if (!user || !profile || readingLoading || (isEditMode && (loadedReadingId !== id || readingLoadError))) {
+      alert('Please wait until the reading has loaded before saving.')
+      return
+    }
 
     if (!title.trim()) {
       alert('Please add a title.')
@@ -1896,8 +2069,9 @@ export default function CreateReading() {
 
     const cleanedQuestions = questions.map(question => {
       if (question.type === 'mcq') {
-        const filledOptions = question.options.filter(option => option.trim())
+        const filledOptions = trimReadingTrailingOptions(question.options)
         return {
+          ...question,
           id: question.id,
           type: 'mcq',
           mode: question.mode || 'single',
@@ -1916,6 +2090,7 @@ export default function CreateReading() {
 
       if (question.type === 'noteCompletion') {
         return {
+          ...question,
           id: question.id,
           type: 'noteCompletion',
           mode: question.mode || 'type',
@@ -1923,20 +2098,23 @@ export default function CreateReading() {
           title: question.title || '',
           options:
             question.mode === 'choose'
-              ? question.options.filter(option => option.trim())
+              ? trimReadingTrailingOptions(question.options)
               : [],
           paragraphs: question.paragraphs.map(p => ({
+            ...p,
             id: p.id,
             heading: p.heading || '',
             parts: p.parts.map(part =>
               part.type === 'blank'
                 ? {
+                    ...part,
                     type: 'blank',
                     id: part.id,
                     answer: part.answer || '',
-                    acceptedAnswers: part.acceptedAnswers || ''
+                    acceptedAnswers: part.acceptedAnswers || '',
+                    maxWords: part.maxWords ?? ''
                   }
-                : { type: 'text', content: part.content || '' }
+                : { ...part, type: 'text', content: part.content || '' }
             )
           }))
         }
@@ -1944,16 +2122,24 @@ export default function CreateReading() {
 
       if (question.type === 'table' || question.type === 'summary') {
         return {
+          ...question,
           id: question.id,
           type: question.type,
           instruction: question.instruction || '',
           columns: question.columns.map(column => column.trim() || 'Column'),
           rows: question.rows.map(row => ({
+            ...row,
             id: row.id,
             cells: row.cells.map(cell =>
               cell.type === 'blank'
-                ? { type: 'blank', answer: cell.answer || '' }
-                : { type: 'text', text: cell.text || '' }
+                ? {
+                    ...cell,
+                    type: 'blank',
+                    answer: cell.answer || '',
+                    acceptedAnswers: cell.acceptedAnswers || '',
+                    maxWords: cell.maxWords ?? ''
+                  }
+                : { ...cell, type: 'text', text: cell.text || '' }
             )
           }))
         }
@@ -1961,13 +2147,15 @@ export default function CreateReading() {
 
       if (question.type === 'summaryOptions') {
         return {
+          ...question,
           id: question.id,
           type: 'summaryOptions',
           instruction: question.instruction || '',
           title: question.title || '',
           startNumber: question.startNumber || '',
-          options: question.options.filter(option => option.trim()),
+          options: trimReadingTrailingOptions(question.options),
           items: question.items.map((item, itemIndex) => ({
+            ...item,
             id: item.id,
             number: String(Number(question.startNumber || 1) + itemIndex),
             beforeText: item.beforeText || '',
@@ -1979,9 +2167,11 @@ export default function CreateReading() {
 
       if (question.type === 'matching') {
         return {
+          ...question,
           id: question.id,
           type: 'matching',
           paragraphs: question.paragraphs.map(p => ({
+            ...p,
             letter: p.letter || '',
             answer: p.answer || ''
           }))
@@ -1990,6 +2180,7 @@ export default function CreateReading() {
 
       if (question.type === 'matchingInformation') {
         return {
+          ...question,
           id: question.id,
           type: 'matchingInformation',
           instruction: question.instruction || '',
@@ -1997,6 +2188,7 @@ export default function CreateReading() {
             ? question.sectionLetters
             : paragraphs.map(p => p.letter),
           items: (question.items || []).map(item => ({
+            ...item,
             id: item.id,
             statement: item.statement || '',
             answer: item.answer || ''
@@ -2006,26 +2198,30 @@ export default function CreateReading() {
 
       if (question.type === 'sentenceEndings') {
         return {
+          ...question,
           id: question.id,
           type: 'sentenceEndings',
           instruction: question.instruction || '',
           items: question.items.map(item => ({
+            ...item,
             id: item.id,
             sentence: item.sentence || '',
             answer: item.answer || ''
           })),
-          endings: question.endings.filter(ending => ending.trim())
+          endings: trimReadingTrailingOptions(question.endings)
         }
       }
 
       if (question.type === 'shortAnswer') {
         return {
+          ...question,
           id: question.id,
           type: 'shortAnswer',
           title: question.title || 'Short-answer Questions',
           instruction: question.instruction || '',
           maxWords: Number(question.maxWords) || 3,
           items: (question.items || []).map(item => ({
+            ...item,
             id: item.id,
             question: item.question || '',
             answer: item.answer || '',
@@ -2035,6 +2231,7 @@ export default function CreateReading() {
       }
 
       return {
+        ...question,
         id: question.id,
         type: question.type,
         question: question.question || '',
@@ -2088,6 +2285,49 @@ export default function CreateReading() {
     }
   }
 
+
+  const renderTableAnswerMetadata = (question, row, cell, cellIndex) => (
+    <div className="space-y-2 mt-2">
+      <label className="block text-xs text-gray-500">
+        Accepted alternatives / optional
+        <input
+          value={cell.acceptedAnswers || ''}
+          onChange={event => updateTableCell(question.id, row.id, cellIndex, 'acceptedAnswers', event.target.value)}
+          placeholder="Comma separated"
+          className="mt-1 w-full border border-gray-200 rounded-lg px-2 py-2 text-xs outline-none focus:border-purple-400 bg-white"
+        />
+      </label>
+      <label className="block text-xs text-gray-500">
+        Maximum words / optional
+        <input
+          type="number"
+          min="1"
+          step="1"
+          value={cell.maxWords ?? ''}
+          onChange={event => updateTableCell(question.id, row.id, cellIndex, 'maxWords', event.target.value)}
+          placeholder="No limit"
+          className="mt-1 w-full border border-gray-200 rounded-lg px-2 py-2 text-xs outline-none focus:border-purple-400 bg-white"
+        />
+      </label>
+    </div>
+  )
+
+  if (!user || !profile || (isEditMode && (readingLoading || loadedReadingId !== id || readingLoadError))) {
+    return (
+      <div className="min-h-screen bg-[#faf9f6] flex items-center justify-center px-6">
+        <div className="bg-white border border-gray-100 rounded-2xl p-6 text-center max-w-lg">
+          <p className="text-sm text-gray-600" role={readingLoadError ? 'alert' : 'status'}>
+            {readingLoadError || 'Loading reading editor...'}
+          </p>
+          {readingLoadError && (
+            <button type="button" onClick={() => navigate('/teacher')} className="mt-4 text-sm text-purple-600">
+              Back to dashboard
+            </button>
+          )}
+        </div>
+      </div>
+    )
+  }
 
   // ============================================================
   // RENDER
@@ -3273,6 +3513,20 @@ export default function CreateReading() {
                                           className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-purple-400 bg-white"
                                         />
                                       </div>
+                                      <div>
+                                        <label className="text-xs text-gray-400 mb-1 block">
+                                          Maximum words / optional
+                                        </label>
+                                        <input
+                                          type="number"
+                                          min="1"
+                                          step="1"
+                                          value={part.maxWords ?? ''}
+                                          onChange={event => updateNotePart(question.id, paragraph.id, partIndex, 'maxWords', event.target.value)}
+                                          placeholder="No limit"
+                                          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-purple-400 bg-white"
+                                        />
+                                      </div>
                                     </div>
                                   )}
                                 </div>
@@ -3321,6 +3575,9 @@ export default function CreateReading() {
                         </p>
                       )}
 
+                      {question.instruction && (
+                        <p className="text-sm text-gray-600 mb-3 whitespace-pre-wrap">{question.instruction}</p>
+                      )}
                       <div className="space-y-3">
                         {question.paragraphs.map(paragraph => (
                           <div key={paragraph.id}>
@@ -3466,6 +3723,7 @@ export default function CreateReading() {
                                       className="w-full border border-gray-200 bg-white rounded-lg px-2 py-2 text-xs outline-none resize-none"
                                     />
                                   )}
+                                  {cell.type === 'blank' && renderTableAnswerMetadata(question, row, cell, cellIndex)}
                                 </td>
                               ))}
                               <td className="p-3 border border-white bg-gray-50">
@@ -3610,6 +3868,7 @@ export default function CreateReading() {
                                       className="w-full border border-gray-200 bg-white rounded-lg px-2 py-2 text-xs outline-none resize-none"
                                     />
                                   )}
+                                  {cell.type === 'blank' && renderTableAnswerMetadata(question, row, cell, cellIndex)}
                                 </td>
                               ))}
                               <td className="p-3 border border-white bg-gray-50">

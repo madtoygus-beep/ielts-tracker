@@ -2232,7 +2232,8 @@ export default function DoMockTest() {
     return isBlankCorrect(
       userAnswer,
       part.answer,
-      part.acceptedAnswers
+      part.acceptedAnswers,
+      part.maxWords
     )
   }
 

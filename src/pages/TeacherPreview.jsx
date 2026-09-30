@@ -505,6 +505,41 @@ function ShortAnswerPreviewInput({ inputId, value, onChange, maxWords }) {
   )
 }
 
+// Repair 05: number every Reading completion blank and show stored limits.
+function ReadingCompletionPreviewInput({ inputId, number, value, onChange, maxWords }) {
+  const parsedLimit = Number(maxWords)
+  const hasLimit = Number.isFinite(parsedLimit) && parsedLimit > 0
+  const wordCount = String(value ?? '').trim().split(/\s+/).filter(Boolean).length
+  const overLimit = hasLimit && wordCount > parsedLimit
+
+  return (
+    <div className="min-w-0">
+      <label htmlFor={inputId} className="block text-xs font-semibold text-purple-600 mb-1">
+        Q{number}
+      </label>
+      <input
+        id={inputId}
+        value={value ?? ''}
+        onChange={event => onChange(event.target.value)}
+        placeholder="Type an answer..."
+        autoComplete="off"
+        spellCheck={false}
+        aria-invalid={overLimit}
+        aria-describedby={hasLimit ? `${inputId}-limit` : undefined}
+        className={`w-full min-w-0 border rounded-xl px-3 py-2.5 text-sm outline-none ${
+          overLimit ? 'border-red-300 bg-red-50' : 'border-gray-200 focus:border-purple-400'
+        }`}
+      />
+      {hasLimit && (
+        <p id={`${inputId}-limit`} className={`text-xs mt-1 ${overLimit ? 'text-red-600' : 'text-gray-500'}`}>
+          {overLimit ? `Too many words - maximum ${parsedLimit}` : `Maximum ${parsedLimit} words`}
+          {' / '}{wordCount} entered
+        </p>
+      )}
+    </div>
+  )
+}
+
 function OptionButtons({
   options,
   selected,
@@ -1018,6 +1053,8 @@ function ReadingPreview({
           }
 
           if (question.type === 'noteCompletion') {
+            const startNumber = questions.slice(0, index).reduce((sum, item) => sum + getQuestionCount(item), 0) + 1
+            let blankOffset = 0
             return (
               <QuestionShell
                 key={keyBase}
@@ -1061,19 +1098,26 @@ function ReadingPreview({
 
                           const fieldKey =
                             `${keyBase}:${paragraph.id || paragraphIndex}:${part.id || partIndex}`
+                          const number = startNumber + blankOffset++
 
                           return (
                             <div key={part.id || partIndex}>
                               {question.mode === 'choose' ? (
-                                <SelectAnswer
-                                  value={answers[fieldKey]}
-                                  onChange={value => setAnswer(fieldKey, value)}
-                                  options={toArray(question.options)}
-                                />
+                                <div>
+                                  <p className="text-xs font-semibold text-purple-600 mb-1">Q{number}</p>
+                                  <SelectAnswer
+                                    value={answers[fieldKey]}
+                                    onChange={value => setAnswer(fieldKey, value)}
+                                    options={toArray(question.options)}
+                                  />
+                                </div>
                               ) : (
-                                <TextAnswer
+                                <ReadingCompletionPreviewInput
+                                  inputId={`preview-reading-${fieldKey}`}
+                                  number={number}
                                   value={answers[fieldKey]}
                                   onChange={value => setAnswer(fieldKey, value)}
+                                  maxWords={part.maxWords}
                                 />
                               )}
 
@@ -1098,6 +1142,8 @@ function ReadingPreview({
             question.type === 'summary' ||
             question.type === 'note'
           ) {
+            const startNumber = questions.slice(0, index).reduce((sum, item) => sum + getQuestionCount(item), 0) + 1
+            let blankOffset = 0
             return (
               <QuestionShell
                 key={keyBase}
@@ -1142,6 +1188,7 @@ function ReadingPreview({
                           {toArray(row.cells).map((cell, cellIndex) => {
                             const fieldKey =
                               `${keyBase}:${row.id || rowIndex}:${cellIndex}`
+                            const number = cell.type === 'blank' ? startNumber + blankOffset++ : null
 
                             return (
                               <td
@@ -1150,9 +1197,12 @@ function ReadingPreview({
                               >
                                 {cell.type === 'blank' ? (
                                   <div>
-                                    <TextAnswer
+                                    <ReadingCompletionPreviewInput
+                                      inputId={`preview-reading-${fieldKey}`}
+                                      number={number}
                                       value={answers[fieldKey]}
                                       onChange={value => setAnswer(fieldKey, value)}
+                                      maxWords={cell.maxWords}
                                     />
 
                                     {showAnswers && (
