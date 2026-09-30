@@ -113,9 +113,18 @@ export default function DoWriting() {
   const navigate = useNavigate()
 
   const timerRef = useRef(null)
-  const autosaveTimeoutRef = useRef(null)
+  const autosaveIntervalRef = useRef(null)
   const draftStatusTimeoutRef = useRef(null)
   const submittingRef = useRef(false)
+  // Repair 06: timer ticks and typing must not restart the autosave schedule.
+  const latestDraftRef = useRef(null)
+  const saveDraftRef = useRef(null)
+  const handleSubmitRef = useRef(null)
+  const loadedDraftKeyRef = useRef(null)
+  const savedDraftKeyRef = useRef(null)
+  const autoSubmitAttemptedRef = useRef(false)
+  const loadVersionRef = useRef(0)
+  const mountedRef = useRef(false)
 
   const [user, setUser] = useState(null)
   const [writing, setWriting] = useState(null)
@@ -130,6 +139,7 @@ export default function DoWriting() {
   const [imageZoomOpen, setImageZoomOpen] = useState(false)
   const [draftStatus, setDraftStatus] = useState('')
   const [draftLoaded, setDraftLoaded] = useState(false)
+  const [draftError, setDraftError] = useState('')
 
   const draftKey = user ? `writingDraft_${id}_${user.uid}` : null
 
@@ -143,7 +153,16 @@ export default function DoWriting() {
       ? 'Task 2'
       : `Task ${currentTask}`
 
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+
   const showDraftStatus = message => {
+    if (!mountedRef.current) return
+
     setDraftStatus(message)
 
     if (draftStatusTimeoutRef.current) {
@@ -151,42 +170,122 @@ export default function DoWriting() {
     }
 
     draftStatusTimeoutRef.current = setTimeout(() => {
-      setDraftStatus('')
+      if (mountedRef.current) setDraftStatus('')
     }, 2500)
   }
 
-  const saveDraftToStorage = (statusMessage = 'Draft saved ✓') => {
-    if (!draftKey) return false
-
-    const hasContent =
-      task1Answer.trim() ||
-      task2Answer.trim()
-
-    if (!hasContent) return false
-
-    const draft = {
+  // Updated after every relevant commit, independently of the save interval.
+  useEffect(() => {
+    latestDraftRef.current = {
+      key: draftKey,
+      uid: user?.uid,
       writingId: id,
+      ready:
+        !loading &&
+        draftLoaded &&
+        writing?.id === id &&
+        loadedDraftKeyRef.current === draftKey,
+      completed: submitted || alreadyDone,
       task1Answer,
       task2Answer,
       currentTask,
-      timeLeft,
+      timeLeft
+    }
+  }, [
+    draftKey, user?.uid, id, loading, draftLoaded, writing?.id,
+    submitted, alreadyDone, task1Answer, task2Answer, currentTask, timeLeft
+  ])
+
+  const saveDraftToStorage = (statusMessage = 'Draft saved ✓', silent = false) => {
+    const snapshot = latestDraftRef.current
+
+    if (
+      !snapshot?.key ||
+      !snapshot.ready ||
+      snapshot.completed ||
+      submittingRef.current ||
+      auth.currentUser?.uid !== snapshot.uid
+    ) return false
+
+    const hasContent =
+      snapshot.task1Answer.trim() ||
+      snapshot.task2Answer.trim()
+
+    // Save cleared text too, so a previously saved answer cannot reappear.
+    if (!hasContent && savedDraftKeyRef.current !== snapshot.key) {
+      if (!silent) showDraftStatus('Nothing to save yet')
+      return false
+    }
+
+    const draft = {
+      writingId: snapshot.writingId,
+      task1Answer: snapshot.task1Answer,
+      task2Answer: snapshot.task2Answer,
+      currentTask: snapshot.currentTask,
+      timeLeft: Math.max(Number(snapshot.timeLeft) || 0, 0),
       savedAt: new Date().toISOString()
     }
 
-    localStorage.setItem(draftKey, JSON.stringify(draft))
-    showDraftStatus(statusMessage)
+    try {
+      localStorage.setItem(snapshot.key, JSON.stringify(draft))
+      savedDraftKeyRef.current = snapshot.key
 
-    return true
+      if (!silent && mountedRef.current) {
+        setDraftError('')
+        if (statusMessage) showDraftStatus(statusMessage)
+      }
+
+      return true
+    } catch (error) {
+      console.warn('Could not save writing draft:', error)
+
+      if (!silent && mountedRef.current) {
+        setDraftStatus('')
+        setDraftError(
+          'Draft could not be saved on this browser. Keep this page open and copy your text before leaving.'
+        )
+      }
+
+      return false
+    }
   }
 
   useEffect(() => {
+    saveDraftRef.current = saveDraftToStorage
+  })
+
+  useEffect(() => {
+    let active = true
+
     const unsub = onAuthStateChanged(auth, async currentUser => {
+      const loadVersion = ++loadVersionRef.current
+      const isCurrentLoad = () => active && loadVersionRef.current === loadVersion
+
+      loadedDraftKeyRef.current = null
+      savedDraftKeyRef.current = null
+      autoSubmitAttemptedRef.current = false
+      submittingRef.current = false
+      setLoading(true)
+      setDraftLoaded(false)
+      setSubmitted(false)
+      setSubmitting(false)
+      setAlreadyDone(false)
+      setTask1Answer('')
+      setTask2Answer('')
+      setDraftStatus('')
+      setDraftError('')
+      setImageZoomOpen(false)
+      setWriting(null)
+
       if (!currentUser) {
+        setUser(null)
         navigate('/login')
         return
       }
 
+      try {
       const profileSnap = await getDoc(doc(db, 'users', currentUser.uid))
+      if (!isCurrentLoad()) return
 
       if (!profileSnap.exists()) {
         await signOut(auth)
@@ -209,6 +308,7 @@ export default function DoWriting() {
       setUser(currentUser)
 
       const snap = await getDoc(doc(db, 'writingHomeworks', id))
+      if (!isCurrentLoad()) return
 
       if (!snap.exists()) {
         alert('Writing homework not found.')
@@ -251,6 +351,7 @@ export default function DoWriting() {
       )
 
       const existing = await getDocs(q)
+      if (!isCurrentLoad()) return
 
       if (!existing.empty) {
         const sub = existing.docs[0].data()
@@ -262,25 +363,53 @@ export default function DoWriting() {
       }
 
       setLoading(false)
+      } catch (error) {
+        console.error('Could not load writing homework:', error)
+        if (isCurrentLoad()) {
+          alert('Could not load your writing homework. Please try again.')
+          navigate('/student')
+        }
+      }
     })
 
-    return unsub
+    return () => {
+      active = false
+      loadVersionRef.current++
+      unsub()
+    }
   }, [id, navigate])
 
   useEffect(() => {
     if (!draftKey || loading || submitted || alreadyDone || draftLoaded) return
+    if (writing?.id !== id || loadedDraftKeyRef.current === draftKey) return
 
-    const savedDraft = localStorage.getItem(draftKey)
+    // Protect restoration from duplicate effects and from saving a blank form.
+    loadedDraftKeyRef.current = draftKey
 
-    if (savedDraft) {
-      try {
+    try {
+      const savedDraft = localStorage.getItem(draftKey)
+
+      if (savedDraft) {
         const draft = JSON.parse(savedDraft)
 
-        const hasContent =
-          draft.task1Answer?.trim() ||
-          draft.task2Answer?.trim()
+        if (
+          !draft ||
+          typeof draft !== 'object' ||
+          Array.isArray(draft) ||
+          (draft.writingId && draft.writingId !== id) ||
+          (draft.task1Answer !== undefined && typeof draft.task1Answer !== 'string') ||
+          (draft.task2Answer !== undefined && typeof draft.task2Answer !== 'string')
+        ) {
+          throw new Error('Invalid writing draft format.')
+        }
 
-        if (hasContent) {
+        const hasContent = draft.task1Answer?.trim() || draft.task2Answer?.trim()
+        const hasSavedTime =
+          typeof draft.timeLeft === 'number' &&
+          Number.isFinite(draft.timeLeft) &&
+          draft.timeLeft >= 0
+
+        if (hasContent || hasSavedTime) {
           const restore = window.confirm(
             'A saved writing draft was found. Do you want to restore it?'
           )
@@ -288,7 +417,7 @@ export default function DoWriting() {
           if (restore) {
             setTask1Answer(draft.task1Answer || '')
             setTask2Answer(draft.task2Answer || '')
-            const restoredTask = draft.currentTask || 1
+            const restoredTask = Number(draft.currentTask) === 2 ? 2 : 1
             setCurrentTask(
               writingMode === 'task2_only'
                 ? 2
@@ -297,74 +426,82 @@ export default function DoWriting() {
                   : restoredTask
             )
 
-            if (typeof draft.timeLeft === 'number' && draft.timeLeft > 0) {
-              setTimeLeft(draft.timeLeft)
+            if (hasSavedTime) {
+              // A saved zero must not grant a fresh timer on reopening.
+              const defaultMinutes = writingMode === 'task1_only'
+                ? 20
+                : writingMode === 'task2_only' ? 40 : 60
+              const maximumSeconds = (Number(writing.timeLimit) || defaultMinutes) * 60
+              setTimeLeft(Math.min(Math.floor(draft.timeLeft), maximumSeconds))
             }
 
+            savedDraftKeyRef.current = draftKey
             showDraftStatus('Draft restored ✓')
           }
         }
-      } catch (error) {
-        console.error('Could not restore writing draft:', error)
       }
+    } catch (error) {
+      console.warn('Could not restore writing draft:', error)
+      setDraftError(
+        'The saved draft could not be read on this browser. Your writing page is still available; keep a separate copy of your text.'
+      )
+    } finally {
+      setDraftLoaded(true)
     }
-
-    setDraftLoaded(true)
-  }, [draftKey, loading, submitted, alreadyDone, draftLoaded, writingMode])
+  }, [draftKey, loading, submitted, alreadyDone, draftLoaded, writingMode, writing, id])
 
   useEffect(() => {
-    if (loading || submitted || timeLeft <= 0) return
+    handleSubmitRef.current = handleSubmit
+  })
 
-    timerRef.current = setInterval(() => {
-      setTimeLeft(prev => {
-        if (prev <= 1) {
-          clearInterval(timerRef.current)
-          handleSubmit(true)
-          return 0
-        }
+  const timerActive =
+    !loading && draftLoaded && !submitted && !alreadyDone &&
+    !submitting && writing?.id === id && timeLeft > 0
 
-        return prev - 1
-      })
+  useEffect(() => {
+    if (!timerActive) return
+
+    const intervalId = setInterval(() => {
+      if (submittingRef.current) return
+      // No submission or other side effect inside a state updater.
+      setTimeLeft(prev => Math.max(prev - 1, 0))
     }, 1000)
-
-    return () => clearInterval(timerRef.current)
-  }, [loading, submitted, timeLeft])
-
-  useEffect(() => {
-    if (!draftKey || loading || submitted || alreadyDone || !draftLoaded) return
-
-    const hasContent =
-      task1Answer.trim() ||
-      task2Answer.trim()
-
-    if (!hasContent) return
-
-    setDraftStatus('Saving...')
-
-    if (autosaveTimeoutRef.current) {
-      clearTimeout(autosaveTimeoutRef.current)
-    }
-
-    autosaveTimeoutRef.current = setTimeout(() => {
-      saveDraftToStorage('Draft saved ✓')
-    }, 8000)
+    timerRef.current = intervalId
 
     return () => {
-      if (autosaveTimeoutRef.current) {
-        clearTimeout(autosaveTimeoutRef.current)
-      }
+      clearInterval(intervalId)
+      if (timerRef.current === intervalId) timerRef.current = null
     }
-  }, [
-    draftKey,
-    loading,
-    submitted,
-    alreadyDone,
-    draftLoaded,
-    task1Answer,
-    task2Answer,
-    currentTask,
-    timeLeft
-  ])
+  }, [timerActive, draftKey])
+
+  useEffect(() => {
+    if (
+      loading || !draftLoaded || submitted || alreadyDone || submitting ||
+      writing?.id !== id || timeLeft > 0 || autoSubmitAttemptedRef.current
+    ) return
+
+    autoSubmitAttemptedRef.current = true
+    // The ref is refreshed every commit, so the last typed words are included.
+    handleSubmitRef.current?.(true)
+  }, [loading, draftLoaded, submitted, alreadyDone, submitting, writing?.id, id, timeLeft])
+
+  useEffect(() => {
+    if (
+      !draftKey || loading || submitted || alreadyDone ||
+      submitting || !draftLoaded || writing?.id !== id
+    ) return
+
+    // Fixed cadence: neither typing nor timer updates reset this interval.
+    const intervalId = setInterval(() => {
+      saveDraftRef.current?.('Draft saved ✓')
+    }, 8000)
+    autosaveIntervalRef.current = intervalId
+
+    return () => {
+      clearInterval(intervalId)
+      if (autosaveIntervalRef.current === intervalId) autosaveIntervalRef.current = null
+    }
+  }, [draftKey, loading, submitted, alreadyDone, submitting, draftLoaded, writing?.id, id])
 
   useEffect(() => {
     const handleKeyDown = event => {
@@ -381,65 +518,77 @@ export default function DoWriting() {
   }, [])
 
   useEffect(() => {
-    const handleBeforeUnload = event => {
-      const hasContent =
-        task1Answer.trim() ||
-        task2Answer.trim()
+    const saveLatestSilently = () => {
+      if (latestDraftRef.current?.key !== draftKey) return
+      saveDraftRef.current?.('', true)
+    }
 
-      if (!submitted && hasContent) {
-        saveDraftToStorage('Draft saved ✓')
+    const handleBeforeUnload = event => {
+      const snapshot = latestDraftRef.current
+      if (!snapshot?.ready || snapshot.completed || snapshot.key !== draftKey) return
+      if (auth.currentUser?.uid !== snapshot.uid) return
+
+      saveLatestSilently()
+      const hasContent = snapshot.task1Answer.trim() || snapshot.task2Answer.trim()
+
+      if (hasContent || submittingRef.current) {
         event.preventDefault()
         event.returnValue = ''
       }
     }
 
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') saveLatestSilently()
+    }
+
     window.addEventListener('beforeunload', handleBeforeUnload)
+    window.addEventListener('pagehide', saveLatestSilently)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
 
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload)
+      window.removeEventListener('pagehide', saveLatestSilently)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      // Also cover navigation inside the app, which has no beforeunload event.
+      saveLatestSilently()
     }
-  }, [submitted, task1Answer, task2Answer, draftKey, currentTask, timeLeft])
+  }, [draftKey])
 
   useEffect(() => {
     return () => {
-      if (timerRef.current) {
-        clearInterval(timerRef.current)
-      }
-
-      if (autosaveTimeoutRef.current) {
-        clearTimeout(autosaveTimeoutRef.current)
-      }
-
-      if (draftStatusTimeoutRef.current) {
-        clearTimeout(draftStatusTimeoutRef.current)
-      }
+      if (timerRef.current) clearInterval(timerRef.current)
+      if (autosaveIntervalRef.current) clearInterval(autosaveIntervalRef.current)
+      if (draftStatusTimeoutRef.current) clearTimeout(draftStatusTimeoutRef.current)
     }
   }, [])
 
   const saveDraftNow = () => {
-    if (!draftKey) return
-
-    const hasContent =
-      task1Answer.trim() ||
-      task2Answer.trim()
-
-    if (!hasContent) {
-      showDraftStatus('Nothing to save yet')
-      return
-    }
-
     saveDraftToStorage('Draft saved ✓')
   }
 
-  const clearDraft = () => {
-    if (!draftKey) return
-    localStorage.removeItem(draftKey)
+  const clearDraft = (key = draftKey) => {
+    if (!key) return
+
+    try {
+      localStorage.removeItem(key)
+      if (savedDraftKeyRef.current === key) savedDraftKeyRef.current = null
+    } catch (error) {
+      // A successful Firestore submission must not become a failed submit
+      // just because this browser refused to remove its local draft.
+      console.warn('Writing submitted; local draft cleanup failed:', error)
+    }
   }
 
   const handleSubmit = async (autoSubmit = false) => {
-    if (submittingRef.current || submitted) return
+    if (
+      submittingRef.current || submitted || alreadyDone || loading ||
+      !draftLoaded || !user || !writing || writing.id !== id ||
+      auth.currentUser?.uid !== user.uid
+    ) return
 
-    if (!autoSubmit) {
+    const expired = timeLeft <= 0
+
+    if (!autoSubmit && !expired) {
       if (hasTask1 && !task1Answer.trim()) {
         alert('Please write your Task 1 answer.')
         setCurrentTask(1)
@@ -459,15 +608,15 @@ export default function DoWriting() {
       if (!ok) return
     }
 
+    // Keep a recovery copy before the network request; do not delete on failure.
+    saveDraftToStorage('', true)
+    const submittedDraftKey = draftKey
+    const submissionVersion = loadVersionRef.current
     submittingRef.current = true
     setSubmitting(true)
 
-    clearInterval(timerRef.current)
-
-    if (autosaveTimeoutRef.current) {
-      clearTimeout(autosaveTimeoutRef.current)
-    }
-
+    // Effects stop intervals while submitting. Do not cancel them manually:
+    // an immediately rejected request may batch true -> false in one render.
     const submissionTeacherIds = getSourceTeacherIds(writing)
 
     try {
@@ -489,22 +638,33 @@ export default function DoWriting() {
         task2WordCount: hasTask2 ? countWords(task2Answer) : 0,
         submittedAt: new Date().toISOString(),
         finishedLate: timeLeft <= 0,
-        autoSubmitted: autoSubmit,
+        autoSubmitted: autoSubmit || expired,
         reviewed: false,
         review: null
       })
 
-      clearDraft()
-      setSubmitted(true)
+      if (latestDraftRef.current?.key === submittedDraftKey) {
+        latestDraftRef.current.completed = true
+      }
+      clearDraft(submittedDraftKey)
+
+      if (mountedRef.current && loadVersionRef.current === submissionVersion) {
+        setSubmitted(true)
+      }
     } catch (error) {
       console.error(error)
-      alert('Could not submit your writing. Please try again.')
-      submittingRef.current = false
-      setSubmitting(false)
+
+      if (mountedRef.current && loadVersionRef.current === submissionVersion) {
+        alert('Could not submit your writing. Please try again.')
+        submittingRef.current = false
+        setSubmitting(false)
+        // Submitting=false restarts autosave and, if time remains, the timer.
+        // At zero the retry is manual, avoiding repeated automatic requests.
+      }
     }
   }
 
-  if (loading || !writing) {
+  if (loading || !writing || writing.id !== id) {
     return (
       <div className="min-h-screen bg-[#faf9f6] flex items-center justify-center">
         <p className="text-gray-400">Loading...</p>
@@ -603,7 +763,8 @@ export default function DoWriting() {
 
           <button
             onClick={saveDraftNow}
-            className="text-xs bg-gray-100 text-gray-600 px-3 py-2 rounded-xl hover:bg-gray-200"
+            disabled={!draftLoaded || submitting}
+            className="text-xs bg-gray-100 text-gray-600 px-3 py-2 rounded-xl hover:bg-gray-200 disabled:opacity-60"
           >
             Save draft
           </button>
@@ -621,6 +782,12 @@ export default function DoWriting() {
           </div>
         </div>
       </nav>
+
+      {draftError && (
+        <div role="alert" className="mx-6 mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {draftError}
+        </div>
+      )}
 
       {isFullWriting ? (
         <div className="flex border-b border-gray-100 bg-white sticky top-[73px] z-10">
@@ -730,6 +897,7 @@ export default function DoWriting() {
 
               <textarea
                 value={task1Answer}
+                disabled={!draftLoaded || submitting || timeLeft <= 0}
                 onChange={e => setTask1Answer(e.target.value)}
                 placeholder="Write your Task 1 response here..."
                 className="w-full min-h-[520px] border border-gray-200 rounded-xl px-4 py-4 text-sm leading-7 outline-none focus:border-purple-400 resize-none"
@@ -796,6 +964,7 @@ export default function DoWriting() {
 
               <textarea
                 value={task2Answer}
+                disabled={!draftLoaded || submitting || timeLeft <= 0}
                 onChange={e => setTask2Answer(e.target.value)}
                 placeholder="Write your Task 2 essay here..."
                 className="w-full min-h-[520px] border border-gray-200 rounded-xl px-4 py-4 text-sm leading-7 outline-none focus:border-purple-400 resize-none"
