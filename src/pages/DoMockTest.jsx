@@ -266,7 +266,21 @@ function getReadingBand(correct, total) {
   return getBandFromPercentage(correct, total)
 }
 
+// Repair 04: Short-answer groups use the same item IDs as standalone Reading.
+function getReadingShortAnswerItems(question) {
+  return Array.isArray(question?.items) ? question.items : []
+}
+
+function getReadingShortAnswerWordLimit(question) {
+  const maxWords = Number(question?.maxWords)
+  return Number.isFinite(maxWords) && maxWords > 0 ? maxWords : 3
+}
+
 function getReadingQuestionCount(question) {
+  if (question.type === 'shortAnswer') {
+    return getReadingShortAnswerItems(question).length
+  }
+
   if (question.type === 'matching') return question.paragraphs?.length || 0
 
   if (question.type === 'matchingInformation') return question.items?.length || 0
@@ -1560,6 +1574,18 @@ export default function DoMockTest() {
     const answerSet = readingAnswers[reading?.id] || {}
 
     ;(reading?.questions || []).forEach(question => {
+      if (question.type === 'shortAnswer') {
+        getReadingShortAnswerItems(question).forEach(item => {
+          total++
+
+          if (hasAnswerValue(answerSet[question.id]?.[item.id])) {
+            answered++
+          }
+        })
+
+        return
+      }
+
       if (question.type === 'matching') {
         question.paragraphs?.forEach(paragraph => {
           total++
@@ -2107,6 +2133,26 @@ export default function DoMockTest() {
     })
   }
 
+  const handleReadingShortAnswer = (readingId, questionId, itemId, value) => {
+    if (readingLocked) return
+
+    setReadingAnswers(prev => {
+      const readingSet = prev[readingId] || {}
+      const currentQuestion = readingSet[questionId] || {}
+
+      return {
+        ...prev,
+        [readingId]: {
+          ...readingSet,
+          [questionId]: {
+            ...currentQuestion,
+            [itemId]: value
+          }
+        }
+      }
+    })
+  }
+
   const handleReadingSentenceEnding = (readingId, questionId, itemId, value) => {
     if (readingLocked) return
 
@@ -2246,6 +2292,21 @@ export default function DoMockTest() {
     }
 
     return normalize(value) === normalize(question.answer)
+  }
+
+  const isReadingShortAnswerCorrect = (readingId, question, item) => {
+    const value = readingAnswers[readingId]?.[question.id]?.[item.id]
+
+    // Missing or blank answers must never match a missing answer key.
+    if (typeof value !== 'string' && typeof value !== 'number') return false
+    if (!normalize(value)) return false
+
+    return isBlankCorrect(
+      value,
+      item.answer,
+      item.acceptedAnswers || '',
+      getReadingShortAnswerWordLimit(question)
+    )
   }
 
   const isReadingSentenceEndingCorrect = (readingId, question, item) => {
@@ -2457,6 +2518,18 @@ export default function DoMockTest() {
     let total = 0
 
     reading.questions.forEach(question => {
+      if (question.type === 'shortAnswer') {
+        getReadingShortAnswerItems(question).forEach(item => {
+          total++
+
+          if (isReadingShortAnswerCorrect(reading.id, question, item)) {
+            correct++
+          }
+        })
+
+        return
+      }
+
       if (question.type === 'matching') {
         question.paragraphs?.forEach(paragraph => {
           total++
@@ -4086,6 +4159,89 @@ ${previousLabel} will be permanently locked and you will not be able to return t
     </div>
   )
 
+  const renderReadingShortAnswers = (reading, question, questionIndex) => {
+    const items = getReadingShortAnswerItems(question)
+    const maxWords = getReadingShortAnswerWordLimit(question)
+    const startNumber = (reading.questions || [])
+      .slice(0, questionIndex)
+      .reduce((sum, item) => sum + getReadingQuestionCount(item), 0) + 1
+
+    return (
+      <div>
+        <h3 className="text-base font-bold text-gray-900 mb-2">
+          {question.title || 'Short-answer Questions'}
+        </h3>
+
+        {question.instruction && (
+          <p className="text-sm font-semibold text-gray-700 whitespace-pre-wrap mb-5">
+            {question.instruction}
+          </p>
+        )}
+
+        {items.length === 0 && (
+          <p className="text-sm text-amber-700 bg-amber-50 rounded-xl p-4">
+            No short-answer questions are available in this section.
+          </p>
+        )}
+
+        <div className="space-y-4">
+          {items.map((item, itemIndex) => {
+            const inputId = `mock-short-answer-${reading.id}-${question.id}-${item.id}`
+            const currentAnswer = readingAnswers[reading.id]?.[question.id]?.[item.id] ?? ''
+            const wordCount = countWords(currentAnswer)
+            const overLimit = wordCount > maxWords
+
+            return (
+              <div key={item.id} className="bg-white border border-gray-100 rounded-xl p-4">
+                <label htmlFor={inputId} className="block text-sm text-gray-800 leading-7 whitespace-pre-wrap mb-3">
+                  <span className="font-semibold mr-2">
+                    {startNumber + itemIndex}.
+                  </span>
+                  {item.question}
+                </label>
+
+                <input
+                  id={inputId}
+                  value={currentAnswer}
+                  disabled={readingLocked}
+                  onChange={event =>
+                    handleReadingShortAnswer(
+                      reading.id,
+                      question.id,
+                      item.id,
+                      event.target.value
+                    )
+                  }
+                  placeholder="Type your answer..."
+                  autoComplete="off"
+                  spellCheck={false}
+                  aria-invalid={overLimit}
+                  aria-describedby={`${inputId}-help`}
+                  className={`w-full min-w-0 border rounded-xl px-3 py-2.5 text-sm outline-none ${
+                    overLimit
+                      ? 'border-red-300 focus:border-red-400 bg-red-50'
+                      : 'border-gray-200 focus:border-purple-400 bg-white'
+                  }`}
+                />
+
+                <div id={`${inputId}-help`} className="flex flex-wrap items-center justify-between gap-2 mt-2">
+                  <span className={`text-xs ${overLimit ? 'text-red-600 font-semibold' : 'text-gray-400'}`}>
+                    {overLimit
+                      ? `Too many words - maximum ${maxWords}`
+                      : `Maximum ${maxWords} word${maxWords === 1 ? '' : 's'}`}
+                  </span>
+                  <span className="text-xs text-gray-400">
+                    {wordCount} word{wordCount === 1 ? '' : 's'}
+                  </span>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    )
+  }
+
   const renderReading = reading => (
     <div className="space-y-6">
       {renderSectionTimerCard()}
@@ -4538,6 +4694,9 @@ ${previousLabel} will be permanently locked and you will not be able to return t
                         </div>
                       </div>
                     )}
+
+                    {question.type === 'shortAnswer' &&
+                      renderReadingShortAnswers(reading, question, index)}
 
                     {question.type === 'noteCompletion' &&
                       renderReadingNoteCompletion(reading, question)}
@@ -5367,6 +5526,25 @@ ${previousLabel} will be permanently locked and you will not be able to return t
             })
 
             subIndex++
+          }
+
+          if (question.type === 'shortAnswer') {
+            getReadingShortAnswerItems(question).forEach(item => {
+              const userAnswer = readingAnswers[reading.id]?.[question.id]?.[item.id]
+              const maxWords = getReadingShortAnswerWordLimit(question)
+
+              pushItem({
+                prompt: item.question,
+                userAnswer,
+                correctAnswer: item.answer,
+                correct: isReadingShortAnswerCorrect(reading.id, question, item),
+                status: countWords(userAnswer) > maxWords
+                  ? `Word limit exceeded (maximum ${maxWords})`
+                  : null
+              })
+            })
+
+            return
           }
 
           if (question.type === 'matching') {
