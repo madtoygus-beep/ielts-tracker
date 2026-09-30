@@ -917,16 +917,17 @@
       ['mcq', 'fitb', 'tfng', 'table', 'summary', 'note', 'listeningCompletion', 'listeningMatching']
     )
 
+    // Count each active assignment once, even if it has duplicate submissions.
     const readingCompletion = {
-      completed: readingSubmissions.filter(sub =>
-        readings.some(reading => reading.id === sub.readingId)
+      completed: readings.filter(reading =>
+        readingSubmissions.some(sub => sub.readingId === reading.id)
       ).length,
       assigned: readings.length
     }
 
     const listeningCompletion = {
-      completed: listeningSubmissions.filter(sub =>
-        listenings.some(listening => listening.id === sub.listeningId)
+      completed: listenings.filter(listening =>
+        listeningSubmissions.some(sub => sub.listeningId === listening.id)
       ).length,
       assigned: listenings.length
     }
@@ -937,7 +938,15 @@
       readings.length > 0 ||
       listenings.length > 0
 
-    const renderSkillCard = (title, icon, analytics, completion, colorClass) => (
+    const renderSkillCard = (title, icon, analytics, completion, colorClass) => {
+      // These values belong to this skill, not to StudentTodoSummary.
+      const totalAssigned = completion.assigned
+      const completedCount = completion.completed
+      const completionRate = totalAssigned > 0
+        ? Math.round((completedCount / totalAssigned) * 100)
+        : null
+
+      return (
       <div className="bg-white border border-gray-100 rounded-2xl p-6">
         <div className="flex items-center justify-between gap-4 mb-5">
           <div>
@@ -958,17 +967,19 @@
         <div className="bg-purple-50 border border-purple-100 rounded-2xl p-5 mb-5">
           <div className="flex items-center justify-between gap-4 mb-3">
             <div>
-              <p className="text-xs text-purple-500 mb-1">Overall Homework Completion</p>
+              <p className="text-xs text-purple-500 mb-1">{title} Homework Completion</p>
               <p className="text-sm text-gray-600">
                 {completedCount}/{totalAssigned} active assignments completed
               </p>
             </div>
-            <p className="text-3xl font-bold text-purple-600">{completionRate}%</p>
+            <p className="text-3xl font-bold text-purple-600">
+              {completionRate === null ? '--' : `${completionRate}%`}
+            </p>
           </div>
           <div className="w-full bg-white rounded-full h-3 overflow-hidden">
             <div
               className="bg-purple-600 h-3 rounded-full"
-              style={{ width: `${completionRate}%` }}
+              style={{ width: `${completionRate ?? 0}%` }}
             />
           </div>
         </div>
@@ -1064,7 +1075,8 @@
           )}
         </div>
       </div>
-    )
+      )
+    }
 
     if (!hasData) {
       return (
