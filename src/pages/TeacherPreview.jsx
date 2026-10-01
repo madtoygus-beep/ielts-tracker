@@ -617,7 +617,7 @@ function SelectAnswer({
             : `${letters[index]}. ${option}`
 
         return (
-          <option key={`${value}-${index}`} value={value}>
+          <option key={`${value}-${index}`} value={value} disabled={typeof option === 'object' && option.disabled === true}>
             {label}
           </option>
         )
@@ -1899,6 +1899,72 @@ function WritingPreview({
   )
 }
 
+// Repair 07: sectionOrder is a display order, never a new answer key.
+// Legacy records without it keep their first-appearance section order.
+function buildVocabularyDisplayBlocks(source) {
+  const questions = Array.isArray(source) ? source : []
+  const blocks = []
+  const groups = new Map()
+  let currentMcqBlock = null
+
+  questions.forEach((question, index) => {
+    const type = question?.type || 'mcq'
+    const storedOrder = Number(question?.sectionOrder)
+    const explicitOrder = Number.isFinite(storedOrder) && storedOrder > 0
+      ? storedOrder
+      : null
+    const order = explicitOrder ?? index + 1
+
+    if (['match_definition', 'word_bank', 'grammar_form'].includes(type)) {
+      currentMcqBlock = null
+      const blockType = type === 'match_definition'
+        ? 'matching'
+        : type === 'word_bank' ? 'wordBank' : 'grammar'
+      const groupId = type === 'word_bank'
+        ? question.groupId || 'legacy-word-bank'
+        : blockType
+      const key = `${blockType}:${groupId}`
+      let block = groups.get(key)
+
+      if (!block) {
+        block = { key, type: blockType, order, firstIndex: index, questions: [] }
+        if (type === 'word_bank') {
+          block.group = { groupId, questions: block.questions }
+        }
+        groups.set(key, block)
+        blocks.push(block)
+      }
+
+      block.order = Math.min(block.order, order)
+      block.questions.push(question)
+      return
+    }
+
+    const startsNewSection = Boolean(question.sectionTitle?.trim())
+    if (
+      !currentMcqBlock ||
+      startsNewSection ||
+      currentMcqBlock.explicitOrder !== explicitOrder
+    ) {
+      currentMcqBlock = {
+        key: `mcq:${index}`,
+        type: 'mcq',
+        order,
+        explicitOrder,
+        firstIndex: index,
+        title: question.sectionTitle?.trim() ||
+          question.taskTitle?.trim() || 'Vocabulary Multiple Choice',
+        questions: []
+      }
+      blocks.push(currentMcqBlock)
+    }
+
+    currentMcqBlock.questions.push(question)
+  })
+
+  return blocks.sort((a, b) => a.order - b.order || a.firstIndex - b.firstIndex)
+}
+
 function VocabularyPreview({
   test,
   answerPrefix,
@@ -1906,10 +1972,21 @@ function VocabularyPreview({
   setAnswer,
   showAnswers
 }) {
-  const questions = toArray(test?.questions)
-  const matchingQuestions = questions.filter(
+  const questions = buildVocabularyDisplayBlocks(test?.questions)
+    .flatMap(block => block.questions)
+  // Keep the original matching array for the existing deterministic shuffle.
+  const matchingQuestions = toArray(test?.questions).filter(
     question => question?.type === 'match_definition'
   )
+  const hash = Array.from(test?.id || test?.title || 'vocabulary').reduce(
+    (value, character) => ((value * 31) + character.charCodeAt(0)) >>> 0, 7
+  )
+  const shift = test?.matchingShuffle === true && matchingQuestions.length > 1
+    ? (hash % (matchingQuestions.length - 1)) + 1
+    : 0
+  const matchingDefinitions = [
+    ...matchingQuestions.slice(shift), ...matchingQuestions.slice(0, shift)
+  ]
 
   const parseWordBank = value =>
     (value || '')
@@ -1924,9 +2001,17 @@ function VocabularyPreview({
         const type = question?.type || 'mcq'
 
         if (type === 'match_definition') {
+          const definitionIndex = matchingQuestions.findIndex(item => item.id === question.id)
+          const definitionQuestion = matchingDefinitions[definitionIndex] || question
+          const selectedWord = answers[fieldKey] || ''
+          const usedElsewhere = new Set(matchingQuestions
+            .map((item, itemIndex) => `${answerPrefix}:${item.id || itemIndex}`)
+            .filter(key => key !== fieldKey)
+            .map(key => answers[key]).filter(Boolean))
           const wordOptions = matchingQuestions.map(item => ({
             value: item.id,
-            label: item.word || item.question || 'Word'
+            disabled: usedElsewhere.has(item.id),
+            label: `${item.word || item.question || 'Word'}${usedElsewhere.has(item.id) ? ' - Used' : ''}`
           }))
 
           return (
@@ -1949,19 +2034,21 @@ function VocabularyPreview({
               )}
 
               <p className="text-sm text-gray-800 mb-3">
-                {question.definition || getQuestionText(question)}
+                {definitionQuestion.definition || getQuestionText(definitionQuestion)}
               </p>
 
               <SelectAnswer
-                value={answers[fieldKey]}
-                onChange={value => setAnswer(fieldKey, value)}
+                value={selectedWord}
+                onChange={value => {
+                  if (!value || !usedElsewhere.has(value)) setAnswer(fieldKey, value)
+                }}
                 options={wordOptions}
                 placeholder="Choose the matching word"
               />
 
               {showAnswers && (
                 <AnswerBadge>
-                  {question.word || question.question || 'Not set'}
+                  {definitionQuestion.word || definitionQuestion.question || 'Not set'}
                 </AnswerBadge>
               )}
             </QuestionShell>

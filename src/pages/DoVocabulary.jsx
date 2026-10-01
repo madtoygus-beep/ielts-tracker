@@ -5,7 +5,8 @@ import {
   collection,
   doc,
   getDoc,
-  getDocs,
+  getDocsFromServer,
+  getDocFromServer,
   query,
   where,
   setDoc,
@@ -153,7 +154,7 @@ function isTypedAnswerCorrect(userAnswer, answer, acceptedAnswers = '') {
 
 function parseWordBank(value) {
   return (value || '')
-    .split(/\n|,|\u2013|-/)
+    .split(/\r?\n|,|\s+[-\u2013\u2014]\s+/)
     .map(item => item.trim())
     .filter(Boolean)
 }
@@ -176,6 +177,83 @@ function stableHash(value) {
   )
 }
 
+// Repair 07: sectionOrder is a display order, never a new answer key.
+// Legacy records without it keep their first-appearance section order.
+function buildVocabularyDisplayBlocks(source) {
+  const questions = Array.isArray(source) ? source : []
+  const blocks = []
+  const groups = new Map()
+  let currentMcqBlock = null
+
+  questions.forEach((question, index) => {
+    const type = question?.type || 'mcq'
+    const storedOrder = Number(question?.sectionOrder)
+    const explicitOrder = Number.isFinite(storedOrder) && storedOrder > 0
+      ? storedOrder
+      : null
+    const order = explicitOrder ?? index + 1
+
+    if (['match_definition', 'word_bank', 'grammar_form'].includes(type)) {
+      currentMcqBlock = null
+      const blockType = type === 'match_definition'
+        ? 'matching'
+        : type === 'word_bank' ? 'wordBank' : 'grammar'
+      const groupId = type === 'word_bank'
+        ? question.groupId || 'legacy-word-bank'
+        : blockType
+      const key = `${blockType}:${groupId}`
+      let block = groups.get(key)
+
+      if (!block) {
+        block = { key, type: blockType, order, firstIndex: index, questions: [] }
+        if (type === 'word_bank') {
+          block.group = { groupId, questions: block.questions }
+        }
+        groups.set(key, block)
+        blocks.push(block)
+      }
+
+      block.order = Math.min(block.order, order)
+      block.questions.push(question)
+      return
+    }
+
+    const startsNewSection = Boolean(question.sectionTitle?.trim())
+    if (
+      !currentMcqBlock ||
+      startsNewSection ||
+      currentMcqBlock.explicitOrder !== explicitOrder
+    ) {
+      currentMcqBlock = {
+        key: `mcq:${index}`,
+        type: 'mcq',
+        order,
+        explicitOrder,
+        firstIndex: index,
+        title: question.sectionTitle?.trim() ||
+          question.taskTitle?.trim() || 'Vocabulary Multiple Choice',
+        questions: []
+      }
+      blocks.push(currentMcqBlock)
+    }
+
+    currentMcqBlock.questions.push(question)
+  })
+
+  return blocks.sort((a, b) => a.order - b.order || a.firstIndex - b.firstIndex)
+}
+
+function getMatchingLetter(index) {
+  let value = index + 1
+  let label = ''
+  while (value > 0) {
+    value -= 1
+    label = String.fromCharCode(65 + (value % 26)) + label
+    value = Math.floor(value / 26)
+  }
+  return label
+}
+
 function normalizeMultilineText(value) {
   return (value || '').replace(/\\n/g, '\n')
 }
@@ -195,12 +273,56 @@ export default function DoVocabulary() {
   const [result, setResult] = useState(null)
   const [draftSaving, setDraftSaving] = useState(false)
   const [draftRestored, setDraftRestored] = useState(false)
+  const [matchingReviewVersion, setMatchingReviewVersion] = useState(1)
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState('')
+  const [reloadCount, setReloadCount] = useState(0)
+  const [operationError, setOperationError] = useState('')
+  const [operationSlow, setOperationSlow] = useState(false)
+  const [timerVersion, setTimerVersion] = useState(0)
 
   const timerRef = useRef(null)
   const submittingRef = useRef(false)
+  const draftSavingRef = useRef(false)
+  const readyRef = useRef(false)
+  const submittedRef = useRef(false)
+  const autoSubmitAttemptedRef = useRef(false)
+  const sessionRef = useRef(0)
+  const routeIdRef = useRef(id)
+  routeIdRef.current = id
 
   useEffect(() => {
+    let active = true
+    readyRef.current = false
+    setLoading(true)
+    setLoadError('')
+
     const unsub = onAuthStateChanged(auth, async currentUser => {
+      const generation = ++sessionRef.current
+      const isCurrent = () => active && generation === sessionRef.current &&
+        routeIdRef.current === id
+
+      clearInterval(timerRef.current)
+      readyRef.current = false
+      submittedRef.current = false
+      submittingRef.current = false
+      draftSavingRef.current = false
+      autoSubmitAttemptedRef.current = false
+      setUser(null)
+      setProfile(null)
+      setTest(null)
+      setAnswers({})
+      setTimeLeft(null)
+      setResult(null)
+      setSubmitted(false)
+      setAlreadyDone(false)
+      setSubmitting(false)
+      setDraftSaving(false)
+      setDraftRestored(false)
+      setMatchingReviewVersion(1)
+      setOperationError('')
+      setLoadError('')
+      setLoading(true)
       if (!currentUser) {
         navigate('/login')
         return
@@ -208,6 +330,8 @@ export default function DoVocabulary() {
 
       try {
         const profileSnap = await getDoc(doc(db, 'users', currentUser.uid))
+
+        if (!isCurrent()) return
 
         if (!profileSnap.exists()) {
           await signOut(auth)
@@ -230,7 +354,9 @@ export default function DoVocabulary() {
         setUser(currentUser)
         setProfile(loadedProfile)
 
-        const testSnap = await getDoc(doc(db, 'vocabularyTests', id))
+        const testSnap = await getDocFromServer(doc(db, 'vocabularyTests', id))
+
+        if (!isCurrent()) return
 
         if (!testSnap.exists()) {
           alert('Vocabulary test not found.')
@@ -266,7 +392,9 @@ export default function DoVocabulary() {
           where('uid', '==', currentUser.uid)
         )
 
-        const existingSnap = await getDocs(existingQuery)
+        const existingSnap = await getDocsFromServer(existingQuery)
+
+        if (!isCurrent()) return
 
         const submissions = existingSnap.docs
           .map(item => item.data())
@@ -279,13 +407,15 @@ export default function DoVocabulary() {
         if (submissions.length > 0) {
           const submission = submissions[0]
 
+          submittedRef.current = true
           setAlreadyDone(true)
+          setMatchingReviewVersion(submission.matchingViewVersion === 1 ? 1 : 0)
           setAnswers(submission.answers || {})
           setResult(submission.result || null)
           setSubmitted(true)
         } else {
           try {
-            const draftSnap = await getDoc(
+            const draftSnap = await getDocFromServer(
               doc(
                 db,
                 'vocabularyDrafts',
@@ -293,33 +423,57 @@ export default function DoVocabulary() {
               )
             )
 
+            if (!isCurrent()) return
+
             if (draftSnap.exists()) {
               const draft = draftSnap.data()
 
-              setAnswers(draft.answers || {})
+              if (
+                draft.uid !== currentUser.uid ||
+                draft.studentId !== currentUser.uid ||
+                draft.vocabularyTestId !== id
+              ) {
+                throw new Error('The saved progress does not belong to this practice.')
+              }
+
+              setAnswers(draft.answers && typeof draft.answers === 'object' &&
+                !Array.isArray(draft.answers) ? draft.answers : {})
               setTimeLeft(
-                Number.isFinite(Number(draft.timeLeft))
-                  ? Math.max(Number(draft.timeLeft), 0)
+                draft.timeLeft !== null && draft.timeLeft !== '' &&
+                  Number.isFinite(Number(draft.timeLeft))
+                  ? Math.min(Math.max(Number(draft.timeLeft), 0), (data.timeLimit || 20) * 60)
                   : (data.timeLimit || 20) * 60
               )
               setDraftRestored(true)
             }
           } catch (draftError) {
-            console.warn(
-              'Could not restore vocabulary draft:',
-              draftError
+            console.warn('Could not restore vocabulary draft:', draftError)
+            // Never turn a failed draft read into a fresh blank attempt.
+            throw new Error(
+              'Saved progress could not be checked. Your saved answers have not been overwritten. Check your connection and permissions, then retry.'
             )
           }
         }
+        if (!isCurrent()) return
+        readyRef.current = true
+        setLoading(false)
       } catch (error) {
         console.error(error)
-        alert('Could not load vocabulary test.')
-        navigate('/student')
+        if (!isCurrent()) return
+        readyRef.current = false
+        setLoadError(error?.message || 'Could not load vocabulary practice.')
+        setLoading(false)
       }
     })
 
-    return unsub
-  }, [id, navigate])
+    return () => {
+      active = false
+      sessionRef.current += 1
+      readyRef.current = false
+      clearInterval(timerRef.current)
+      unsub()
+    }
+  }, [id, navigate, reloadCount])
 
   const groupedQuestions = useMemo(() => {
     const questions = test?.questions || []
@@ -421,102 +575,17 @@ export default function DoVocabulary() {
       )
   }, [test, wordBankGroups])
 
-  // Preserve the exact question order saved by the creator.
-  // Do not regroup all MCQs into one block because a vocabulary practice
-  // can contain more than one MCQ section (for example Q7-11 and Q21-25).
-  const orderedQuestions = useMemo(
-    () => Array.isArray(test?.questions) ? test.questions : [],
+  // Repair 07: use the same saved section order for display and numbering.
+  // Answer IDs and the raw matchingDefinitionOrder below remain unchanged.
+  const displayBlocks = useMemo(
+    () => buildVocabularyDisplayBlocks(test?.questions),
     [test]
   )
 
-  const displayBlocks = useMemo(() => {
-    const sourceQuestions = Array.isArray(test?.questions)
-      ? test.questions
-      : []
-
-    const blocks = []
-    const emittedWordBankGroups = new Set()
-    let currentMcqBlock = null
-    let matchingAdded = false
-    let grammarAdded = false
-    let mcqBlockIndex = 0
-
-    sourceQuestions.forEach(question => {
-      const questionType = getQuestionType(question)
-
-      if (questionType === 'word_bank') {
-        currentMcqBlock = null
-
-        const groupId = question.groupId || 'legacy-word-bank'
-        if (emittedWordBankGroups.has(groupId)) return
-
-        emittedWordBankGroups.add(groupId)
-
-        const group = wordBankGroups.find(item => item.groupId === groupId)
-        if (group) {
-          blocks.push({
-            key: `wordBank:${groupId}`,
-            type: 'wordBank',
-            group
-          })
-        }
-
-        return
-      }
-
-      if (questionType === 'match_definition') {
-        currentMcqBlock = null
-
-        if (!matchingAdded) {
-          matchingAdded = true
-          blocks.push({
-            key: 'matching',
-            type: 'matching'
-          })
-        }
-
-        return
-      }
-
-      if (questionType === 'grammar_form') {
-        currentMcqBlock = null
-
-        if (!grammarAdded) {
-          grammarAdded = true
-          blocks.push({
-            key: 'grammar',
-            type: 'grammar'
-          })
-        }
-
-        return
-      }
-
-      // MCQ sections are intentionally split whenever a new section title
-      // appears, or whenever MCQs restart after another task type.
-      const startsNewSection = Boolean(question.sectionTitle?.trim())
-
-      if (!currentMcqBlock || startsNewSection) {
-        mcqBlockIndex += 1
-
-        currentMcqBlock = {
-          key: `mcq:${mcqBlockIndex}`,
-          type: 'mcq',
-          title:
-            question.sectionTitle?.trim() ||
-            question.taskTitle?.trim() ||
-            'Vocabulary Multiple Choice',
-          questions: []
-        }
-
-        blocks.push(currentMcqBlock)
-      }
-
-      currentMcqBlock.questions.push(question)
-    })
-
-    return blocks
-  }, [test, wordBankGroups])
+  const orderedQuestions = useMemo(
+    () => displayBlocks.flatMap(block => block.questions),
+    [displayBlocks]
+  )
 
   const matchingDefinitionOrder = useMemo(() => {
     const items = groupedQuestions.matching
@@ -546,19 +615,53 @@ export default function DoVocabulary() {
   }
 
   useEffect(() => {
-    if (timeLeft === null || submitted) return
+    if (loading || loadError || !readyRef.current || timeLeft === null ||
+      submitted || alreadyDone || draftSaving || submitting) return
 
     if (timeLeft <= 0) {
-      handleSubmit(true)
+      if (!autoSubmitAttemptedRef.current) {
+        autoSubmitAttemptedRef.current = true
+        handleSubmit(true)
+      }
       return
     }
 
+    const deadline = Date.now() + timeLeft * 1000
     timerRef.current = setInterval(() => {
-      setTimeLeft(prev => Math.max(prev - 1, 0))
+      if (draftSavingRef.current || submittingRef.current || !readyRef.current) return
+      setTimeLeft(Math.max(0, Math.ceil((deadline - Date.now()) / 1000)))
     }, 1000)
 
     return () => clearInterval(timerRef.current)
-  }, [timeLeft, submitted])
+  }, [timeLeft, submitted, alreadyDone, loading, loadError, draftSaving, submitting, timerVersion])
+
+  useEffect(() => {
+    setOperationSlow(false)
+    if (!draftSaving && !submitting) return
+    // A pending Firestore write is not a confirmed save. Do not race it with
+    // a second write or tell the student it succeeded while disconnected.
+    const timeout = setTimeout(() => setOperationSlow(true), 12000)
+    return () => clearTimeout(timeout)
+  }, [draftSaving, submitting])
+
+  useEffect(() => {
+    const warnBeforeLeaving = event => {
+      if (!readyRef.current || submittedRef.current) return
+      if (!Object.keys(answers).length && !draftSaving && !submitting) return
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', warnBeforeLeaving)
+    return () => window.removeEventListener('beforeunload', warnBeforeLeaving)
+  }, [answers, draftSaving, submitting])
+
+  const answersLocked = loading || Boolean(loadError) || submitted || alreadyDone ||
+    draftSaving || submitting || timeLeft === null || timeLeft <= 0
+
+  const cannotEditAnswers = () => answersLocked || !readyRef.current ||
+    draftSavingRef.current || submittingRef.current || submittedRef.current ||
+    routeIdRef.current !== id
+
 
   const formatTime = secs => {
     const safeSeconds = Math.max(Number(secs) || 0, 0)
@@ -569,6 +672,7 @@ export default function DoVocabulary() {
   }
 
   const handleAnswer = (questionId, value) => {
+    if (cannotEditAnswers()) return
     setAnswers(prev => ({
       ...prev,
       [answerKey(questionId)]: value
@@ -576,7 +680,7 @@ export default function DoVocabulary() {
   }
 
   const getWordSelectedForDefinition = definitionIndex => {
-    const definitionLetter = letters[definitionIndex]
+    const definitionLetter = getMatchingLetter(definitionIndex)
 
     return groupedQuestions.matching.find(
       question =>
@@ -598,7 +702,12 @@ export default function DoVocabulary() {
     definitionIndex,
     selectedQuestionId
   ) => {
-    const definitionLetter = letters[definitionIndex]
+    if (cannotEditAnswers()) return
+    const definitionLetter = getMatchingLetter(definitionIndex)
+    if (!matchingDefinitionOrder[definitionIndex]) return
+    if (selectedQuestionId && !groupedQuestions.matching.some(
+      question => question.id === selectedQuestionId
+    )) return
 
     setAnswers(prev => {
       const next = { ...prev }
@@ -622,7 +731,9 @@ export default function DoVocabulary() {
     const selected = answers[answerKey(question.id)]
 
     if (type === 'match_definition') {
-      const selectedIndex = letters.indexOf(selected)
+      const selectedIndex = matchingDefinitionOrder.findIndex(
+        (_, index) => getMatchingLetter(index) === selected
+      )
 
       if (selectedIndex < 0) return false
 
@@ -637,7 +748,8 @@ export default function DoVocabulary() {
       )
     }
 
-    return selected === question.answer
+    return Boolean(normalizeValue(selected)) && Boolean(normalizeValue(question.answer)) &&
+      selected === question.answer
   }
 
   const calculateScore = () => {
@@ -664,73 +776,81 @@ export default function DoVocabulary() {
   }
 
   const handleSaveAndContinueLater = async () => {
-    if (
-      !test ||
-      !user ||
-      submitted ||
-      alreadyDone ||
-      draftSaving
-    ) return
+    if (!test || !user || cannotEditAnswers()) return
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      setOperationError('You are offline. Reconnect before saving. Your answers are still on this page.')
+      return
+    }
 
+    const generation = sessionRef.current
+    const isCurrent = () => generation === sessionRef.current && routeIdRef.current === id
+    draftSavingRef.current = true
     setDraftSaving(true)
+    setOperationError('')
     clearInterval(timerRef.current)
 
     const submissionTeacherIds = getSourceTeacherIds(test)
+    const payload = {
+      uid: user.uid,
+      studentId: user.uid,
+      studentEmail: user.email || profile?.email || '',
+      studentName: profile?.name || profile?.fullName || user.email || '',
+      vocabularyTestId: id,
+      vocabularyId: id,
+      testId: id,
+      homeworkId: id,
+      vocabularyTitle: test.title || '',
+      teacherId: submissionTeacherIds[0] || '',
+      teacherIds: submissionTeacherIds,
+      schoolId: test.schoolId || profile?.schoolId || 'maxima',
+      answers: { ...answers },
+      timeLeft: Math.max(Number(timeLeft) || 0, 0),
+      updatedAt: new Date().toISOString()
+    }
 
     try {
       await setDoc(
-        doc(
-          db,
-          'vocabularyDrafts',
-          `${user.uid}_${id}`
-        ),
-        {
-          uid: user.uid,
-          studentId: user.uid,
-          studentEmail: user.email || profile?.email || '',
-          studentName:
-            profile?.name ||
-            profile?.fullName ||
-            user.email ||
-            '',
-          vocabularyTestId: id,
-          vocabularyId: id,
-          testId: id,
-          homeworkId: id,
-          vocabularyTitle: test.title || '',
-          teacherId: submissionTeacherIds[0] || '',
-          teacherIds: submissionTeacherIds,
-          schoolId:
-            test.schoolId ||
-            profile?.schoolId ||
-            'maxima',
-          answers,
-          timeLeft: Math.max(Number(timeLeft) || 0, 0),
-          updatedAt: new Date().toISOString()
-        },
-        { merge: true }
+        doc(db, 'vocabularyDrafts', `${user.uid}_${id}`),
+        payload,
+        // Replace the entire answers map, including deleted/blank choices.
+        // Preserve any other top-level metadata not owned by this screen.
+        { mergeFields: Object.keys(payload) }
       )
-
+      if (!isCurrent()) return
+      readyRef.current = false
       navigate('/student')
     } catch (error) {
       console.error(error)
-      alert(
-        'Could not save your progress. Please try again.'
-      )
+      if (!isCurrent()) return
+      draftSavingRef.current = false
       setDraftSaving(false)
+      // Restart even if a fast rejection batches saving=true/false together.
+      setTimerVersion(version => version + 1)
+      setOperationError(
+        'Could not save your progress. Your answers are still here and the timer will continue. Check your connection or permissions and try again.'
+      )
     }
   }
 
   const handleSubmit = async (autoSubmit = false) => {
-    if (submittingRef.current || submitted || alreadyDone || !test || !user) return
+    if (submittingRef.current || draftSavingRef.current || submittedRef.current ||
+      submitted || alreadyDone || loading || loadError || !readyRef.current ||
+      routeIdRef.current !== id || !test || !user) return
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      setOperationError('You are offline. Reconnect and click Submit answers to retry. Your answers have not been submitted.')
+      return
+    }
 
     if (!autoSubmit) {
       const ok = window.confirm('Submit your vocabulary practice? You cannot retake it after submitting.')
       if (!ok) return
     }
 
+    const generation = sessionRef.current
+    const isCurrent = () => generation === sessionRef.current && routeIdRef.current === id
     submittingRef.current = true
     setSubmitting(true)
+    setOperationError('')
 
     clearInterval(timerRef.current)
 
@@ -748,6 +868,7 @@ export default function DoVocabulary() {
         testId: id,
         homeworkId: id,
         vocabularyTitle: test.title || '',
+        matchingViewVersion: 1,
         teacherId: submissionTeacherIds[0] || '',
         teacherIds: submissionTeacherIds,
         schoolId: test.schoolId || profile?.schoolId || 'maxima',
@@ -759,29 +880,26 @@ export default function DoVocabulary() {
         autoSubmitted: autoSubmit
       })
 
-      try {
-        await deleteDoc(
-          doc(
-            db,
-            'vocabularyDrafts',
-            `${user.uid}_${id}`
-          )
-        )
-      } catch (draftCleanupError) {
-        console.warn(
-          'Could not delete vocabulary draft after submit:',
-          draftCleanupError
-        )
-      }
+      // The submission is already durable. Draft cleanup is best-effort and
+      // must not turn a successful submission into an apparent failure.
+      void deleteDoc(doc(db, 'vocabularyDrafts', `${user.uid}_${id}`))
+        .catch(error => console.warn('Could not remove the submitted draft:', error))
 
+      if (!isCurrent()) return
+      submittedRef.current = true
       setResult(res)
       setSubmitted(true)
       setDraftRestored(false)
+      setSubmitting(false)
     } catch (error) {
       console.error(error)
-      alert('Could not submit your vocabulary practice. Please try again.')
+      if (!isCurrent()) return
       submittingRef.current = false
       setSubmitting(false)
+      setTimerVersion(version => version + 1)
+      setOperationError(
+        'Could not submit your vocabulary practice. Your answers are still here. Please click Submit answers to retry.'
+      )
     }
   }
 
@@ -796,7 +914,9 @@ export default function DoVocabulary() {
 
     if (type === 'match_definition') {
       if (!selected) return 'No answer'
-      const selectedIndex = letters.indexOf(selected)
+      const selectedIndex = matchingDefinitionOrder.findIndex(
+        (_, index) => getMatchingLetter(index) === selected
+      )
       const definition =
         matchingDefinitionOrder[selectedIndex]?.definition || ''
 
@@ -1138,6 +1258,21 @@ export default function DoVocabulary() {
     )
   }
 
+  const getDefinitionReview = question => {
+    if (matchingReviewVersion !== 1 || getQuestionType(question) !== 'match_definition') return null
+    const index = groupedQuestions.matching.findIndex(item => item.id === question.id)
+    const definition = matchingDefinitionOrder[index]
+    if (!definition) return null
+    const selectedId = getWordSelectedForDefinition(index)
+    const word = groupedQuestions.matching.find(item => item.id === selectedId)
+    return {
+      correct: Boolean(word && word.id === definition.id),
+      prompt: definition.definition || '',
+      studentAnswer: word ? word.word || word.question : 'No answer',
+      correctAnswer: definition.word || definition.question || ''
+    }
+  }
+
   const reviewGroups = () => {
     return displayBlocks.map(section => {
       if (section.type === 'matching') {
@@ -1173,10 +1308,39 @@ export default function DoVocabulary() {
     })
   }
 
-  if (!test) {
+  if (loadError) {
+    return (
+      <div className="min-h-screen bg-[#faf9f6] flex items-center justify-center px-6">
+        <div className="bg-white border border-red-100 rounded-2xl p-6 max-w-lg">
+          <h1 className="font-semibold text-gray-900 mb-3">Practice could not be loaded</h1>
+          <p role="alert" className="text-sm text-red-600 mb-5">{loadError}</p>
+          <div className="flex gap-3">
+            <button type="button" onClick={() => setReloadCount(count => count + 1)}
+              className="bg-purple-600 text-white rounded-xl px-4 py-2 text-sm">Retry</button>
+            <button type="button" onClick={() => navigate('/student')}
+              className="bg-gray-100 rounded-xl px-4 py-2 text-sm">Back to dashboard</button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  if (loading || !test || test.id !== id) {
     return (
       <div className="min-h-screen bg-[#faf9f6] flex items-center justify-center">
         <p className="text-gray-400">Loading...</p>
+      </div>
+    )
+  }
+
+  if (submitted && !result) {
+    return (
+      <div className="min-h-screen bg-[#faf9f6] flex items-center justify-center px-6">
+        <div className="bg-white rounded-2xl p-6 max-w-lg text-center">
+          <p className="text-gray-800 mb-4">This practice has already been submitted. Its saved score is unavailable. Please contact your teacher.</p>
+          <button type="button" onClick={() => navigate('/student')}
+            className="bg-purple-600 text-white px-4 py-2 rounded-xl">Back to dashboard</button>
+        </div>
       </div>
     )
   }
@@ -1212,13 +1376,14 @@ export default function DoVocabulary() {
           </div>
 
           <div className="space-y-6">
-            {reviewGroups().map(([groupTitle, items]) => (
-              <div key={groupTitle} className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm">
+            {reviewGroups().map(([groupTitle, items], groupIndex) => (
+              <div key={displayBlocks[groupIndex].key} className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm">
                 <h2 className="font-semibold text-gray-800 mb-5">{groupTitle}</h2>
 
                 <div className="flex flex-col gap-4">
                   {items.map((question, index) => {
-                    const correct = isCorrect(question)
+                    const definitionReview = getDefinitionReview(question)
+                    const correct = definitionReview ? definitionReview.correct : isCorrect(question)
 
                     return (
                       <div
@@ -1241,19 +1406,19 @@ export default function DoVocabulary() {
                         )}
 
                         <p className="text-sm font-medium text-gray-800 mb-4">
-                          {getQuestionPrompt(question)}
+                          {definitionReview ? definitionReview.prompt : getQuestionPrompt(question)}
                         </p>
 
                         <p className="text-xs text-gray-500 mb-1">Your answer:</p>
                         <p className="text-sm text-gray-800 mb-3">
-                          {getStudentAnswerText(question, index)}
+                          {definitionReview ? definitionReview.studentAnswer : getStudentAnswerText(question, index)}
                         </p>
 
                         {!correct && (
                           <>
                             <p className="text-xs text-gray-500 mb-1">Correct answer:</p>
                             <p className="text-sm font-medium text-green-700">
-                              {getCorrectAnswerText(question, index)}
+                              {definitionReview ? definitionReview.correctAnswer : getCorrectAnswerText(question, index)}
                             </p>
                           </>
                         )}
@@ -1319,7 +1484,21 @@ export default function DoVocabulary() {
           )}
         </div>
 
-        <div className="space-y-6">
+        {operationError && (
+          <p role="alert" className="bg-red-50 border border-red-100 text-red-700 rounded-xl p-4 mb-5 text-sm">
+            {operationError}
+          </p>
+        )}
+        {operationSlow && (draftSaving || submitting) && (
+          <p role="status" className="bg-amber-50 text-amber-800 rounded-xl p-4 mb-5 text-sm">
+            Waiting for the server to confirm. Keep this page open and check your connection. This operation has not been confirmed yet.
+          </p>
+        )}
+        {timeLeft <= 0 && !submitting && (
+          <p className="text-sm text-red-600 mb-4">Time has finished. Answers are locked; Submit answers remains available if a retry is needed.</p>
+        )}
+
+        <fieldset disabled={answersLocked} className="min-w-0 space-y-6">
           {displayBlocks.map(section => {
             if (section.type === 'matching') {
               return (
@@ -1351,7 +1530,7 @@ export default function DoVocabulary() {
               </div>
             )
           })}
-        </div>
+        </fieldset>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-8">
           <button

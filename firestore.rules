@@ -487,6 +487,13 @@ service cloud.firestore {
       allow read: if isAdmin()
         || (
           isStudent()
+          && request.method == 'get'
+          && draftId.size() > request.auth.uid.size() + 1
+          && draftId[0:request.auth.uid.size() + 1] == request.auth.uid + '_'
+          && !exists(/databases/$(database)/documents/vocabularyDrafts/$(draftId))
+        )
+        || (
+          isStudent()
           && resource.data.get('uid', '') == request.auth.uid
           && resource.data.get('studentId', '') == request.auth.uid
           && draftId == request.auth.uid + '_' + resource.data.get('vocabularyTestId', '')
