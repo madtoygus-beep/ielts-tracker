@@ -13,7 +13,7 @@ service firebase.storage {
     function isApprovedUser() {
       return isAuth()
         && userDoc().data.status == 'approved'
-        && userDoc().data.deleted != true;
+        && userDoc().data.get('deleted', false) != true;
     }
 
     function isAdmin() {
@@ -40,18 +40,28 @@ service firebase.storage {
         && request.resource.contentType.matches('audio/.*');
     }
 
-    function isMaterialFile() {
+    function isMaterialFile(fileName) {
+      // An absent browser MIME type must not allow arbitrary executables.
+      // Existing stored files are not rewritten and remain readable.
       return request.resource != null
         && (
-          request.resource.contentType.matches('application/pdf')
-          || request.resource.contentType.matches('image/.*')
-          || request.resource.contentType.matches('text/plain')
-          || request.resource.contentType.matches('application/msword')
-          || request.resource.contentType.matches('application/vnd.openxmlformats-officedocument.wordprocessingml.document')
-          || request.resource.contentType.matches('application/vnd.ms-powerpoint')
-          || request.resource.contentType.matches('application/vnd.openxmlformats-officedocument.presentationml.presentation')
-          || request.resource.contentType.matches('application/octet-stream')
+          request.resource.contentType in [
+            'application/pdf', 'image/jpeg', 'image/png', 'image/webp',
+            'text/plain', 'application/msword',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'application/vnd.ms-powerpoint',
+            'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+          ]
+          || (
+            request.resource.contentType == 'application/octet-stream'
+            && fileName.lower().matches('.*[.](pdf|doc|docx|ppt|pptx|png|jpg|jpeg|webp|txt)')
+          )
         );
+    }
+
+    function isMapImageFile() {
+      return request.resource != null
+        && request.resource.contentType in ['image/jpeg', 'image/png', 'image/webp'];
     }
 
     function materialDoc(materialId) {
@@ -76,19 +86,37 @@ service firebase.storage {
       );
     }
 
+    // Repair 08A: matches the existing CreateListening upload path.
+    match /listening-map-images/{ownerId}/{fileName} {
+      // Preserve the same approved-user asset policy as listening audio.
+      allow read: if isApprovedUser();
+
+      allow create, update: if request.resource != null
+        && isTeacherOrAdmin()
+        && request.auth.uid == ownerId
+        && isMapImageFile()
+        && request.resource.size > 0
+        && request.resource.size <= 8 * 1024 * 1024;
+
+      allow delete: if isAdmin()
+        || (isTeacher() && request.auth.uid == ownerId);
+    }
+
     match /materials/{ownerId}/{materialId}/{fileName} {
       allow read: if isAdmin()
         || (isTeacher() && request.auth.uid == ownerId)
         || (
           isStudent()
           && materialDoc(materialId).data.get('recipientIds', []).hasAny([request.auth.uid])
+          && materialDoc(materialId).data.get('storagePath', '') ==
+            'materials/' + ownerId + '/' + materialId + '/' + fileName
         );
 
       allow write: if (
         request.resource != null
         && isTeacherOrAdmin()
         && request.auth.uid == ownerId
-        && isMaterialFile()
+        && isMaterialFile(fileName)
         && request.resource.size <= 25 * 1024 * 1024
       ) || (
         request.resource == null

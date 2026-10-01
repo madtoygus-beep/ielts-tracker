@@ -17,7 +17,7 @@ service cloud.firestore {
     function isApprovedUser() {
       return isAuth()
         && userDoc(request.auth.uid).data.status == 'approved'
-        && userDoc(request.auth.uid).data.deleted != true;
+        && userDoc(request.auth.uid).data.get('deleted', false) != true;
     }
 
     function isAdmin() {
@@ -120,7 +120,10 @@ service cloud.firestore {
     }
 
     function privilegedFieldsUnchanged() {
-      return request.resource.data.role == resource.data.role
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'name', 'fullName', 'updatedAt'
+        ])
+        && request.resource.data.role == resource.data.role
         && request.resource.data.status == resource.data.status
         && request.resource.data.get('deleted', false) == resource.data.get('deleted', false)
         && request.resource.data.get('requestedRole', null) == resource.data.get('requestedRole', null)
@@ -155,9 +158,16 @@ service cloud.firestore {
         && schoolIdOf(data) == schoolIdOf(parentData)
         && schoolIdOf(parentData) == currentSchoolId()
         && teacherIdsOf(parentData).size() > 0
-        && data.get('teacherIds', []) == teacherIdsOf(parentData)
+        && (
+          data.get('teacherIds', []) == teacherIdsOf(parentData)
+          || data.get('teacherIds', []) == clientTeacherIdsOf(parentData)
+        )
         && data.get('teacherId', '') == teacherIdsOf(parentData)[0]
-        && isAssignedToCurrentUser(parentData);
+        && isAssignedToCurrentUser(parentData)
+        && parentData.get('archived', false) != true
+        && !parentData.get('hiddenFor', []).hasAny([
+          request.auth.uid, request.auth.token.get('email', '')
+        ]);
     }
 
     function teacherListedOn(data) {
@@ -170,6 +180,215 @@ service cloud.firestore {
     }
 
     // ============================================================
+    // REPAIR 08A: INITIAL RECORD VALIDATION (NO DATA MIGRATION)
+    // These checks validate shape and ownership, not answer correctness.
+    // Client-side scoring and random submission IDs remain in this release.
+    // Content reads are unchanged pending the linked-Mock access migration.
+    // ============================================================
+
+    function clientTeacherIdsOf(data) {
+      let teacherId = data.get('teacherId', '');
+      let createdBy = data.get('createdBy', '');
+      return data.get('teacherIds', []).size() > 0
+        ? data.get('teacherIds', [])
+        : teacherId != ''
+          ? (createdBy != '' && createdBy != teacherId
+            ? [teacherId, createdBy] : [teacherId])
+          : (createdBy != '' ? [createdBy] : []);
+    }
+
+    function validSignupFields(data) {
+      return data.keys().hasOnly([
+          'name', 'email', 'role', 'requestedRole', 'status', 'deleted',
+          'createdAt', 'updatedAt'
+        ])
+        && data.get('name', '') is string
+        && data.get('email', '') is string
+        && data.get('email', '') == request.auth.token.get('email', '')
+        && data.get('requestedRole', 'student') in ['student', 'teacher'];
+    }
+
+    function initialSubmissionFields() {
+      return [
+        'uid', 'studentId', 'studentEmail', 'studentName', 'schoolId',
+        'teacherId', 'teacherIds', 'submittedAt', 'finishedLate',
+        'autoSubmitted', 'archived'
+      ];
+    }
+
+    function validInitialSubmissionFields(data, extraFields) {
+      return data.keys().hasOnly(initialSubmissionFields().concat(extraFields))
+        && data.submittedAt is string
+        && data.get('studentEmail', '') is string
+        && data.get('studentName', '') is string
+        && data.get('finishedLate', false) is bool
+        && data.get('autoSubmitted', false) is bool
+        && data.get('archived', false) == false;
+    }
+
+    function validBandOrNull(value) {
+      return value == null || (value is number && value >= 0 && value <= 9);
+    }
+
+    function validBandOrBlank(value) {
+      return value == '' || (value is number && value >= 0 && value <= 9);
+    }
+
+    function validCounts(result) {
+      return result is map
+        && result.correct is int && result.total is int
+        && result.total >= 0 && result.correct >= 0
+        && result.correct <= result.total;
+    }
+
+    function validObjectiveResult(result) {
+      return validCounts(result)
+        && result.keys().hasOnly(['correct', 'total', 'band', 'percentage'])
+        && validBandOrNull(result.get('band', null))
+        && result.get('percentage', 0) is number
+        && result.get('percentage', 0) >= 0
+        && result.get('percentage', 0) <= 100;
+    }
+
+    function validObjectiveSubmission(data, parentField) {
+      return validInitialSubmissionFields(data, [
+          parentField, 'answers', 'result', 'flaggedQuestions',
+          'studentNote', 'highlights'
+        ])
+        && data.answers is map
+        && validObjectiveResult(data.result)
+        && data.get('flaggedQuestions', []) is list
+        && data.get('studentNote', '') is string;
+    }
+
+    function validVocabularySubmission(data) {
+      return validInitialSubmissionFields(data, [
+          'vocabularyTestId', 'vocabularyId', 'testId', 'homeworkId',
+          'vocabularyTitle', 'matchingViewVersion', 'answers', 'result'
+        ])
+        && data.answers is map
+        && validObjectiveResult(data.result)
+        && data.get('vocabularyId', data.vocabularyTestId) == data.vocabularyTestId
+        && data.get('testId', data.vocabularyTestId) == data.vocabularyTestId
+        && data.get('homeworkId', data.vocabularyTestId) == data.vocabularyTestId
+        && data.get('matchingViewVersion', 1) == 1;
+    }
+
+    function validWritingSubmission(data) {
+      return validInitialSubmissionFields(data, [
+          'writingId', 'contentType', 'writingMode', 'task1Enabled',
+          'task2Enabled', 'task1Answer', 'task2Answer', 'task1WordCount',
+          'task2WordCount', 'reviewed', 'review'
+        ])
+        && data.task1Answer is string && data.task2Answer is string
+        && data.task1WordCount is int && data.task1WordCount >= 0
+        && data.task2WordCount is int && data.task2WordCount >= 0
+        && data.get('task1Enabled', true) is bool
+        && data.get('task2Enabled', true) is bool
+        && data.get('reviewed', false) == false
+        && data.get('review', null) == null;
+    }
+
+    function validMockSkillResult(result) {
+      return validCounts(result)
+        && result.keys().hasOnly([
+          'enabled', 'correct', 'total', 'band', 'passages'
+        ])
+        && result.get('enabled', true) is bool
+        && validBandOrNull(result.get('band', null))
+        && result.get('passages', []) is list;
+    }
+
+    function validInitialMockWriting(result) {
+      return result is map
+        && result.keys().hasOnly([
+          'enabled', 'status', 'writingMode', 'task1Enabled', 'task2Enabled',
+          'task1WordCount', 'task2WordCount'
+        ])
+        && result.get('enabled', true) is bool
+        && result.get('status', '') == (result.get('enabled', true)
+          ? 'pending_review' : 'not_included')
+        && result.get('task1Enabled', true) is bool
+        && result.get('task2Enabled', true) is bool
+        && result.task1WordCount is int && result.task1WordCount >= 0
+        && result.task2WordCount is int && result.task2WordCount >= 0;
+    }
+
+    function validInitialMockResult(result) {
+      return result is map
+        && result.keys().hasOnly([
+          'enabledSections', 'listening', 'reading', 'writing', 'overallEstimate'
+        ])
+        && validMockSkillResult(result.listening)
+        && validMockSkillResult(result.reading)
+        && validInitialMockWriting(result.writing)
+        && validBandOrNull(result.get('overallEstimate', null));
+    }
+
+    function validMockSubmission(data) {
+      return validInitialSubmissionFields(data, [
+          'mockTestId', 'title', 'mockType', 'contentType', 'enabledSections',
+          'writingMode', 'task1Enabled', 'task2Enabled', 'sectionTimeLimits',
+          'listeningId', 'listeningIds', 'readingIds', 'writingId',
+          'listeningAnswers', 'readingAnswers', 'writingAnswers', 'result',
+          'tabSwitchCount', 'timing', 'status'
+        ])
+        && data.listeningAnswers is map && data.readingAnswers is map
+        && data.writingAnswers is map
+        && data.writingAnswers.keys().hasOnly(['task1', 'task2'])
+        && data.writingAnswers.get('task1', '') is string
+        && data.writingAnswers.get('task2', '') is string
+        && data.get('status', 'submitted') == 'submitted'
+        && validInitialMockResult(data.result);
+    }
+
+    function validInitialMockScoreFields(data) {
+      return data.keys().hasOnly([
+          'uid', 'studentId', 'studentEmail', 'schoolId', 'teacherId',
+          'teacherIds', 'date', 'source', 'mockTestId', 'listening',
+          'reading', 'writing', 'speaking', 'overall', 'createdAt'
+        ])
+        && data.get('writing', '') == '' && data.get('speaking', '') == ''
+        && validBandOrBlank(data.get('listening', ''))
+        && validBandOrBlank(data.get('reading', ''))
+        && validBandOrBlank(data.get('overall', ''));
+    }
+
+    function validVocabularyDraftFields(data) {
+      // Unknown existing metadata is preserved by Repair 07 mergeFields.
+      // A draft is never accepted as a graded submission.
+      return data.answers is map
+        && data.timeLeft is number && data.timeLeft >= 0
+        && data.updatedAt is string
+        && data.get('vocabularyId', data.vocabularyTestId) == data.vocabularyTestId
+        && data.get('testId', data.vocabularyTestId) == data.vocabularyTestId
+        && data.get('homeworkId', data.vocabularyTestId) == data.vocabularyTestId;
+    }
+
+    function teacherMessageIdentityUnchanged() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+        'senderId', 'teacherId', 'teacherIds', 'schoolId', 'createdAt'
+      ]);
+    }
+
+    function studentAddsOnlyOwnReadReceipt() {
+      let before = resource.data.get('readBy', []);
+      let after = request.resource.data.get('readBy', []);
+      return before is list && after is list
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readBy'])
+        && after.hasAll(before)
+        && after.hasAny([request.auth.uid])
+        && after.toSet().difference(before.toSet()).hasOnly([request.auth.uid])
+        && after.size() == after.toSet().size();
+    }
+
+    function teacherMaterialIdentityUnchanged() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+        'ownerId', 'teacherId', 'teacherIds', 'schoolId', 'storagePath', 'createdAt'
+      ]);
+    }
+
+    // ============================================================
     // USERS
     // ============================================================
 
@@ -177,6 +396,7 @@ service cloud.firestore {
       allow read: if isAdmin() || isOwner(userId) || teacherCanReadUser();
 
       allow create: if isOwner(userId)
+        && validSignupFields(request.resource.data)
         && request.resource.data.status == 'pending'
         && request.resource.data.get('role', null) == null
         && request.resource.data.get('deleted', false) == false;
@@ -236,6 +456,7 @@ service cloud.firestore {
         && data.uid == request.auth.uid
         && data.get('studentId', '') == request.auth.uid
         && data.get('source', '') == 'mock_test'
+        && validInitialMockScoreFields(data)
         && mockForScoreExists(data)
         && validStudentSubmissionBase(
           data,
@@ -296,6 +517,7 @@ service cloud.firestore {
         || (isStudent() && resource.data.uid == request.auth.uid);
 
       allow create: if readingParentExists(request.resource.data)
+        && validObjectiveSubmission(request.resource.data, 'readingId')
         && validStudentSubmissionBase(
           request.resource.data,
           get(/databases/$(database)/documents/readings/$(request.resource.data.readingId)).data
@@ -339,6 +561,7 @@ service cloud.firestore {
         || (isStudent() && resource.data.uid == request.auth.uid);
 
       allow create: if listeningParentExists(request.resource.data)
+        && validObjectiveSubmission(request.resource.data, 'listeningId')
         && validStudentSubmissionBase(
           request.resource.data,
           get(/databases/$(database)/documents/listenings/$(request.resource.data.listeningId)).data
@@ -382,6 +605,7 @@ service cloud.firestore {
         || (isStudent() && resource.data.uid == request.auth.uid);
 
       allow create: if writingParentExists(request.resource.data)
+        && validWritingSubmission(request.resource.data)
         && validStudentSubmissionBase(
           request.resource.data,
           get(/databases/$(database)/documents/writingHomeworks/$(request.resource.data.writingId)).data
@@ -425,6 +649,7 @@ service cloud.firestore {
         || (isStudent() && resource.data.uid == request.auth.uid);
 
       allow create: if mockParentExists(request.resource.data)
+        && validMockSubmission(request.resource.data)
         && validStudentSubmissionBase(
           request.resource.data,
           get(/databases/$(database)/documents/mockTests/$(request.resource.data.mockTestId)).data
@@ -468,6 +693,7 @@ service cloud.firestore {
         || (isStudent() && resource.data.uid == request.auth.uid);
 
       allow create: if vocabularyParentExists(request.resource.data)
+        && validVocabularySubmission(request.resource.data)
         && validStudentSubmissionBase(
           request.resource.data,
           get(/databases/$(database)/documents/vocabularyTests/$(request.resource.data.vocabularyTestId)).data
@@ -510,7 +736,7 @@ service cloud.firestore {
           ).data
         )
         && draftId == request.auth.uid + '_' + request.resource.data.vocabularyTestId
-        && request.resource.data.get('timeLeft', -1) >= 0;
+        && validVocabularyDraftFields(request.resource.data);
 
       // Final submission removes the student's draft.
       allow delete: if isAdmin()
@@ -540,19 +766,17 @@ service cloud.firestore {
         || (
           isTeacher()
           && schoolIdOf(request.resource.data) == currentSchoolId()
+          && request.resource.data.get('senderId', '') == request.auth.uid
           && request.resource.data.get('teacherId', '') == request.auth.uid
-          && request.resource.data.get('teacherIds', []).hasAny([request.auth.uid])
+          && request.resource.data.get('teacherIds', []) == [request.auth.uid]
+          && request.resource.data.get('recipientIds', []) is list
           && request.resource.data.get('recipientIds', []).size() > 0
+          && request.resource.data.get('readBy', []) == []
         );
 
       allow update: if isAdmin()
-        || teacherListedOn(resource.data)
-        || (
-          isMessageRecipient(resource.data)
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readBy'])
-          && request.resource.data.get('readBy', []).hasAll(resource.data.get('readBy', []))
-          && request.resource.data.get('readBy', []).hasAny([request.auth.uid])
-        );
+        || (teacherListedOn(resource.data) && teacherMessageIdentityUnchanged())
+        || (isMessageRecipient(resource.data) && studentAddsOnlyOwnReadReceipt());
 
       allow delete: if isAdmin() || teacherListedOn(resource.data);
     }
@@ -577,12 +801,20 @@ service cloud.firestore {
           && schoolIdOf(request.resource.data) == currentSchoolId()
           && request.resource.data.get('ownerId', '') == request.auth.uid
           && request.resource.data.get('teacherId', '') == request.auth.uid
-          && request.resource.data.get('teacherIds', []).hasAny([request.auth.uid])
+          && request.resource.data.get('teacherIds', []) == [request.auth.uid]
+          && request.resource.data.get('recipientIds', []) is list
           && request.resource.data.get('recipientIds', []).size() > 0
-          && request.resource.data.get('storagePath', '') != ''
+          && request.resource.data.get('storagePath', '') is string
+          && request.resource.data.get('storagePath', '').size() >
+            ('materials/' + request.auth.uid + '/' + materialId + '/').size()
+          && request.resource.data.storagePath[
+            0:('materials/' + request.auth.uid + '/' + materialId + '/').size()
+          ] == 'materials/' + request.auth.uid + '/' + materialId + '/'
         );
 
-      allow update, delete: if isAdmin() || teacherListedOn(resource.data);
+      allow update: if isAdmin()
+        || (teacherListedOn(resource.data) && teacherMaterialIdentityUnchanged());
+      allow delete: if isAdmin() || teacherListedOn(resource.data);
     }
 
   }
