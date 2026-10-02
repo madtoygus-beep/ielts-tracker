@@ -139,6 +139,19 @@ function getHighlightStorageKey(userId, readingId) {
   return `reading-highlights:${userId}:${readingId}`
 }
 
+function getReadingProgressStorageKey(userId, readingId) {
+  return `reading_progress_${readingId}_${userId}`
+}
+
+function getSavedReadingState(storageKey) {
+  try {
+    const saved = localStorage.getItem(storageKey)
+    return saved ? JSON.parse(saved) : null
+  } catch {
+    return null
+  }
+}
+
 function getElementFromNode(node) {
   if (!node) return null
   return node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement
@@ -172,9 +185,14 @@ export default function DoReading() {
 
   const timerRef = useRef(null)
   const submittingRef = useRef(false)
+  const restoredRef = useRef(false)
   const questionRefs = useRef({})
   const highlightMessageTimerRef = useRef(null)
   const navigate = useNavigate()
+
+  const storageKey = user?.uid && id
+    ? getReadingProgressStorageKey(user.uid, id)
+    : null
 
   useEffect(() => {
     let active = true
@@ -191,6 +209,7 @@ export default function DoReading() {
       setSubmitted(false)
       setAlreadyDone(false)
       submittingRef.current = false
+      restoredRef.current = false
       setSubmitting(false)
       setFlaggedQuestions([])
       setStudentNote('')
@@ -342,6 +361,15 @@ export default function DoReading() {
             : locallySavedHighlights
         )
         setSubmitted(true)
+
+        try {
+          localStorage.removeItem(
+            getReadingProgressStorageKey(currentUser.uid, id)
+          )
+        } catch (error) {
+          console.warn('Could not clear saved reading progress:', error)
+        }
+
         return
       }
 
@@ -370,6 +398,85 @@ export default function DoReading() {
       unsub()
     }
   }, [id, navigate])
+
+  useEffect(() => {
+    if (!storageKey || restoredRef.current || !reading) return
+    if (submitted || alreadyDone) return
+
+    const saved = getSavedReadingState(storageKey)
+
+    if (!saved) {
+      restoredRef.current = true
+      return
+    }
+
+    setAnswers(saved.answers || {})
+    setFlaggedQuestions(
+      Array.isArray(saved.flaggedQuestions) ? saved.flaggedQuestions : []
+    )
+    setStudentNote(saved.studentNote || '')
+
+    if (typeof saved.timeLeft === 'number' && Number.isFinite(saved.timeLeft)) {
+      setTimeLeft(Math.max(0, saved.timeLeft))
+    }
+
+    restoredRef.current = true
+  }, [storageKey, reading, submitted, alreadyDone])
+
+  useEffect(() => {
+    if (!storageKey || !reading || submitted || alreadyDone) return
+    if (!restoredRef.current) return
+
+    const timeout = setTimeout(() => {
+      try {
+        localStorage.setItem(
+          storageKey,
+          JSON.stringify({
+            answers,
+            timeLeft,
+            flaggedQuestions,
+            studentNote,
+            updatedAt: new Date().toISOString()
+          })
+        )
+      } catch (error) {
+        console.warn('Could not save reading progress:', error)
+      }
+    }, 300)
+
+    return () => clearTimeout(timeout)
+  }, [
+    storageKey,
+    reading,
+    submitted,
+    alreadyDone,
+    answers,
+    timeLeft,
+    flaggedQuestions,
+    studentNote
+  ])
+
+  useEffect(() => {
+    if (submitted || alreadyDone) return
+
+    const handleBeforeUnload = event => {
+      const hasDraft =
+        Object.keys(answers || {}).length > 0 ||
+        flaggedQuestions.length > 0 ||
+        studentNote.trim().length > 0
+
+      if (!reading || !hasDraft) return
+
+      event.preventDefault()
+      event.returnValue = ''
+    }
+
+    window.addEventListener('beforeunload', handleBeforeUnload)
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload)
+    }
+  }, [submitted, alreadyDone, reading, answers, flaggedQuestions, studentNote])
 
   useEffect(() => {
     if (timeLeft === null || submitted) return
@@ -1468,6 +1575,14 @@ export default function DoReading() {
         }
 
         setAlreadyDone(true)
+      }
+
+      if (storageKey) {
+        try {
+          localStorage.removeItem(storageKey)
+        } catch (error) {
+          console.warn('Could not clear saved reading progress:', error)
+        }
       }
 
       setReading({
