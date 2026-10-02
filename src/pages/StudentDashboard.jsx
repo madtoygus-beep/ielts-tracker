@@ -1,8 +1,9 @@
   import { useState, useEffect } from 'react'
-  import { auth, db, storage } from '../firebase'
+  import { auth, db, functions, storage } from '../firebase'
   import { collection, query, where, onSnapshot, doc, getDoc, updateDoc, arrayUnion } from 'firebase/firestore'
   import { signOut, onAuthStateChanged, updatePassword } from 'firebase/auth'
   import { ref as storageRef, getDownloadURL } from 'firebase/storage'
+  import { httpsCallable } from 'firebase/functions'
   import { useNavigate } from 'react-router-dom'
 
   function uniqueCleanValues(values) {
@@ -839,7 +840,7 @@
       if (!user) return
 
       return listenAssignedCollection(
-        'readings',
+        'studentReadings',
         user,
         profile,
         setReadings,
@@ -873,7 +874,7 @@
       if (!user) return
 
       return listenAssignedCollection(
-        'listenings',
+        'studentListenings',
         user,
         profile,
         setListenings,
@@ -1129,7 +1130,7 @@
       if (!user) return
 
       return listenAssignedCollection(
-        'readings',
+        'studentReadings',
         user,
         profile,
         setReadings,
@@ -1279,7 +1280,7 @@
       if (!user) return
 
       return listenAssignedCollection(
-        'listenings',
+        'studentListenings',
         user,
         profile,
         setListenings,
@@ -1703,7 +1704,7 @@
       if (!user) return
 
       return listenAssignedCollection(
-        'vocabularyTests',
+        'studentVocabularyTests',
         user,
         profile,
         setVocabularyTests,
@@ -2847,7 +2848,7 @@
       if (!user) return
 
       const unsubReadings = listenAssignedCollection(
-        'readings',
+        'studentReadings',
         user,
         profile,
         setReadings,
@@ -2858,7 +2859,7 @@
       )
 
       const unsubListenings = listenAssignedCollection(
-        'listenings',
+        'studentListenings',
         user,
         profile,
         setListenings,
@@ -2880,7 +2881,7 @@
       )
 
       const unsubVocabularyTests = listenAssignedCollection(
-        'vocabularyTests',
+        'studentVocabularyTests',
         user,
         profile,
         setVocabularyTests,
@@ -3477,6 +3478,23 @@
         }
       }
     }, [navigate])
+
+    useEffect(() => {
+      if (!user) return
+
+      let active = true
+      const syncObjectiveAssignments = httpsCallable(functions, 'syncMyObjectiveAssignments')
+
+      syncObjectiveAssignments().catch(error => {
+        if (active) {
+          console.warn('Could not sync secure objective assignments:', error)
+        }
+      })
+
+      return () => {
+        active = false
+      }
+    }, [user])
 
     const mockScores = scores.filter(score => score.source === 'mock_test')
     const latestMockScore = mockScores[0]
