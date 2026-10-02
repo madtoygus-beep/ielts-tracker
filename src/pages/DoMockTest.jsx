@@ -1041,6 +1041,7 @@ export default function DoMockTest() {
   const audioRef = useRef(null)
   const audioLastTimeRef = useRef(0)
   const audioSeekLockRef = useRef(false)
+  const pendingAudioRestoreRef = useRef(null)
   const activeAudioKeyRef = useRef('')
   const listeningTickRef = useRef(null)
   const readingTickRef = useRef(null)
@@ -1055,6 +1056,7 @@ export default function DoMockTest() {
   const [audioWarning, setAudioWarning] = useState('')
   const [audioCurrentTime, setAudioCurrentTime] = useState(0)
   const [audioDuration, setAudioDuration] = useState(0)
+  const [audioResumePending, setAudioResumePending] = useState(false)
   const [tabWarning, setTabWarning] = useState('')
 
   const storageKey = useMemo(() => {
@@ -1430,12 +1432,58 @@ export default function DoMockTest() {
     setReadingLocked(savedReadingLocked || restoredReadingTime <= 0)
     setWritingLocked(savedWritingLocked || restoredWritingTime <= 0)
 
-    setAudioStarted(Boolean(saved.audioStarted))
-    setAudioLocked(
+    const savedAudioTime = Math.max(0, Number(saved.audioCurrentTime) || 0)
+    const savedAudioDuration = Math.max(0, Number(saved.audioDuration) || 0)
+    const hadAudioStarted = Boolean(saved.audioStarted)
+    const baseAudioLocked =
       Boolean(saved.audioLocked) ||
       savedListeningLocked ||
       restoredListeningTime <= 0
-    )
+
+    let restoredAudioTime = savedAudioTime
+
+    if (hadAudioStarted && !baseAudioLocked) {
+      restoredAudioTime += elapsedSinceSave
+    }
+
+    const reachedSavedAudioEnd =
+      savedAudioDuration > 0 &&
+      restoredAudioTime >= Math.max(savedAudioDuration - 0.25, 0)
+
+    if (reachedSavedAudioEnd) {
+      restoredAudioTime = savedAudioDuration
+    }
+
+    const restoredAudioLocked = baseAudioLocked || reachedSavedAudioEnd
+
+    pendingAudioRestoreRef.current = hadAudioStarted
+      ? {
+          sourceUrl:
+            typeof saved.audioSourceUrl === 'string'
+              ? saved.audioSourceUrl
+              : '',
+          time: restoredAudioTime,
+          duration: savedAudioDuration,
+          shouldResume: !restoredAudioLocked
+        }
+      : null
+
+    audioLastTimeRef.current = restoredAudioTime
+    setAudioCurrentTime(restoredAudioTime)
+    setAudioDuration(savedAudioDuration)
+    setAudioStarted(hadAudioStarted)
+    setAudioLocked(restoredAudioLocked)
+    setAudioResumePending(hadAudioStarted && !restoredAudioLocked)
+
+    if (reachedSavedAudioEnd) {
+      setAudioWarning(
+        'Listening audio finished while you were away. You cannot replay it.'
+      )
+    } else if (hadAudioStarted && !restoredAudioLocked) {
+      setAudioWarning(
+        'Listening audio will resume from the saved position. If autoplay is blocked, click Resume Audio.'
+      )
+    }
 
     tabSwitchCountRef.current = Number(saved.tabSwitchCount) || 0
 
@@ -1445,7 +1493,10 @@ export default function DoMockTest() {
   useEffect(() => {
     if (!storageKey || loading || alreadySubmitted || finalResult) return
 
-    const timeout = setTimeout(() => {
+    const persistProgress = () => {
+      const mediaTime = Number(audioRef.current?.currentTime)
+      const mediaDuration = Number(audioRef.current?.duration)
+
       const data = {
         sectionIndex,
         maxUnlockedSectionIndex,
@@ -1463,14 +1514,34 @@ export default function DoMockTest() {
         writingLocked,
         audioStarted,
         audioLocked,
+        audioResumePending,
+        audioCurrentTime:
+          Number.isFinite(mediaTime) && mediaTime >= 0
+            ? mediaTime
+            : Math.max(0, Number(audioCurrentTime) || 0),
+        audioDuration:
+          Number.isFinite(mediaDuration) && mediaDuration > 0
+            ? mediaDuration
+            : Math.max(0, Number(audioDuration) || 0),
+        audioSourceUrl:
+          audioRef.current?.currentSrc || audioRef.current?.src || '',
         tabSwitchCount: tabSwitchCountRef.current,
         updatedAt: new Date().toISOString()
       }
 
       localStorage.setItem(storageKey, JSON.stringify(data))
-    }, 300)
+    }
 
-    return () => clearTimeout(timeout)
+    const timeout = setTimeout(persistProgress, 300)
+
+    // A debounced save can be cancelled by a fast refresh/navigation.
+    // pagehide gives us one final synchronous localStorage write.
+    window.addEventListener('pagehide', persistProgress)
+
+    return () => {
+      clearTimeout(timeout)
+      window.removeEventListener('pagehide', persistProgress)
+    }
   }, [
     storageKey,
     loading,
@@ -1491,7 +1562,10 @@ export default function DoMockTest() {
     readingLocked,
     writingLocked,
     audioStarted,
-    audioLocked
+    audioLocked,
+    audioResumePending,
+    audioCurrentTime,
+    audioDuration
   ])
 
   useEffect(() => {
@@ -1951,8 +2025,41 @@ export default function DoMockTest() {
 
     activeAudioKeyRef.current = activeListeningAudioKey
 
+    const pendingRestore = pendingAudioRestoreRef.current
+    const currentSourceUrl =
+      activeSection.listeningPart?.listeningAudioUrl || ''
+    const restoreMatchesCurrentAudio =
+      pendingRestore &&
+      (!pendingRestore.sourceUrl ||
+        pendingRestore.sourceUrl === currentSourceUrl)
+
+    if (restoreMatchesCurrentAudio) {
+      const restoredTime = Math.max(0, Number(pendingRestore.time) || 0)
+      const restoredDuration = Math.max(
+        0,
+        Number(pendingRestore.duration) || 0
+      )
+
+      audioLastTimeRef.current = restoredTime
+      audioSeekLockRef.current = false
+      setAudioCurrentTime(restoredTime)
+      setAudioDuration(restoredDuration)
+      setAudioStarted(true)
+      setAudioResumePending(Boolean(pendingRestore.shouldResume))
+
+      if (pendingRestore.shouldResume) {
+        setAudioWarning(
+          'Listening audio will resume from the saved position. If autoplay is blocked, click Resume Audio.'
+        )
+      }
+
+      return
+    }
+
+    pendingAudioRestoreRef.current = null
     setAudioStarted(false)
     setAudioLocked(false)
+    setAudioResumePending(false)
     setAudioWarning('')
     setAudioCurrentTime(0)
     setAudioDuration(0)
@@ -1963,7 +2070,7 @@ export default function DoMockTest() {
       audioRef.current.pause()
       audioRef.current.currentTime = 0
     }
-  }, [activeListeningAudioKey])
+  }, [activeListeningAudioKey, activeSection.listeningPart?.listeningAudioUrl])
 
   useEffect(() => {
     if (!activeSection.key?.startsWith('listening-')) return
@@ -2931,13 +3038,20 @@ export default function DoMockTest() {
   }
 
   const handleStartAudio = () => {
-    if (!audioRef.current || listeningLocked || audioLocked || audioStarted) {
+    if (
+      !audioRef.current ||
+      listeningLocked ||
+      audioLocked ||
+      (audioStarted && !audioResumePending)
+    ) {
       return
     }
 
     audioRef.current.play().catch(() => {
       setAudioWarning(
-        'Your browser blocked audio playback. Please click Start Audio again.'
+        audioResumePending
+          ? 'Your browser blocked automatic resume. Click Resume Audio again.'
+          : 'Your browser blocked audio playback. Please click Start Audio again.'
       )
     })
   }
@@ -2949,6 +3063,7 @@ export default function DoMockTest() {
     }
 
     setAudioStarted(true)
+    setAudioResumePending(false)
     setAudioWarning('')
   }
 
@@ -3003,8 +3118,58 @@ export default function DoMockTest() {
     if (!audioRef.current) return
 
     const duration = Number(audioRef.current.duration)
+    const safeDuration = Number.isFinite(duration) ? duration : 0
+    const pendingRestore = pendingAudioRestoreRef.current
 
-    setAudioDuration(Number.isFinite(duration) ? duration : 0)
+    setAudioDuration(safeDuration)
+
+    if (pendingRestore) {
+      const requestedTime = Math.max(0, Number(pendingRestore.time) || 0)
+      const targetTime =
+        safeDuration > 0
+          ? Math.min(requestedTime, safeDuration)
+          : requestedTime
+      const reachedEnd =
+        safeDuration > 0 && targetTime >= Math.max(safeDuration - 0.25, 0)
+      const shouldResume = pendingRestore.shouldResume && !reachedEnd
+
+      audioSeekLockRef.current = true
+      audioLastTimeRef.current = targetTime
+      audioRef.current.currentTime = targetTime
+      setAudioCurrentTime(targetTime)
+      pendingAudioRestoreRef.current = null
+
+      if (reachedEnd) {
+        setAudioLocked(true)
+        setAudioResumePending(false)
+        setAudioStarted(true)
+        setAudioWarning(
+          'Listening audio finished while you were away. You cannot replay it.'
+        )
+      } else if (shouldResume && !listeningLocked && !audioLocked) {
+        setAudioResumePending(true)
+
+        window.setTimeout(() => {
+          audioSeekLockRef.current = false
+
+          if (!audioRef.current || listeningLocked || audioLocked) return
+
+          audioRef.current.play().catch(() => {
+            setAudioWarning(
+              'Your browser blocked automatic resume. Click Resume Audio to continue from the saved position.'
+            )
+          })
+        }, 120)
+
+        return
+      }
+
+      window.setTimeout(() => {
+        audioSeekLockRef.current = false
+      }, 120)
+      return
+    }
+
     setAudioCurrentTime(audioRef.current.currentTime || 0)
   }
 
@@ -3013,6 +3178,7 @@ export default function DoMockTest() {
       setAudioCurrentTime(audioDuration)
     }
 
+    setAudioResumePending(false)
     setAudioLocked(true)
     setAudioWarning('Listening audio finished. You cannot replay it.')
   }
@@ -3389,6 +3555,7 @@ export default function DoMockTest() {
   const lockListeningSection = () => {
     setListeningLocked(true)
     setAudioLocked(true)
+    setAudioResumePending(false)
     setAudioWarning('Listening section is locked. You cannot return to Listening after starting Reading.')
 
     if (audioRef.current) {
@@ -3911,7 +4078,7 @@ ${previousLabel} will be permanently locked and you will not be able to return t
               type="button"
               onClick={handleStartAudio}
               disabled={
-                audioStarted ||
+                (audioStarted && !audioResumePending) ||
                 listeningLocked ||
                 audioLocked ||
                 !part?.listeningAudioUrl
@@ -3920,9 +4087,11 @@ ${previousLabel} will be permanently locked and you will not be able to return t
             >
               {audioLocked
                 ? 'Audio Finished'
-                : audioStarted
-                  ? 'Audio Playing'
-                  : 'Start Audio'}
+                : audioResumePending
+                  ? 'Resume Audio'
+                  : audioStarted
+                    ? 'Audio Playing'
+                    : 'Start Audio'}
             </button>
           </div>
 
