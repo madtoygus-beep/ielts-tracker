@@ -305,6 +305,20 @@ service cloud.firestore {
         ]);
     }
 
+    // Repair 08C: new student submissions use one deterministic document
+    // per student + assignment. Student updates remain forbidden, so a second
+    // attempt becomes an update request and is denied.
+    function expectedSubmissionId(parentId) {
+      return request.auth.uid + '_' + parentId;
+    }
+
+    function hasExpectedSubmissionId(documentId, parentId) {
+      return isStudent()
+        && parentId is string
+        && parentId != ''
+        && documentId == expectedSubmissionId(parentId);
+    }
+
     function teacherListedOn(data) {
       return isTeacher()
         && (
@@ -317,7 +331,8 @@ service cloud.firestore {
     // ============================================================
     // REPAIR 08A: INITIAL RECORD VALIDATION (NO DATA MIGRATION)
     // These checks validate shape and ownership, not answer correctness.
-    // Client-side scoring and random submission IDs remain in this release.
+    // Client-side scoring remains in this release; Repair 08C locks new submissions
+    // to deterministic document IDs. Existing random-ID submissions remain readable.
     // REPAIR 08B above now restricts reads to assignments or validated Mock links.
     // ============================================================
 
@@ -612,7 +627,13 @@ service cloud.firestore {
           && schoolIdOf(request.resource.data) == currentSchoolId()
           && userDoc(request.resource.data.uid).data.get('teacherIds', []).hasAny([request.auth.uid])
         )
-        || validStudentMockScore(request.resource.data);
+        || (
+          validStudentMockScore(request.resource.data)
+          && hasExpectedSubmissionId(
+            scoreId,
+            request.resource.data.get('mockTestId', '')
+          )
+        );
 
       allow update, delete: if isAdmin()
         || teacherListedOn(resource.data)
@@ -657,7 +678,8 @@ service cloud.firestore {
         || teacherOwnsReadingParent(resource.data)
         || (isStudent() && resource.data.uid == request.auth.uid);
 
-      allow create: if readingParentExists(request.resource.data)
+      allow create: if hasExpectedSubmissionId(id, request.resource.data.get('readingId', ''))
+        && readingParentExists(request.resource.data)
         && validObjectiveSubmission(request.resource.data, 'readingId')
         && validStudentSubmissionBase(
           request.resource.data,
@@ -707,7 +729,8 @@ service cloud.firestore {
         || teacherOwnsListeningParent(resource.data)
         || (isStudent() && resource.data.uid == request.auth.uid);
 
-      allow create: if listeningParentExists(request.resource.data)
+      allow create: if hasExpectedSubmissionId(id, request.resource.data.get('listeningId', ''))
+        && listeningParentExists(request.resource.data)
         && validObjectiveSubmission(request.resource.data, 'listeningId')
         && validStudentSubmissionBase(
           request.resource.data,
@@ -757,7 +780,8 @@ service cloud.firestore {
         || teacherOwnsWritingParent(resource.data)
         || (isStudent() && resource.data.uid == request.auth.uid);
 
-      allow create: if writingParentExists(request.resource.data)
+      allow create: if hasExpectedSubmissionId(id, request.resource.data.get('writingId', ''))
+        && writingParentExists(request.resource.data)
         && validWritingSubmission(request.resource.data)
         && validStudentSubmissionBase(
           request.resource.data,
@@ -808,7 +832,8 @@ service cloud.firestore {
         || teacherOwnsMockParent(resource.data)
         || (isStudent() && resource.data.uid == request.auth.uid);
 
-      allow create: if mockParentExists(request.resource.data)
+      allow create: if hasExpectedSubmissionId(id, request.resource.data.get('mockTestId', ''))
+        && mockParentExists(request.resource.data)
         && validMockSubmission(request.resource.data)
         && validStudentSubmissionBase(
           request.resource.data,
@@ -852,7 +877,8 @@ service cloud.firestore {
         || teacherOwnsVocabularyParent(resource.data)
         || (isStudent() && resource.data.uid == request.auth.uid);
 
-      allow create: if vocabularyParentExists(request.resource.data)
+      allow create: if hasExpectedSubmissionId(id, request.resource.data.get('vocabularyTestId', ''))
+        && vocabularyParentExists(request.resource.data)
         && validVocabularySubmission(request.resource.data)
         && validStudentSubmissionBase(
           request.resource.data,

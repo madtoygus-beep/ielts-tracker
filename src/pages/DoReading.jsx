@@ -4,7 +4,7 @@ import {
   doc,
   getDoc,
   getDocFromServer,
-  addDoc,
+  setDoc,
   collection,
   query,
   where,
@@ -1384,29 +1384,56 @@ export default function DoReading() {
     const res = calculateScore()
     const submissionTeacherIds = getSourceTeacherIds(reading)
 
+    const submissionRef = doc(db, 'readingSubmissions', `${user.uid}_${id}`)
+    const submissionData = {
+      uid: user.uid,
+      studentId: user.uid,
+      studentEmail: user.email || '',
+      readingId: id,
+      schoolId: reading.schoolId || 'maxima',
+      teacherId: submissionTeacherIds[0] || '',
+      teacherIds: submissionTeacherIds,
+      answers,
+      result: res,
+      flaggedQuestions,
+      studentNote: studentNote.trim(),
+      highlights,
+      submittedAt: new Date().toISOString(),
+      finishedLate: timeLeft <= 0,
+      autoSubmitted: autoSubmit
+    }
+
     try {
-      await addDoc(collection(db, 'readingSubmissions'), {
-        uid: user.uid,
-        studentId: user.uid,
-        studentEmail: user.email || '',
-        readingId: id,
-        schoolId: reading.schoolId || 'maxima',
-        teacherId: submissionTeacherIds[0] || '',
-        teacherIds: submissionTeacherIds,
-        answers,
-        result: res,
-        flaggedQuestions,
-        studentNote: studentNote.trim(),
-        highlights,
-        submittedAt: new Date().toISOString(),
-        finishedLate: timeLeft <= 0,
-        autoSubmitted: autoSubmit
-      })
+      // Repair 08C: deterministic IDs make a second create become a denied update.
+      await setDoc(submissionRef, submissionData)
 
       setResult(res)
       setSubmitted(true)
     } catch (error) {
       console.error(error)
+
+      // A second tab or an uncertain network response may reach this branch
+      // after the first immutable submission was already written.
+      try {
+        const existingSnap = await getDoc(submissionRef)
+        if (existingSnap.exists()) {
+          const existing = existingSnap.data()
+          setAlreadyDone(true)
+          setAnswers(existing.answers || {})
+          setResult(existing.result || res)
+          setFlaggedQuestions(
+            Array.isArray(existing.flaggedQuestions) ? existing.flaggedQuestions : []
+          )
+          setStudentNote(existing.studentNote || '')
+          setHighlights(Array.isArray(existing.highlights) ? existing.highlights : [])
+          setSubmitted(true)
+          setSubmitting(false)
+          return
+        }
+      } catch (lookupError) {
+        console.warn('Could not verify an existing reading submission:', lookupError)
+      }
+
       alert('Could not submit your answers. Please try again.')
       submittingRef.current = false
       setSubmitting(false)

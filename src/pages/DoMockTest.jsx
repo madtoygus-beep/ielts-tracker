@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { auth, db } from '../firebase'
 import {
-  addDoc,
   collection,
   doc,
   getDoc,
@@ -12,7 +11,8 @@ import {
   query,
   where,
   orderBy,
-  limit
+  limit,
+  writeBatch
 } from 'firebase/firestore'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -3036,7 +3036,9 @@ export default function DoMockTest() {
 
       const submissionTeacherIds = getSourceTeacherIds(mock)
 
-      await addDoc(collection(db, 'mockSubmissions'), {
+      const submissionRef = doc(db, 'mockSubmissions', `${user.uid}_${mock.id}`)
+      const scoreRef = doc(db, 'scores', `${user.uid}_${mock.id}`)
+      const submissionData = {
         uid: user.uid,
         studentId: user.uid,
         studentEmail: user.email || '',
@@ -3079,33 +3081,36 @@ export default function DoMockTest() {
         },
         submittedAt,
         status: 'submitted'
-      })
-
-      try {
-        await addDoc(collection(db, 'scores'), {
-          uid: user.uid,
-          studentId: user.uid,
-          studentEmail: user.email || '',
-          schoolId: mock.schoolId || 'maxima',
-          teacherId: submissionTeacherIds[0] || '',
-          teacherIds: submissionTeacherIds,
-          date: submittedAt.slice(0, 10),
-          source: 'mock_test',
-          mockTestId: mock.id,
-          listening: enabledSections.listening
-            ? result.listening?.band || ''
-            : '',
-          reading: enabledSections.reading
-            ? result.reading?.band || ''
-            : '',
-          writing: '',
-          speaking: '',
-          overall: result.overallEstimate ?? '',
-          createdAt: submittedAt
-        })
-      } catch (scoreError) {
-        console.warn('Mock test was submitted, but score history could not be created.', scoreError)
       }
+      const scoreData = {
+        uid: user.uid,
+        studentId: user.uid,
+        studentEmail: user.email || '',
+        schoolId: mock.schoolId || 'maxima',
+        teacherId: submissionTeacherIds[0] || '',
+        teacherIds: submissionTeacherIds,
+        date: submittedAt.slice(0, 10),
+        source: 'mock_test',
+        mockTestId: mock.id,
+        listening: enabledSections.listening
+          ? result.listening?.band || ''
+          : '',
+        reading: enabledSections.reading
+          ? result.reading?.band || ''
+          : '',
+        writing: '',
+        speaking: '',
+        overall: result.overallEstimate ?? '',
+        createdAt: submittedAt
+      }
+
+      // Repair 08C: submission + score history succeed or fail together.
+      // Both document IDs are deterministic, so a second student attempt is an
+      // update request and is rejected by Firestore Rules.
+      const batch = writeBatch(db)
+      batch.set(submissionRef, submissionData)
+      batch.set(scoreRef, scoreData)
+      await batch.commit()
 
       if (storageKey) {
         localStorage.removeItem(storageKey)
@@ -3126,6 +3131,34 @@ export default function DoMockTest() {
       setSectionIndex(sections.length - 1)
     } catch (error) {
       console.error('Could not submit mock test.', error)
+
+      // If another tab won the race, recover the immutable submission instead
+      // of presenting it as a failed new attempt.
+      try {
+        const deterministicRef = doc(db, 'mockSubmissions', `${user.uid}_${mock.id}`)
+        const existingSnap = await getDoc(deterministicRef)
+        if (existingSnap.exists()) {
+          const existingSubmission = {
+            id: existingSnap.id,
+            ...existingSnap.data()
+          }
+          setCompletedSubmission(existingSubmission)
+          setFinalResult(existingSubmission.result || null)
+          setListeningAnswers(existingSubmission.listeningAnswers || {})
+          setReadingAnswers(existingSubmission.readingAnswers || {})
+          setWritingAnswers(
+            existingSubmission.writingAnswers || { task1: '', task2: '' }
+          )
+          setAlreadySubmitted(true)
+          setSectionIndex(sections.length - 1)
+          if (storageKey) localStorage.removeItem(storageKey)
+          if (!auto) alert('You already submitted this mock test.')
+          return
+        }
+      } catch (lookupError) {
+        console.warn('Could not verify an existing mock submission:', lookupError)
+      }
+
       alert(error?.message || 'Could not submit mock test.')
     } finally {
       submittingRef.current = false

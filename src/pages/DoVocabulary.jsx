@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { auth, db } from '../firebase'
 import {
-  addDoc,
   collection,
   doc,
   getDoc,
@@ -857,28 +856,32 @@ export default function DoVocabulary() {
     const res = calculateScore()
     const submissionTeacherIds = getSourceTeacherIds(test)
 
+    const submissionRef = doc(db, 'vocabularySubmissions', `${user.uid}_${id}`)
+    const submissionData = {
+      uid: user.uid,
+      studentId: user.uid,
+      studentEmail: user.email || profile?.email || '',
+      studentName: profile?.name || profile?.fullName || user.email || '',
+      vocabularyTestId: id,
+      vocabularyId: id,
+      testId: id,
+      homeworkId: id,
+      vocabularyTitle: test.title || '',
+      matchingViewVersion: 1,
+      teacherId: submissionTeacherIds[0] || '',
+      teacherIds: submissionTeacherIds,
+      schoolId: test.schoolId || profile?.schoolId || 'maxima',
+      answers,
+      result: res,
+      submittedAt: new Date().toISOString(),
+      archived: false,
+      finishedLate: timeLeft <= 0,
+      autoSubmitted: autoSubmit
+    }
+
     try {
-      await addDoc(collection(db, 'vocabularySubmissions'), {
-        uid: user.uid,
-        studentId: user.uid,
-        studentEmail: user.email || profile?.email || '',
-        studentName: profile?.name || profile?.fullName || user.email || '',
-        vocabularyTestId: id,
-        vocabularyId: id,
-        testId: id,
-        homeworkId: id,
-        vocabularyTitle: test.title || '',
-        matchingViewVersion: 1,
-        teacherId: submissionTeacherIds[0] || '',
-        teacherIds: submissionTeacherIds,
-        schoolId: test.schoolId || profile?.schoolId || 'maxima',
-        answers,
-        result: res,
-        submittedAt: new Date().toISOString(),
-        archived: false,
-        finishedLate: timeLeft <= 0,
-        autoSubmitted: autoSubmit
-      })
+      // Repair 08C: one immutable document per student + vocabulary test.
+      await setDoc(submissionRef, submissionData)
 
       // The submission is already durable. Draft cleanup is best-effort and
       // must not turn a successful submission into an apparent failure.
@@ -894,6 +897,26 @@ export default function DoVocabulary() {
     } catch (error) {
       console.error(error)
       if (!isCurrent()) return
+
+      try {
+        const existingSnap = await getDoc(submissionRef)
+        if (existingSnap.exists()) {
+          const existing = existingSnap.data()
+          void deleteDoc(doc(db, 'vocabularyDrafts', `${user.uid}_${id}`))
+            .catch(cleanupError => console.warn('Could not remove the submitted draft:', cleanupError))
+          submittedRef.current = true
+          setAlreadyDone(true)
+          setAnswers(existing.answers || {})
+          setResult(existing.result || res)
+          setSubmitted(true)
+          setDraftRestored(false)
+          setSubmitting(false)
+          return
+        }
+      } catch (lookupError) {
+        console.warn('Could not verify an existing vocabulary submission:', lookupError)
+      }
+
       submittingRef.current = false
       setSubmitting(false)
       setTimerVersion(version => version + 1)

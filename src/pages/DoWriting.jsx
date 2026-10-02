@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { auth, db } from '../firebase'
 import {
-  addDoc,
+  setDoc,
   collection,
   doc,
   getDoc,
@@ -619,29 +619,33 @@ export default function DoWriting() {
     // an immediately rejected request may batch true -> false in one render.
     const submissionTeacherIds = getSourceTeacherIds(writing)
 
+    const submissionRef = doc(db, 'writingSubmissions', `${user.uid}_${id}`)
+    const submissionData = {
+      uid: user.uid,
+      studentId: user.uid,
+      studentEmail: user.email || '',
+      writingId: id,
+      schoolId: writing.schoolId || 'maxima',
+      teacherId: submissionTeacherIds[0] || '',
+      teacherIds: submissionTeacherIds,
+      contentType: writingMode,
+      writingMode,
+      task1Enabled: hasTask1,
+      task2Enabled: hasTask2,
+      task1Answer: hasTask1 ? task1Answer : '',
+      task2Answer: hasTask2 ? task2Answer : '',
+      task1WordCount: hasTask1 ? countWords(task1Answer) : 0,
+      task2WordCount: hasTask2 ? countWords(task2Answer) : 0,
+      submittedAt: new Date().toISOString(),
+      finishedLate: timeLeft <= 0,
+      autoSubmitted: autoSubmit || expired,
+      reviewed: false,
+      review: null
+    }
+
     try {
-      await addDoc(collection(db, 'writingSubmissions'), {
-        uid: user.uid,
-        studentId: user.uid,
-        studentEmail: user.email || '',
-        writingId: id,
-        schoolId: writing.schoolId || 'maxima',
-        teacherId: submissionTeacherIds[0] || '',
-        teacherIds: submissionTeacherIds,
-        contentType: writingMode,
-        writingMode,
-        task1Enabled: hasTask1,
-        task2Enabled: hasTask2,
-        task1Answer: hasTask1 ? task1Answer : '',
-        task2Answer: hasTask2 ? task2Answer : '',
-        task1WordCount: hasTask1 ? countWords(task1Answer) : 0,
-        task2WordCount: hasTask2 ? countWords(task2Answer) : 0,
-        submittedAt: new Date().toISOString(),
-        finishedLate: timeLeft <= 0,
-        autoSubmitted: autoSubmit || expired,
-        reviewed: false,
-        review: null
-      })
+      // Repair 08C: the first create is immutable for the student.
+      await setDoc(submissionRef, submissionData)
 
       if (latestDraftRef.current?.key === submittedDraftKey) {
         latestDraftRef.current.completed = true
@@ -653,6 +657,27 @@ export default function DoWriting() {
       }
     } catch (error) {
       console.error(error)
+
+      // If another tab already submitted, show the durable result instead of
+      // inviting the student to create a second attempt.
+      try {
+        const existingSnap = await getDoc(submissionRef)
+        if (existingSnap.exists()) {
+          if (latestDraftRef.current?.key === submittedDraftKey) {
+            latestDraftRef.current.completed = true
+          }
+          clearDraft(submittedDraftKey)
+
+          if (mountedRef.current && loadVersionRef.current === submissionVersion) {
+            setAlreadyDone(true)
+            setSubmitted(true)
+            setSubmitting(false)
+          }
+          return
+        }
+      } catch (lookupError) {
+        console.warn('Could not verify an existing writing submission:', lookupError)
+      }
 
       if (mountedRef.current && loadVersionRef.current === submissionVersion) {
         alert('Could not submit your writing. Please try again.')

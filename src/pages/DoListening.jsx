@@ -3,7 +3,7 @@ import { auth, db } from '../firebase'
 import {
   doc,
   getDoc,
-  addDoc,
+  setDoc,
   collection,
   query,
   where,
@@ -1180,23 +1180,27 @@ export default function DoListening() {
     const res = calculateScore()
     const submissionTeacherIds = getSourceTeacherIds(listening)
 
+    const submissionRef = doc(db, 'listeningSubmissions', `${user.uid}_${id}`)
+    const submissionData = {
+      uid: user.uid,
+      studentId: user.uid,
+      studentEmail: user.email || '',
+      listeningId: id,
+      schoolId: listening.schoolId || 'maxima',
+      teacherId: submissionTeacherIds[0] || '',
+      teacherIds: submissionTeacherIds,
+      answers,
+      flaggedQuestions,
+      studentNote: studentNote.trim(),
+      result: res,
+      submittedAt: new Date().toISOString(),
+      finishedLate: timeLeft <= 0,
+      autoSubmitted: autoSubmit
+    }
+
     try {
-      await addDoc(collection(db, 'listeningSubmissions'), {
-        uid: user.uid,
-        studentId: user.uid,
-        studentEmail: user.email || '',
-        listeningId: id,
-        schoolId: listening.schoolId || 'maxima',
-        teacherId: submissionTeacherIds[0] || '',
-        teacherIds: submissionTeacherIds,
-        answers,
-        flaggedQuestions,
-        studentNote: studentNote.trim(),
-        result: res,
-        submittedAt: new Date().toISOString(),
-        finishedLate: timeLeft <= 0,
-        autoSubmitted: autoSubmit
-      })
+      // Repair 08C: one immutable document per student + listening homework.
+      await setDoc(submissionRef, submissionData)
 
       if (storageKey) {
         localStorage.removeItem(storageKey)
@@ -1206,6 +1210,27 @@ export default function DoListening() {
       setSubmitted(true)
     } catch (error) {
       console.error(error)
+
+      try {
+        const existingSnap = await getDoc(submissionRef)
+        if (existingSnap.exists()) {
+          const existing = existingSnap.data()
+          if (storageKey) localStorage.removeItem(storageKey)
+          setAlreadyDone(true)
+          setAnswers(existing.answers || {})
+          setFlaggedQuestions(
+            Array.isArray(existing.flaggedQuestions) ? existing.flaggedQuestions : []
+          )
+          setStudentNote(existing.studentNote || '')
+          setResult(existing.result || res)
+          setSubmitted(true)
+          setSubmitting(false)
+          return
+        }
+      } catch (lookupError) {
+        console.warn('Could not verify an existing listening submission:', lookupError)
+      }
+
       alert('Could not submit your answers. Please try again.')
       submittingRef.current = false
       setSubmitting(false)
