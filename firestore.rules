@@ -136,19 +136,154 @@ service cloud.firestore {
     }
 
     function isAssignedToCurrentUser(data) {
+      // REPAIR 08B: trust the authenticated UID/email, never a client-supplied identity.
+      // Older assignments may store an email in assignTo or assignedTo.
+      let email = request.auth.token.get('email', '');
       return data.get('assignTo', []).hasAny([request.auth.uid])
         || data.get('assignedTo', []).hasAny([request.auth.uid])
         || data.get('studentIds', []).hasAny([request.auth.uid])
         || data.get('assignedStudentIds', []).hasAny([request.auth.uid])
-        || data.get('assignedEmails', []).hasAny([request.auth.token.get('email', '')]);
+        || (email is string && email != ''
+          && (data.get('assignedEmails', []).hasAny([email, email.lower()])
+            || data.get('assignTo', []).hasAny([email, email.lower()])
+            || data.get('assignedTo', []).hasAny([email, email.lower()])));
     }
 
     function studentCanReadContent(data) {
+      // Same-school membership alone must not expose unassigned content.
+      // Keep list queries compatible with the existing assignment-based dashboards.
+      return isStudent() && isAssignedToCurrentUser(data);
+    }
+
+    // ============================================================
+    // REPAIR 08B: ASSIGNED MOCK -> LINKED RESOURCE ACCESS
+    // A student may request a narrow reference, not grant arbitrary permission.
+    // Every source read revalidates the LIVE mock and LIVE source documents.
+    // No answers, scores, assignment arrays or source copies are written here.
+    // ============================================================
+
+    function supportedMockSource(collectionName) {
+      return collectionName in ['readings', 'listenings', 'writingHomeworks'];
+    }
+
+    function activeMockForCurrentStudent(mockData) {
+      let email = request.auth.token.get('email', '');
       return isStudent()
+        && isAssignedToCurrentUser(mockData)
+        && schoolIdOf(mockData) == currentSchoolId()
+        && mockData.get('archived', false) != true
+        && !mockData.get('hiddenFor', []).hasAny([request.auth.uid])
+        && !(email is string && email != ''
+          && mockData.get('hiddenFor', []).hasAny([email, email.lower()]));
+    }
+
+    function mockSectionAllowsResource(mockData, collectionName) {
+      let rawType = mockData.get('mockType', '');
+      let mockType = rawType is string && rawType != ''
+        ? rawType : mockData.get('contentType', 'full_mock');
+      let stored = mockData.get('enabledSections', {});
+      let enabled = stored is map ? stored : {};
+      let hasExplicitSelection = enabled.get('listening', false) == true
+        || enabled.get('reading', false) == true
+        || enabled.get('writing', false) == true;
+      let section = collectionName == 'readings' ? 'reading'
+        : collectionName == 'listenings' ? 'listening' : 'writing';
+      // This mirrors getMockEnabledSections: legacy/all-false records infer
+      // sections from their actual links. mockLinksResource checks those links.
+      return mockType != 'mini_mock' || !hasExplicitSelection
+        || enabled.get(section, false) == true;
+    }
+
+    function mockLinksResource(mockData, collectionName, sourceId) {
+      let readingIds = mockData.get('readingIds', null);
+      let listeningIds = mockData.get('listeningIds', null);
+      return mockSectionAllowsResource(mockData, collectionName)
         && (
-          isAssignedToCurrentUser(data)
-          || sameSchool(data)
+          (collectionName == 'readings' && (
+            readingIds is list ? readingIds.hasAny([sourceId])
+              : mockData.get('readingId', '') == sourceId
+          ))
+          || (collectionName == 'listenings' && (
+            listeningIds is list ? listeningIds.hasAny([sourceId])
+              : mockData.get('listeningId', '') == sourceId
+          ))
+          || (collectionName == 'writingHomeworks'
+            && mockData.get('writingId', '') == sourceId)
         );
+    }
+
+    function mockCreatorCanUseSource(mockData, sourceData) {
+      let createdBy = mockData.get('createdBy', '');
+      let ownerId = createdBy != '' ? createdBy : mockData.get('teacherId', '');
+      // A mock must not become a route to another teacher's private library.
+      // The creator field is immutable for teachers; legacy teacherId is locked
+      // on updates below when createdBy is absent.
+      return isSchoolLibraryItem(sourceData)
+        || (ownerId is string && ownerId != '' && (
+          sourceData.get('createdBy', '') == ownerId
+          || sourceData.get('teacherId', '') == ownerId
+          || sourceData.get('teacherIds', []).hasAny([ownerId])
+          || (exists(/databases/$(database)/documents/users/$(ownerId))
+            && userDoc(ownerId).data.get('role', '') == 'admin'
+            && userDoc(ownerId).data.get('status', '') == 'approved'
+            && userDoc(ownerId).data.get('deleted', false) != true)
+        ));
+    }
+
+    function validMockResourceContext(mockData, sourceData, collectionName, sourceId) {
+      return activeMockForCurrentStudent(mockData)
+        && schoolIdOf(sourceData) == schoolIdOf(mockData)
+        && mockLinksResource(mockData, collectionName, sourceId)
+        && mockCreatorCanUseSource(mockData, sourceData);
+      // Source archived/hidden flags apply to standalone homework lists.
+      // A teacher may still deliberately use that existing source in an active
+      // assigned mock. Unassign/archive/hide the MOCK to revoke this access.
+    }
+
+    function validMockAccessReference(data, collectionName, sourceId) {
+      return supportedMockSource(collectionName)
+        && data.get('uid', '') == request.auth.uid
+        && data.get('sourceCollection', '') == collectionName
+        && data.get('sourceId', '') == sourceId
+        && data.get('mockTestId', '') is string
+        && data.get('mockTestId', '') != ''
+        && data.mockTestId.matches('^[^/]+$')
+        && exists(/databases/$(database)/documents/mockTests/$(data.mockTestId))
+        && exists(/databases/$(database)/documents/$(collectionName)/$(sourceId))
+        && validMockResourceContext(
+          get(/databases/$(database)/documents/mockTests/$(data.mockTestId)).data,
+          get(/databases/$(database)/documents/$(collectionName)/$(sourceId)).data,
+          collectionName,
+          sourceId
+        );
+    }
+
+    function studentCanGetMockResource(collectionName, sourceId) {
+      return isStudent()
+        && exists(/databases/$(database)/documents/mockResourceAccess/$(request.auth.uid)/$(collectionName)/$(sourceId))
+        && validMockAccessReference(
+          get(/databases/$(database)/documents/mockResourceAccess/$(request.auth.uid)/$(collectionName)/$(sourceId)).data,
+          collectionName,
+          sourceId
+        );
+    }
+
+    match /mockResourceAccess/{studentId}/{collectionName}/{sourceId} {
+      // DoMockTest creates this only after a denied direct read. Rules validate
+      // the current assignment and exact source link before accepting the write.
+      allow create, update: if isStudent()
+        && studentId == request.auth.uid
+        && request.resource.data.keys().hasOnly([
+          'uid', 'mockTestId', 'sourceCollection', 'sourceId',
+          'schemaVersion', 'updatedAt'
+        ])
+        && request.resource.data.get('schemaVersion', 0) == 1
+        && request.resource.data.get('updatedAt', null) == request.time
+        && validMockAccessReference(request.resource.data, collectionName, sourceId);
+
+      allow get: if isAdmin() || (isStudent() && studentId == request.auth.uid);
+      allow list: if false;
+      allow delete: if isAdmin() || (isStudent() && studentId == request.auth.uid);
     }
 
     function validStudentSubmissionBase(data, parentData) {
@@ -183,7 +318,7 @@ service cloud.firestore {
     // REPAIR 08A: INITIAL RECORD VALIDATION (NO DATA MIGRATION)
     // These checks validate shape and ownership, not answer correctness.
     // Client-side scoring and random submission IDs remain in this release.
-    // Content reads are unchanged pending the linked-Mock access migration.
+    // REPAIR 08B above now restricts reads to assignments or validated Mock links.
     // ============================================================
 
     function clientTeacherIdsOf(data) {
@@ -489,7 +624,13 @@ service cloud.firestore {
     // ============================================================
 
     match /readings/{id} {
-      allow read: if isAdmin()
+      allow get: if isAdmin()
+        || teacherCanReadContent(resource.data)
+        || studentCanReadContent(resource.data)
+        || studentCanGetMockResource('readings', id);
+
+      // A mock reference permits a single linked document, not library queries.
+      allow list: if isAdmin()
         || teacherCanReadContent(resource.data)
         || studentCanReadContent(resource.data);
 
@@ -533,7 +674,13 @@ service cloud.firestore {
     // ============================================================
 
     match /listenings/{id} {
-      allow read: if isAdmin()
+      allow get: if isAdmin()
+        || teacherCanReadContent(resource.data)
+        || studentCanReadContent(resource.data)
+        || studentCanGetMockResource('listenings', id);
+
+      // A mock reference permits a single linked document, not library queries.
+      allow list: if isAdmin()
         || teacherCanReadContent(resource.data)
         || studentCanReadContent(resource.data);
 
@@ -577,7 +724,13 @@ service cloud.firestore {
     // ============================================================
 
     match /writingHomeworks/{id} {
-      allow read: if isAdmin()
+      allow get: if isAdmin()
+        || teacherCanReadContent(resource.data)
+        || studentCanReadContent(resource.data)
+        || studentCanGetMockResource('writingHomeworks', id);
+
+      // A mock reference permits a single linked document, not library queries.
+      allow list: if isAdmin()
         || teacherCanReadContent(resource.data)
         || studentCanReadContent(resource.data);
 
@@ -625,8 +778,15 @@ service cloud.firestore {
         || teacherCanReadContent(resource.data)
         || (isStudent() && isAssignedToCurrentUser(resource.data));
 
-      allow create: if isAdmin() || teacherCanCreateContent(request.resource.data);
-      allow update: if isAdmin() || teacherCanUpdateContent();
+      allow create: if isAdmin() || (
+        teacherCanCreateContent(request.resource.data)
+        && request.resource.data.get('createdBy', '') == request.auth.uid
+      );
+      allow update: if isAdmin() || (
+        teacherCanUpdateContent()
+        && (resource.data.get('createdBy', '') != ''
+          || request.resource.data.get('teacherId', '') == resource.data.get('teacherId', ''))
+      );
       allow delete: if isAdmin() || teacherOwns(resource.data);
     }
 

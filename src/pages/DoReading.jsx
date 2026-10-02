@@ -3,6 +3,7 @@ import { auth, db } from '../firebase'
 import {
   doc,
   getDoc,
+  getDocFromServer,
   addDoc,
   collection,
   query,
@@ -172,13 +173,33 @@ export default function DoReading() {
   const navigate = useNavigate()
 
   useEffect(() => {
+    let active = true
+    let loadVersion = 0
     const unsub = onAuthStateChanged(auth, async currentUser => {
+      const version = ++loadVersion
+      const isCurrent = () => active && version === loadVersion
+      clearInterval(timerRef.current)
+      setReading(null)
+      setTimeLeft(null)
+      setLoadError(null)
+      setAnswers({})
+      setResult(null)
+      setSubmitted(false)
+      setAlreadyDone(false)
+      submittingRef.current = false
+      setSubmitting(false)
+      setFlaggedQuestions([])
+      setStudentNote('')
+      setHighlights([])
+
+      try {
       if (!currentUser) {
         navigate('/login')
         return
       }
 
       const profileSnap = await getDoc(doc(db, 'users', currentUser.uid))
+      if (!isCurrent()) return
 
       if (!profileSnap.exists()) {
         await signOut(auth)
@@ -201,7 +222,8 @@ export default function DoReading() {
       setUser(currentUser)
       setLoadError(null)
 
-      const snap = await getDoc(doc(db, 'readings', id))
+      const snap = await getDocFromServer(doc(db, 'readings', id))
+      if (!isCurrent()) return
       if (!snap.exists()) {
         setLoadError({
           title: 'Reading homework not found.',
@@ -216,20 +238,15 @@ export default function DoReading() {
         ...snap.data()
       }
 
-      // StudentDashboard already lists only assigned reading homework.
-      // Do not hard-redirect here, because old reading documents may use different assignment fields.
+      // REPAIR 08B: this route is standalone homework, not a Mock entry point.
+      // A source authorized only through a Mock must be opened inside that Mock.
       if (!isAssignedToCurrentUser(data, currentUser, profile)) {
-        console.warn('Reading assignment check did not match, but access is allowed from dashboard.', {
-          readingId: data.id,
-          assignTo: data.assignTo,
-          assignedTo: data.assignedTo,
-          studentIds: data.studentIds,
-          assignedStudentIds: data.assignedStudentIds,
-          assignedEmails: data.assignedEmails,
-          currentUserUid: currentUser.uid,
-          currentUserEmail: currentUser.email,
-          profile
+        setLoadError({
+          title: 'This reading is not assigned as standalone homework.',
+          message: 'If this passage belongs to your mock test, open the mock from your dashboard instead.',
+          readingId: data.id
         })
+        return
       }
 
       if (isHiddenForCurrentUser(data, currentUser, profile) || data.archived === true) {
@@ -243,8 +260,6 @@ export default function DoReading() {
         return
       }
 
-      setReading(data)
-      setTimeLeft((data.timeLimit || 60) * 60)
 
       let locallySavedHighlights = []
 
@@ -273,6 +288,11 @@ export default function DoReading() {
       )
 
       const existing = await getDocs(q)
+      if (!isCurrent()) return
+
+      // Start rendering/timing only after access and submission checks succeed.
+      setReading(data)
+      setTimeLeft((data.timeLimit || 60) * 60)
 
       if (!existing.empty) {
         const sub = existing.docs[0].data()
@@ -291,9 +311,27 @@ export default function DoReading() {
         )
         setSubmitted(true)
       }
+      } catch (error) {
+        console.error('Could not load reading homework:', error)
+        if (!isCurrent()) return
+        clearInterval(timerRef.current)
+        setReading(null)
+        setTimeLeft(null)
+        setLoadError({
+          title: error?.code === 'permission-denied'
+            ? 'Reading access was denied.' : 'Reading could not be loaded.',
+          message: error?.code === 'permission-denied'
+            ? 'This homework may no longer be assigned to you. Open linked passages through your assigned mock, or ask your teacher to check the assignment.'
+            : 'Check your connection and try again. The test has not started.',
+          readingId: id
+        })
+      }
     })
 
-    return unsub
+    return () => {
+      active = false
+      unsub()
+    }
   }, [id, navigate])
 
   useEffect(() => {

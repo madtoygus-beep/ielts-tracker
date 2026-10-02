@@ -5,6 +5,9 @@ import {
   collection,
   doc,
   getDoc,
+  getDocFromServer,
+  setDoc,
+  serverTimestamp,
   getDocs,
   query,
   where,
@@ -845,6 +848,100 @@ function isHiddenForCurrentUser(item, user, profile) {
   return currentUserValues.some(value => hiddenValues.includes(value))
 }
 
+// REPAIR 08B: load a linked source without assigning it as standalone homework.
+// Read-first keeps this client compatible with both pre-08B and 08B rules.
+// If direct access is denied, request a source-scoped reference. The server
+// independently verifies the LIVE mock assignment/link on write AND on read.
+async function getAssignedMockResource({
+  collectionName,
+  sourceId,
+  mockData,
+  currentUser,
+  profile,
+  isCurrent = () => true
+}) {
+  const sectionByCollection = {
+    readings: 'reading',
+    listenings: 'listening',
+    writingHomeworks: 'writing'
+  }
+  const section = sectionByCollection[collectionName]
+  const validId = value => typeof value === 'string'
+    && value.length > 0 && !value.includes('/') && value !== '.' && value !== '..'
+  const ensureCurrent = () => {
+    if (!isCurrent()) {
+      const error = new Error('This mock load is no longer active.')
+      error.code = 'cancelled'
+      throw error
+    }
+  }
+
+  ensureCurrent()
+  if (
+    !section || !validId(sourceId) || !validId(mockData?.id) ||
+    !validId(currentUser?.uid) || profile?.role !== 'student' ||
+    profile?.status !== 'approved' || profile?.deleted === true ||
+    !isAssignedToCurrentUser(mockData, currentUser, profile) ||
+    isHiddenForCurrentUser(mockData, currentUser, profile) ||
+    mockData.archived === true ||
+    (mockData.schoolId || 'maxima') !== (profile.schoolId || 'maxima') ||
+    !getMockEnabledSections(mockData)[section]
+  ) {
+    throw new Error('This mock resource is not available to this student.')
+  }
+
+  const linkedIds = section === 'writing'
+    ? [mockData.writingId]
+    : Array.isArray(mockData[`${section}Ids`])
+      ? mockData[`${section}Ids`].filter(Boolean)
+      : [mockData[`${section}Id`]].filter(Boolean)
+
+  if (!linkedIds.includes(sourceId)) {
+    throw new Error('The requested resource is not linked to this mock.')
+  }
+
+  const sourceRef = doc(db, collectionName, sourceId)
+  try {
+    // Do not treat an old cached document as fresh authorization.
+    const snapshot = await getDocFromServer(sourceRef)
+    ensureCurrent()
+    return snapshot
+  } catch (error) {
+    ensureCurrent()
+    if (error?.code !== 'permission-denied') throw error
+  }
+
+  try {
+    await setDoc(
+      doc(db, 'mockResourceAccess', currentUser.uid, collectionName, sourceId),
+      {
+        uid: currentUser.uid,
+        mockTestId: mockData.id,
+        sourceCollection: collectionName,
+        sourceId,
+        schemaVersion: 1,
+        updatedAt: serverTimestamp()
+      }
+    )
+    ensureCurrent()
+    const snapshot = await getDocFromServer(sourceRef)
+    ensureCurrent()
+    return snapshot
+  } catch (error) {
+    ensureCurrent()
+    if (error?.code === 'permission-denied') {
+      const accessError = new Error(
+        `The ${section} resource cannot be opened for this mock. ` +
+        'Ask your teacher to check the mock assignment and the linked resource. ' +
+        'No answers or results have been changed.'
+      )
+      accessError.code = error.code
+      throw accessError
+    }
+    throw error
+  }
+}
+
 function getSavedMockState(storageKey) {
   try {
     const saved = localStorage.getItem(storageKey)
@@ -924,19 +1021,22 @@ export default function DoMockTest() {
 
   useEffect(() => {
     let isActive = true
+    let loadVersion = 0
 
     const unsub = onAuthStateChanged(auth, async currentUser => {
+      const version = ++loadVersion
+      const isCurrent = () => isActive && version === loadVersion
       if (!currentUser) {
         navigate('/login')
         return
       }
 
       try {
-        if (!isActive) return
+        if (!isCurrent()) return
 
         const profileSnap = await getDoc(doc(db, 'users', currentUser.uid))
 
-        if (!isActive) return
+        if (!isCurrent()) return
 
         if (!profileSnap.exists()) {
           await signOut(auth)
@@ -958,9 +1058,9 @@ export default function DoMockTest() {
 
         setUser(currentUser)
 
-        const mockSnap = await getDoc(doc(db, 'mockTests', id))
+        const mockSnap = await getDocFromServer(doc(db, 'mockTests', id))
 
-        if (!isActive) return
+        if (!isCurrent()) return
 
         if (!mockSnap.exists()) {
           alert('Mock test not found.')
@@ -1006,7 +1106,7 @@ export default function DoMockTest() {
 
         const existingSnap = await getDocs(existingQuery)
 
-        if (!isActive) return
+        if (!isCurrent()) return
 
         if (!existingSnap.empty) {
           setAlreadySubmitted(true)
@@ -1070,27 +1170,37 @@ export default function DoMockTest() {
           throw new Error('Mock test is missing a Writing resource.')
         }
 
+        const loadLinkedResource = (collectionName, sourceId) =>
+          getAssignedMockResource({
+            collectionName,
+            sourceId,
+            mockData,
+            currentUser,
+            profile,
+            isCurrent
+          })
+
         const [listeningDocs, readingDocs, writingSnap] = await Promise.all([
           enabledSections.listening
             ? Promise.all(
                 listeningIds.map(listeningId =>
-                  getDoc(doc(db, 'listenings', listeningId))
+                  loadLinkedResource('listenings', listeningId)
                 )
               )
             : Promise.resolve([]),
           enabledSections.reading
             ? Promise.all(
                 readingIds.map(readingId =>
-                  getDoc(doc(db, 'readings', readingId))
+                  loadLinkedResource('readings', readingId)
                 )
               )
             : Promise.resolve([]),
           enabledSections.writing
-            ? getDoc(doc(db, 'writingHomeworks', mockData.writingId))
+            ? loadLinkedResource('writingHomeworks', mockData.writingId)
             : Promise.resolve(null)
         ])
 
-        if (!isActive) return
+        if (!isCurrent()) return
 
         const loadedListenings = listeningDocs
           .filter(snap => snap.exists())
@@ -1136,7 +1246,7 @@ export default function DoMockTest() {
         setLoading(false)
       } catch (error) {
         console.error(error)
-        if (isActive) {
+        if (isCurrent()) {
           alert(error?.message || 'Could not load mock test.')
           navigate('/student')
         }
