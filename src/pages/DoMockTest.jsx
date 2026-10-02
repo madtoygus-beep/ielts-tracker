@@ -6276,6 +6276,21 @@ ${previousLabel} will be permanently locked and you will not be able to return t
       completedSubmission?.writingReview?.status ||
       'pending_review'
 
+    const writingReviewed = writingStatus === 'reviewed'
+    const displayedOverall =
+      finalResult?.finalOverall ||
+      finalResult?.overall ||
+      finalResult?.overallEstimate ||
+      '-'
+
+    const overallLabel = enabledSections.writing
+      ? writingReviewed
+        ? 'Final overall after teacher Writing review'
+        : enabledSections.listening || enabledSections.reading
+          ? 'Current estimate from objective sections · Writing pending review'
+          : 'Writing will be reviewed by your teacher'
+      : 'Overall from included objective sections'
+
     return (
       <div className="min-h-screen bg-[#faf9f6]">
         <nav className="flex justify-between items-center px-4 sm:px-8 py-4 bg-white border-b border-gray-100 sticky top-0 z-20">
@@ -6314,13 +6329,11 @@ ${previousLabel} will be permanently locked and you will not be able to return t
             </h1>
 
             <p className="text-5xl font-bold text-purple-600 mb-2">
-              {finalResult.overallEstimate || '-'}
+              {displayedOverall}
             </p>
 
             <p className="text-sm text-gray-500">
-              {enabledSections.listening || enabledSections.reading
-                ? 'Overall estimate from included objective sections'
-                : 'Writing will be reviewed by your teacher'}
+              {overallLabel}
             </p>
           </div>
 
@@ -6359,19 +6372,34 @@ ${previousLabel} will be permanently locked and you will not be able to return t
               <div className="bg-white border border-gray-100 rounded-2xl p-5">
                 <p className="text-xs text-gray-400 mb-1">Writing</p>
                 <p className={`text-xl font-bold ${
-                  writingStatus === 'reviewed'
+                  writingReviewed
                     ? 'text-green-600'
                     : 'text-amber-600'
                 }`}>
-                  {writingStatus === 'reviewed'
-                    ? writingReview?.overall || 'Reviewed'
+                  {writingReviewed
+                    ? writingReview?.overall || finalResult?.writing?.band || 'Reviewed'
                     : 'Pending'}
                 </p>
                 <p className="text-xs text-gray-400 mt-1">
-                  {writingStatus === 'reviewed'
+                  {writingReviewed
                     ? 'Teacher feedback available'
                     : 'Teacher review required'}
                 </p>
+
+                {writingReviewed && (
+                  <div className="flex flex-wrap gap-2 mt-3">
+                    {hasWritingTask1 && (
+                      <span className="text-[11px] bg-purple-50 text-purple-700 px-2.5 py-1 rounded-full">
+                        Task 1 {writingReview?.task1Band || '-'}
+                      </span>
+                    )}
+                    {hasWritingTask2 && (
+                      <span className="text-[11px] bg-indigo-50 text-indigo-700 px-2.5 py-1 rounded-full">
+                        Task 2 {writingReview?.task2Band || '-'}
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -6438,9 +6466,16 @@ ${previousLabel} will be permanently locked and you will not be able to return t
                       <h3 className="font-semibold text-gray-900">
                         Writing Task 1
                       </h3>
-                    <span className="text-xs text-gray-400">
-                      {countWords(writingAnswers.task1 || '')} words
-                    </span>
+                    <div className="flex items-center gap-2">
+                      {writingReviewed && (
+                        <span className="text-xs bg-purple-50 text-purple-700 px-2.5 py-1 rounded-full">
+                          Band {writingReview?.task1Band || '-'}
+                        </span>
+                      )}
+                      <span className="text-xs text-gray-400">
+                        {countWords(writingAnswers.task1 || '')} words
+                      </span>
+                    </div>
                   </div>
 
                   <div className="bg-gray-50 border border-gray-100 rounded-xl p-4 text-sm text-gray-700 whitespace-pre-wrap min-h-[90px]">
@@ -6466,9 +6501,16 @@ ${previousLabel} will be permanently locked and you will not be able to return t
                       <h3 className="font-semibold text-gray-900">
                         Writing Task 2
                       </h3>
-                    <span className="text-xs text-gray-400">
-                      {countWords(writingAnswers.task2 || '')} words
-                    </span>
+                    <div className="flex items-center gap-2">
+                      {writingReviewed && (
+                        <span className="text-xs bg-indigo-50 text-indigo-700 px-2.5 py-1 rounded-full">
+                          Band {writingReview?.task2Band || '-'}
+                        </span>
+                      )}
+                      <span className="text-xs text-gray-400">
+                        {countWords(writingAnswers.task2 || '')} words
+                      </span>
+                    </div>
                   </div>
 
                   <div className="bg-gray-50 border border-gray-100 rounded-xl p-4 text-sm text-gray-700 whitespace-pre-wrap min-h-[90px]">
@@ -6496,6 +6538,10 @@ ${previousLabel} will be permanently locked and you will not be able to return t
                     <p className="text-sm text-blue-800 whitespace-pre-wrap">
                       {writingReview.generalFeedback}
                     </p>
+                  </div>
+                ) : writingReviewed ? (
+                  <div className="bg-gray-50 border border-gray-100 rounded-xl p-4 text-sm text-gray-600">
+                    Review completed. No general feedback was added.
                   </div>
                 ) : (
                   <div className="bg-amber-50 border border-amber-100 rounded-xl p-4 text-sm text-amber-700">

@@ -789,6 +789,43 @@
     )
   }
 
+  function getWritingMode(writing, submission) {
+    return (
+      submission?.writingMode ||
+      submission?.contentType ||
+      writing?.writingMode ||
+      writing?.contentType ||
+      'full_writing'
+    )
+  }
+
+  function getWritingModeLabel(writing, submission) {
+    const mode = getWritingMode(writing, submission)
+
+    if (mode === 'task1_only') return 'Writing Task 1'
+    if (mode === 'task2_only') return 'Writing Task 2'
+    return 'Task 1 + Task 2'
+  }
+
+  function getWritingTaskVisibility(writing, submission) {
+    const mode = getWritingMode(writing, submission)
+
+    return {
+      hasTask1: mode !== 'task2_only',
+      hasTask2: mode !== 'task1_only'
+    }
+  }
+
+  function getWritingTimeLimit(writing, submission) {
+    const stored = Number(writing?.timeLimit)
+    if (Number.isFinite(stored) && stored > 0) return stored
+
+    const mode = getWritingMode(writing, submission)
+    if (mode === 'task1_only') return 20
+    if (mode === 'task2_only') return 40
+    return 60
+  }
+
   function getRubricAverages(review) {
     const task1 = review?.rubric?.task1 || {}
     const task2 = review?.rubric?.task2 || {}
@@ -2152,17 +2189,19 @@
                           Overall {overall || '-'}
                         </span>
 
-                        <span
-                          className={`text-xs px-3 py-1 rounded-full ${
-                            writingBand
-                              ? 'bg-green-50 text-green-600'
-                              : 'bg-amber-50 text-amber-600'
-                          }`}
-                        >
-                          {writingBand
-                            ? `Writing Band ${formatBand(writingBand)}`
-                            : 'Writing pending review'}
-                        </span>
+                        {getMockEnabledSections(mock).writing && (
+                          <span
+                            className={`text-xs px-3 py-1 rounded-full ${
+                              writingBand
+                                ? 'bg-green-50 text-green-600'
+                                : 'bg-amber-50 text-amber-600'
+                            }`}
+                          >
+                            {writingBand
+                              ? `Writing Band ${formatBand(writingBand)}`
+                              : 'Writing pending review'}
+                          </span>
+                        )}
                       </div>
                     </div>
 
@@ -2585,7 +2624,7 @@
                       </p>
 
                       <p className="text-xs text-gray-400 mt-0.5">
-                        ⏱ {w.timeLimit || 60} min · Task 1 + Task 2
+                        ⏱ {getWritingTimeLimit(w)} min · {getWritingModeLabel(w)}
                       </p>
 
                       <div className="flex gap-2 mt-2 flex-wrap">
@@ -2638,7 +2677,7 @@
                       </p>
 
                       <p className="text-xs text-gray-400 mt-0.5">
-                        ⏱ {w.timeLimit || 60} min · Task 1 + Task 2
+                        ⏱ {getWritingTimeLimit(w, submission)} min · {getWritingModeLabel(w, submission)}
                       </p>
 
                       {reviewed ? (
@@ -2682,61 +2721,75 @@
           </div>
         )}
 
-        {selectedReview && (
-          <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center px-4">
-            <div className="bg-white rounded-2xl w-full max-w-5xl max-h-[90vh] overflow-y-auto p-6">
-              <div className="flex items-start justify-between mb-6">
-                <div>
-                  <h2 className="text-xl font-bold text-gray-900">
-                    Writing Feedback
-                  </h2>
+        {selectedReview && (() => {
+          const { hasTask1, hasTask2 } = getWritingTaskVisibility(
+            selectedReview.writing,
+            selectedReview.submission
+          )
+          const review = selectedReview.submission.review || {}
+          const reviewed = Boolean(selectedReview.submission.reviewed)
+          const bandCardCount = [hasTask1, hasTask2, true].filter(Boolean).length
 
-                  <p className="text-sm text-gray-400">
-                    {selectedReview.writing.title}
-                  </p>
+          return (
+            <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center px-4">
+              <div className="bg-white rounded-2xl w-full max-w-5xl max-h-[90vh] overflow-y-auto p-6">
+                <div className="flex items-start justify-between mb-6">
+                  <div>
+                    <h2 className="text-xl font-bold text-gray-900">
+                      Writing Feedback
+                    </h2>
 
-                  <p className="text-sm text-purple-600 font-semibold mt-1">
-                    {selectedReview.submission.reviewed
-                      ? `Overall Band ${selectedReview.submission.review?.overall || '-'}`
-                      : 'Waiting for teacher review'}
-                  </p>
+                    <p className="text-sm text-gray-400">
+                      {selectedReview.writing.title} · {getWritingModeLabel(selectedReview.writing, selectedReview.submission)}
+                    </p>
+
+                    <p className="text-sm text-purple-600 font-semibold mt-1">
+                      {reviewed
+                        ? `Overall Band ${review.overall || '-'}`
+                        : 'Waiting for teacher review'}
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={() => setSelectedReview(null)}
+                    className="text-sm text-gray-400 hover:text-gray-600"
+                  >
+                    Close
+                  </button>
                 </div>
 
-                <button
-                  onClick={() => setSelectedReview(null)}
-                  className="text-sm text-gray-400 hover:text-gray-600"
-                >
-                  Close
-                </button>
-              </div>
+                {reviewed && (
+                  <div className={`grid grid-cols-1 ${bandCardCount >= 3 ? 'md:grid-cols-3' : 'md:grid-cols-2'} gap-3 mb-6`}>
+                    {hasTask1 && (
+                      <div className="bg-purple-50 rounded-xl p-4 text-center">
+                        <p className="text-xs text-gray-500 mb-1">Task 1 Band</p>
+                        <p className="text-2xl font-bold text-purple-600">
+                          {review.task1Band || '-'}
+                        </p>
+                      </div>
+                    )}
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-6">
-                <div className="bg-purple-50 rounded-xl p-4 text-center">
-                  <p className="text-xs text-gray-500 mb-1">Task 1 Band</p>
-                  <p className="text-2xl font-bold text-purple-600">
-                    {selectedReview.submission.review?.task1Band || '-'}
-                  </p>
-                </div>
+                    {hasTask2 && (
+                      <div className="bg-indigo-50 rounded-xl p-4 text-center">
+                        <p className="text-xs text-gray-500 mb-1">Task 2 Band</p>
+                        <p className="text-2xl font-bold text-indigo-600">
+                          {review.task2Band || '-'}
+                        </p>
+                      </div>
+                    )}
 
-                <div className="bg-indigo-50 rounded-xl p-4 text-center">
-                  <p className="text-xs text-gray-500 mb-1">Task 2 Band</p>
-                  <p className="text-2xl font-bold text-indigo-600">
-                    {selectedReview.submission.review?.task2Band || '-'}
-                  </p>
-                </div>
+                    <div className="bg-green-50 rounded-xl p-4 text-center">
+                      <p className="text-xs text-gray-500 mb-1">Overall</p>
+                      <p className="text-2xl font-bold text-green-600">
+                        {review.overall || '-'}
+                      </p>
+                    </div>
+                  </div>
+                )}
 
-                <div className="bg-green-50 rounded-xl p-4 text-center">
-                  <p className="text-xs text-gray-500 mb-1">Overall</p>
-                  <p className="text-2xl font-bold text-green-600">
-                    {selectedReview.submission.review?.overall || '-'}
-                  </p>
-                </div>
-              </div>
-
-              {selectedReview.submission.review?.rubric && (
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-                  {Object.entries(getRubricAverages(selectedReview.submission.review)).map(
-                    ([key, value]) => (
+                {reviewed && review.rubric && (
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+                    {Object.entries(getRubricAverages(review)).map(([key, value]) => (
                       <div
                         key={key}
                         className="bg-gray-50 rounded-xl p-3 text-center"
@@ -2749,81 +2802,74 @@
                           {formatBand(value)}
                         </p>
                       </div>
-                    )
+                    ))}
+                  </div>
+                )}
+
+                <div className={`grid grid-cols-1 ${hasTask1 && hasTask2 ? 'lg:grid-cols-2' : ''} gap-6`}>
+                  {hasTask1 && (
+                    <div className="border border-gray-100 rounded-2xl p-5">
+                      <div className="flex items-center justify-between mb-3">
+                        <h3 className="font-semibold text-gray-800">Task 1</h3>
+                        <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1 rounded-full">
+                          {selectedReview.submission.task1WordCount || 0} words
+                        </span>
+                      </div>
+
+                      <p className="text-xs text-gray-400 mb-2">Your answer</p>
+                      <p className="text-sm text-gray-800 leading-7 whitespace-pre-wrap bg-gray-50 rounded-xl p-4 mb-4">
+                        {selectedReview.submission.task1Answer || 'No Task 1 answer submitted.'}
+                      </p>
+
+                      {reviewed && (
+                        <>
+                          <p className="text-xs text-gray-400 mb-2">Teacher feedback</p>
+                          <p className="text-sm text-gray-800 leading-7 whitespace-pre-wrap bg-green-50 rounded-xl p-4">
+                            {review.task1Feedback || 'No feedback.'}
+                          </p>
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {hasTask2 && (
+                    <div className="border border-gray-100 rounded-2xl p-5">
+                      <div className="flex items-center justify-between mb-3">
+                        <h3 className="font-semibold text-gray-800">Task 2</h3>
+                        <span className="text-xs bg-indigo-50 text-indigo-600 px-3 py-1 rounded-full">
+                          {selectedReview.submission.task2WordCount || 0} words
+                        </span>
+                      </div>
+
+                      <p className="text-xs text-gray-400 mb-2">Your answer</p>
+                      <p className="text-sm text-gray-800 leading-7 whitespace-pre-wrap bg-gray-50 rounded-xl p-4 mb-4">
+                        {selectedReview.submission.task2Answer || 'No Task 2 answer submitted.'}
+                      </p>
+
+                      {reviewed && (
+                        <>
+                          <p className="text-xs text-gray-400 mb-2">Teacher feedback</p>
+                          <p className="text-sm text-gray-800 leading-7 whitespace-pre-wrap bg-green-50 rounded-xl p-4">
+                            {review.task2Feedback || 'No feedback.'}
+                          </p>
+                        </>
+                      )}
+                    </div>
                   )}
                 </div>
-              )}
 
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div className="border border-gray-100 rounded-2xl p-5">
-                  <div className="flex items-center justify-between mb-3">
-                    <h3 className="font-semibold text-gray-800">
-                      Task 1
-                    </h3>
-
-                    <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1 rounded-full">
-                      {selectedReview.submission.task1WordCount || 0} words
-                    </span>
-                  </div>
-
-                  <p className="text-xs text-gray-400 mb-2">
-                    Your answer
-                  </p>
-
-                  <p className="text-sm text-gray-800 leading-7 whitespace-pre-wrap bg-gray-50 rounded-xl p-4 mb-4">
-                    {selectedReview.submission.task1Answer}
-                  </p>
-
-                  <p className="text-xs text-gray-400 mb-2">
-                    Teacher feedback
-                  </p>
-
-                  <p className="text-sm text-gray-800 leading-7 whitespace-pre-wrap bg-green-50 rounded-xl p-4">
-                    {selectedReview.submission.review?.task1Feedback || 'No feedback.'}
+                <div className="bg-purple-50 rounded-2xl p-5 mt-6">
+                  <p className="text-xs text-gray-500 mb-2">General Feedback</p>
+                  <p className="text-sm text-purple-800 leading-7 whitespace-pre-wrap">
+                    {reviewed
+                      ? review.generalFeedback || 'No general feedback.'
+                      : 'Your teacher has not reviewed this submission yet.'}
                   </p>
                 </div>
-
-                <div className="border border-gray-100 rounded-2xl p-5">
-                  <div className="flex items-center justify-between mb-3">
-                    <h3 className="font-semibold text-gray-800">
-                      Task 2
-                    </h3>
-
-                    <span className="text-xs bg-indigo-50 text-indigo-600 px-3 py-1 rounded-full">
-                      {selectedReview.submission.task2WordCount || 0} words
-                    </span>
-                  </div>
-
-                  <p className="text-xs text-gray-400 mb-2">
-                    Your answer
-                  </p>
-
-                  <p className="text-sm text-gray-800 leading-7 whitespace-pre-wrap bg-gray-50 rounded-xl p-4 mb-4">
-                    {selectedReview.submission.task2Answer}
-                  </p>
-
-                  <p className="text-xs text-gray-400 mb-2">
-                    Teacher feedback
-                  </p>
-
-                  <p className="text-sm text-gray-800 leading-7 whitespace-pre-wrap bg-green-50 rounded-xl p-4">
-                    {selectedReview.submission.review?.task2Feedback || 'No feedback.'}
-                  </p>
-                </div>
-              </div>
-
-              <div className="bg-purple-50 rounded-2xl p-5 mt-6">
-                <p className="text-xs text-gray-500 mb-2">
-                  General Feedback
-                </p>
-
-                <p className="text-sm text-purple-800 leading-7 whitespace-pre-wrap">
-                  {selectedReview.submission.review?.generalFeedback || 'No general feedback.'}
-                </p>
               </div>
             </div>
-          </div>
-        )}
+          )
+        })()}
       </div>
     )
   }

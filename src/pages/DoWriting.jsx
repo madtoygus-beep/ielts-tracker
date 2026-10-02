@@ -6,6 +6,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  onSnapshot,
   query,
   where
 } from 'firebase/firestore'
@@ -133,6 +134,7 @@ export default function DoWriting() {
   const [task2Answer, setTask2Answer] = useState('')
   const [timeLeft, setTimeLeft] = useState(60 * 60)
   const [submitted, setSubmitted] = useState(false)
+  const [completedSubmission, setCompletedSubmission] = useState(null)
   const [submitting, setSubmitting] = useState(false)
   const [alreadyDone, setAlreadyDone] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -354,10 +356,12 @@ export default function DoWriting() {
       if (!isCurrentLoad()) return
 
       if (!existing.empty) {
-        const sub = existing.docs[0].data()
+        const existingDoc = existing.docs[0]
+        const sub = { id: existingDoc.id, ...existingDoc.data() }
 
         setAlreadyDone(true)
         setSubmitted(true)
+        setCompletedSubmission(sub)
         setTask1Answer(sub.task1Answer || '')
         setTask2Answer(sub.task2Answer || '')
       }
@@ -562,6 +566,28 @@ export default function DoWriting() {
     }
   }, [])
 
+  useEffect(() => {
+    if (!user || !submitted || !completedSubmission?.id) return undefined
+
+    const submissionRef = doc(db, 'writingSubmissions', completedSubmission.id)
+
+    return onSnapshot(
+      submissionRef,
+      snapshot => {
+        if (!snapshot.exists()) return
+
+        const data = { id: snapshot.id, ...snapshot.data() }
+        setCompletedSubmission(data)
+        setAlreadyDone(true)
+        setTask1Answer(data.task1Answer || '')
+        setTask2Answer(data.task2Answer || '')
+      },
+      error => {
+        console.warn('Could not refresh writing review:', error)
+      }
+    )
+  }, [user, submitted, completedSubmission?.id])
+
   const saveDraftNow = () => {
     saveDraftToStorage('Draft saved ✓')
   }
@@ -653,6 +679,7 @@ export default function DoWriting() {
       clearDraft(submittedDraftKey)
 
       if (mountedRef.current && loadVersionRef.current === submissionVersion) {
+        setCompletedSubmission({ id: submissionRef.id, ...submissionData })
         setSubmitted(true)
       }
     } catch (error) {
@@ -669,6 +696,10 @@ export default function DoWriting() {
           clearDraft(submittedDraftKey)
 
           if (mountedRef.current && loadVersionRef.current === submissionVersion) {
+            const data = { id: existingSnap.id, ...existingSnap.data() }
+            setCompletedSubmission(data)
+            setTask1Answer(data.task1Answer || '')
+            setTask2Answer(data.task2Answer || '')
             setAlreadyDone(true)
             setSubmitted(true)
             setSubmitting(false)
@@ -698,6 +729,9 @@ export default function DoWriting() {
   }
 
   if (submitted) {
+    const review = completedSubmission?.review || null
+    const reviewed = Boolean(completedSubmission?.reviewed && review)
+
     return (
       <div className="min-h-screen bg-[#faf9f6]">
         <nav className="flex justify-between items-center px-8 py-4 bg-white border-b border-gray-100">
@@ -713,14 +747,16 @@ export default function DoWriting() {
 
         <div className="max-w-3xl mx-auto px-6 py-16">
           <div className="bg-white border border-gray-100 rounded-2xl p-8 text-center">
-            <div className="text-4xl mb-4">✅</div>
+            <div className="text-4xl mb-4">{reviewed ? '📝' : '✅'}</div>
 
             <h1 className="text-2xl font-bold text-gray-900 mb-2">
-              Writing Submitted
+              {reviewed ? 'Writing Reviewed' : 'Writing Submitted'}
             </h1>
 
             <p className="text-gray-500 text-sm mb-6">
-              Your teacher will review your writing answer.
+              {reviewed
+                ? `Your teacher has reviewed this ${isFullWriting ? 'Writing test' : activeTaskLabel}.`
+                : 'Your teacher will review your writing answer.'}
             </p>
 
             {alreadyDone && (
@@ -729,25 +765,105 @@ export default function DoWriting() {
               </p>
             )}
 
-            <div className={`grid ${isFullWriting ? 'grid-cols-2' : 'grid-cols-1'} gap-3 mb-6`}>
-              {hasTask1 && (
-                <div className="bg-gray-50 rounded-xl p-4">
-                  <p className="text-xs text-gray-400 mb-1">Task 1 words</p>
-                  <p className="text-xl font-bold text-purple-600">
-                    {countWords(task1Answer)}
+            {reviewed ? (
+              <div className={`grid grid-cols-1 ${isFullWriting ? 'md:grid-cols-3' : 'md:grid-cols-2'} gap-3 mb-6`}>
+                {hasTask1 && (
+                  <div className="bg-purple-50 rounded-xl p-4">
+                    <p className="text-xs text-gray-500 mb-1">Task 1 Band</p>
+                    <p className="text-2xl font-bold text-purple-600">
+                      {review?.task1Band || '-'}
+                    </p>
+                  </div>
+                )}
+
+                {hasTask2 && (
+                  <div className="bg-indigo-50 rounded-xl p-4">
+                    <p className="text-xs text-gray-500 mb-1">Task 2 Band</p>
+                    <p className="text-2xl font-bold text-indigo-600">
+                      {review?.task2Band || '-'}
+                    </p>
+                  </div>
+                )}
+
+                <div className="bg-green-50 rounded-xl p-4">
+                  <p className="text-xs text-gray-500 mb-1">Overall Band</p>
+                  <p className="text-2xl font-bold text-green-600">
+                    {review?.overall || '-'}
                   </p>
+                </div>
+              </div>
+            ) : (
+              <div className={`grid ${isFullWriting ? 'grid-cols-2' : 'grid-cols-1'} gap-3 mb-6`}>
+                {hasTask1 && (
+                  <div className="bg-gray-50 rounded-xl p-4">
+                    <p className="text-xs text-gray-400 mb-1">Task 1 words</p>
+                    <p className="text-xl font-bold text-purple-600">
+                      {countWords(task1Answer)}
+                    </p>
+                  </div>
+                )}
+
+                {hasTask2 && (
+                  <div className="bg-gray-50 rounded-xl p-4">
+                    <p className="text-xs text-gray-400 mb-1">Task 2 words</p>
+                    <p className="text-xl font-bold text-purple-600">
+                      {countWords(task2Answer)}
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className={`grid grid-cols-1 ${isFullWriting ? 'lg:grid-cols-2' : ''} gap-4 mb-6 text-left`}>
+              {hasTask1 && (
+                <div className="border border-gray-100 rounded-xl p-4">
+                  <div className="flex items-center justify-between gap-3 mb-2">
+                    <p className="font-semibold text-gray-800">Task 1</p>
+                    <span className="text-xs text-gray-400">{countWords(task1Answer)} words</span>
+                  </div>
+                  <div className="bg-gray-50 rounded-lg p-3 text-sm text-gray-700 whitespace-pre-wrap max-h-56 overflow-y-auto">
+                    {task1Answer || 'No Task 1 answer submitted.'}
+                  </div>
+                  {reviewed && (
+                    <div className="bg-green-50 rounded-lg p-3 mt-3">
+                      <p className="text-xs font-semibold text-green-700 mb-1">Teacher feedback</p>
+                      <p className="text-sm text-green-900 whitespace-pre-wrap">
+                        {review?.task1Feedback || 'No feedback.'}
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
 
               {hasTask2 && (
-                <div className="bg-gray-50 rounded-xl p-4">
-                  <p className="text-xs text-gray-400 mb-1">Task 2 words</p>
-                  <p className="text-xl font-bold text-purple-600">
-                    {countWords(task2Answer)}
-                  </p>
+                <div className="border border-gray-100 rounded-xl p-4">
+                  <div className="flex items-center justify-between gap-3 mb-2">
+                    <p className="font-semibold text-gray-800">Task 2</p>
+                    <span className="text-xs text-gray-400">{countWords(task2Answer)} words</span>
+                  </div>
+                  <div className="bg-gray-50 rounded-lg p-3 text-sm text-gray-700 whitespace-pre-wrap max-h-56 overflow-y-auto">
+                    {task2Answer || 'No Task 2 answer submitted.'}
+                  </div>
+                  {reviewed && (
+                    <div className="bg-green-50 rounded-lg p-3 mt-3">
+                      <p className="text-xs font-semibold text-green-700 mb-1">Teacher feedback</p>
+                      <p className="text-sm text-green-900 whitespace-pre-wrap">
+                        {review?.task2Feedback || 'No feedback.'}
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
+
+            {reviewed && (
+              <div className="bg-purple-50 rounded-xl p-4 mb-6 text-left">
+                <p className="text-xs font-semibold text-purple-700 mb-1">General Feedback</p>
+                <p className="text-sm text-purple-900 whitespace-pre-wrap">
+                  {review?.generalFeedback || 'No general feedback.'}
+                </p>
+              </div>
+            )}
 
             <button
               onClick={() => navigate('/student')}
