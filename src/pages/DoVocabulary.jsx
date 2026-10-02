@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { auth, db } from '../firebase'
+import { auth, db, functions } from '../firebase'
 import {
   collection,
   doc,
@@ -8,13 +8,17 @@ import {
   getDocFromServer,
   query,
   where,
-  setDoc,
-  deleteDoc
+  setDoc
 } from 'firebase/firestore'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
+import { httpsCallable } from 'firebase/functions'
 import { useNavigate, useParams } from 'react-router-dom'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
+
+const syncMyObjectiveAssignments = httpsCallable(functions, 'syncMyObjectiveAssignments')
+const submitVocabularySecure = httpsCallable(functions, 'submitVocabularySecure')
+const getCompletedObjectiveReview = httpsCallable(functions, 'getCompletedObjectiveReview')
 
 function getVocabularyBand(correct, total) {
   if (!total) return 0
@@ -353,14 +357,26 @@ export default function DoVocabulary() {
         setUser(currentUser)
         setProfile(loadedProfile)
 
-        const testSnap = await getDocFromServer(doc(db, 'vocabularyTests', id))
+        // 8D-2: students load the answer-key-free projection, never the source vocabulary test.
+        let testSnap = await getDocFromServer(doc(db, 'studentVocabularyTests', id))
 
         if (!isCurrent()) return
 
+        // Older assignments may predate the projection collections. Refresh only when needed.
         if (!testSnap.exists()) {
-          alert('Vocabulary test not found.')
-          navigate('/student')
-          return
+          try {
+            await syncMyObjectiveAssignments({})
+            if (!isCurrent()) return
+            testSnap = await getDocFromServer(doc(db, 'studentVocabularyTests', id))
+          } catch (syncError) {
+            console.warn('Could not refresh sanitized vocabulary assignments:', syncError)
+          }
+        }
+
+        if (!testSnap.exists()) {
+          throw new Error(
+            'The student-safe copy of this vocabulary practice is not available. Return to the dashboard and try again, or ask your teacher to refresh the assignment.'
+          )
         }
 
         const data = {
@@ -406,11 +422,34 @@ export default function DoVocabulary() {
         if (submissions.length > 0) {
           const submission = submissions[0]
 
+          // Answer keys are returned only after the server confirms this student submitted.
+          const reviewResponse = await getCompletedObjectiveReview({
+            type: 'vocabulary',
+            assignmentId: id
+          })
+
+          if (!isCurrent()) return
+
+          const reviewData = reviewResponse?.data || {}
+          const reviewSource = reviewData.source
+
+          if (!reviewSource || typeof reviewSource !== 'object') {
+            throw new Error('Completed vocabulary review did not return the source document.')
+          }
+
+          setTest({
+            ...reviewSource,
+            id: reviewSource.id || id,
+            questions: Array.isArray(reviewSource.questions)
+              ? reviewSource.questions
+              : []
+          })
+          setTimeLeft((data.timeLimit || 20) * 60)
           submittedRef.current = true
           setAlreadyDone(true)
           setMatchingReviewVersion(submission.matchingViewVersion === 1 ? 1 : 0)
           setAnswers(submission.answers || {})
-          setResult(submission.result || null)
+          setResult(reviewData.result || submission.result || null)
           setSubmitted(true)
         } else {
           try {
@@ -587,6 +626,12 @@ export default function DoVocabulary() {
   )
 
   const matchingDefinitionOrder = useMemo(() => {
+    // During an active attempt the sanitized projection deliberately has no
+    // definition attached to its word/question object. Do not reconstruct the
+    // word-to-definition pairing in the browser. The ordered definition text is
+    // supplied separately by the server-safe projection.
+    if (test?.answerKeySeparated === true) return []
+
     const items = groupedQuestions.matching
 
     if (
@@ -604,6 +649,14 @@ export default function DoVocabulary() {
       ...items.slice(0, shift)
     ]
   }, [groupedQuestions.matching, test])
+
+  const matchingDefinitionTexts = useMemo(() => {
+    if (test?.answerKeySeparated === true && Array.isArray(test?.matchingDefinitions)) {
+      return test.matchingDefinitions.map(value => value?.toString() || '')
+    }
+
+    return matchingDefinitionOrder.map(item => item?.definition || '')
+  }, [matchingDefinitionOrder, test])
 
   const getGlobalQuestionNumber = question => {
     const index = orderedQuestions.findIndex(
@@ -703,7 +756,7 @@ export default function DoVocabulary() {
   ) => {
     if (cannotEditAnswers()) return
     const definitionLetter = getMatchingLetter(definitionIndex)
-    if (!matchingDefinitionOrder[definitionIndex]) return
+    if (!matchingDefinitionTexts[definitionIndex]) return
     if (selectedQuestionId && !groupedQuestions.matching.some(
       question => question.id === selectedQuestionId
     )) return
@@ -853,69 +906,82 @@ export default function DoVocabulary() {
 
     clearInterval(timerRef.current)
 
-    const res = calculateScore()
-    const submissionTeacherIds = getSourceTeacherIds(test)
-
-    const submissionRef = doc(db, 'vocabularySubmissions', `${user.uid}_${id}`)
-    const submissionData = {
-      uid: user.uid,
-      studentId: user.uid,
-      studentEmail: user.email || profile?.email || '',
-      studentName: profile?.name || profile?.fullName || user.email || '',
-      vocabularyTestId: id,
-      vocabularyId: id,
-      testId: id,
-      homeworkId: id,
-      vocabularyTitle: test.title || '',
-      matchingViewVersion: 1,
-      teacherId: submissionTeacherIds[0] || '',
-      teacherIds: submissionTeacherIds,
-      schoolId: test.schoolId || profile?.schoolId || 'maxima',
-      answers,
-      result: res,
-      submittedAt: new Date().toISOString(),
-      archived: false,
-      finishedLate: timeLeft <= 0,
-      autoSubmitted: autoSubmit
-    }
-
     try {
-      // Repair 08C: one immutable document per student + vocabulary test.
-      await setDoc(submissionRef, submissionData)
-
-      // The submission is already durable. Draft cleanup is best-effort and
-      // must not turn a successful submission into an apparent failure.
-      void deleteDoc(doc(db, 'vocabularyDrafts', `${user.uid}_${id}`))
-        .catch(error => console.warn('Could not remove the submitted draft:', error))
+      // 8D-2: scoring and immutable submission creation happen on the server.
+      const response = await submitVocabularySecure({
+        vocabularyTestId: id,
+        answers,
+        finishedLate: timeLeft <= 0,
+        autoSubmitted: autoSubmit
+      })
 
       if (!isCurrent()) return
+
+      const secureData = response?.data || {}
+      let reviewSource = secureData.reviewSource
+      let secureResult = secureData.result || null
+
+      if (!reviewSource || typeof reviewSource !== 'object') {
+        const reviewResponse = await getCompletedObjectiveReview({
+          type: 'vocabulary',
+          assignmentId: id
+        })
+
+        if (!isCurrent()) return
+
+        reviewSource = reviewResponse?.data?.source
+        secureResult = reviewResponse?.data?.result || secureResult
+      }
+
+      if (!reviewSource || typeof reviewSource !== 'object') {
+        throw new Error('Secure Vocabulary submission did not return review data.')
+      }
+
+      // If another tab submitted first, restore the answers that are actually stored.
+      if (secureData.alreadySubmitted === true) {
+        const existingQuery = query(
+          collection(db, 'vocabularySubmissions'),
+          where('uid', '==', user.uid)
+        )
+        const existingSnap = await getDocsFromServer(existingQuery)
+
+        if (!isCurrent()) return
+
+        const storedSubmissions = existingSnap.docs
+          .map(item => item.data())
+          .filter(submission => isSubmissionForVocabularyTest(submission, id))
+          .sort(
+            (a, b) =>
+              new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0)
+          )
+
+        if (storedSubmissions.length > 0) {
+          const stored = storedSubmissions[0]
+          setAnswers(stored.answers || {})
+          setMatchingReviewVersion(stored.matchingViewVersion === 1 ? 1 : 0)
+          secureResult = stored.result || secureResult
+        }
+
+        setAlreadyDone(true)
+      } else {
+        setMatchingReviewVersion(1)
+      }
+
+      setTest({
+        ...reviewSource,
+        id: reviewSource.id || id,
+        questions: Array.isArray(reviewSource.questions)
+          ? reviewSource.questions
+          : []
+      })
       submittedRef.current = true
-      setResult(res)
+      setResult(secureResult)
       setSubmitted(true)
       setDraftRestored(false)
       setSubmitting(false)
     } catch (error) {
-      console.error(error)
+      console.error('Secure Vocabulary submission failed:', error)
       if (!isCurrent()) return
-
-      try {
-        const existingSnap = await getDoc(submissionRef)
-        if (existingSnap.exists()) {
-          const existing = existingSnap.data()
-          void deleteDoc(doc(db, 'vocabularyDrafts', `${user.uid}_${id}`))
-            .catch(cleanupError => console.warn('Could not remove the submitted draft:', cleanupError))
-          submittedRef.current = true
-          setAlreadyDone(true)
-          setAnswers(existing.answers || {})
-          setResult(existing.result || res)
-          setSubmitted(true)
-          setDraftRestored(false)
-          setSubmitting(false)
-          return
-        }
-      } catch (lookupError) {
-        console.warn('Could not verify an existing vocabulary submission:', lookupError)
-      }
 
       submittingRef.current = false
       setSubmitting(false)
@@ -1024,13 +1090,13 @@ export default function DoVocabulary() {
         </div>
 
         <div className="space-y-3">
-          {matchingDefinitionOrder.map((definitionQuestion, definitionIndex) => {
+          {matchingDefinitionTexts.map((definitionText, definitionIndex) => {
             const selectedQuestionId =
               getWordSelectedForDefinition(definitionIndex)
 
             return (
               <div
-                key={definitionQuestion.id}
+                key={`definition-${definitionIndex}`}
                 className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_260px] gap-4 items-center border border-gray-100 rounded-2xl p-4"
               >
                 <div className="flex items-start gap-3">
@@ -1039,7 +1105,7 @@ export default function DoVocabulary() {
                   </span>
 
                   <p className="text-sm text-gray-800 leading-7">
-                    {definitionQuestion.definition}
+                    {definitionText}
                   </p>
                 </div>
 
