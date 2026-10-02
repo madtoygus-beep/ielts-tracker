@@ -47,7 +47,31 @@ function isTeacherLibraryVisible(item, teacherId, schoolId) {
   return isAssignedToTeacher(item, teacherId) || visibility === 'school'
 }
 
-function listenMergedQueries(queryList, onItems, label = 'Firestore query') {
+function chunkValues(values, size = 10) {
+  const clean = Array.from(
+    new Set(
+      (Array.isArray(values) ? values : [])
+        .filter(value => value !== undefined && value !== null)
+        .map(value => value.toString().trim())
+        .filter(Boolean)
+    )
+  )
+
+  const chunks = []
+
+  for (let index = 0; index < clean.length; index += size) {
+    chunks.push(clean.slice(index, index + size))
+  }
+
+  return chunks
+}
+
+function listenMergedQueries(
+  queryList,
+  onItems,
+  label = 'Firestore query',
+  onError = null
+) {
   if (!Array.isArray(queryList) || queryList.length === 0) {
     onItems([])
     return () => {}
@@ -80,7 +104,13 @@ function listenMergedQueries(queryList, onItems, label = 'Firestore query') {
       },
       error => {
         console.warn(`${label} failed`, error)
-        buckets.set(index, [])
+
+        // Keep the last successful bucket instead of turning a transient
+        // Firestore error into an empty dashboard.
+        if (typeof onError === 'function') {
+          onError(error, label)
+        }
+
         emit()
       }
     )
@@ -146,9 +176,11 @@ function buildTeacherSubmissionQueries(
     query(source, where('teacherId', '==', teacherId))
   ]
 
-  parentIds.forEach(parentId => {
-    parentFields.forEach(parentField => {
-      queries.push(query(source, where(parentField, '==', parentId)))
+  const parentIdChunks = chunkValues(parentIds)
+
+  parentFields.forEach(parentField => {
+    parentIdChunks.forEach(parentIdChunk => {
+      queries.push(query(source, where(parentField, 'in', parentIdChunk)))
     })
   })
 
@@ -255,11 +287,19 @@ export default function TeacherDashboard() {
   const [passwordMsg, setPasswordMsg] = useState('')
   const [activeTab, setActiveTab] = useState('overview')
   const [analyticsStudentId, setAnalyticsStudentId] = useState('all')
+  const [dashboardDataError, setDashboardDataError] = useState('')
 
   const navigate = useNavigate()
 
   const openTeacherPreview = (type, contentId) => {
     navigate(`/preview/${type}/${contentId}`)
+  }
+
+  const reportLiveQueryError = (error, label = 'Dashboard data') => {
+    console.warn(`${label} failed`, error)
+    setDashboardDataError(
+      'Some dashboard data could not be refreshed. Existing data is being kept on screen. Firestore listeners will retry automatically.'
+    )
   }
 
   useEffect(() => {
@@ -283,6 +323,7 @@ export default function TeacherDashboard() {
 
     const unsubAuth = onAuthStateChanged(auth, async currentUser => {
       clearLiveUnsubscribers()
+      setDashboardDataError('')
 
       if (!currentUser) {
         navigate('/login')
@@ -327,21 +368,25 @@ export default function TeacherDashboard() {
             )
 
         trackSnapshot(
-          onSnapshot(studentsQuery, snap => {
-            const list = snap.docs
-              .map(d => ({ id: d.id, ...d.data() }))
-              .filter(u => {
-                if (u.deleted || u.status !== 'approved') return false
-                if (isAdminUser) return true
+          onSnapshot(
+            studentsQuery,
+            snap => {
+              const list = snap.docs
+                .map(d => ({ id: d.id, ...d.data() }))
+                .filter(u => {
+                  if (u.deleted || u.status !== 'approved') return false
+                  if (isAdminUser) return true
 
-                return getSchoolId(u) === teacherSchoolId
-              })
-              .sort((a, b) =>
-                (a.name || a.email || '').localeCompare(b.name || b.email || '')
-              )
+                  return getSchoolId(u) === teacherSchoolId
+                })
+                .sort((a, b) =>
+                  (a.name || a.email || '').localeCompare(b.name || b.email || '')
+                )
 
-            setStudents(list)
-          })
+              setStudents(list)
+            },
+            error => reportLiveQueryError(error, 'Student list query')
+          )
         )
 
         const classesQuery = isAdminUser
@@ -352,19 +397,23 @@ export default function TeacherDashboard() {
             )
 
         trackSnapshot(
-          onSnapshot(classesQuery, snap => {
-            const list = snap.docs
-              .map(d => ({ id: d.id, ...d.data() }))
-              .filter(classItem => {
-                if (classItem.archived === true) return false
-                if (isAdminUser) return true
+          onSnapshot(
+            classesQuery,
+            snap => {
+              const list = snap.docs
+                .map(d => ({ id: d.id, ...d.data() }))
+                .filter(classItem => {
+                  if (classItem.archived === true) return false
+                  if (isAdminUser) return true
 
-                return getSchoolId(classItem) === teacherSchoolId
-              })
-              .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+                  return getSchoolId(classItem) === teacherSchoolId
+                })
+                .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
 
-            setClasses(list)
-          })
+              setClasses(list)
+            },
+            error => reportLiveQueryError(error, 'Class list query')
+          )
         )
 
         const [
@@ -416,7 +465,8 @@ export default function TeacherDashboard() {
           listenMergedQueries(
             contentQueries('readings'),
             setSortedLibraryItems(setReadings),
-            'Reading library query'
+            'Reading library query',
+            reportLiveQueryError
           )
         )
 
@@ -424,7 +474,8 @@ export default function TeacherDashboard() {
           listenMergedQueries(
             contentQueries('writingHomeworks'),
             setSortedLibraryItems(setWritings),
-            'Writing library query'
+            'Writing library query',
+            reportLiveQueryError
           )
         )
 
@@ -432,7 +483,8 @@ export default function TeacherDashboard() {
           listenMergedQueries(
             contentQueries('listenings'),
             setSortedLibraryItems(setListenings),
-            'Listening library query'
+            'Listening library query',
+            reportLiveQueryError
           )
         )
 
@@ -440,7 +492,8 @@ export default function TeacherDashboard() {
           listenMergedQueries(
             contentQueries('mockTests'),
             setSortedLibraryItems(setMockTests),
-            'Mock library query'
+            'Mock library query',
+            reportLiveQueryError
           )
         )
 
@@ -448,7 +501,8 @@ export default function TeacherDashboard() {
           listenMergedQueries(
             contentQueries('vocabularyTests'),
             setSortedLibraryItems(setVocabularyTests),
-            'Vocabulary library query'
+            'Vocabulary library query',
+            reportLiveQueryError
           )
         )
 
@@ -474,7 +528,8 @@ export default function TeacherDashboard() {
               ownedReadingIds
             ),
             setSubmissions,
-            'Reading submission query'
+            'Reading submission query',
+            reportLiveQueryError
           )
         )
 
@@ -486,7 +541,8 @@ export default function TeacherDashboard() {
               ownedWritingIds
             ),
             setWritingSubmissions,
-            'Writing submission query'
+            'Writing submission query',
+            reportLiveQueryError
           )
         )
 
@@ -498,7 +554,8 @@ export default function TeacherDashboard() {
               ownedListeningIds
             ),
             setListeningSubmissions,
-            'Listening submission query'
+            'Listening submission query',
+            reportLiveQueryError
           )
         )
 
@@ -510,7 +567,8 @@ export default function TeacherDashboard() {
               ownedMockIds
             ),
             setMockSubmissions,
-            'Mock submission query'
+            'Mock submission query',
+            reportLiveQueryError
           )
         )
 
@@ -522,7 +580,8 @@ export default function TeacherDashboard() {
               ownedVocabularyIds
             ),
             setVocabularySubmissions,
-            'Vocabulary submission query'
+            'Vocabulary submission query',
+            reportLiveQueryError
           )
         )
 
@@ -550,7 +609,8 @@ export default function TeacherDashboard() {
                     new Date(b.createdAt || 0) - new Date(a.createdAt || 0)
                 )
               ),
-            'Message query'
+            'Message query',
+            reportLiveQueryError
           )
         )
 
@@ -564,7 +624,8 @@ export default function TeacherDashboard() {
                     new Date(b.createdAt || 0) - new Date(a.createdAt || 0)
                 )
               ),
-            'Material query'
+            'Material query',
+            reportLiveQueryError
           )
         )
 
@@ -583,10 +644,10 @@ export default function TeacherDashboard() {
                 collection(db, 'scores'),
                 where('addedBy', '==', currentUser.uid)
               ),
-              ...ownedMockIds.map(mockId =>
+              ...chunkValues(ownedMockIds).map(mockIdChunk =>
                 query(
                   collection(db, 'scores'),
-                  where('mockTestId', '==', mockId)
+                  where('mockTestId', 'in', mockIdChunk)
                 )
               )
             ]
@@ -615,15 +676,21 @@ export default function TeacherDashboard() {
 
               setScores(groupedScores)
             },
-            'Score query'
+            'Score query',
+            reportLiveQueryError
           )
         )
       } catch (error) {
         console.error(error)
 
         if (isActive) {
-          await signOut(auth)
-          navigate('/login')
+          // A transient Firestore/network problem should not log a valid
+          // teacher out of the application or replace the dashboard with
+          // the login page.
+          setUser(currentUser)
+          setDashboardDataError(
+            'The dashboard could not finish loading all data. Check your connection and retry. Your account has not been signed out.'
+          )
         }
       }
     })
@@ -5765,6 +5832,19 @@ Continue permanent delete?`
         <p className="text-gray-400 text-sm mb-6">
           Manage students, scores and reusable homework
         </p>
+
+        {dashboardDataError && (
+          <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <p className="text-sm text-amber-800">{dashboardDataError}</p>
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="shrink-0 rounded-xl bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700"
+            >
+              Retry
+            </button>
+          </div>
+        )}
 
         <div className="flex items-center gap-4 mb-8">
           <button
