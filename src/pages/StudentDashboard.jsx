@@ -78,6 +78,100 @@
     return currentUserValues.some(value => assignedValues.includes(value))
   }
 
+
+  const sharedStudentSnapshotRegistry = new Map()
+  const STUDENT_DATA_ERROR_EVENT = 'maxima-student-data-error'
+
+  function emitStudentDataError(key, error = null) {
+    if (typeof window === 'undefined') return
+
+    window.dispatchEvent(
+      new CustomEvent(STUDENT_DATA_ERROR_EVENT, {
+        detail: {
+          key,
+          message: error?.message || ''
+        }
+      })
+    )
+  }
+
+  function subscribeSharedSnapshot(key, firestoreQuery, onItems) {
+    let entry = sharedStudentSnapshotRegistry.get(key)
+
+    if (!entry) {
+      entry = {
+        subscribers: new Set(),
+        lastItems: null,
+        unsubscribe: null
+      }
+
+      entry.unsubscribe = onSnapshot(
+        firestoreQuery,
+        snap => {
+          const items = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+          entry.lastItems = items
+          emitStudentDataError(key)
+
+          entry.subscribers.forEach(subscriber => {
+            subscriber(items)
+          })
+        },
+        error => {
+          console.warn(`Student dashboard query failed: ${key}`, error)
+          emitStudentDataError(key, error)
+        }
+      )
+
+      sharedStudentSnapshotRegistry.set(key, entry)
+    }
+
+    entry.subscribers.add(onItems)
+
+    if (entry.lastItems !== null) {
+      onItems(entry.lastItems)
+    }
+
+    return () => {
+      const currentEntry = sharedStudentSnapshotRegistry.get(key)
+      if (!currentEntry) return
+
+      currentEntry.subscribers.delete(onItems)
+
+      if (currentEntry.subscribers.size === 0) {
+        currentEntry.unsubscribe?.()
+        sharedStudentSnapshotRegistry.delete(key)
+        emitStudentDataError(key)
+      }
+    }
+  }
+
+  function listenUserCollection(collectionName, uid, onItems, options = {}) {
+    if (!uid) return () => {}
+
+    const q = query(
+      collection(db, collectionName),
+      where('uid', '==', uid)
+    )
+
+    return subscribeSharedSnapshot(
+      `uid:${collectionName}:${uid}`,
+      q,
+      items => {
+        let nextItems = items.filter(item => item.archived !== true)
+
+        if (typeof options.filter === 'function') {
+          nextItems = nextItems.filter(options.filter)
+        }
+
+        if (typeof options.sort === 'function') {
+          nextItems = [...nextItems].sort(options.sort)
+        }
+
+        onItems(nextItems)
+      }
+    )
+  }
+
   function listenAssignedCollection(collectionName, user, profile, onItems, options = {}) {
     if (!user) return () => {}
 
@@ -163,19 +257,11 @@
         where(fieldName, 'array-contains', value)
       )
 
-      return onSnapshot(
+      return subscribeSharedSnapshot(
+        `assigned:${collectionName}:${fieldName}:${normalizeId(value)}`,
         q,
-        snap => {
-          resultBuckets[key] = snap.docs.map(d => ({
-            id: d.id,
-            ...d.data()
-          }))
-
-          emit()
-        },
-        error => {
-          console.warn(`Assignment query failed for ${collectionName}.${fieldName}`, error)
-          resultBuckets[key] = []
+        items => {
+          resultBuckets[key] = items
           emit()
         }
       )
@@ -760,20 +846,11 @@
     useEffect(() => {
       if (!user) return
 
-      const q = query(
-        collection(db, 'readingSubmissions'),
-        where('uid', '==', user.uid)
+      return listenUserCollection(
+        'readingSubmissions',
+        user.uid,
+        setReadingSubmissions
       )
-
-      const unsub = onSnapshot(q, snap => {
-        const data = snap.docs
-          .map(d => ({ id: d.id, ...d.data() }))
-          .filter(item => item.archived !== true)
-
-        setReadingSubmissions(data)
-      })
-
-      return unsub
     }, [user])
 
     useEffect(() => {
@@ -794,20 +871,11 @@
     useEffect(() => {
       if (!user) return
 
-      const q = query(
-        collection(db, 'listeningSubmissions'),
-        where('uid', '==', user.uid)
+      return listenUserCollection(
+        'listeningSubmissions',
+        user.uid,
+        setListeningSubmissions
       )
-
-      const unsub = onSnapshot(q, snap => {
-        const data = snap.docs
-          .map(d => ({ id: d.id, ...d.data() }))
-          .filter(item => item.archived !== true)
-
-        setListeningSubmissions(data)
-      })
-
-      return unsub
     }, [user])
 
     const readingAnalytics = calculateSkillAnalytics(
@@ -1055,20 +1123,11 @@
     useEffect(() => {
       if (!user) return
 
-      const q = query(
-        collection(db, 'readingSubmissions'),
-        where('uid', '==', user.uid)
+      return listenUserCollection(
+        'readingSubmissions',
+        user.uid,
+        setSubmissions
       )
-
-      const unsub = onSnapshot(q, snap => {
-        const data = snap.docs
-          .map(d => ({ id: d.id, ...d.data() }))
-          .filter(item => item.archived !== true)
-
-        setSubmissions(data)
-      })
-
-      return unsub
     }, [user])
 
     const isDone = readingId =>
@@ -1205,20 +1264,11 @@
     useEffect(() => {
       if (!user) return
 
-      const q = query(
-        collection(db, 'listeningSubmissions'),
-        where('uid', '==', user.uid)
+      return listenUserCollection(
+        'listeningSubmissions',
+        user.uid,
+        setSubmissions
       )
-
-      const unsub = onSnapshot(q, snap => {
-        const data = snap.docs
-          .map(d => ({ id: d.id, ...d.data() }))
-          .filter(item => item.archived !== true)
-
-        setSubmissions(data)
-      })
-
-      return unsub
     }, [user])
 
     const isDone = listeningId =>
@@ -1340,24 +1390,15 @@
     useEffect(() => {
       if (!user) return
 
-      const q = query(
-        collection(db, 'mockSubmissions'),
-        where('uid', '==', user.uid)
+      return listenUserCollection(
+        'mockSubmissions',
+        user.uid,
+        setMockSubmissions,
+        {
+          sort: (a, b) =>
+            new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0)
+        }
       )
-
-      const unsub = onSnapshot(q, snap => {
-        const data = snap.docs
-          .map(d => ({ id: d.id, ...d.data() }))
-          .filter(item => item.archived !== true)
-
-        data.sort(
-          (a, b) => new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0)
-        )
-
-        setMockSubmissions(data)
-      })
-
-      return unsub
     }, [user])
 
     useEffect(() => {
@@ -1725,20 +1766,11 @@
     useEffect(() => {
       if (!user) return
 
-      const q = query(
-        collection(db, 'vocabularySubmissions'),
-        where('uid', '==', user.uid)
+      return listenUserCollection(
+        'vocabularySubmissions',
+        user.uid,
+        setSubmissions
       )
-
-      const unsub = onSnapshot(q, snap => {
-        const data = snap.docs
-          .map(d => ({ id: d.id, ...d.data() }))
-          .filter(item => item.archived !== true)
-
-        setSubmissions(data)
-      })
-
-      return unsub
     }, [user])
 
     const isVocabularySubmissionForTest = (submission, vocabularyTestId) =>
@@ -2019,20 +2051,11 @@
     useEffect(() => {
       if (!user) return
 
-      const q = query(
-        collection(db, 'mockSubmissions'),
-        where('uid', '==', user.uid)
+      return listenUserCollection(
+        'mockSubmissions',
+        user.uid,
+        setSubmissions
       )
-
-      const unsub = onSnapshot(q, snap => {
-        const data = snap.docs
-          .map(d => ({ id: d.id, ...d.data() }))
-          .filter(item => item.archived !== true)
-
-        setSubmissions(data)
-      })
-
-      return unsub
     }, [user])
 
     const getSubmission = mockId =>
@@ -2199,20 +2222,11 @@
     useEffect(() => {
       if (!user) return
 
-      const q = query(
-        collection(db, 'writingSubmissions'),
-        where('uid', '==', user.uid)
+      return listenUserCollection(
+        'writingSubmissions',
+        user.uid,
+        setSubmissions
       )
-
-      const unsub = onSnapshot(q, snap => {
-        const data = snap.docs
-          .map(d => ({ id: d.id, ...d.data() }))
-          .filter(item => item.archived !== true)
-
-        setSubmissions(data)
-      })
-
-      return unsub
     }, [user])
 
     useEffect(() => {
@@ -2544,20 +2558,11 @@
     useEffect(() => {
       if (!user) return
 
-      const q = query(
-        collection(db, 'writingSubmissions'),
-        where('uid', '==', user.uid)
+      return listenUserCollection(
+        'writingSubmissions',
+        user.uid,
+        setSubmissions
       )
-
-      const unsub = onSnapshot(q, snap => {
-        const data = snap.docs
-          .map(d => ({ id: d.id, ...d.data() }))
-          .filter(item => item.archived !== true)
-
-        setSubmissions(data)
-      })
-
-      return unsub
     }, [user])
 
     const getSubmission = writingId =>
@@ -2933,59 +2938,34 @@
     useEffect(() => {
       if (!user) return
 
-      const unsubReadingSubmissions = onSnapshot(
-        query(collection(db, 'readingSubmissions'), where('uid', '==', user.uid)),
-        snap => {
-          setReadingSubmissions(
-            snap.docs
-              .map(d => ({ id: d.id, ...d.data() }))
-              .filter(item => item.archived !== true)
-          )
-        }
+      const unsubReadingSubmissions = listenUserCollection(
+        'readingSubmissions',
+        user.uid,
+        setReadingSubmissions
       )
 
-      const unsubListeningSubmissions = onSnapshot(
-        query(collection(db, 'listeningSubmissions'), where('uid', '==', user.uid)),
-        snap => {
-          setListeningSubmissions(
-            snap.docs
-              .map(d => ({ id: d.id, ...d.data() }))
-              .filter(item => item.archived !== true)
-          )
-        }
+      const unsubListeningSubmissions = listenUserCollection(
+        'listeningSubmissions',
+        user.uid,
+        setListeningSubmissions
       )
 
-      const unsubWritingSubmissions = onSnapshot(
-        query(collection(db, 'writingSubmissions'), where('uid', '==', user.uid)),
-        snap => {
-          setWritingSubmissions(
-            snap.docs
-              .map(d => ({ id: d.id, ...d.data() }))
-              .filter(item => item.archived !== true)
-          )
-        }
+      const unsubWritingSubmissions = listenUserCollection(
+        'writingSubmissions',
+        user.uid,
+        setWritingSubmissions
       )
 
-      const unsubVocabularySubmissions = onSnapshot(
-        query(collection(db, 'vocabularySubmissions'), where('uid', '==', user.uid)),
-        snap => {
-          setVocabularySubmissions(
-            snap.docs
-              .map(d => ({ id: d.id, ...d.data() }))
-              .filter(item => item.archived !== true)
-          )
-        }
+      const unsubVocabularySubmissions = listenUserCollection(
+        'vocabularySubmissions',
+        user.uid,
+        setVocabularySubmissions
       )
 
-      const unsubMockSubmissions = onSnapshot(
-        query(collection(db, 'mockSubmissions'), where('uid', '==', user.uid)),
-        snap => {
-          setMockSubmissions(
-            snap.docs
-              .map(d => ({ id: d.id, ...d.data() }))
-              .filter(item => item.archived !== true)
-          )
-        }
+      const unsubMockSubmissions = listenUserCollection(
+        'mockSubmissions',
+        user.uid,
+        setMockSubmissions
       )
 
       return () => {
@@ -3236,29 +3216,32 @@
         where('recipientIds', 'array-contains', user.uid)
       )
 
-      const unsubMessages = onSnapshot(messagesQuery, snap => {
-        const items = snap.docs
-          .map(item => ({ id: item.id, ...item.data() }))
-          .filter(item => item.archived !== true)
-          .sort(
-            (a, b) =>
-              new Date(b.createdAt || 0) - new Date(a.createdAt || 0)
+      const sortNewestFirst = (a, b) =>
+        new Date(b.createdAt || 0) - new Date(a.createdAt || 0)
+
+      const unsubMessages = subscribeSharedSnapshot(
+        `recipient:messages:${user.uid}`,
+        messagesQuery,
+        items => {
+          setMessages(
+            items
+              .filter(item => item.archived !== true)
+              .sort(sortNewestFirst)
           )
+        }
+      )
 
-        setMessages(items)
-      })
-
-      const unsubMaterials = onSnapshot(materialsQuery, snap => {
-        const items = snap.docs
-          .map(item => ({ id: item.id, ...item.data() }))
-          .filter(item => item.archived !== true)
-          .sort(
-            (a, b) =>
-              new Date(b.createdAt || 0) - new Date(a.createdAt || 0)
+      const unsubMaterials = subscribeSharedSnapshot(
+        `recipient:materials:${user.uid}`,
+        materialsQuery,
+        items => {
+          setMaterials(
+            items
+              .filter(item => item.archived !== true)
+              .sort(sortNewestFirst)
           )
-
-        setMaterials(items)
-      })
+        }
+      )
 
       return () => {
         unsubMessages()
@@ -3441,11 +3424,40 @@
     const [passwordMsg, setPasswordMsg] = useState('')
     const [activeTab, setActiveTab] = useState('overview')
     const [profile, setProfile] = useState(null)
+    const [dashboardLoadError, setDashboardLoadError] = useState('')
+    const [dataSyncErrors, setDataSyncErrors] = useState({})
+    const [authRetryKey, setAuthRetryKey] = useState(0)
     const navigate = useNavigate()
 
     const targetBand = profile?.targetBand !== undefined && profile?.targetBand !== null
       ? Number(profile.targetBand)
       : null
+
+    useEffect(() => {
+      const handleDataError = event => {
+        const key = event?.detail?.key
+        if (!key) return
+
+        setDataSyncErrors(previous => {
+          const next = { ...previous }
+          const message = event?.detail?.message
+
+          if (message) {
+            next[key] = message
+          } else {
+            delete next[key]
+          }
+
+          return next
+        })
+      }
+
+      window.addEventListener(STUDENT_DATA_ERROR_EVENT, handleDataError)
+
+      return () => {
+        window.removeEventListener(STUDENT_DATA_ERROR_EVENT, handleDataError)
+      }
+    }, [])
 
     useEffect(() => {
       let unsubScores = null
@@ -3495,21 +3507,26 @@
             where('uid', '==', currentUser.uid)
           )
 
-          unsubScores = onSnapshot(q, snap => {
-            const data = snap.docs
-              .map(d => ({ id: d.id, ...d.data() }))
-              .filter(item => item.archived !== true)
+          setDashboardLoadError('')
 
-            data.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0))
+          unsubScores = subscribeSharedSnapshot(
+            `uid:scores:${currentUser.uid}`,
+            q,
+            items => {
+              const data = items
+                .filter(item => item.archived !== true)
+                .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0))
 
-            setScores(data)
-          })
+              setScores(data)
+            }
+          )
         } catch (error) {
-          console.error(error)
+          console.error('Could not load student profile:', error)
 
           if (active) {
-            await signOut(auth)
-            navigate('/login')
+            setDashboardLoadError(
+              'We could not refresh your student profile. Check your connection and try again.'
+            )
           }
         }
       })
@@ -3522,7 +3539,7 @@
           unsubScores()
         }
       }
-    }, [navigate])
+    }, [navigate, authRetryKey])
 
     useEffect(() => {
       if (!user) return
@@ -3540,6 +3557,34 @@
         active = false
       }
     }, [user])
+
+    const dataSyncErrorCount = Object.keys(dataSyncErrors).length
+
+    if (dashboardLoadError && !user) {
+      return (
+        <div className="min-h-screen bg-[#faf9f6] flex items-center justify-center px-4">
+          <div className="w-full max-w-md bg-white border border-red-100 rounded-2xl p-6 shadow-sm text-center">
+            <div className="text-3xl mb-3">⚠️</div>
+            <h1 className="text-lg font-semibold text-gray-900 mb-2">
+              Dashboard could not refresh
+            </h1>
+            <p className="text-sm text-gray-500 leading-6 mb-5">
+              {dashboardLoadError}
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                setDashboardLoadError('')
+                setAuthRetryKey(value => value + 1)
+              }}
+              className="bg-purple-600 text-white px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-purple-700"
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      )
+    }
 
     const mockScores = scores.filter(score => score.source === 'mock_test')
     const latestMockScore = mockScores[0]
@@ -3733,6 +3778,24 @@
         </nav>
 
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 lg:py-10">
+          {dataSyncErrorCount > 0 && (
+            <div className="mb-5 bg-amber-50 border border-amber-200 text-amber-800 rounded-2xl px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold">Some dashboard data could not refresh.</p>
+                <p className="text-xs text-amber-700 mt-1">
+                  Your last successfully loaded data is still shown. Refresh when your connection is stable.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => window.location.reload()}
+                className="self-start sm:self-auto bg-white border border-amber-200 px-3 py-2 rounded-xl text-xs font-semibold hover:bg-amber-100"
+              >
+                Refresh data
+              </button>
+            </div>
+          )}
+
           <div className="bg-gray-900 text-white rounded-[2rem] p-6 md:p-8 mb-6 overflow-hidden relative">
             <div className="absolute -right-12 -top-12 w-48 h-48 bg-purple-500/20 rounded-full blur-2xl" />
             <div className="absolute right-20 bottom-0 w-36 h-36 bg-blue-500/10 rounded-full blur-2xl" />
