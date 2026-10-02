@@ -101,34 +101,45 @@ function isHiddenForCurrentUser(item, user, profile) {
 
 
 function normalizeListeningParts(listening) {
-  const sourceQuestions = []
-
   if (Array.isArray(listening?.parts) && listening.parts.length) {
-    listening.parts.forEach(part => {
-      ;(part.questions || []).forEach(question => {
-        sourceQuestions.push({
-          ...question,
-          partId: question.partId || part.id || '',
-          partTitle: question.partTitle || part.title || ''
-        })
-      })
-    })
-  }
+    return listening.parts.map((part, index) => {
+      const partId = part.id || `part-${index + 1}`
+      const partTitle = part.title || `Part ${index + 1}`
 
-  if (sourceQuestions.length === 0 && Array.isArray(listening?.questions)) {
-    listening.questions.forEach(question => {
-      sourceQuestions.push(question)
+      return {
+        ...part,
+        id: partId,
+        title: partTitle,
+        instructions: part.instructions || '',
+        questions: (part.questions || []).map(question => ({
+          ...question,
+          partId: question.partId || partId,
+          partTitle: question.partTitle || partTitle
+        }))
+      }
     })
   }
 
   return [
     {
-      id: listening?.parts?.[0]?.id || 'listening-main',
+      id: 'listening-main',
       title: 'Listening Questions',
-      instructions: '',
-      questions: sourceQuestions
+      instructions: listening?.instructions || '',
+      questions: Array.isArray(listening?.questions)
+        ? listening.questions
+        : []
     }
   ]
+}
+
+function getListeningQuestionImage(question) {
+  return (
+    question?.mapImage ||
+    question?.mapImageUrl ||
+    question?.image ||
+    question?.imageUrl ||
+    ''
+  )
 }
 
 function getListeningQuestionCount(question) {
@@ -784,7 +795,7 @@ export default function DoListening() {
     )
   }
 
-  const getQuestionStatus = (question, index) => {
+  const getQuestionStatus = (question, partId, index) => {
     let answered = 0
     let total = getListeningQuestionCount(question)
 
@@ -860,7 +871,8 @@ export default function DoListening() {
 
     return {
       id: question.id,
-      label: getQuestionRangeLabel(parts, activePart?.id, index),
+      partId,
+      label: getQuestionRangeLabel(parts, partId, index),
       answered,
       total,
       complete: total > 0 && answered >= total,
@@ -870,8 +882,10 @@ export default function DoListening() {
   }
 
   const getQuestionStatuses = () =>
-    activeQuestions.map((question, index) =>
-      getQuestionStatus(question, index)
+    parts.flatMap(part =>
+      (part.questions || []).map((question, index) =>
+        getQuestionStatus(question, part.id, index)
+      )
     )
 
   const getAnsweredQuestionCount = () =>
@@ -893,11 +907,21 @@ export default function DoListening() {
     )
   }
 
-  const scrollToQuestion = questionId => {
-    questionRefs.current[questionId]?.scrollIntoView({
-      behavior: 'smooth',
-      block: 'start'
-    })
+  const scrollToQuestion = (questionId, partId) => {
+    const scroll = () => {
+      questionRefs.current[questionId]?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start'
+      })
+    }
+
+    if (partId && partId !== activePart?.id) {
+      setActivePartId(partId)
+      window.setTimeout(scroll, 50)
+      return
+    }
+
+    scroll()
   }
 
   const handleAnswer = (questionId, value) => {
@@ -1728,10 +1752,10 @@ export default function DoListening() {
 
                       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)] gap-5 lg:items-start">
                         <div className="space-y-4">
-                          {question.mapImage && (
+                          {getListeningQuestionImage(question) && (
                             <div className="bg-gray-50 border border-gray-100 rounded-2xl p-4">
                               <img
-                                src={question.mapImage}
+                                src={getListeningQuestionImage(question)}
                                 alt="Map"
                                 className="w-full max-h-[520px] object-contain rounded-xl bg-white"
                               />
@@ -2055,6 +2079,41 @@ export default function DoListening() {
             </button>
           </div>
 
+          {parts.length === 1 && activePart?.instructions && (
+            <div className="bg-white border border-gray-100 rounded-2xl p-4 mb-6 shadow-sm">
+              <p className="text-sm text-gray-500 whitespace-pre-wrap">
+                {activePart.instructions}
+              </p>
+            </div>
+          )}
+
+          {parts.length > 1 && (
+            <div className="bg-white border border-gray-100 rounded-2xl p-4 mb-6 shadow-sm">
+              <div className="flex flex-wrap gap-2">
+                {parts.map((part, partIndex) => (
+                  <button
+                    key={part.id}
+                    type="button"
+                    onClick={() => setActivePartId(part.id)}
+                    className={`px-4 py-2 rounded-xl text-sm font-semibold border transition-all ${
+                      activePart?.id === part.id
+                        ? 'bg-purple-600 text-white border-purple-600'
+                        : 'bg-white text-gray-600 border-gray-200 hover:border-purple-300'
+                    }`}
+                  >
+                    {part.title || `Part ${partIndex + 1}`}
+                  </button>
+                ))}
+              </div>
+
+              {activePart?.instructions && (
+                <p className="text-sm text-gray-500 mt-3 whitespace-pre-wrap">
+                  {activePart.instructions}
+                </p>
+              )}
+            </div>
+          )}
+
           {showQuestionMap && (
             <div className="bg-white border border-purple-100 rounded-2xl p-5 mb-6 shadow-sm">
               <div className="flex items-center justify-between gap-3 mb-3">
@@ -2078,7 +2137,7 @@ export default function DoListening() {
                   <button
                     key={status.id}
                     type="button"
-                    onClick={() => scrollToQuestion(status.id)}
+                    onClick={() => scrollToQuestion(status.id, status.partId)}
                     className={`px-3 py-2 rounded-xl text-xs font-semibold border transition-all ${
                       status.flagged
                         ? 'bg-amber-100 text-amber-700 border-amber-200'
@@ -2173,8 +2232,8 @@ export default function DoListening() {
 
                   <div className="flex items-center gap-2 flex-wrap justify-end">
                     <span className="text-xs bg-white border border-gray-200 text-gray-500 px-2.5 py-1.5 rounded-full whitespace-nowrap">
-                      {getQuestionStatus(question, index).answered}/
-                      {getQuestionStatus(question, index).total} answered
+                      {getQuestionStatus(question, activePart?.id, index).answered}/
+                      {getQuestionStatus(question, activePart?.id, index).total} answered
                     </span>
 
                     <button
@@ -2249,10 +2308,10 @@ export default function DoListening() {
 
                     <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)] gap-5 lg:items-start">
                       <div className="lg:sticky lg:top-[220px] space-y-4">
-                        {question.mapImage && (
+                        {getListeningQuestionImage(question) && (
                           <div className="bg-gray-50 border border-gray-100 rounded-2xl p-4">
                             <img
-                              src={question.mapImage}
+                              src={getListeningQuestionImage(question)}
                               alt="Map"
                               className="w-full max-h-[520px] object-contain rounded-xl bg-white"
                             />
