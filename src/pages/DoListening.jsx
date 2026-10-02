@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
-import { auth, db } from '../firebase'
+import { auth, db, functions } from '../firebase'
 import {
   doc,
   getDoc,
-  setDoc,
+  getDocFromServer,
   collection,
   query,
   where,
@@ -12,9 +12,14 @@ import {
   getDocs
 } from 'firebase/firestore'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
+import { httpsCallable } from 'firebase/functions'
 import { useNavigate, useParams } from 'react-router-dom'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
+
+const syncMyObjectiveAssignments = httpsCallable(functions, 'syncMyObjectiveAssignments')
+const submitListeningSecure = httpsCallable(functions, 'submitListeningSecure')
+const getCompletedObjectiveReview = httpsCallable(functions, 'getCompletedObjectiveReview')
 
 function normalizeId(value) {
   return value === undefined || value === null
@@ -160,7 +165,7 @@ function getListeningQuestionCount(question) {
   }
 
   if (question.type === 'mcq' && question.mode === 'multi') {
-    return question.answers?.length || 2
+    return question.answerCount || question.answers?.length || 2
   }
 
   return 1
@@ -232,7 +237,7 @@ function getQuestionDisplayNumbers(parts, partId, targetQuestion) {
         }
 
         if (question.type === 'mcq' && question.mode === 'multi') {
-          const count = question.answers?.length || 2
+          const count = question.answerCount || question.answers?.length || 2
           const first = getManualQuestionNumber(question) || number
           const firstAsNumber = Number(first)
 
@@ -508,9 +513,21 @@ export default function DoListening() {
 
       setUser(currentUser)
 
-      const snap = await getDoc(doc(db, 'listenings', id))
+      // 8D-2: students load the answer-key-free projection, never the source listening.
+      let snap = await getDocFromServer(doc(db, 'studentListenings', id))
+
+      // Older assignments may predate the projection collections. Refresh only when needed.
       if (!snap.exists()) {
-        alert('Listening homework not found.')
+        try {
+          await syncMyObjectiveAssignments({})
+          snap = await getDocFromServer(doc(db, 'studentListenings', id))
+        } catch (syncError) {
+          console.warn('Could not refresh sanitized listening assignments:', syncError)
+        }
+      }
+
+      if (!snap.exists()) {
+        alert('Listening homework not found or the student-safe copy is not available yet.')
         navigate('/student')
         return
       }
@@ -551,9 +568,31 @@ export default function DoListening() {
       if (!existing.empty) {
         const sub = existing.docs[0].data()
 
+        // Answer keys are returned only after the server confirms this student submitted.
+        const reviewResponse = await getCompletedObjectiveReview({
+          type: 'listening',
+          assignmentId: id
+        })
+        const reviewData = reviewResponse?.data || {}
+        const reviewSource = reviewData.source
+
+        if (!reviewSource || typeof reviewSource !== 'object') {
+          throw new Error('Completed listening review did not return the source document.')
+        }
+
+        const reviewParts = normalizeListeningParts({
+          ...reviewSource,
+          id: reviewSource.id || id
+        })
+
+        setListening({
+          ...reviewSource,
+          id: reviewSource.id || id
+        })
+        setActivePartId(reviewParts[0]?.id || null)
         setAlreadyDone(true)
         setAnswers(sub.answers || {})
-        setResult(sub.result)
+        setResult(reviewData.result || sub.result || null)
         setFlaggedQuestions(
           Array.isArray(sub.flaggedQuestions) ? sub.flaggedQuestions : []
         )
@@ -812,7 +851,7 @@ export default function DoListening() {
         ? answers[question.id]
         : []
 
-      total = question.answers?.length || 2
+      total = question.answerCount || question.answers?.length || 2
       answered = Math.min(selected.filter(Boolean).length, total)
     } else {
       total = 1
@@ -905,21 +944,23 @@ export default function DoListening() {
     }))
   }
 
-  const handleMultiAnswer = (questionId, letter) => {
+  const handleMultiAnswer = (question, letter) => {
+    const maxSelections = question.answerCount || question.answers?.length || 2
+
     setAnswers(prev => {
-      const current = Array.isArray(prev[questionId])
-        ? prev[questionId]
+      const current = Array.isArray(prev[question.id])
+        ? prev[question.id]
         : []
 
       const updated = current.includes(letter)
         ? current.filter(item => item !== letter)
-        : current.length < 2
+        : current.length < maxSelections
           ? [...current, letter]
           : current
 
       return {
         ...prev,
-        [questionId]: updated
+        [question.id]: updated
       }
     })
   }
@@ -1177,60 +1218,75 @@ export default function DoListening() {
 
     clearInterval(timerRef.current)
 
-    const res = calculateScore()
-    const submissionTeacherIds = getSourceTeacherIds(listening)
-
-    const submissionRef = doc(db, 'listeningSubmissions', `${user.uid}_${id}`)
-    const submissionData = {
-      uid: user.uid,
-      studentId: user.uid,
-      studentEmail: user.email || '',
-      listeningId: id,
-      schoolId: listening.schoolId || 'maxima',
-      teacherId: submissionTeacherIds[0] || '',
-      teacherIds: submissionTeacherIds,
-      answers,
-      flaggedQuestions,
-      studentNote: studentNote.trim(),
-      result: res,
-      submittedAt: new Date().toISOString(),
-      finishedLate: timeLeft <= 0,
-      autoSubmitted: autoSubmit
-    }
-
     try {
-      // Repair 08C: one immutable document per student + listening homework.
-      await setDoc(submissionRef, submissionData)
+      // 8D-2: scoring and immutable submission creation happen on the server.
+      const response = await submitListeningSecure({
+        listeningId: id,
+        answers,
+        flaggedQuestions,
+        studentNote: studentNote.trim(),
+        finishedLate: timeLeft <= 0,
+        autoSubmitted: autoSubmit
+      })
+
+      const secureData = response?.data || {}
+      let reviewSource = secureData.reviewSource
+      let secureResult = secureData.result || null
+
+      if (!reviewSource || typeof reviewSource !== 'object') {
+        const reviewResponse = await getCompletedObjectiveReview({
+          type: 'listening',
+          assignmentId: id
+        })
+        reviewSource = reviewResponse?.data?.source
+        secureResult = reviewResponse?.data?.result || secureResult
+      }
+
+      if (!reviewSource || typeof reviewSource !== 'object') {
+        throw new Error('Secure Listening submission did not return review data.')
+      }
+
+      // If another tab submitted first, restore the answers that are actually stored.
+      if (secureData.alreadySubmitted === true) {
+        const existingQuery = query(
+          collection(db, 'listeningSubmissions'),
+          where('uid', '==', user.uid),
+          where('listeningId', '==', id),
+          orderBy('submittedAt', 'desc'),
+          limit(1)
+        )
+        const existing = await getDocs(existingQuery)
+
+        if (!existing.empty) {
+          const stored = existing.docs[0].data()
+          setAnswers(stored.answers || {})
+          setFlaggedQuestions(
+            Array.isArray(stored.flaggedQuestions) ? stored.flaggedQuestions : []
+          )
+          setStudentNote(stored.studentNote || '')
+          secureResult = stored.result || secureResult
+        }
+
+        setAlreadyDone(true)
+      }
 
       if (storageKey) {
         localStorage.removeItem(storageKey)
       }
 
-      setResult(res)
-      setSubmitted(true)
-    } catch (error) {
-      console.error(error)
-
-      try {
-        const existingSnap = await getDoc(submissionRef)
-        if (existingSnap.exists()) {
-          const existing = existingSnap.data()
-          if (storageKey) localStorage.removeItem(storageKey)
-          setAlreadyDone(true)
-          setAnswers(existing.answers || {})
-          setFlaggedQuestions(
-            Array.isArray(existing.flaggedQuestions) ? existing.flaggedQuestions : []
-          )
-          setStudentNote(existing.studentNote || '')
-          setResult(existing.result || res)
-          setSubmitted(true)
-          setSubmitting(false)
-          return
-        }
-      } catch (lookupError) {
-        console.warn('Could not verify an existing listening submission:', lookupError)
+      const reviewListening = {
+        ...reviewSource,
+        id: reviewSource.id || id
       }
+      const reviewParts = normalizeListeningParts(reviewListening)
 
+      setListening(reviewListening)
+      setActivePartId(reviewParts[0]?.id || null)
+      setResult(secureResult)
+      setSubmitted(true)
+      setSubmitting(false)
+    } catch (error) {
+      console.error('Secure Listening submission failed:', error)
       alert('Could not submit your answers. Please try again.')
       submittingRef.current = false
       setSubmitting(false)
@@ -2402,7 +2458,7 @@ export default function DoListening() {
                             key={optionIndex}
                             onClick={() =>
                               question.mode === 'multi'
-                                ? handleMultiAnswer(question.id, letter)
+                                ? handleMultiAnswer(question, letter)
                                 : handleAnswer(question.id, letter)
                             }
                             className={`text-left px-4 py-3 rounded-xl text-sm border transition-all ${
