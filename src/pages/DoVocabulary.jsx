@@ -388,15 +388,11 @@ export default function DoVocabulary() {
         }
 
         if (!isAssignedToCurrentUser(data, currentUser, loadedProfile)) {
-          alert('This vocabulary test is not assigned to you.')
-          navigate('/student')
-          return
+          throw new Error('This Vocabulary practice is not assigned to you.')
         }
 
         if (isHiddenForCurrentUser(data, currentUser, loadedProfile) || data.archived === true) {
-          alert('This vocabulary test is no longer available.')
-          navigate('/student')
-          return
+          throw new Error('This Vocabulary practice is hidden, archived, or no longer available.')
         }
 
         setTest(data)

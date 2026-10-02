@@ -481,6 +481,8 @@ export default function DoListening() {
   const [flaggedQuestions, setFlaggedQuestions] = useState([])
   const [studentNote, setStudentNote] = useState('')
   const [showQuestionMap, setShowQuestionMap] = useState(true)
+  const [loadError, setLoadError] = useState('')
+  const [reloadCount, setReloadCount] = useState(0)
 
   const timerRef = useRef(null)
   const submittingRef = useRef(false)
@@ -496,127 +498,173 @@ export default function DoListening() {
   const totalQuestionCount = getTotalListeningQuestionCount(parts)
 
   useEffect(() => {
+    let active = true
+    let loadVersion = 0
+
     const unsub = onAuthStateChanged(auth, async currentUser => {
+      const version = ++loadVersion
+      const isCurrent = () => active && version === loadVersion
+
+      clearInterval(timerRef.current)
+      restoredRef.current = false
+      submittingRef.current = false
+      setLoadError('')
+      setListening(null)
+      setActivePartId(null)
+      setAnswers({})
+      setTimeLeft(null)
+      setSubmitted(false)
+      setSubmitting(false)
+      setResult(null)
+      setAlreadyDone(false)
+      setFlaggedQuestions([])
+      setStudentNote('')
+
       if (!currentUser) {
         navigate('/login')
         return
       }
 
-      const profileSnap = await getDoc(doc(db, 'users', currentUser.uid))
+      try {
+        const profileSnap = await getDoc(doc(db, 'users', currentUser.uid))
+        if (!isCurrent()) return
 
-      if (!profileSnap.exists()) {
-        await signOut(auth)
-        navigate('/login')
-        return
-      }
-
-      const profile = profileSnap.data()
-
-      if (
-        profile.deleted === true ||
-        profile.status !== 'approved' ||
-        profile.role !== 'student'
-      ) {
-        await signOut(auth)
-        navigate('/login')
-        return
-      }
-
-      setUser(currentUser)
-
-      // 8D-2: students load the answer-key-free projection, never the source listening.
-      let snap = await getDocFromServer(doc(db, 'studentListenings', id))
-
-      // Older assignments may predate the projection collections. Refresh only when needed.
-      if (!snap.exists()) {
-        try {
-          await syncMyObjectiveAssignments({})
-          snap = await getDocFromServer(doc(db, 'studentListenings', id))
-        } catch (syncError) {
-          console.warn('Could not refresh sanitized listening assignments:', syncError)
-        }
-      }
-
-      if (!snap.exists()) {
-        alert('Listening homework not found or the student-safe copy is not available yet.')
-        navigate('/student')
-        return
-      }
-
-      const data = {
-        id: snap.id,
-        ...snap.data()
-      }
-
-      if (!isAssignedToCurrentUser(data, currentUser, profile)) {
-        alert('This listening homework is not assigned to you.')
-        navigate('/student')
-        return
-      }
-
-      if (isHiddenForCurrentUser(data, currentUser, profile) || data.archived === true) {
-        alert('This listening homework is no longer available.')
-        navigate('/student')
-        return
-      }
-
-      const loadedParts = normalizeListeningParts(data)
-
-      setListening(data)
-      setActivePartId(loadedParts[0]?.id || null)
-      setTimeLeft((data.timeLimit || 30) * 60)
-
-      const q = query(
-        collection(db, 'listeningSubmissions'),
-        where('uid', '==', currentUser.uid),
-        where('listeningId', '==', id),
-        orderBy('submittedAt', 'desc'),
-        limit(1)
-      )
-
-      const existing = await getDocs(q)
-
-      if (!existing.empty) {
-        const sub = existing.docs[0].data()
-
-        // Answer keys are returned only after the server confirms this student submitted.
-        const reviewResponse = await getCompletedObjectiveReview({
-          type: 'listening',
-          assignmentId: id
-        })
-        const reviewData = reviewResponse?.data || {}
-        const reviewSource = reviewData.source
-
-        if (!reviewSource || typeof reviewSource !== 'object') {
-          throw new Error('Completed listening review did not return the source document.')
+        if (!profileSnap.exists()) {
+          await signOut(auth)
+          navigate('/login')
+          return
         }
 
-        const reviewParts = normalizeListeningParts({
-          ...reviewSource,
-          id: reviewSource.id || id
-        })
+        const profile = profileSnap.data()
 
-        setListening({
-          ...reviewSource,
-          id: reviewSource.id || id
-        })
-        setActivePartId(reviewParts[0]?.id || null)
-        setAlreadyDone(true)
-        setAnswers(sub.answers || {})
-        setResult(reviewData.result || sub.result || null)
-        setFlaggedQuestions(
-          Array.isArray(sub.flaggedQuestions) ? sub.flaggedQuestions : []
+        if (
+          profile.deleted === true ||
+          profile.status !== 'approved' ||
+          profile.role !== 'student'
+        ) {
+          await signOut(auth)
+          navigate('/login')
+          return
+        }
+
+        setUser(currentUser)
+
+        // 8D-2: students load the answer-key-free projection, never the source listening.
+        let snap = await getDocFromServer(doc(db, 'studentListenings', id))
+        if (!isCurrent()) return
+
+        // Older assignments may predate the projection collections. Refresh only when needed.
+        if (!snap.exists()) {
+          try {
+            await syncMyObjectiveAssignments({})
+            if (!isCurrent()) return
+            snap = await getDocFromServer(doc(db, 'studentListenings', id))
+          } catch (syncError) {
+            console.warn('Could not refresh sanitized listening assignments:', syncError)
+          }
+        }
+
+        if (!snap.exists()) {
+          throw new Error(
+            'Listening homework was not found, or its student-safe copy is not available yet. Return to the dashboard and try again, or ask your teacher to refresh the assignment.'
+          )
+        }
+
+        const data = {
+          id: snap.id,
+          ...snap.data()
+        }
+
+        if (!isAssignedToCurrentUser(data, currentUser, profile)) {
+          throw new Error(
+            'This Listening homework is not assigned to you. If it belongs to a Mock Test, open it from that Mock instead.'
+          )
+        }
+
+        if (isHiddenForCurrentUser(data, currentUser, profile) || data.archived === true) {
+          throw new Error('This Listening homework is hidden, archived, or no longer available.')
+        }
+
+        const loadedParts = normalizeListeningParts(data)
+
+        setListening(data)
+        setActivePartId(loadedParts[0]?.id || null)
+        setTimeLeft((data.timeLimit || 30) * 60)
+
+        const q = query(
+          collection(db, 'listeningSubmissions'),
+          where('uid', '==', currentUser.uid),
+          where('listeningId', '==', id),
+          orderBy('submittedAt', 'desc'),
+          limit(1)
         )
-        setStudentNote(sub.studentNote || '')
-        setSubmitted(true)
 
-        const key = `listening_progress_${id}_${currentUser.uid}`
-        localStorage.removeItem(key)
+        const existing = await getDocs(q)
+        if (!isCurrent()) return
+
+        if (!existing.empty) {
+          const sub = existing.docs[0].data()
+
+          // Answer keys are returned only after the server confirms this student submitted.
+          const reviewResponse = await getCompletedObjectiveReview({
+            type: 'listening',
+            assignmentId: id
+          })
+          if (!isCurrent()) return
+
+          const reviewData = reviewResponse?.data || {}
+          const reviewSource = reviewData.source
+
+          if (!reviewSource || typeof reviewSource !== 'object') {
+            throw new Error('Completed Listening review could not be loaded. Your submission is safe; please retry.')
+          }
+
+          const reviewParts = normalizeListeningParts({
+            ...reviewSource,
+            id: reviewSource.id || id
+          })
+
+          setListening({
+            ...reviewSource,
+            id: reviewSource.id || id
+          })
+          setActivePartId(reviewParts[0]?.id || null)
+          setAlreadyDone(true)
+          setAnswers(sub.answers || {})
+          setResult(reviewData.result || sub.result || null)
+          setFlaggedQuestions(
+            Array.isArray(sub.flaggedQuestions) ? sub.flaggedQuestions : []
+          )
+          setStudentNote(sub.studentNote || '')
+          setSubmitted(true)
+
+          try {
+            const key = `listening_progress_${id}_${currentUser.uid}`
+            localStorage.removeItem(key)
+          } catch (storageError) {
+            console.warn('Could not clear saved Listening progress:', storageError)
+          }
+        }
+      } catch (error) {
+        console.error('Could not load Listening homework:', error)
+        if (!isCurrent()) return
+        clearInterval(timerRef.current)
+        setListening(null)
+        setTimeLeft(null)
+        setLoadError(
+          error?.code === 'permission-denied'
+            ? 'Listening access was denied. This homework may no longer be assigned to you. Open linked Listening content through your assigned Mock, or ask your teacher to check the assignment.'
+            : error?.message || 'Listening could not be loaded. Check your connection and retry.'
+        )
       }
     })
 
-    return unsub
-  }, [id, navigate])
+    return () => {
+      active = false
+      clearInterval(timerRef.current)
+      unsub()
+    }
+  }, [id, navigate, reloadCount])
 
   useEffect(() => {
     if (!storageKey || restoredRef.current || !listening) return
@@ -1628,8 +1676,36 @@ export default function DoListening() {
 
   if (!listening) {
     return (
-      <div className="min-h-screen bg-[#faf9f6] flex items-center justify-center">
-        <p className="text-gray-400">Loading...</p>
+      <div className="min-h-screen bg-[#faf9f6] flex items-center justify-center px-6">
+        <div className="bg-white border border-gray-100 rounded-2xl p-7 max-w-lg w-full text-center shadow-sm">
+          {loadError ? (
+            <>
+              <h1 className="text-xl font-semibold text-gray-900 mb-3">Listening could not be opened</h1>
+              <p role="alert" className="text-sm text-red-600 leading-6 mb-5">{loadError}</p>
+              <div className="flex flex-col sm:flex-row justify-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setReloadCount(count => count + 1)}
+                  className="bg-purple-600 text-white rounded-xl px-4 py-2.5 text-sm font-medium hover:bg-purple-700"
+                >
+                  Retry
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigate('/student')}
+                  className="bg-gray-100 text-gray-700 rounded-xl px-4 py-2.5 text-sm font-medium hover:bg-gray-200"
+                >
+                  Back to dashboard
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="text-gray-500 mb-2">Loading Listening homework...</p>
+              <p className="text-xs text-gray-400">Please wait while your homework is loading.</p>
+            </>
+          )}
+        </div>
       </div>
     )
   }

@@ -1007,6 +1007,8 @@ export default function DoMockTest() {
   const [readings, setReadings] = useState([])
   const [writing, setWriting] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState('')
+  const [reloadCount, setReloadCount] = useState(0)
   const [alreadySubmitted, setAlreadySubmitted] = useState(false)
 
   const [sectionIndex, setSectionIndex] = useState(0)
@@ -1074,6 +1076,10 @@ export default function DoMockTest() {
     const unsub = onAuthStateChanged(auth, async currentUser => {
       const version = ++loadVersion
       const isCurrent = () => isActive && version === loadVersion
+
+      setLoading(true)
+      setLoadError('')
+
       if (!currentUser) {
         navigate('/login')
         return
@@ -1111,9 +1117,7 @@ export default function DoMockTest() {
         if (!isCurrent()) return
 
         if (!mockSnap.exists()) {
-          alert('Mock test not found.')
-          navigate('/student')
-          return
+          throw new Error('Mock Test was not found. It may have been removed or archived by your teacher.')
         }
 
         const mockData = {
@@ -1122,15 +1126,11 @@ export default function DoMockTest() {
         }
 
         if (!isAssignedToCurrentUser(mockData, currentUser, profile)) {
-          alert('This mock test is not assigned to you.')
-          navigate('/student')
-          return
+          throw new Error('This Mock Test is not assigned to you.')
         }
 
         if (isHiddenForCurrentUser(mockData, currentUser, profile) || mockData.archived === true) {
-          alert('This mock test is no longer available.')
-          navigate('/student')
-          return
+          throw new Error('This Mock Test is hidden, archived, or no longer available.')
         }
 
         setMock(mockData)
@@ -1329,10 +1329,14 @@ export default function DoMockTest() {
 
         setLoading(false)
       } catch (error) {
-        console.error(error)
+        console.error('Could not load Mock Test:', error)
         if (isCurrent()) {
-          alert(error?.message || 'Could not load mock test.')
-          navigate('/student')
+          setLoadError(
+            error?.code === 'permission-denied'
+              ? 'Mock Test access was denied. It may no longer be assigned to you, or one of its linked resources is no longer available.'
+              : error?.message || 'Mock Test could not be loaded. Check your connection and retry.'
+          )
+          setLoading(false)
         }
       }
     })
@@ -1341,7 +1345,7 @@ export default function DoMockTest() {
       isActive = false
       unsub()
     }
-  }, [id, navigate])
+  }, [id, navigate, reloadCount])
 
   useEffect(() => {
     if (!storageKey || restoredRef.current || loading) return
@@ -6246,6 +6250,36 @@ ${previousLabel} will be permanently locked and you will not be able to return t
       </div>
     </div>
   )
+
+  if (loadError) {
+    return (
+      <div className="min-h-screen bg-[#faf9f6] flex items-center justify-center px-6">
+        <div className="bg-white border border-red-100 rounded-2xl p-7 max-w-xl w-full text-center shadow-sm">
+          <h1 className="text-xl font-semibold text-gray-900 mb-3">Mock Test could not be opened</h1>
+          <p role="alert" className="text-sm text-red-600 leading-6 mb-5">{loadError}</p>
+          <p className="text-xs text-gray-400 leading-5 mb-5">
+            Your saved local progress has not been deleted. Retry after checking your connection, or return to the dashboard.
+          </p>
+          <div className="flex flex-col sm:flex-row justify-center gap-3">
+            <button
+              type="button"
+              onClick={() => setReloadCount(count => count + 1)}
+              className="bg-purple-600 text-white rounded-xl px-4 py-2.5 text-sm font-medium hover:bg-purple-700"
+            >
+              Retry
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate('/student')}
+              className="bg-gray-100 text-gray-700 rounded-xl px-4 py-2.5 text-sm font-medium hover:bg-gray-200"
+            >
+              Back to dashboard
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   if (loading) {
     return (

@@ -26,6 +26,7 @@ const DoVocabulary = lazy(() => import('./pages/DoVocabulary'))
 
 const ManageClasses = lazy(() => import('./pages/ManageClasses'))
 const TeacherPreview = lazy(() => import('./pages/TeacherPreview'))
+const NotFound = lazy(() => import('./pages/NotFound'))
 
 function PageLoader() {
   return (
@@ -85,6 +86,8 @@ function App() {
             path="/preview/:type/:id"
             element={<TeacherPreview />}
           />
+
+          <Route path="*" element={<NotFound />} />
         </Routes>
       </Suspense>
     </BrowserRouter>

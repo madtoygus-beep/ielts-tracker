@@ -142,6 +142,8 @@ export default function DoWriting() {
   const [draftStatus, setDraftStatus] = useState('')
   const [draftLoaded, setDraftLoaded] = useState(false)
   const [draftError, setDraftError] = useState('')
+  const [loadError, setLoadError] = useState('')
+  const [reloadCount, setReloadCount] = useState(0)
 
   const draftKey = user ? `writingDraft_${id}_${user.uid}` : null
 
@@ -276,6 +278,7 @@ export default function DoWriting() {
       setTask2Answer('')
       setDraftStatus('')
       setDraftError('')
+      setLoadError('')
       setImageZoomOpen(false)
       setWriting(null)
 
@@ -313,8 +316,8 @@ export default function DoWriting() {
       if (!isCurrentLoad()) return
 
       if (!snap.exists()) {
-        alert('Writing homework not found.')
-        navigate('/student')
+        setLoadError('Writing homework was not found. It may have been removed or archived by your teacher.')
+        setLoading(false)
         return
       }
 
@@ -324,14 +327,14 @@ export default function DoWriting() {
       }
 
       if (!isAssignedToCurrentUser(data, currentUser, profile)) {
-        alert('This writing homework is not assigned to you.')
-        navigate('/student')
+        setLoadError('This Writing homework is not assigned to you.')
+        setLoading(false)
         return
       }
 
       if (isHiddenForCurrentUser(data, currentUser, profile) || data.archived === true) {
-        alert('This writing homework is no longer available.')
-        navigate('/student')
+        setLoadError('This Writing homework is hidden, archived, or no longer available.')
+        setLoading(false)
         return
       }
 
@@ -370,8 +373,12 @@ export default function DoWriting() {
       } catch (error) {
         console.error('Could not load writing homework:', error)
         if (isCurrentLoad()) {
-          alert('Could not load your writing homework. Please try again.')
-          navigate('/student')
+          setLoadError(
+            error?.code === 'permission-denied'
+              ? 'Writing access was denied. This homework may no longer be assigned to you.'
+              : 'Writing homework could not be loaded. Check your connection and retry.'
+          )
+          setLoading(false)
         }
       }
     })
@@ -381,7 +388,7 @@ export default function DoWriting() {
       loadVersionRef.current++
       unsub()
     }
-  }, [id, navigate])
+  }, [id, navigate, reloadCount])
 
   useEffect(() => {
     if (!draftKey || loading || submitted || alreadyDone || draftLoaded) return
@@ -718,6 +725,33 @@ export default function DoWriting() {
         // At zero the retry is manual, avoiding repeated automatic requests.
       }
     }
+  }
+
+  if (loadError) {
+    return (
+      <div className="min-h-screen bg-[#faf9f6] flex items-center justify-center px-6">
+        <div className="bg-white border border-red-100 rounded-2xl p-7 max-w-lg w-full text-center shadow-sm">
+          <h1 className="text-xl font-semibold text-gray-900 mb-3">Writing could not be opened</h1>
+          <p role="alert" className="text-sm text-red-600 leading-6 mb-5">{loadError}</p>
+          <div className="flex flex-col sm:flex-row justify-center gap-3">
+            <button
+              type="button"
+              onClick={() => setReloadCount(count => count + 1)}
+              className="bg-purple-600 text-white rounded-xl px-4 py-2.5 text-sm font-medium hover:bg-purple-700"
+            >
+              Retry
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate('/student')}
+              className="bg-gray-100 text-gray-700 rounded-xl px-4 py-2.5 text-sm font-medium hover:bg-gray-200"
+            >
+              Back to dashboard
+            </button>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   if (loading || !writing || writing.id !== id) {
