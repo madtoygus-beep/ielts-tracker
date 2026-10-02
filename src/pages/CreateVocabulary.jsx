@@ -1258,6 +1258,8 @@ export default function CreateVocabulary() {
       hasWorkbookTasks: preparedQuestions.some(question => question.type !== 'mcq'),
       matchingShuffle: true,
       assignTo,
+      assignedTo: [],
+      studentIds: [],
       assignedStudentIds: selectedStudents.map(student => student.id),
       assignedEmails: selectedStudents
         .map(student => student.email?.toLowerCase())

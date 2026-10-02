@@ -1966,6 +1966,8 @@ export default function CreateListening() {
       dueDate,
       timeLimit: Number(timeLimit) || 30,
       assignTo,
+      assignedTo: [],
+      studentIds: [],
       assignedStudentIds: selectedStudents.map(student => student.id),
       assignedEmails: selectedStudents.map(student => student.email?.toLowerCase()).filter(Boolean),
       schoolId: getProfileSchoolId(profile),

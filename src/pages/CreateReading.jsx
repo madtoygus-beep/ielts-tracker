@@ -455,11 +455,16 @@ export default function CreateReading() {
       setTimeLimit(data.timeLimit || 60)
       setDueDate(data.dueDate || '')
       setAssignTo(
-        data.assignTo?.length
-          ? data.assignTo
-          : data.assignedStudentIds?.length
-            ? data.assignedStudentIds
-            : data.studentIds || []
+        Array.from(
+          new Set([
+            ...(Array.isArray(data.assignTo) ? data.assignTo : []),
+            ...(Array.isArray(data.assignedTo) ? data.assignedTo : []),
+            ...(Array.isArray(data.studentIds) ? data.studentIds : []),
+            ...(Array.isArray(data.assignedStudentIds)
+              ? data.assignedStudentIds
+              : [])
+          ])
+        )
       )
       setPassageMode(
         data.passageMode || (data.paragraphs ? 'sections' : 'standard')
@@ -2248,6 +2253,8 @@ export default function CreateReading() {
       timeLimit,
       dueDate,
       assignTo,
+      assignedTo: [],
+      studentIds: [],
       assignedStudentIds: students.filter(student => assignTo.includes(student.id)).map(student => student.id),
       assignedEmails: students.filter(student => assignTo.includes(student.id)).map(student => student.email?.toLowerCase()).filter(Boolean),
       schoolId: getProfileSchoolId(profile),

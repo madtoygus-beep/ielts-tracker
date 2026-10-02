@@ -1007,6 +1007,8 @@ export default function CreateMockTest() {
       sectionTimeLimits: cleanSectionTimeLimits,
       totalTimeMinutes: savedTotalTimeMinutes,
       assignTo,
+      assignedTo: [],
+      studentIds: [],
       assignedStudentIds: selectedStudents.map(student => student.id),
       assignedEmails: selectedStudents
         .map(student => student.email?.toLowerCase())

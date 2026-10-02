@@ -238,7 +238,18 @@ export default function CreateWriting() {
       setVisibility(data.visibility || data.libraryVisibility || 'private')
       setDueDate(data.dueDate || '')
       setTimeLimit(Number(data.timeLimit) || getDefaultWritingTimeLimit(loadedContentType))
-      setAssignTo(data.assignTo || [])
+      setAssignTo(
+        Array.from(
+          new Set([
+            ...(Array.isArray(data.assignTo) ? data.assignTo : []),
+            ...(Array.isArray(data.assignedTo) ? data.assignedTo : []),
+            ...(Array.isArray(data.studentIds) ? data.studentIds : []),
+            ...(Array.isArray(data.assignedStudentIds)
+              ? data.assignedStudentIds
+              : [])
+          ])
+        )
+      )
 
       setTask1Title(data.task1?.title || 'Writing Task 1')
       setTask1Prompt(data.task1?.prompt || '')
@@ -350,6 +361,8 @@ export default function CreateWriting() {
     visibility,
     dueDate: cleanString(dueDate),
     assignTo: assignTo.map(id => cleanString(id)).filter(Boolean),
+    assignedTo: [],
+    studentIds: [],
     assignedStudentIds: students.filter(student => assignTo.includes(student.id)).map(student => student.id),
     assignedEmails: students.filter(student => assignTo.includes(student.id)).map(student => student.email?.toLowerCase()).filter(Boolean),
     schoolId: getProfileSchoolId(profile),

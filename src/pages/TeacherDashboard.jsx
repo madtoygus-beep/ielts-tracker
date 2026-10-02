@@ -1927,6 +1927,8 @@ export default function TeacherDashboard() {
 
     await updateDoc(doc(db, collectionName, selectedHomework.id), {
       assignTo: finalAssignment,
+      assignedTo: [],
+      studentIds: [],
       assignedStudentIds,
       assignedEmails,
       hiddenFor,
@@ -2018,6 +2020,8 @@ export default function TeacherDashboard() {
     await updateDoc(doc(db, 'readings', reading.id), {
       archived: true,
       assignTo: [],
+      assignedTo: [],
+      studentIds: [],
       assignedStudentIds: [],
       assignedEmails: []
     })
@@ -2077,6 +2081,8 @@ Continue permanent delete?`
       updatedAt,
       createdBy,
       assignTo,
+      assignedTo,
+      studentIds,
       assignedStudentIds,
       assignedEmails,
       hiddenFor,
@@ -2088,6 +2094,8 @@ Continue permanent delete?`
       ...copyData,
       title: `${reading.title} Copy`,
       assignTo: [],
+      assignedTo: [],
+      studentIds: [],
       assignedStudentIds: [],
       assignedEmails: [],
       hiddenFor: [],
@@ -2112,6 +2120,8 @@ Continue permanent delete?`
     await updateDoc(doc(db, 'writingHomeworks', writing.id), {
       archived: true,
       assignTo: [],
+      assignedTo: [],
+      studentIds: [],
       assignedStudentIds: [],
       assignedEmails: []
     })
@@ -2171,6 +2181,8 @@ Continue permanent delete?`
       updatedAt,
       createdBy,
       assignTo,
+      assignedTo,
+      studentIds,
       assignedStudentIds,
       assignedEmails,
       hiddenFor,
@@ -2182,6 +2194,8 @@ Continue permanent delete?`
       ...copyData,
       title: `${writing.title} Copy`,
       assignTo: [],
+      assignedTo: [],
+      studentIds: [],
       assignedStudentIds: [],
       assignedEmails: [],
       hiddenFor: [],
@@ -2206,6 +2220,8 @@ Continue permanent delete?`
     await updateDoc(doc(db, 'listenings', listening.id), {
       archived: true,
       assignTo: [],
+      assignedTo: [],
+      studentIds: [],
       assignedStudentIds: [],
       assignedEmails: []
     })
@@ -2265,6 +2281,8 @@ Continue permanent delete?`
       updatedAt,
       createdBy,
       assignTo,
+      assignedTo,
+      studentIds,
       assignedStudentIds,
       assignedEmails,
       hiddenFor,
@@ -2276,6 +2294,8 @@ Continue permanent delete?`
       ...copyData,
       title: `${listening.title} Copy`,
       assignTo: [],
+      assignedTo: [],
+      studentIds: [],
       assignedStudentIds: [],
       assignedEmails: [],
       hiddenFor: [],
@@ -2300,6 +2320,8 @@ Continue permanent delete?`
     await updateDoc(doc(db, 'vocabularyTests', vocabularyTest.id), {
       archived: true,
       assignTo: [],
+      assignedTo: [],
+      studentIds: [],
       assignedStudentIds: [],
       assignedEmails: []
     })
@@ -2359,6 +2381,8 @@ Continue permanent delete?`
       updatedAt,
       createdBy,
       assignTo,
+      assignedTo,
+      studentIds,
       assignedStudentIds,
       assignedEmails,
       hiddenFor,
@@ -2370,6 +2394,8 @@ Continue permanent delete?`
       ...copyData,
       title: `${vocabularyTest.title} Copy`,
       assignTo: [],
+      assignedTo: [],
+      studentIds: [],
       assignedStudentIds: [],
       assignedEmails: [],
       hiddenFor: [],
@@ -2394,6 +2420,8 @@ Continue permanent delete?`
     await updateDoc(doc(db, 'mockTests', mockTest.id), {
       archived: true,
       assignTo: [],
+      assignedTo: [],
+      studentIds: [],
       assignedStudentIds: [],
       assignedEmails: []
     })
