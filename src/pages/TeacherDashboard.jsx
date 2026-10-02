@@ -1551,6 +1551,14 @@ export default function TeacherDashboard() {
     )
 
   const getMockWritingStatus = submission => {
+    if (
+      submission?.result?.enabledSections?.writing === false ||
+      submission?.enabledSections?.writing === false ||
+      submission?.result?.writing?.enabled === false
+    ) {
+      return 'not_included'
+    }
+
     return (
       submission.result?.writing?.status ||
       submission.writingReview?.status ||
@@ -2494,6 +2502,10 @@ Continue permanent delete?`
     return `${questionId}_${itemId}`
   }
 
+  const mapAnswerKey = (questionId, itemId) => {
+    return `${questionId}_${itemId}`
+  }
+
   const getHeadingText = (reading, number) => {
     if (!number) return 'No answer'
     const index = Number(number) - 1
@@ -2697,10 +2709,13 @@ Continue permanent delete?`
       summary: { correct: 0, total: 0 },
       note: { correct: 0, total: 0 },
       noteCompletion: { correct: 0, total: 0 },
+      shortAnswer: { correct: 0, total: 0 },
       mcq: { correct: 0, total: 0 }
     }
 
     studentSubs.forEach(sub => {
+      if (mergeStoredGradingBreakdown(stats, sub, { mcq_multi: 'mcq' })) return
+
       const reading = readings.find(r => r.id === sub.readingId)
       if (!reading) return
 
@@ -2770,13 +2785,19 @@ Continue permanent delete?`
         }
 
         if (question.type === 'table' || question.type === 'summary' || question.type === 'note') {
+          const key = question.type === 'summary'
+            ? 'summary'
+            : question.type === 'note'
+              ? 'note'
+              : 'table'
+
           question.rows?.forEach(row => {
             row.cells?.forEach((cell, cellIndex) => {
               if (cell.type === 'blank') {
-                stats.table.total++
+                stats[key].total++
 
                 if (isTableCellCorrect(sub, question, row, cellIndex)) {
-                  stats.table.correct++
+                  stats[key].correct++
                 }
               }
             })
@@ -2809,6 +2830,7 @@ Continue permanent delete?`
       summary: percentage(stats.summary),
       note: percentage(stats.note),
       noteCompletion: percentage(stats.noteCompletion),
+      shortAnswer: percentage(stats.shortAnswer),
       mcq: percentage(stats.mcq)
     }
 
@@ -2833,6 +2855,7 @@ Continue permanent delete?`
     if (type === 'summary') return 'Summary Completion'
     if (type === 'note') return 'Legacy Note Completion'
     if (type === 'noteCompletion') return 'Reading Note/Summary Completion'
+    if (type === 'shortAnswer') return 'Short Answer'
     if (type === 'mcq') return 'Multiple Choice'
     return 'No data yet'
   }
@@ -2842,6 +2865,119 @@ Continue permanent delete?`
     if (value >= 75) return 'text-green-600'
     if (value >= 60) return 'text-amber-600'
     return 'text-red-500'
+  }
+
+
+  const mergeStoredGradingBreakdown = (stats, submission, aliases = {}) => {
+    const breakdown = submission?.result?.gradingBreakdown
+
+    if (!breakdown || typeof breakdown !== 'object') return false
+
+    let merged = false
+
+    Object.entries(breakdown).forEach(([rawKey, value]) => {
+      const key = aliases[rawKey] || rawKey
+      const correct = Number(value?.correct)
+      const total = Number(value?.total)
+
+      if (!Number.isFinite(correct) || !Number.isFinite(total) || total <= 0) {
+        return
+      }
+
+      if (!stats[key]) {
+        stats[key] = { correct: 0, total: 0 }
+      }
+
+      stats[key].correct += correct
+      stats[key].total += total
+      merged = true
+    })
+
+    return merged
+  }
+
+  const getPartialMultiAnswerScore = (selectedAnswers, correctAnswers) => {
+    const selected = Array.isArray(selectedAnswers)
+      ? Array.from(new Set(selectedAnswers.map(value => value?.toString()).filter(Boolean)))
+      : []
+    const expected = Array.isArray(correctAnswers)
+      ? correctAnswers.map(value => value?.toString()).filter(Boolean)
+      : []
+    const total = expected.length || 2
+    const correct = selected.filter(value => expected.includes(value)).length
+
+    return { correct, total }
+  }
+
+  const normalizeVocabularyValue = value =>
+    value === undefined || value === null
+      ? ''
+      : value.toString().trim().toLowerCase()
+
+  const normalizeVocabularyTypedAnswer = value =>
+    normalizeVocabularyValue(value)
+      .replace(/[\u2018\u2019]/g, "'")
+      .replace(/\s+/g, ' ')
+
+  const getVocabularyAcceptedAnswers = question => {
+    const values = []
+    const mainAnswer = question?.answerText || question?.answer
+
+    if (mainAnswer) values.push(mainAnswer)
+
+    ;(question?.acceptedAnswers || '')
+      .toString()
+      .split(',')
+      .map(value => value.trim())
+      .filter(Boolean)
+      .forEach(value => values.push(value))
+
+    return values.map(normalizeVocabularyTypedAnswer)
+  }
+
+  const getVocabularyMatchingOrder = vocabularyTest => {
+    const matchingQuestions = (vocabularyTest?.questions || []).filter(
+      question => (question?.type || 'mcq') === 'match_definition'
+    )
+
+    if (vocabularyTest?.matchingShuffle !== true || matchingQuestions.length <= 1) {
+      return matchingQuestions
+    }
+
+    const hash = Array.from(vocabularyTest?.id || vocabularyTest?.title || 'vocabulary').reduce(
+      (value, character) => ((value * 31) + character.charCodeAt(0)) >>> 0,
+      7
+    )
+    const shift = (hash % (matchingQuestions.length - 1)) + 1
+
+    return [
+      ...matchingQuestions.slice(shift),
+      ...matchingQuestions.slice(0, shift)
+    ]
+  }
+
+  const isVocabularyQuestionCorrectForAnalytics = (vocabularyTest, submission, question) => {
+    const type = question?.type || 'mcq'
+    const selected = submission?.answers?.[question.id]
+
+    if (type === 'match_definition') {
+      const matchingOrder = getVocabularyMatchingOrder(vocabularyTest)
+      const selectedIndex = letters.findIndex(letter => letter === selected)
+
+      if (selectedIndex < 0 || selectedIndex >= matchingOrder.length) return false
+      return matchingOrder[selectedIndex]?.id === question.id
+    }
+
+    if (type === 'word_bank' || type === 'grammar_form') {
+      const cleanUser = normalizeVocabularyTypedAnswer(selected)
+      if (!cleanUser) return false
+
+      return getVocabularyAcceptedAnswers(question).includes(cleanUser)
+    }
+
+    return Boolean(normalizeVocabularyValue(selected)) &&
+      Boolean(normalizeVocabularyValue(question?.answer)) &&
+      selected === question.answer
   }
 
 
@@ -3105,6 +3241,17 @@ Continue permanent delete?`
           return
         }
 
+        if (question.type === 'mcq' && question.mode === 'multi') {
+          const score = getPartialMultiAnswerScore(
+            submission.answers?.[question.id],
+            question.answers
+          )
+
+          stats[key].total += score.total
+          stats[key].wrong += score.total - score.correct
+          return
+        }
+
         stats[key].total++
 
         if (!isNormalCorrect(submission, question)) {
@@ -3170,10 +3317,13 @@ Continue permanent delete?`
       table: { correct: 0, total: 0 },
       summary: { correct: 0, total: 0 },
       note: { correct: 0, total: 0 },
-      noteCompletion: { correct: 0, total: 0 }
+      noteCompletion: { correct: 0, total: 0 },
+      shortAnswer: { correct: 0, total: 0 }
     }
 
     submissions.forEach(submission => {
+      if (mergeStoredGradingBreakdown(stats, submission, { mcq_multi: 'mcq' })) return
+
       const reading = readings.find(item => item.id === submission.readingId)
       if (!reading) return
 
@@ -3339,10 +3489,13 @@ Continue permanent delete?`
       table: { correct: 0, total: 0 },
       summary: { correct: 0, total: 0 },
       note: { correct: 0, total: 0 },
-      noteCompletion: { correct: 0, total: 0 }
+      noteCompletion: { correct: 0, total: 0 },
+      shortAnswer: { correct: 0, total: 0 }
     }
 
     targetSubmissions.forEach(submission => {
+      if (mergeStoredGradingBreakdown(stats, submission, { mcq_multi: 'mcq' })) return
+
       const reading = readings.find(item => item.id === submission.readingId)
       if (!reading) return
 
@@ -3553,6 +3706,17 @@ Continue permanent delete?`
           return
         }
 
+        if (question.type === 'mcq' && question.mode === 'multi') {
+          const score = getPartialMultiAnswerScore(
+            submission.answers?.[question.id],
+            question.answers
+          )
+
+          stats[key].total += score.total
+          stats[key].wrong += score.total - score.correct
+          return
+        }
+
         stats[key].total++
 
         if (!isNormalCorrect(submission, question)) {
@@ -3614,10 +3778,17 @@ Continue permanent delete?`
       table: { correct: 0, total: 0 },
       note: { correct: 0, total: 0 },
       listeningCompletion: { correct: 0, total: 0 },
-      listeningMatching: { correct: 0, total: 0 }
+      listeningMatching: { correct: 0, total: 0 },
+      map: { correct: 0, total: 0 },
+      shortAnswer: { correct: 0, total: 0 }
     }
 
     targetSubmissions.forEach(submission => {
+      if (mergeStoredGradingBreakdown(stats, submission, {
+        matching: 'listeningMatching',
+        mcq_multi: 'mcq'
+      })) return
+
       const listening = listenings.find(item => item.id === submission.listeningId)
       if (!listening) return
 
@@ -3628,6 +3799,21 @@ Continue permanent delete?`
 
             if (isListeningMatchingItemCorrect(submission, question, item)) {
               stats.listeningMatching.correct++
+            }
+          })
+
+          return
+        }
+
+        if (question.type === 'map' && Array.isArray(question.mapItems)) {
+          question.mapItems.forEach(item => {
+            stats.map.total++
+
+            const userAnswer = normalize(submission.answers?.[mapAnswerKey(question.id, item.id)])
+            const correctAnswer = normalize(item.answer)
+
+            if (userAnswer && correctAnswer && userAnswer === correctAnswer) {
+              stats.map.correct++
             }
           })
 
@@ -3651,13 +3837,15 @@ Continue permanent delete?`
         }
 
         if (question.type === 'table' || question.type === 'summary' || question.type === 'note') {
+          const key = question.type === 'note' ? 'note' : 'table'
+
           question.rows?.forEach(row => {
             row.cells?.forEach((cell, cellIndex) => {
               if (cell.type === 'blank') {
-                stats.table.total++
+                stats[key].total++
 
                 if (isTableCellCorrect(submission, question, row, cellIndex)) {
-                  stats.table.correct++
+                  stats[key].correct++
                 }
               }
             })
@@ -3718,6 +3906,21 @@ Continue permanent delete?`
           return
         }
 
+        if (question.type === 'map' && Array.isArray(question.mapItems)) {
+          question.mapItems.forEach(item => {
+            stats[key].total++
+
+            const userAnswer = normalize(submission.answers?.[mapAnswerKey(question.id, item.id)])
+            const correctAnswer = normalize(item.answer)
+
+            if (!userAnswer || !correctAnswer || userAnswer !== correctAnswer) {
+              stats[key].wrong++
+            }
+          })
+
+          return
+        }
+
         if (question.type === 'listeningCompletion') {
           question.sections?.forEach(section => {
             section.parts?.forEach(item => {
@@ -3747,6 +3950,17 @@ Continue permanent delete?`
             })
           })
 
+          return
+        }
+
+        if (question.type === 'mcq' && question.mode === 'multi') {
+          const score = getPartialMultiAnswerScore(
+            submission.answers?.[question.id],
+            question.answers
+          )
+
+          stats[key].total += score.total
+          stats[key].wrong += score.total - score.correct
           return
         }
 
@@ -3833,9 +4047,11 @@ Continue permanent delete?`
       if (!vocabularyTest) return
 
       vocabularyTest.questions?.forEach((question, questionIndex) => {
-        const selectedAnswer = submission.answers?.[question.id]
-        const correctAnswer = question.answer
-        const isCorrect = selectedAnswer === correctAnswer
+        const isCorrect = isVocabularyQuestionCorrectForAnalytics(
+          vocabularyTest,
+          submission,
+          question
+        )
         const key = `${vocabularyTest.title} — Q${questionIndex + 1}`
 
         if (!stats[key]) {
@@ -3877,6 +4093,7 @@ Continue permanent delete?`
     if (type === 'summary') return 'Summary Completion'
     if (type === 'note') return 'Legacy Note Completion'
     if (type === 'noteCompletion') return 'Reading Note/Summary Completion'
+    if (type === 'shortAnswer') return 'Short Answer'
     return type
   }
 
@@ -3943,6 +4160,21 @@ Continue permanent delete?`
           return
         }
 
+        if (question.type === 'map' && Array.isArray(question.mapItems)) {
+          question.mapItems.forEach(item => {
+            stats[key].total++
+
+            const userAnswer = normalize(submission.answers?.[mapAnswerKey(question.id, item.id)])
+            const correctAnswer = normalize(item.answer)
+
+            if (!userAnswer || !correctAnswer || userAnswer !== correctAnswer) {
+              stats[key].wrong++
+            }
+          })
+
+          return
+        }
+
         if (question.type === 'listeningCompletion') {
           question.sections?.forEach(section => {
             section.parts?.forEach(item => {
@@ -3972,6 +4204,17 @@ Continue permanent delete?`
             })
           })
 
+          return
+        }
+
+        if (question.type === 'mcq' && question.mode === 'multi') {
+          const score = getPartialMultiAnswerScore(
+            submission.answers?.[question.id],
+            question.answers
+          )
+
+          stats[key].total += score.total
+          stats[key].wrong += score.total - score.correct
           return
         }
 
@@ -4026,10 +4269,17 @@ Continue permanent delete?`
       table: { correct: 0, total: 0 },
       note: { correct: 0, total: 0 },
       listeningCompletion: { correct: 0, total: 0 },
-      listeningMatching: { correct: 0, total: 0 }
+      listeningMatching: { correct: 0, total: 0 },
+      map: { correct: 0, total: 0 },
+      shortAnswer: { correct: 0, total: 0 }
     }
 
     listeningSubmissions.forEach(submission => {
+      if (mergeStoredGradingBreakdown(stats, submission, {
+        matching: 'listeningMatching',
+        mcq_multi: 'mcq'
+      })) return
+
       const listening = listenings.find(item => item.id === submission.listeningId)
       if (!listening) return
 
@@ -4040,6 +4290,21 @@ Continue permanent delete?`
 
             if (isListeningMatchingItemCorrect(submission, question, item)) {
               stats.listeningMatching.correct++
+            }
+          })
+
+          return
+        }
+
+        if (question.type === 'map' && Array.isArray(question.mapItems)) {
+          question.mapItems.forEach(item => {
+            stats.map.total++
+
+            const userAnswer = normalize(submission.answers?.[mapAnswerKey(question.id, item.id)])
+            const correctAnswer = normalize(item.answer)
+
+            if (userAnswer && correctAnswer && userAnswer === correctAnswer) {
+              stats.map.correct++
             }
           })
 
@@ -4063,13 +4328,15 @@ Continue permanent delete?`
         }
 
         if (question.type === 'table' || question.type === 'summary' || question.type === 'note') {
+          const key = question.type === 'note' ? 'note' : 'table'
+
           question.rows?.forEach(row => {
             row.cells?.forEach((cell, cellIndex) => {
               if (cell.type === 'blank') {
-                stats.table.total++
+                stats[key].total++
 
                 if (isTableCellCorrect(submission, question, row, cellIndex)) {
-                  stats.table.correct++
+                  stats[key].correct++
                 }
               }
             })
@@ -4108,6 +4375,8 @@ Continue permanent delete?`
     if (type === 'table') return 'Form/Table'
     if (type === 'note') return 'Legacy Note Completion'
     if (type === 'listeningCompletion') return 'Listening Note/Summary Completion'
+    if (type === 'map') return 'Map Labelling'
+    if (type === 'shortAnswer') return 'Short Answer'
     return type
   }
 
@@ -4128,6 +4397,24 @@ Continue permanent delete?`
     )
   }
 
+
+  const getMockTypeForSubmission = submission => {
+    const mock = mockTests.find(item => item.id === submission?.mockTestId)
+
+    return (
+      submission?.mockType ||
+      submission?.contentType ||
+      mock?.mockType ||
+      mock?.contentType ||
+      'full_mock'
+    )
+  }
+
+  const getMockTypeLabelForSubmission = submission =>
+    getMockTypeForSubmission(submission) === 'mini_mock'
+      ? 'Mini Mock'
+      : 'Full Mock'
+
   const getMockWritingBand = submission => {
     const result = submission?.result || {}
 
@@ -4141,6 +4428,8 @@ Continue permanent delete?`
   }
 
   const getMockWritingStatusLabel = submission => {
+    if (getMockWritingStatus(submission) === 'not_included') return 'Not included'
+
     const band = getMockWritingBand(submission)
 
     if (band) return `Reviewed · Band ${formatBand(band)}`
@@ -4151,7 +4440,7 @@ Continue permanent delete?`
   const getMockTitle = submission => {
     const mock = mockTests.find(item => item.id === submission.mockTestId)
 
-    return mock?.title || submission.mockTitle || 'Mock Test'
+    return mock?.title || submission.mockTitle || submission.title || 'Mock Test'
   }
 
   const getStudentMockSubmissions = studentId => {
@@ -4192,6 +4481,7 @@ Continue permanent delete?`
               <tr>
                 <th>Date</th>
                 <th>Mock</th>
+                <th>Type</th>
                 <th>Listening</th>
                 <th>Reading</th>
                 <th>Writing</th>
@@ -4206,6 +4496,7 @@ Continue permanent delete?`
                     <tr>
                       <td>${formatDateShort(submission.submittedAt)}</td>
                       <td>${getMockTitle(submission)}</td>
+                      <td>${getMockTypeLabelForSubmission(submission)}</td>
                       <td>${formatBand(result.listening?.band)}</td>
                       <td>${formatBand(result.reading?.band)}</td>
                       <td>${getMockWritingBand(submission) ? formatBand(getMockWritingBand(submission)) : 'Pending'}</td>
@@ -7014,7 +7305,9 @@ Continue permanent delete?`
                   <div className="flex items-center gap-4">
                     {latestMockSubmission(student.id) && (
                       <div className="text-right">
-                        <p className="text-xs text-gray-400">Latest mock</p>
+                        <p className="text-xs text-gray-400">
+                          Latest {getMockTypeLabelForSubmission(latestMockSubmission(student.id))}
+                        </p>
                         <p className="text-lg font-bold text-purple-600">
                           {formatBand(getMockOverall(latestMockSubmission(student.id)))}
                         </p>
@@ -7084,7 +7377,7 @@ Continue permanent delete?`
                                 Mock History for {student.name}
                               </h3>
                               <p className="text-xs text-gray-400 mt-1">
-                                Full mock results are listed here. Manual IELTS score logging was removed.
+                                Full Mock and Mini Mock results are listed here with their types kept separate.
                               </p>
                             </div>
 
@@ -7115,9 +7408,18 @@ Continue permanent delete?`
                                   >
                                     <div className="flex items-start justify-between gap-4 mb-3">
                                       <div>
-                                        <p className="text-sm font-semibold text-gray-800">
-                                          {getMockTitle(submission)}
-                                        </p>
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                          <p className="text-sm font-semibold text-gray-800">
+                                            {getMockTitle(submission)}
+                                          </p>
+                                          <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${
+                                            getMockTypeForSubmission(submission) === 'mini_mock'
+                                              ? 'bg-blue-50 text-blue-600'
+                                              : 'bg-purple-50 text-purple-600'
+                                          }`}>
+                                            {getMockTypeLabelForSubmission(submission)}
+                                          </span>
+                                        </div>
 
                                         <p className="text-xs text-gray-400 mt-0.5">
                                           Submitted {formatDateShort(submission.submittedAt)}
@@ -7160,7 +7462,11 @@ Continue permanent delete?`
                                       <div className="bg-white rounded-xl p-3">
                                         <p className="text-[11px] text-gray-400 mb-1">Status</p>
                                         <p className="text-sm font-semibold text-gray-700">
-                                          {getMockWritingStatus(submission) === 'reviewed' ? 'Reviewed' : 'Waiting for writing review'}
+                                          {getMockWritingStatus(submission) === 'not_included'
+                                            ? 'No Writing'
+                                            : getMockWritingStatus(submission) === 'reviewed'
+                                              ? 'Reviewed'
+                                              : 'Waiting for writing review'}
                                         </p>
                                       </div>
                                     </div>
@@ -7191,6 +7497,7 @@ Continue permanent delete?`
                             ['Table Completion', analytics.table],
                             ['Legacy Note Completion', analytics.note],
                             ['Reading Note/Summary Completion', analytics.noteCompletion],
+                            ['Short Answer', analytics.shortAnswer],
                             ['MCQ', analytics.mcq]
                           ]
                             .filter(([, value]) => value !== null && value !== undefined)

@@ -203,6 +203,9 @@
   }
 
   function toNumber(value) {
+    if (value === undefined || value === null) return null
+    if (typeof value === 'string' && value.trim() === '') return null
+
     const number = Number(value)
     return Number.isFinite(number) ? number : null
   }
@@ -531,6 +534,9 @@
     if (type === 'note') return 'Note Completion'
     if (type === 'noteCompletion') return 'Note Completion'
     if (type === 'listeningCompletion') return 'Listening Note/Summary Completion'
+    if (type === 'map') return 'Map Labelling'
+    if (type === 'shortAnswer') return 'Short Answer'
+    if (type === 'mcq_multi') return 'Multiple Choice (Multiple Answers)'
     return type
   }
 
@@ -548,7 +554,7 @@
     return 'bg-red-500'
   }
 
-  function calculateSkillAnalytics(homeworks, submissions, idField, typeKeys) {
+  function calculateSkillAnalytics(homeworks, submissions, idField, typeKeys, breakdownAliases = {}) {
     const stats = {}
 
     typeKeys.forEach(key => {
@@ -560,191 +566,48 @@
 
     let totalCorrect = 0
     let totalQuestions = 0
+    const storedBands = []
 
     submissions.forEach(submission => {
-      const homework = homeworks.find(item => item.id === submission[idField])
-      if (!homework) return
+      const result = submission?.result || {}
+      const storedCorrect = Number(result.correct)
+      const storedTotal = Number(result.total)
 
-      homework.questions?.forEach(question => {
-        if (question.type === 'matching' && Array.isArray(question.matchingItems)) {
-          const key = 'listeningMatching'
+      if (
+        Number.isFinite(storedCorrect) &&
+        Number.isFinite(storedTotal) &&
+        storedTotal > 0
+      ) {
+        totalCorrect += storedCorrect
+        totalQuestions += storedTotal
+      }
 
-          if (!stats[key]) {
-            stats[key] = { correct: 0, total: 0 }
-          }
+      const bandValue = result.band ?? result.estimatedBand
+      const band = toNumber(bandValue)
 
-          question.matchingItems.forEach(item => {
-            stats[key].total++
-            totalQuestions++
+      if (band !== null && band > 0) {
+        storedBands.push(band)
+      }
 
-            if (isListeningMatchingItemCorrect(submission, question, item)) {
-              stats[key].correct++
-              totalCorrect++
-            }
-          })
+      const breakdown = result.gradingBreakdown
 
+      if (!breakdown || typeof breakdown !== 'object') return
+
+      Object.entries(breakdown).forEach(([rawKey, value]) => {
+        const key = breakdownAliases[rawKey] || rawKey
+        const correct = Number(value?.correct)
+        const total = Number(value?.total)
+
+        if (!Number.isFinite(correct) || !Number.isFinite(total) || total <= 0) {
           return
         }
 
-        if (question.type === 'matching') {
-          question.paragraphs?.forEach(paragraph => {
-            if (!stats.matching) {
-              stats.matching = { correct: 0, total: 0 }
-            }
-
-            stats.matching.total++
-            totalQuestions++
-
-            if (isMatchingCorrect(submission, question, paragraph)) {
-              stats.matching.correct++
-              totalCorrect++
-            }
-          })
-
-          return
+        if (!stats[key]) {
+          stats[key] = { correct: 0, total: 0 }
         }
 
-        if (question.type === 'matchingInformation') {
-          if (!stats.matchingInformation) {
-            stats.matchingInformation = { correct: 0, total: 0 }
-          }
-
-          question.items?.forEach(item => {
-            stats.matchingInformation.total++
-            totalQuestions++
-
-            if (isMatchingInformationCorrect(submission, question, item)) {
-              stats.matchingInformation.correct++
-              totalCorrect++
-            }
-          })
-
-          return
-        }
-
-        if (question.type === 'sentenceEndings') {
-          if (!stats.sentenceEndings) {
-            stats.sentenceEndings = { correct: 0, total: 0 }
-          }
-
-          question.items?.forEach(item => {
-            stats.sentenceEndings.total++
-            totalQuestions++
-
-            if (isSentenceEndingCorrect(submission, question, item)) {
-              stats.sentenceEndings.correct++
-              totalCorrect++
-            }
-          })
-
-          return
-        }
-
-        if (question.type === 'summaryOptions') {
-          if (!stats.summaryOptions) {
-            stats.summaryOptions = { correct: 0, total: 0 }
-          }
-
-          question.items?.forEach(item => {
-            stats.summaryOptions.total++
-            totalQuestions++
-
-            if (isSummaryOptionCorrect(submission, question, item)) {
-              stats.summaryOptions.correct++
-              totalCorrect++
-            }
-          })
-
-          return
-        }
-
-        if (question.type === 'noteCompletion') {
-          const key = 'noteCompletion'
-
-          if (!stats[key]) {
-            stats[key] = { correct: 0, total: 0 }
-          }
-
-          question.paragraphs?.forEach(paragraph => {
-            paragraph.parts?.forEach(part => {
-              if (part.type !== 'blank') return
-
-              stats[key].total++
-              totalQuestions++
-
-              if (isNoteCompletionPartCorrect(submission, question, paragraph, part)) {
-                stats[key].correct++
-                totalCorrect++
-              }
-            })
-          })
-
-          return
-        }
-
-        if (question.type === 'listeningCompletion') {
-          const key = 'listeningCompletion'
-
-          if (!stats[key]) {
-            stats[key] = { correct: 0, total: 0 }
-          }
-
-          question.sections?.forEach(section => {
-            section.parts?.forEach(item => {
-              if (item.type !== 'blank') return
-
-              stats[key].total++
-              totalQuestions++
-
-              if (isListeningCompletionPartCorrect(submission, question, section, item)) {
-                stats[key].correct++
-                totalCorrect++
-              }
-            })
-          })
-
-          return
-        }
-
-        if (question.type === 'table' || question.type === 'summary' || question.type === 'note') {
-          const key = question.type === 'summary'
-            ? 'summary'
-            : question.type === 'note'
-              ? 'note'
-              : 'table'
-
-          if (!stats[key]) {
-            stats[key] = { correct: 0, total: 0 }
-          }
-
-          question.rows?.forEach(row => {
-            row.cells?.forEach((cell, cellIndex) => {
-              if (cell.type === 'blank') {
-                stats[key].total++
-                totalQuestions++
-
-                if (isTableCellCorrect(submission, question, row, cellIndex)) {
-                  stats[key].correct++
-                  totalCorrect++
-                }
-              }
-            })
-          })
-
-          return
-        }
-
-        if (!stats[question.type]) {
-          stats[question.type] = { correct: 0, total: 0 }
-        }
-
-        stats[question.type].total++
-        totalQuestions++
-
-        if (isNormalCorrect(submission, question)) {
-          stats[question.type].correct++
-          totalCorrect++
-        }
+        stats[key].correct += correct
+        stats[key].total += total
       })
     })
 
@@ -769,11 +632,17 @@
       ? Math.round((totalCorrect / totalQuestions) * 100)
       : null
 
+    const estimatedBand = storedBands.length
+      ? Math.round(
+          (storedBands.reduce((sum, value) => sum + value, 0) / storedBands.length) * 10
+        ) / 10
+      : estimateHomeworkBand(totalCorrect, totalQuestions)
+
     return {
       totalCorrect,
       totalQuestions,
       averageAccuracy,
-      estimatedBand: estimateHomeworkBand(totalCorrect, totalQuestions),
+      estimatedBand,
       typeAnalytics,
       weakest
     }
@@ -945,14 +814,19 @@
       readings,
       readingSubmissions,
       'readingId',
-      ['matching', 'matchingInformation', 'sentenceEndings', 'summaryOptions', 'mcq', 'fitb', 'tfng', 'table', 'summary', 'note', 'noteCompletion']
+      ['matching', 'matchingInformation', 'sentenceEndings', 'summaryOptions', 'mcq', 'fitb', 'tfng', 'table', 'summary', 'note', 'noteCompletion', 'shortAnswer'],
+      { mcq_multi: 'mcq' }
     )
 
     const listeningAnalytics = calculateSkillAnalytics(
       listenings,
       listeningSubmissions,
       'listeningId',
-      ['mcq', 'fitb', 'tfng', 'table', 'summary', 'note', 'listeningCompletion', 'listeningMatching']
+      ['mcq', 'fitb', 'tfng', 'table', 'note', 'listeningCompletion', 'listeningMatching', 'map', 'shortAnswer'],
+      {
+        matching: 'listeningMatching',
+        mcq_multi: 'mcq'
+      }
     )
 
     // Count each active assignment once, even if it has duplicate submissions.
@@ -1494,69 +1368,128 @@
         user,
         profile,
         items => {
-        const map = {}
+          const map = {}
 
-        items.forEach(item => {
-          map[item.id] = item
-        })
+          items.forEach(item => {
+            map[item.id] = item
+          })
 
-        setMockMap(map)
-      },
+          setMockMap(map)
+        },
         {
           filter: item => !item.archived
         }
       )
     }, [user, profile])
 
-    const completed = mockSubmissions.length
-    const latest = mockSubmissions[0]
-    const previous = mockSubmissions[1]
+    const getSubmissionMock = submission =>
+      mockMap[submission?.mockTestId] || {}
+
+    const getSubmissionMockType = submission => {
+      const mock = getSubmissionMock(submission)
+
+      return (
+        submission?.mockType ||
+        submission?.contentType ||
+        mock?.mockType ||
+        mock?.contentType ||
+        'full_mock'
+      )
+    }
+
+    const getSubmissionMockTypeLabel = submission =>
+      getSubmissionMockType(submission) === 'mini_mock'
+        ? 'Mini Mock'
+        : 'Full Mock'
+
+    const mockIncludesWriting = submission => {
+      if (submission?.result?.enabledSections?.writing === false) return false
+      if (submission?.enabledSections?.writing === false) return false
+      if (submission?.result?.writing?.enabled === false) return false
+
+      const mock = getSubmissionMock(submission)
+
+      if (getSubmissionMockType(submission) !== 'mini_mock') return true
+
+      if (mock?.enabledSections && typeof mock.enabledSections === 'object') {
+        return mock.enabledSections.writing === true
+      }
+
+      return Boolean(
+        submission?.writingId ||
+        mock?.writingId ||
+        submission?.result?.writing?.enabled
+      )
+    }
+
+    const getValidBand = (...values) => {
+      for (const value of values) {
+        const band = toNumber(value)
+        if (band !== null && band > 0) return band
+      }
+
+      return null
+    }
 
     const getMockOverall = submission => {
       const result = submission?.result || {}
 
-      return (
-        result.reviewedOverall ||
-        result.finalOverall ||
-        result.overall ||
-        result.overallEstimate ||
-        null
+      return getValidBand(
+        result.reviewedOverall,
+        result.finalOverall,
+        result.overall,
+        result.overallEstimate
       )
     }
 
     const getWritingBand = submission => {
       const result = submission?.result || {}
 
-      return (
-        result.writing?.band ||
-        result.writingBand ||
-        submission?.writingReview?.overall ||
-        submission?.review?.writingOverall ||
-        null
+      return getValidBand(
+        result.writing?.band,
+        result.writingBand,
+        submission?.writingReview?.overall,
+        submission?.review?.writingOverall
       )
     }
 
     const getWritingStatus = submission => {
+      if (!mockIncludesWriting(submission)) return 'Not included'
+
       const writingBand = getWritingBand(submission)
 
-      if (writingBand) return `Reviewed · Band ${formatBand(writingBand)}`
+      if (writingBand !== null) {
+        return `Reviewed · Band ${formatBand(writingBand)}`
+      }
 
       return 'Pending teacher review'
     }
 
+    const fullMockSubmissions = mockSubmissions.filter(
+      submission => getSubmissionMockType(submission) !== 'mini_mock'
+    )
+    const miniMockSubmissions = mockSubmissions.filter(
+      submission => getSubmissionMockType(submission) === 'mini_mock'
+    )
+
+    const completedFull = fullMockSubmissions.length
+    const completedMini = miniMockSubmissions.length
+    const latest = fullMockSubmissions[0]
+    const previous = fullMockSubmissions[1]
+
     const latestOverall = getMockOverall(latest)
     const previousOverall = getMockOverall(previous)
 
-    const trend = [...mockSubmissions]
+    const trend = [...fullMockSubmissions]
       .reverse()
       .slice(-6)
 
     const overallChange = getChangeLabel(latestOverall, previousOverall)
     const latestMockTitle = latest
-      ? mockMap[latest.mockTestId]?.title || latest.mockTitle || 'Mock Test'
-      : 'No mock completed yet'
+      ? getSubmissionMock(latest)?.title || latest.mockTitle || latest.title || 'Mock Test'
+      : 'No Full Mock completed yet'
 
-    if (completed === 0) {
+    if (mockSubmissions.length === 0) {
       return (
         <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
           <div className="flex items-center justify-between mb-2">
@@ -1570,7 +1503,32 @@
           </div>
 
           <p className="text-sm text-gray-400">
-            Once you complete a full mock test, your mock trend, latest estimate and section performance will appear here.
+            Once you complete a mock test, Full Mock and Mini Mock results will appear here separately.
+          </p>
+        </div>
+      )
+    }
+
+    if (completedFull === 0) {
+      return (
+        <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
+          <div className="flex items-start justify-between gap-4 mb-3">
+            <div>
+              <h2 className="font-semibold text-gray-800">
+                🧠 My Mock Analysis
+              </h2>
+              <p className="text-xs text-gray-400 mt-1">
+                Mini Mock results are kept separate from the Full Mock trend.
+              </p>
+            </div>
+
+            <span className="text-xs bg-blue-50 text-blue-600 px-3 py-1.5 rounded-full">
+              {completedMini} Mini Mock completed
+            </span>
+          </div>
+
+          <p className="text-sm text-gray-500">
+            No Full Mock has been completed yet. Your Mini Mock results remain available in the Mock Tests list below.
           </p>
         </div>
       )
@@ -1585,23 +1543,23 @@
             </h2>
 
             <p className="text-xs text-gray-400 mt-1">
-              Based on your completed full IELTS mock tests.
+              Full Mock trend only. Mini Mock results are listed separately and do not affect this trend.
             </p>
           </div>
 
           <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1.5 rounded-full">
-            {completed} completed
+            {completedFull} full · {completedMini} mini
           </span>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-5">
           <div className="bg-gray-900 text-white rounded-2xl p-5">
             <p className="text-xs text-gray-400 mb-1">
-              Latest Mock Overall
+              Latest Full Mock Overall
             </p>
 
             <p className="text-4xl font-bold">
-              {latestOverall ? formatBand(latestOverall) : '--'}
+              {latestOverall !== null ? formatBand(latestOverall) : '--'}
             </p>
 
             <p className="text-xs text-gray-400 mt-2 truncate">
@@ -1647,7 +1605,7 @@
             </p>
 
             <p className={`text-xs mt-2 ${getChangeColor(latestOverall, previousOverall)}`}>
-              {overallChange ? `${overallChange} from previous mock` : 'No previous mock yet'}
+              {overallChange ? `${overallChange} from previous Full Mock` : 'No previous Full Mock yet'}
             </p>
           </div>
         </div>
@@ -1655,14 +1613,16 @@
         {trend.length > 1 && (
           <div className="mb-5">
             <h3 className="text-sm font-semibold text-gray-700 mb-3">
-              Mock Progress Trend
+              Full Mock Progress Trend
             </h3>
 
             <div className="flex items-end gap-2 h-28 bg-gray-50 rounded-2xl p-4 overflow-x-auto">
               {trend.map((submission, index) => {
-                const overall = Number(getMockOverall(submission)) || 0
-                const height = Math.max(14, Math.min(100, (overall / 9) * 100))
-                const title = mockMap[submission.mockTestId]?.title || `Mock ${index + 1}`
+                const overall = getMockOverall(submission)
+                const height = overall === null
+                  ? 0
+                  : Math.max(14, Math.min(100, (overall / 9) * 100))
+                const title = getSubmissionMock(submission)?.title || submission.mockTitle || `Full Mock ${index + 1}`
 
                 return (
                   <div
@@ -1671,7 +1631,7 @@
                     title={title}
                   >
                     <p className="text-xs font-semibold text-purple-600 mb-1">
-                      {overall ? formatBand(overall) : '--'}
+                      {overall === null ? '--' : formatBand(overall)}
                     </p>
 
                     <div
@@ -1680,7 +1640,7 @@
                     />
 
                     <p className="text-[10px] text-gray-400 mt-1">
-                      M{index + 1}
+                      F{index + 1}
                     </p>
                   </div>
                 )
@@ -1695,10 +1655,11 @@
           </h3>
 
           <div className="flex flex-col gap-2">
-            {mockSubmissions.slice(0, 4).map(submission => {
+            {mockSubmissions.slice(0, 6).map(submission => {
               const result = submission.result || {}
               const overall = getMockOverall(submission)
-              const title = mockMap[submission.mockTestId]?.title || submission.mockTitle || 'Mock Test'
+              const title = getSubmissionMock(submission)?.title || submission.mockTitle || submission.title || 'Mock Test'
+              const isMini = getSubmissionMockType(submission) === 'mini_mock'
 
               return (
                 <div
@@ -1706,9 +1667,18 @@
                   className="border border-gray-100 bg-gray-50 rounded-xl p-4 flex items-center justify-between gap-4"
                 >
                   <div>
-                    <p className="text-sm font-medium text-gray-800">
-                      {title}
-                    </p>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-sm font-medium text-gray-800">
+                        {title}
+                      </p>
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${
+                        isMini
+                          ? 'bg-blue-50 text-blue-600'
+                          : 'bg-purple-50 text-purple-600'
+                      }`}>
+                        {getSubmissionMockTypeLabel(submission)}
+                      </span>
+                    </div>
 
                     <p className="text-xs text-gray-400 mt-0.5">
                       Submitted {submission.submittedAt ? new Date(submission.submittedAt).toLocaleDateString() : 'No date'}
@@ -1720,7 +1690,7 @@
                   </div>
 
                   <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1.5 rounded-full font-semibold">
-                    Overall {overall ? formatBand(overall) : '--'}
+                    Overall {overall === null ? '--' : formatBand(overall)}
                   </span>
                 </div>
               )
@@ -2268,7 +2238,10 @@
     }, [user, profile])
 
     const reviewed = submissions
-      .filter(sub => sub.reviewed && sub.review?.overall)
+      .filter(sub => {
+        const band = toNumber(sub.review?.overall)
+        return sub.reviewed && band !== null && band > 0
+      })
       .sort((a, b) => new Date(getReviewDate(a)) - new Date(getReviewDate(b)))
 
     if (reviewed.length === 0) {
