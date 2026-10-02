@@ -641,6 +641,48 @@ service cloud.firestore {
     }
 
     // ============================================================
+    // 8D-2 SANITIZED STUDENT CONTENT PROJECTIONS
+    // Students read answer-key-free copies here.
+    // Standalone access follows the same assignment rules as the source.
+    // Mock Reading/Listening get access is also allowed only through the
+    // already validated mockResourceAccess reference.
+    // Writes are server-only (Admin SDK / Cloud Functions bypass rules).
+    // ============================================================
+
+    match /studentReadings/{id} {
+      allow get: if isAdmin()
+        || (isStudent() && (
+          studentCanReadContent(resource.data)
+          || studentCanGetMockResource('readings', id)
+        ));
+
+      allow list: if isAdmin()
+        || studentCanReadContent(resource.data);
+
+      allow create, update, delete: if false;
+    }
+
+    match /studentListenings/{id} {
+      allow get: if isAdmin()
+        || (isStudent() && (
+          studentCanReadContent(resource.data)
+          || studentCanGetMockResource('listenings', id)
+        ));
+
+      allow list: if isAdmin()
+        || studentCanReadContent(resource.data);
+
+      allow create, update, delete: if false;
+    }
+
+    match /studentVocabularyTests/{id} {
+      allow get, list: if isAdmin()
+        || studentCanReadContent(resource.data);
+
+      allow create, update, delete: if false;
+    }
+
+    // ============================================================
     // READING
     // ============================================================
 
