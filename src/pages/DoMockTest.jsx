@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { auth, db } from '../firebase'
+import { auth, db, functions } from '../firebase'
 import {
   collection,
   doc,
@@ -11,10 +11,10 @@ import {
   query,
   where,
   orderBy,
-  limit,
-  writeBatch
+  limit
 } from 'firebase/firestore'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
+import { httpsCallable } from 'firebase/functions'
 import { useNavigate, useParams } from 'react-router-dom'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
@@ -28,6 +28,16 @@ const MINI_MOCK_DEFAULT_MINUTES = {
   reading: 30,
   writing: 30
 }
+
+const ensureMockObjectiveResourceCall = httpsCallable(
+  functions,
+  'ensureMockObjectiveResource'
+)
+const submitMockSecureCall = httpsCallable(functions, 'submitMockSecure')
+const getCompletedMockReviewCall = httpsCallable(
+  functions,
+  'getCompletedMockReview'
+)
 
 function getMockType(mock) {
   return mock?.mockType || mock?.contentType || 'full_mock'
@@ -305,7 +315,7 @@ function getReadingQuestionCount(question) {
   }
 
   if (question.type === 'mcq' && question.mode === 'multi') {
-    return question.answers?.length || 2
+    return question.answerCount || question.answers?.length || 2
   }
 
   if (question.type === 'table' || question.type === 'summary') {
@@ -479,7 +489,7 @@ function getListeningQuestionCount(question) {
   }
 
   if (question.type === 'mcq' && question.mode === 'multi') {
-    return question.answers?.length || 2
+    return question.answerCount || question.answers?.length || 2
   }
 
   return 1
@@ -544,7 +554,7 @@ function getListeningQuestionDisplayNumbers(parts, partId, targetQuestion) {
         }
 
         if (question.type === 'mcq' && question.mode === 'multi') {
-          const count = question.answers?.length || 2
+          const count = question.answerCount || question.answers?.length || 2
           const first = getManualQuestionNumber(question) || number
           const firstAsNumber = Number(first)
 
@@ -900,9 +910,45 @@ async function getAssignedMockResource({
     throw new Error('The requested resource is not linked to this mock.')
   }
 
+  if (section === 'reading' || section === 'listening') {
+    try {
+      await ensureMockObjectiveResourceCall({
+        mockTestId: mockData.id,
+        type: section,
+        sourceId
+      })
+      ensureCurrent()
+
+      const publicCollection =
+        section === 'reading' ? 'studentReadings' : 'studentListenings'
+      const snapshot = await getDocFromServer(
+        doc(db, publicCollection, sourceId)
+      )
+      ensureCurrent()
+
+      if (!snapshot.exists()) {
+        throw new Error(
+          `The sanitized ${section} resource could not be loaded for this mock.`
+        )
+      }
+
+      return snapshot
+    } catch (error) {
+      ensureCurrent()
+      const accessError = new Error(
+        error?.message ||
+        `The ${section} resource cannot be opened for this mock. ` +
+          'Ask your teacher to check the mock assignment and the linked resource.'
+      )
+      accessError.code = error?.code
+      throw accessError
+    }
+  }
+
   const sourceRef = doc(db, collectionName, sourceId)
   try {
-    // Do not treat an old cached document as fresh authorization.
+    // Writing has no objective answer key, so the existing scoped mock access
+    // remains in place for the linked writing resource.
     const snapshot = await getDocFromServer(sourceRef)
     ensureCurrent()
     return snapshot
@@ -1108,6 +1154,8 @@ export default function DoMockTest() {
 
         if (!isCurrent()) return
 
+        let completedReviewSources = null
+
         if (!existingSnap.empty) {
           setAlreadySubmitted(true)
 
@@ -1117,7 +1165,6 @@ export default function DoMockTest() {
           }
 
           setCompletedSubmission(submission)
-          setFinalResult(submission.result || null)
           setListeningAnswers(submission.listeningAnswers || {})
           setReadingAnswers(submission.readingAnswers || {})
           setWritingAnswers(
@@ -1126,6 +1173,14 @@ export default function DoMockTest() {
               task2: ''
             }
           )
+
+          const reviewResponse = await getCompletedMockReviewCall({
+            mockTestId: id
+          })
+          ensureCurrent()
+          const reviewPayload = reviewResponse?.data || {}
+          completedReviewSources = reviewPayload.reviewSources || null
+          setFinalResult(reviewPayload.result || submission.result || null)
 
           const key = `mock_progress_${id}_${currentUser.uid}`
           localStorage.removeItem(key)
@@ -1168,6 +1223,33 @@ export default function DoMockTest() {
 
         if (enabledSections.writing && !mockData.writingId) {
           throw new Error('Mock test is missing a Writing resource.')
+        }
+
+        if (completedReviewSources) {
+          const reviewListenings = Array.isArray(completedReviewSources.listenings)
+            ? completedReviewSources.listenings
+            : []
+          const reviewReadings = Array.isArray(completedReviewSources.readings)
+            ? completedReviewSources.readings
+            : []
+
+          if (enabledSections.listening && reviewListenings.length !== listeningIds.length) {
+            throw new Error('Completed Listening review data could not be loaded.')
+          }
+
+          if (enabledSections.reading && reviewReadings.length !== readingIds.length) {
+            throw new Error('Completed Reading review data could not be loaded.')
+          }
+
+          if (enabledSections.writing && !completedReviewSources.writing) {
+            throw new Error('Completed Writing review data could not be loaded.')
+          }
+
+          setListenings(reviewListenings)
+          setReadings(reviewReadings)
+          setWriting(completedReviewSources.writing || null)
+          setLoading(false)
+          return
         }
 
         const loadLinkedResource = (collectionName, sourceId) =>
@@ -1654,7 +1736,7 @@ export default function DoMockTest() {
       }
 
       if (question.type === 'mcq' && question.mode === 'multi') {
-        const required = question.answers?.length || 2
+        const required = question.answerCount || question.answers?.length || 2
         const selected = Array.isArray(listeningAnswers[question.id])
           ? listeningAnswers[question.id].filter(Boolean)
           : []
@@ -1781,7 +1863,7 @@ export default function DoMockTest() {
       }
 
       if (question.type === 'mcq' && question.mode === 'multi') {
-        const required = question.answers?.length || 2
+        const required = question.answerCount || question.answers?.length || 2
         const selected = Array.isArray(answerSet[question.id])
           ? answerSet[question.id].filter(Boolean)
           : []
@@ -2115,20 +2197,23 @@ export default function DoMockTest() {
     }))
   }
 
-  const handleListeningMultiAnswer = (questionId, letter) => {
+  const handleListeningMultiAnswer = (question, letter) => {
     if (listeningLocked) return
 
+    const maxSelections =
+      question.answerCount || question.answers?.length || 2
+
     setListeningAnswers(prev => {
-      const current = Array.isArray(prev[questionId]) ? prev[questionId] : []
+      const current = Array.isArray(prev[question.id]) ? prev[question.id] : []
       const updated = current.includes(letter)
         ? current.filter(item => item !== letter)
-        : current.length < 2
+        : current.length < maxSelections
           ? [...current, letter]
           : current
 
       return {
         ...prev,
-        [questionId]: updated
+        [question.id]: updated
       }
     })
   }
@@ -2181,15 +2266,20 @@ export default function DoMockTest() {
     }))
   }
 
-  const handleReadingMultiAnswer = (readingId, questionId, letter) => {
+  const handleReadingMultiAnswer = (readingId, question, letter) => {
     if (readingLocked) return
+
+    const maxSelections =
+      question.answerCount || question.answers?.length || 2
 
     setReadingAnswers(prev => {
       const readingSet = prev[readingId] || {}
-      const current = Array.isArray(readingSet[questionId]) ? readingSet[questionId] : []
+      const current = Array.isArray(readingSet[question.id])
+        ? readingSet[question.id]
+        : []
       const updated = current.includes(letter)
         ? current.filter(item => item !== letter)
-        : current.length < 2
+        : current.length < maxSelections
           ? [...current, letter]
           : current
 
@@ -2197,7 +2287,7 @@ export default function DoMockTest() {
         ...prev,
         [readingId]: {
           ...readingSet,
-          [questionId]: updated
+          [question.id]: updated
         }
       }
     })
@@ -2991,15 +3081,18 @@ export default function DoMockTest() {
       const existingSnap = await getDocs(existingQuery)
 
       if (!existingSnap.empty) {
-        setAlreadySubmitted(true)
-
         const existingSubmission = {
           id: existingSnap.docs[0].id,
           ...existingSnap.docs[0].data()
         }
+        const reviewResponse = await getCompletedMockReviewCall({
+          mockTestId: mock.id
+        })
+        const reviewPayload = reviewResponse?.data || {}
 
+        setAlreadySubmitted(true)
         setCompletedSubmission(existingSubmission)
-        setFinalResult(existingSubmission.result || null)
+        setFinalResult(reviewPayload.result || existingSubmission.result || null)
         setListeningAnswers(existingSubmission.listeningAnswers || {})
         setReadingAnswers(existingSubmission.readingAnswers || {})
         setWritingAnswers(
@@ -3008,10 +3101,20 @@ export default function DoMockTest() {
             task2: ''
           }
         )
+        setListenings(
+          Array.isArray(reviewPayload.reviewSources?.listenings)
+            ? reviewPayload.reviewSources.listenings
+            : []
+        )
+        setReadings(
+          Array.isArray(reviewPayload.reviewSources?.readings)
+            ? reviewPayload.reviewSources.readings
+            : []
+        )
+        setWriting(reviewPayload.reviewSources?.writing || null)
 
-        if (storageKey) {
-          localStorage.removeItem(storageKey)
-        }
+        if (storageKey) localStorage.removeItem(storageKey)
+        setSectionIndex(sections.length - 1)
 
         if (!auto) {
           alert('You already submitted this mock test.')
@@ -3020,57 +3123,21 @@ export default function DoMockTest() {
         return
       }
 
-      const result = getMockResult()
-      const submittedAt = new Date().toISOString()
-      const listeningIds = Array.isArray(mock.listeningIds)
-        ? mock.listeningIds.filter(Boolean)
-        : mock.listeningId
-          ? [mock.listeningId]
-          : []
-
-      const readingIds = Array.isArray(mock.readingIds)
-        ? mock.readingIds.filter(Boolean)
-        : mock.readingId
-          ? [mock.readingId]
-          : []
-
-      const submissionTeacherIds = getSourceTeacherIds(mock)
-
-      const submissionRef = doc(db, 'mockSubmissions', `${user.uid}_${mock.id}`)
-      const scoreRef = doc(db, 'scores', `${user.uid}_${mock.id}`)
-      const submissionData = {
-        uid: user.uid,
-        studentId: user.uid,
-        studentEmail: user.email || '',
-        schoolId: mock.schoolId || 'maxima',
-        teacherId: submissionTeacherIds[0] || '',
-        teacherIds: submissionTeacherIds,
+      const response = await submitMockSecureCall({
         mockTestId: mock.id,
-        title: mock.title || 'Untitled Mock Test',
-        mockType: getMockType(mock),
-        contentType: getMockType(mock),
-        enabledSections: { ...enabledSections },
-        writingMode,
-        task1Enabled: hasWritingTask1,
-        task2Enabled: hasWritingTask2,
-        sectionTimeLimits: {
-          listening: getMockSectionMinutes(mock, 'listening'),
-          reading: getMockSectionMinutes(mock, 'reading'),
-          writing: getMockSectionMinutes(mock, 'writing')
-        },
-        listeningId: listeningIds[0] || '',
-        listeningIds,
-        readingIds,
-        writingId: mock.writingId || '',
         listeningAnswers: listeningAnswers || {},
         readingAnswers: readingAnswers || {},
         writingAnswers: {
           task1: writingAnswers?.task1 || '',
           task2: writingAnswers?.task2 || ''
         },
-        result,
         autoSubmitted: auto,
         tabSwitchCount: tabSwitchCountRef.current,
+        sectionTimeLimits: {
+          listening: getMockSectionMinutes(mock, 'listening'),
+          reading: getMockSectionMinutes(mock, 'reading'),
+          writing: getMockSectionMinutes(mock, 'writing')
+        },
         timing: {
           listeningTimeLeft,
           readingTimeLeft,
@@ -3078,45 +3145,17 @@ export default function DoMockTest() {
           listeningLocked,
           readingLocked,
           writingLocked
-        },
-        submittedAt,
-        status: 'submitted'
-      }
-      const scoreData = {
-        uid: user.uid,
-        studentId: user.uid,
-        studentEmail: user.email || '',
-        schoolId: mock.schoolId || 'maxima',
-        teacherId: submissionTeacherIds[0] || '',
-        teacherIds: submissionTeacherIds,
-        date: submittedAt.slice(0, 10),
-        source: 'mock_test',
-        mockTestId: mock.id,
-        listening: enabledSections.listening
-          ? result.listening?.band || ''
-          : '',
-        reading: enabledSections.reading
-          ? result.reading?.band || ''
-          : '',
-        writing: '',
-        speaking: '',
-        overall: result.overallEstimate ?? '',
-        createdAt: submittedAt
+        }
+      })
+
+      const payload = response?.data || {}
+      const result = payload.result || null
+
+      if (!result) {
+        throw new Error('Secure grading did not return a mock result.')
       }
 
-      // Repair 08C: submission + score history succeed or fail together.
-      // Both document IDs are deterministic, so a second student attempt is an
-      // update request and is rejected by Firestore Rules.
-      const batch = writeBatch(db)
-      batch.set(submissionRef, submissionData)
-      batch.set(scoreRef, scoreData)
-      await batch.commit()
-
-      if (storageKey) {
-        localStorage.removeItem(storageKey)
-      }
-
-      setCompletedSubmission({
+      let submissionForReview = {
         mockTestId: mock.id,
         listeningAnswers: listeningAnswers || {},
         readingAnswers: readingAnswers || {},
@@ -3125,7 +3164,50 @@ export default function DoMockTest() {
           task2: writingAnswers?.task2 || ''
         },
         result
-      })
+      }
+
+      if (payload.alreadySubmitted) {
+        const deterministicRef = doc(
+          db,
+          'mockSubmissions',
+          `${user.uid}_${mock.id}`
+        )
+        const deterministicSnap = await getDoc(deterministicRef)
+
+        if (deterministicSnap.exists()) {
+          submissionForReview = {
+            id: deterministicSnap.id,
+            ...deterministicSnap.data()
+          }
+          setListeningAnswers(submissionForReview.listeningAnswers || {})
+          setReadingAnswers(submissionForReview.readingAnswers || {})
+          setWritingAnswers(
+            submissionForReview.writingAnswers || {
+              task1: '',
+              task2: ''
+            }
+          )
+        }
+      }
+
+      const reviewSources = payload.reviewSources || {}
+      setListenings(
+        Array.isArray(reviewSources.listenings)
+          ? reviewSources.listenings
+          : []
+      )
+      setReadings(
+        Array.isArray(reviewSources.readings)
+          ? reviewSources.readings
+          : []
+      )
+      setWriting(reviewSources.writing || null)
+
+      if (storageKey) {
+        localStorage.removeItem(storageKey)
+      }
+
+      setCompletedSubmission(submissionForReview)
       setFinalResult(result)
       setAlreadySubmitted(true)
       setSectionIndex(sections.length - 1)
@@ -3142,13 +3224,29 @@ export default function DoMockTest() {
             id: existingSnap.id,
             ...existingSnap.data()
           }
+          const reviewResponse = await getCompletedMockReviewCall({
+            mockTestId: mock.id
+          })
+          const reviewPayload = reviewResponse?.data || {}
+
           setCompletedSubmission(existingSubmission)
-          setFinalResult(existingSubmission.result || null)
+          setFinalResult(reviewPayload.result || existingSubmission.result || null)
           setListeningAnswers(existingSubmission.listeningAnswers || {})
           setReadingAnswers(existingSubmission.readingAnswers || {})
           setWritingAnswers(
             existingSubmission.writingAnswers || { task1: '', task2: '' }
           )
+          setListenings(
+            Array.isArray(reviewPayload.reviewSources?.listenings)
+              ? reviewPayload.reviewSources.listenings
+              : []
+          )
+          setReadings(
+            Array.isArray(reviewPayload.reviewSources?.readings)
+              ? reviewPayload.reviewSources.readings
+              : []
+          )
+          setWriting(reviewPayload.reviewSources?.writing || null)
           setAlreadySubmitted(true)
           setSectionIndex(sections.length - 1)
           if (storageKey) localStorage.removeItem(storageKey)
@@ -3908,7 +4006,7 @@ ${previousLabel} will be permanently locked and you will not be able to return t
                         type="button"
                         onClick={() =>
                           question.mode === 'multi'
-                            ? handleListeningMultiAnswer(question.id, letter)
+                            ? handleListeningMultiAnswer(question, letter)
                             : handleListeningAnswer(question.id, letter)
                         }
                         className={`text-left px-4 py-3 rounded-xl text-sm border ${
@@ -4997,7 +5095,7 @@ ${previousLabel} will be permanently locked and you will not be able to return t
                                   question.mode === 'multi'
                                     ? handleReadingMultiAnswer(
                                         reading.id,
-                                        question.id,
+                                        question,
                                         letter
                                       )
                                     : handleReadingAnswer(
