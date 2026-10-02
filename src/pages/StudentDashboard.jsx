@@ -3270,6 +3270,10 @@
       message => !(message.readBy || []).includes(user?.uid)
     ).length
 
+    const unopenedMaterialCount = materials.filter(
+      material => !(material.readBy || []).includes(user?.uid)
+    ).length
+
     const markMessageRead = async message => {
       if (!user || (message.readBy || []).includes(user.uid)) return
 
@@ -3291,7 +3295,18 @@
         const url = await getDownloadURL(
           storageRef(storage, material.storagePath)
         )
+
         window.open(url, '_blank', 'noopener,noreferrer')
+
+        if (user && !(material.readBy || []).includes(user.uid)) {
+          try {
+            await updateDoc(doc(db, 'materials', material.id), {
+              readBy: arrayUnion(user.uid)
+            })
+          } catch (readError) {
+            console.warn('Could not mark material as opened:', readError)
+          }
+        }
       } catch (error) {
         console.error('Could not open material:', error)
         alert('Could not open this file.')
@@ -3363,8 +3378,10 @@
               <h2 className="font-semibold text-gray-800">📚 Materials</h2>
               <p className="text-xs text-gray-400 mt-1">Lesson notes, PDFs and worksheets shared with you.</p>
             </div>
-            <span className="text-xs bg-gray-100 text-gray-500 px-3 py-1.5 rounded-full">
-              {materials.length} file{materials.length === 1 ? '' : 's'}
+            <span className={`text-xs px-3 py-1.5 rounded-full ${unopenedMaterialCount > 0 ? 'bg-purple-50 text-purple-600' : 'bg-gray-100 text-gray-500'}`}>
+              {unopenedMaterialCount > 0
+                ? `${unopenedMaterialCount} unopened`
+                : `${materials.length} file${materials.length === 1 ? '' : 's'}`}
             </span>
           </div>
 
@@ -3374,11 +3391,19 @@
             </div>
           ) : (
             <div className="space-y-3">
-              {materials.map(material => (
-                <div key={material.id} className="border border-gray-100 rounded-xl p-4">
+              {materials.map(material => {
+                const isUnopened = !(material.readBy || []).includes(user?.uid)
+
+                return (
+                <div key={material.id} className={`border rounded-xl p-4 ${isUnopened ? 'border-purple-200 bg-purple-50/40' : 'border-gray-100'}`}>
                   <div className="flex items-start justify-between gap-4">
                     <div className="min-w-0">
-                      <p className="text-sm font-semibold text-gray-800">📎 {material.title}</p>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="text-sm font-semibold text-gray-800">📎 {material.title}</p>
+                        {isUnopened && (
+                          <span className="text-[10px] bg-purple-600 text-white px-2 py-1 rounded-full">NEW</span>
+                        )}
+                      </div>
                       <p className="text-xs text-purple-600 mt-1">From {material.senderName || 'Teacher'}</p>
                       <p className="text-xs text-gray-400 mt-1 truncate">{material.fileName}</p>
                       {material.description && (
@@ -3399,7 +3424,8 @@
                     </button>
                   </div>
                 </div>
-              ))}
+                )
+              })}
             </div>
           )}
         </div>

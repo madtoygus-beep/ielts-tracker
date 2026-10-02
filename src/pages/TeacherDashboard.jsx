@@ -1164,6 +1164,7 @@ export default function TeacherDashboard() {
         schoolId: profile?.schoolId || DEFAULT_SCHOOL_ID,
         recipientIds,
         recipientNames,
+        readBy: [],
         classId,
         className,
         shareTargets: [initialShareTarget],
@@ -1280,6 +1281,19 @@ export default function TeacherDashboard() {
       .filter(Boolean)
 
     return uniqueCleanValues(labels)
+  }
+
+  const getMaterialReadCount = material => {
+    const recipientIds = new Set(
+      uniqueCleanValues(Array.isArray(material?.recipientIds) ? material.recipientIds : [])
+        .map(normalizeAssignmentId)
+        .filter(Boolean)
+    )
+
+    return uniqueCleanValues(Array.isArray(material?.readBy) ? material.readBy : [])
+      .map(normalizeAssignmentId)
+      .filter(value => value && recipientIds.has(value))
+      .length
   }
 
   const openMaterialShareAgain = material => {
@@ -1469,14 +1483,22 @@ export default function TeacherDashboard() {
     if (!ok) return
 
     try {
-      if (material.storagePath) {
-        await deleteObject(storageRef(storage, material.storagePath))
-      }
+      await deleteDoc(doc(db, 'materials', material.id))
     } catch (error) {
-      console.warn('Could not delete material file:', error)
+      console.error('Could not delete material record:', error)
+      alert('Could not delete this material. Please try again.')
+      return
     }
 
-    await deleteDoc(doc(db, 'materials', material.id))
+    if (material.storagePath) {
+      try {
+        await deleteObject(storageRef(storage, material.storagePath))
+      } catch (error) {
+        if (error?.code !== 'storage/object-not-found') {
+          console.warn('Material record deleted, but file cleanup failed:', error)
+        }
+      }
+    }
   }
 
   const getCompletedCount = readingId => {
@@ -6487,6 +6509,9 @@ Continue permanent delete?`
                                 </div>
                               </div>
                               <p className="text-xs text-gray-400 mt-2 truncate">{material.fileName}</p>
+                              <p className="text-[11px] text-gray-500 mt-1">
+                                Opened by {getMaterialReadCount(material)}/{uniqueCleanValues(Array.isArray(material.recipientIds) ? material.recipientIds : []).length}
+                              </p>
                               {material.description && (
                                 <p className="text-sm text-gray-600 mt-2 whitespace-pre-wrap">{material.description}</p>
                               )}

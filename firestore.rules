@@ -534,7 +534,7 @@ service cloud.firestore {
 
     function teacherMaterialIdentityUnchanged() {
       return !request.resource.data.diff(resource.data).affectedKeys().hasAny([
-        'ownerId', 'teacherId', 'teacherIds', 'schoolId', 'storagePath', 'createdAt'
+        'ownerId', 'teacherId', 'teacherIds', 'schoolId', 'storagePath', 'createdAt', 'readBy'
       ]);
     }
 
@@ -998,6 +998,7 @@ service cloud.firestore {
           && request.resource.data.get('teacherIds', []) == [request.auth.uid]
           && request.resource.data.get('recipientIds', []) is list
           && request.resource.data.get('recipientIds', []).size() > 0
+          && request.resource.data.get('readBy', []) == []
           && request.resource.data.get('storagePath', '') is string
           && request.resource.data.get('storagePath', '').size() >
             ('materials/' + request.auth.uid + '/' + materialId + '/').size()
@@ -1007,7 +1008,8 @@ service cloud.firestore {
         );
 
       allow update: if isAdmin()
-        || (teacherListedOn(resource.data) && teacherMaterialIdentityUnchanged());
+        || (teacherListedOn(resource.data) && teacherMaterialIdentityUnchanged())
+        || (isMaterialRecipient(resource.data) && studentAddsOnlyOwnReadReceipt());
       allow delete: if isAdmin() || teacherListedOn(resource.data);
     }
 
