@@ -4352,6 +4352,30 @@ Continue permanent delete?`
     return roundToHalf(avg)
   }
 
+  const getWeightedWritingOverall = ({
+    task1Enabled,
+    task2Enabled,
+    task1Band,
+    task2Band
+  }) => {
+    const t1 = Number(task1Band)
+    const t2 = Number(task2Band)
+    const hasTask1Band =
+      task1Enabled && Number.isFinite(t1) && t1 > 0
+    const hasTask2Band =
+      task2Enabled && Number.isFinite(t2) && t2 > 0
+
+    if (hasTask1Band && hasTask2Band) {
+      // IELTS Writing Task 2 contributes twice as much as Task 1.
+      return roundToHalf((t1 + t2 * 2) / 3)
+    }
+
+    if (hasTask1Band) return roundToHalf(t1)
+    if (hasTask2Band) return roundToHalf(t2)
+
+    return ''
+  }
+
   const currentNormalWritingReviewTask1Enabled = selectedWritingReview
     ? isWritingTask1Enabled(selectedWritingReview.writing, selectedWritingReview.submission)
     : true
@@ -4392,14 +4416,16 @@ Continue permanent delete?`
       ])
     : ''
 
-  const suggestedOverallBand = averageBand([
-    currentWritingReviewTask1Enabled
+  const suggestedOverallBand = getWeightedWritingOverall({
+    task1Enabled: currentWritingReviewTask1Enabled,
+    task2Enabled: currentWritingReviewTask2Enabled,
+    task1Band: currentWritingReviewTask1Enabled
       ? writingReviewForm.task1Band || suggestedTask1Band
       : '',
-    currentWritingReviewTask2Enabled
+    task2Band: currentWritingReviewTask2Enabled
       ? writingReviewForm.task2Band || suggestedTask2Band
       : ''
-  ])
+  })
 
   const useSuggestedBands = () => {
     setWritingReviewForm(prev => ({
@@ -8696,17 +8722,24 @@ Continue permanent delete?`
           ? getMockTask2WordCount(reviewTarget.submission)
           : reviewTarget.submission.task2WordCount
 
-        const task1Enabled = isMockReview
-          ? true
-          : isWritingTask1Enabled(reviewTarget.writing, reviewTarget.submission)
+        const writingSource = isMockReview
+          ? reviewTarget.mock
+          : reviewTarget.writing
 
-        const task2Enabled = isMockReview
-          ? true
-          : isWritingTask2Enabled(reviewTarget.writing, reviewTarget.submission)
+        const task1Enabled = isWritingTask1Enabled(
+          writingSource,
+          reviewTarget.submission
+        )
 
-        const reviewTaskLabel = isMockReview
-          ? 'Task 1 + Task 2'
-          : getWritingTaskLabel(reviewTarget.writing, reviewTarget.submission)
+        const task2Enabled = isWritingTask2Enabled(
+          writingSource,
+          reviewTarget.submission
+        )
+
+        const reviewTaskLabel = getWritingTaskLabel(
+          writingSource,
+          reviewTarget.submission
+        )
 
         return (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center px-4">
@@ -8809,7 +8842,7 @@ Continue permanent delete?`
                 </h3>
 
                 <p className="text-xs text-gray-400 mb-5">
-                  Use IELTS Writing criteria. Suggested bands are calculated from the rubric, but you can still edit the final band manually.
+                  Use IELTS Writing criteria. For full Writing, Task 2 counts twice as much as Task 1 in the suggested overall band. Single-task work uses that task's band. You can still edit the final band manually.
                 </p>
 
                 <div className="bg-purple-50 rounded-2xl p-4 mb-5">
