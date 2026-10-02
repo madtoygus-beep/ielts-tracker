@@ -1,19 +1,23 @@
 import { useState, useEffect, useRef } from 'react'
-import { auth, db } from '../firebase'
+import { auth, db, functions } from '../firebase'
 import {
   doc,
   getDoc,
   getDocFromServer,
-  setDoc,
   collection,
   query,
   where,
   getDocs
 } from 'firebase/firestore'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
+import { httpsCallable } from 'firebase/functions'
 import { useNavigate, useParams } from 'react-router-dom'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
+
+const syncMyObjectiveAssignments = httpsCallable(functions, 'syncMyObjectiveAssignments')
+const submitReadingSecure = httpsCallable(functions, 'submitReadingSecure')
+const getCompletedObjectiveReview = httpsCallable(functions, 'getCompletedObjectiveReview')
 
 function normalizeId(value) {
   return value === undefined || value === null
@@ -222,12 +226,25 @@ export default function DoReading() {
       setUser(currentUser)
       setLoadError(null)
 
-      const snap = await getDocFromServer(doc(db, 'readings', id))
+      // 8D-2: students load the answer-key-free projection, never the source reading.
+      let snap = await getDocFromServer(doc(db, 'studentReadings', id))
       if (!isCurrent()) return
+
+      // Older assignments may predate the projection collections. Refresh only when needed.
+      if (!snap.exists()) {
+        try {
+          await syncMyObjectiveAssignments({})
+          if (!isCurrent()) return
+          snap = await getDocFromServer(doc(db, 'studentReadings', id))
+        } catch (syncError) {
+          console.warn('Could not refresh sanitized reading assignments:', syncError)
+        }
+      }
+
       if (!snap.exists()) {
         setLoadError({
           title: 'Reading homework not found.',
-          message: 'This reading document does not exist in Firestore. The dashboard may be pointing to an old or deleted reading ID.',
+          message: 'The student-safe copy of this reading is not available. Return to the dashboard and try again, or ask your teacher to refresh the assignment.',
           readingId: id
         })
         return
@@ -290,16 +307,31 @@ export default function DoReading() {
       const existing = await getDocs(q)
       if (!isCurrent()) return
 
-      // Start rendering/timing only after access and submission checks succeed.
-      setReading(data)
-      setTimeLeft((data.timeLimit || 60) * 60)
-
       if (!existing.empty) {
         const sub = existing.docs[0].data()
 
+        // Answer keys are returned only after the server confirms this student submitted.
+        const reviewResponse = await getCompletedObjectiveReview({
+          type: 'reading',
+          assignmentId: id
+        })
+        if (!isCurrent()) return
+
+        const reviewData = reviewResponse?.data || {}
+        const reviewSource = reviewData.source
+
+        if (!reviewSource || typeof reviewSource !== 'object') {
+          throw new Error('Completed reading review did not return the source document.')
+        }
+
+        setReading({
+          ...reviewSource,
+          id: reviewSource.id || id
+        })
+        setTimeLeft((data.timeLimit || 60) * 60)
         setAlreadyDone(true)
         setAnswers(sub.answers || {})
-        setResult(sub.result)
+        setResult(reviewData.result || sub.result || null)
         setFlaggedQuestions(
           Array.isArray(sub.flaggedQuestions) ? sub.flaggedQuestions : []
         )
@@ -310,7 +342,12 @@ export default function DoReading() {
             : locallySavedHighlights
         )
         setSubmitted(true)
+        return
       }
+
+      // Start rendering/timing only after access and submission checks succeed.
+      setReading(data)
+      setTimeLeft((data.timeLimit || 60) * 60)
       } catch (error) {
         console.error('Could not load reading homework:', error)
         if (!isCurrent()) return
@@ -1381,59 +1418,67 @@ export default function DoReading() {
 
     clearInterval(timerRef.current)
 
-    const res = calculateScore()
-    const submissionTeacherIds = getSourceTeacherIds(reading)
-
-    const submissionRef = doc(db, 'readingSubmissions', `${user.uid}_${id}`)
-    const submissionData = {
-      uid: user.uid,
-      studentId: user.uid,
-      studentEmail: user.email || '',
-      readingId: id,
-      schoolId: reading.schoolId || 'maxima',
-      teacherId: submissionTeacherIds[0] || '',
-      teacherIds: submissionTeacherIds,
-      answers,
-      result: res,
-      flaggedQuestions,
-      studentNote: studentNote.trim(),
-      highlights,
-      submittedAt: new Date().toISOString(),
-      finishedLate: timeLeft <= 0,
-      autoSubmitted: autoSubmit
-    }
-
     try {
-      // Repair 08C: deterministic IDs make a second create become a denied update.
-      await setDoc(submissionRef, submissionData)
+      // 8D-2: scoring and immutable submission creation happen on the server.
+      const response = await submitReadingSecure({
+        readingId: id,
+        answers,
+        flaggedQuestions,
+        studentNote: studentNote.trim(),
+        highlights,
+        finishedLate: timeLeft <= 0,
+        autoSubmitted: autoSubmit
+      })
 
-      setResult(res)
-      setSubmitted(true)
-    } catch (error) {
-      console.error(error)
+      const secureData = response?.data || {}
+      let reviewSource = secureData.reviewSource
+      let secureResult = secureData.result || null
 
-      // A second tab or an uncertain network response may reach this branch
-      // after the first immutable submission was already written.
-      try {
-        const existingSnap = await getDoc(submissionRef)
-        if (existingSnap.exists()) {
-          const existing = existingSnap.data()
-          setAlreadyDone(true)
-          setAnswers(existing.answers || {})
-          setResult(existing.result || res)
-          setFlaggedQuestions(
-            Array.isArray(existing.flaggedQuestions) ? existing.flaggedQuestions : []
-          )
-          setStudentNote(existing.studentNote || '')
-          setHighlights(Array.isArray(existing.highlights) ? existing.highlights : [])
-          setSubmitted(true)
-          setSubmitting(false)
-          return
-        }
-      } catch (lookupError) {
-        console.warn('Could not verify an existing reading submission:', lookupError)
+      if (!reviewSource || typeof reviewSource !== 'object') {
+        const reviewResponse = await getCompletedObjectiveReview({
+          type: 'reading',
+          assignmentId: id
+        })
+        reviewSource = reviewResponse?.data?.source
+        secureResult = reviewResponse?.data?.result || secureResult
       }
 
+      if (!reviewSource || typeof reviewSource !== 'object') {
+        throw new Error('Secure Reading submission did not return review data.')
+      }
+
+      // If another tab submitted first, restore the answers that are actually stored.
+      if (secureData.alreadySubmitted === true) {
+        const existingQuery = query(
+          collection(db, 'readingSubmissions'),
+          where('uid', '==', user.uid),
+          where('readingId', '==', id)
+        )
+        const existing = await getDocs(existingQuery)
+
+        if (!existing.empty) {
+          const stored = existing.docs[0].data()
+          setAnswers(stored.answers || {})
+          setFlaggedQuestions(
+            Array.isArray(stored.flaggedQuestions) ? stored.flaggedQuestions : []
+          )
+          setStudentNote(stored.studentNote || '')
+          setHighlights(Array.isArray(stored.highlights) ? stored.highlights : [])
+          secureResult = stored.result || secureResult
+        }
+
+        setAlreadyDone(true)
+      }
+
+      setReading({
+        ...reviewSource,
+        id: reviewSource.id || id
+      })
+      setResult(secureResult)
+      setSubmitted(true)
+      setSubmitting(false)
+    } catch (error) {
+      console.error('Secure Reading submission failed:', error)
       alert('Could not submit your answers. Please try again.')
       submittingRef.current = false
       setSubmitting(false)
@@ -2169,14 +2214,14 @@ export default function DoReading() {
                           {question.instruction}
                         </p>
 
-                        <div className="overflow-x-auto">
-                          <table className="w-full text-sm border border-gray-100 rounded-xl overflow-hidden">
+                        <div className="overflow-x-auto overscroll-x-contain">
+                          <table className="w-full min-w-[720px] lg:min-w-full table-auto text-sm border border-gray-100 rounded-xl overflow-hidden">
                             <thead>
                               <tr className="bg-gray-100">
                                 {question.columns.map((column, columnIndex) => (
                                   <th
                                     key={columnIndex}
-                                    className="p-3 text-left font-semibold text-gray-700 border border-white"
+                                    className="p-3 min-w-[160px] text-left font-semibold text-gray-700 border border-white whitespace-normal break-words"
                                   >
                                     {column}
                                   </th>
@@ -2192,7 +2237,7 @@ export default function DoReading() {
                                       return (
                                         <td
                                           key={cellIndex}
-                                          className="p-3 bg-gray-50 border border-white text-gray-700 whitespace-pre-wrap"
+                                          className="p-3 min-w-[160px] max-w-[360px] bg-gray-50 border border-white text-gray-700 whitespace-pre-wrap break-words align-top"
                                         >
                                           {cell.text}
                                         </td>
@@ -2214,7 +2259,7 @@ export default function DoReading() {
                                     return (
                                       <td
                                         key={cellIndex}
-                                        className={`p-3 border border-white ${
+                                        className={`p-3 min-w-[220px] align-top border border-white ${
                                           correct
                                             ? 'bg-green-50'
                                             : 'bg-red-50'
@@ -2230,7 +2275,7 @@ export default function DoReading() {
                                               Your answer:
                                             </p>
 
-                                            <p className="text-sm text-gray-800">
+                                            <p className="text-sm text-gray-800 whitespace-pre-wrap break-words">
                                               {answers[key] || 'No answer'}
                                             </p>
                                           </div>
@@ -2242,7 +2287,7 @@ export default function DoReading() {
                                               Correct:
                                             </p>
 
-                                            <p className="text-sm font-medium text-green-700">
+                                            <p className="text-sm font-medium text-green-700 whitespace-pre-wrap break-words">
                                               {cell.answer}
                                             </p>
                                           </>
@@ -3009,14 +3054,14 @@ export default function DoReading() {
                       {question.instruction}
                     </p>
 
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-sm border border-gray-100 rounded-xl overflow-hidden">
+                    <div className="overflow-x-auto overscroll-x-contain">
+                      <table className="w-full min-w-[720px] lg:min-w-full table-auto text-sm border border-gray-100 rounded-xl overflow-hidden">
                         <thead>
                           <tr className="bg-gray-100">
                             {question.columns.map((column, columnIndex) => (
                               <th
                                 key={columnIndex}
-                                className="p-3 text-left font-semibold text-gray-700 border border-white"
+                                className="p-3 min-w-[160px] text-left font-semibold text-gray-700 border border-white whitespace-normal break-words"
                               >
                                 {column}
                               </th>
@@ -3032,7 +3077,7 @@ export default function DoReading() {
                                   return (
                                     <td
                                       key={cellIndex}
-                                      className="p-3 bg-gray-50 border border-white text-gray-700 whitespace-pre-wrap align-top"
+                                      className="p-3 min-w-[160px] max-w-[360px] bg-gray-50 border border-white text-gray-700 whitespace-pre-wrap break-words align-top"
                                     >
                                       {cell.text}
                                     </td>
@@ -3048,25 +3093,32 @@ export default function DoReading() {
                                 return (
                                   <td
                                     key={cellIndex}
-                                    className="p-3 bg-gray-50 border border-white align-top"
+                                    className="p-3 min-w-[240px] bg-gray-50 border border-white align-top"
                                   >
-                                    <div className="flex items-center gap-2">
-                                      <span className="bg-purple-50 border border-purple-100 text-purple-600 font-semibold rounded-md px-2 py-1 text-xs">
+                                    <div className="flex items-start gap-2 min-w-0">
+                                      <span className="shrink-0 bg-purple-50 border border-purple-100 text-purple-600 font-semibold rounded-md px-2 py-1 text-xs">
                                         Q{getReadingBlankNumber(question.id, row.id, cellIndex)}
                                       </span>
 
-                                      <input
+                                      <textarea
+                                        rows={1}
                                         value={answers[key] || ''}
-                                        onChange={e =>
+                                        onChange={e => {
                                           handleTableAnswer(
                                             question.id,
                                             row.id,
                                             cellIndex,
                                             e.target.value
                                           )
-                                        }
+                                          e.currentTarget.style.height = 'auto'
+                                          e.currentTarget.style.height = `${Math.max(e.currentTarget.scrollHeight, 42)}px`
+                                        }}
+                                        onFocus={e => {
+                                          e.currentTarget.style.height = 'auto'
+                                          e.currentTarget.style.height = `${Math.max(e.currentTarget.scrollHeight, 42)}px`
+                                        }}
                                         placeholder="Type answer..."
-                                        className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400 bg-white"
+                                        className="block w-full min-w-[180px] min-h-[42px] resize-none overflow-hidden whitespace-pre-wrap break-words border border-gray-200 rounded-xl px-3 py-2 text-sm leading-5 outline-none focus:border-purple-400 bg-white"
                                       />
                                     </div>
                                   </td>
