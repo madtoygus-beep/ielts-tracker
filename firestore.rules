@@ -620,19 +620,14 @@ service cloud.firestore {
         || teacherOwnsScoreMock(resource.data)
         || (isStudent() && resource.data.uid == request.auth.uid);
 
+      // 8D-2: objective/mock scores are server-authored for students.
+      // Teachers/admins keep their existing manual score path.
       allow create: if isAdmin()
         || (
           isTeacher()
           && teacherListedOn(request.resource.data)
           && schoolIdOf(request.resource.data) == currentSchoolId()
           && userDoc(request.resource.data.uid).data.get('teacherIds', []).hasAny([request.auth.uid])
-        )
-        || (
-          validStudentMockScore(request.resource.data)
-          && hasExpectedSubmissionId(
-            scoreId,
-            request.resource.data.get('mockTestId', '')
-          )
         );
 
       allow update, delete: if isAdmin()
@@ -687,15 +682,10 @@ service cloud.firestore {
     // ============================================================
 
     match /readings/{id} {
-      allow get: if isAdmin()
-        || teacherCanReadContent(resource.data)
-        || studentCanReadContent(resource.data)
-        || studentCanGetMockResource('readings', id);
-
-      // A mock reference permits a single linked document, not library queries.
-      allow list: if isAdmin()
-        || teacherCanReadContent(resource.data)
-        || studentCanReadContent(resource.data);
+      // 8D-2 final cutover: students never read answer-key-bearing source docs.
+      // Student and Mock flows use studentReadings projections instead.
+      allow get, list: if isAdmin()
+        || teacherCanReadContent(resource.data);
 
       allow create: if isAdmin() || teacherCanCreateContent(request.resource.data);
       allow update: if isAdmin() || teacherCanUpdateContent();
@@ -720,13 +710,9 @@ service cloud.firestore {
         || teacherOwnsReadingParent(resource.data)
         || (isStudent() && resource.data.uid == request.auth.uid);
 
-      allow create: if hasExpectedSubmissionId(id, request.resource.data.get('readingId', ''))
-        && readingParentExists(request.resource.data)
-        && validObjectiveSubmission(request.resource.data, 'readingId')
-        && validStudentSubmissionBase(
-          request.resource.data,
-          get(/databases/$(database)/documents/readings/$(request.resource.data.readingId)).data
-        );
+      // 8D-2: student Reading submissions are created only by submitReadingSecure.
+      // Cloud Functions use the Admin SDK and bypass Firestore client rules.
+      allow create: if isAdmin();
 
       allow update, delete: if isAdmin()
         || teacherListedOn(resource.data)
@@ -738,15 +724,10 @@ service cloud.firestore {
     // ============================================================
 
     match /listenings/{id} {
-      allow get: if isAdmin()
-        || teacherCanReadContent(resource.data)
-        || studentCanReadContent(resource.data)
-        || studentCanGetMockResource('listenings', id);
-
-      // A mock reference permits a single linked document, not library queries.
-      allow list: if isAdmin()
-        || teacherCanReadContent(resource.data)
-        || studentCanReadContent(resource.data);
+      // 8D-2 final cutover: students never read answer-key-bearing source docs.
+      // Student and Mock flows use studentListenings projections instead.
+      allow get, list: if isAdmin()
+        || teacherCanReadContent(resource.data);
 
       allow create: if isAdmin() || teacherCanCreateContent(request.resource.data);
       allow update: if isAdmin() || teacherCanUpdateContent();
@@ -771,13 +752,8 @@ service cloud.firestore {
         || teacherOwnsListeningParent(resource.data)
         || (isStudent() && resource.data.uid == request.auth.uid);
 
-      allow create: if hasExpectedSubmissionId(id, request.resource.data.get('listeningId', ''))
-        && listeningParentExists(request.resource.data)
-        && validObjectiveSubmission(request.resource.data, 'listeningId')
-        && validStudentSubmissionBase(
-          request.resource.data,
-          get(/databases/$(database)/documents/listenings/$(request.resource.data.listeningId)).data
-        );
+      // 8D-2: student Listening submissions are created only by submitListeningSecure.
+      allow create: if isAdmin();
 
       allow update, delete: if isAdmin()
         || teacherListedOn(resource.data)
@@ -874,13 +850,8 @@ service cloud.firestore {
         || teacherOwnsMockParent(resource.data)
         || (isStudent() && resource.data.uid == request.auth.uid);
 
-      allow create: if hasExpectedSubmissionId(id, request.resource.data.get('mockTestId', ''))
-        && mockParentExists(request.resource.data)
-        && validMockSubmission(request.resource.data)
-        && validStudentSubmissionBase(
-          request.resource.data,
-          get(/databases/$(database)/documents/mockTests/$(request.resource.data.mockTestId)).data
-        );
+      // 8D-2: student Mock submissions are created only by submitMockSecure.
+      allow create: if isAdmin();
 
       allow update, delete: if isAdmin()
         || teacherListedOn(resource.data)
@@ -892,9 +863,9 @@ service cloud.firestore {
     // ============================================================
 
     match /vocabularyTests/{id} {
+      // 8D-2 final cutover: students use studentVocabularyTests projections.
       allow read: if isAdmin()
-        || teacherCanReadContent(resource.data)
-        || studentCanReadContent(resource.data);
+        || teacherCanReadContent(resource.data);
 
       allow create: if isAdmin() || teacherCanCreateContent(request.resource.data);
       allow update: if isAdmin() || teacherCanUpdateContent();
@@ -919,13 +890,8 @@ service cloud.firestore {
         || teacherOwnsVocabularyParent(resource.data)
         || (isStudent() && resource.data.uid == request.auth.uid);
 
-      allow create: if hasExpectedSubmissionId(id, request.resource.data.get('vocabularyTestId', ''))
-        && vocabularyParentExists(request.resource.data)
-        && validVocabularySubmission(request.resource.data)
-        && validStudentSubmissionBase(
-          request.resource.data,
-          get(/databases/$(database)/documents/vocabularyTests/$(request.resource.data.vocabularyTestId)).data
-        );
+      // 8D-2: student Vocabulary submissions are created only by submitVocabularySecure.
+      allow create: if isAdmin();
 
       allow update, delete: if isAdmin()
         || teacherListedOn(resource.data)
