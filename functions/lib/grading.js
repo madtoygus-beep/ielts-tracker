@@ -45,20 +45,19 @@ function sortAnswers(value) {
 }
 
 function countWords(value) {
-  return (value || '').trim().split(/\s+/).filter(Boolean).length
+  if (value === undefined || value === null) return 0
+  return value.toString().trim().split(/\s+/).filter(Boolean).length
 }
 
 function isWithinWordLimit(value, maxWords) {
-  const limit = Number(maxWords)
-  if (!Number.isFinite(limit) || limit <= 0) return true
-  return countWords(value) <= limit
+  if (!maxWords) return true
+  return countWords(value) <= Number(maxWords)
 }
 
-function getAcceptedAnswers(mainAnswer, acceptedAnswers = '') {
+function getAcceptedAnswers(mainAnswer, acceptedAnswers = '', normalizer = normalize) {
   const values = []
-  if (mainAnswer !== undefined && mainAnswer !== null && `${mainAnswer}`.trim()) {
-    values.push(mainAnswer)
-  }
+
+  if (mainAnswer) values.push(mainAnswer)
 
   if (acceptedAnswers) {
     acceptedAnswers
@@ -69,16 +68,49 @@ function getAcceptedAnswers(mainAnswer, acceptedAnswers = '') {
       .forEach(item => values.push(item))
   }
 
-  return values.map(normalizeIELTSAnswer).filter(Boolean)
+  return values.map(normalizer)
 }
 
-function isBlankCorrect(userAnswer, mainAnswer, acceptedAnswers = '', maxWords = '') {
-  const cleanUser = normalizeIELTSAnswer(userAnswer)
-  if (!cleanUser) return false
+function isReadingBlankCorrect(userAnswer, mainAnswer, acceptedAnswers = '', maxWords = '') {
   if (!isWithinWordLimit(userAnswer, maxWords)) return false
 
-  const accepted = getAcceptedAnswers(mainAnswer, acceptedAnswers)
-  if (accepted.length === 0) return false
+  const cleanUser = normalize(userAnswer)
+  const accepted = getAcceptedAnswers(mainAnswer, acceptedAnswers, normalize)
+
+  if (!cleanUser || accepted.length === 0) return false
+  return accepted.includes(cleanUser)
+}
+
+function getListeningWordCount(value) {
+  const clean = normalizeIELTSAnswer(value)
+  if (!clean) return 0
+  return clean.split(' ').filter(Boolean).length
+}
+
+function isWithinListeningWordLimit(value, maxWords) {
+  if (!maxWords) return true
+  return getListeningWordCount(value) <= Number(maxWords)
+}
+
+function isListeningBlankCorrect(userAnswer, mainAnswer, acceptedAnswers = '', maxWords = '') {
+  const cleanUser = normalizeIELTSAnswer(userAnswer)
+  const accepted = getAcceptedAnswers(mainAnswer, acceptedAnswers, normalizeIELTSAnswer)
+
+  if (!cleanUser || accepted.length === 0) return false
+  if (!isWithinListeningWordLimit(userAnswer, maxWords)) return false
+  return accepted.includes(cleanUser)
+}
+
+function isVocabularyTypedAnswerCorrect(userAnswer, mainAnswer, acceptedAnswers = '') {
+  const cleanUser = normalizeTypedAnswer(userAnswer)
+  if (!cleanUser) return false
+
+  const accepted = getAcceptedAnswers(
+    mainAnswer,
+    acceptedAnswers,
+    normalizeTypedAnswer
+  )
+
   return accepted.includes(cleanUser)
 }
 
@@ -342,18 +374,28 @@ function getMatchingLetter(index) {
   return label
 }
 
-function buildVocabularyDefinitionOrder(source) {
+function buildVocabularyMatchingOrder(source) {
   const questions = Array.isArray(source?.questions) ? source.questions : []
-  return questions
-    .filter(question => (question?.type || 'mcq') === 'match_definition')
+  const items = questions.filter(
+    question => (question?.type || 'mcq') === 'match_definition'
+  )
+
+  if (source?.matchingShuffle !== true || items.length <= 1) {
+    return items
+  }
+
+  const shift =
+    (stableHash(source?.id || source?.title || 'vocabulary') % (items.length - 1)) + 1
+
+  return [
+    ...items.slice(shift),
+    ...items.slice(0, shift)
+  ]
+}
+
+function buildVocabularyDefinitionOrder(source) {
+  return buildVocabularyMatchingOrder(source)
     .map(question => (question.definition || '').toString().trim())
-    .filter(Boolean)
-    .sort((a, b) => {
-      const ah = stableHash(`${source?.id || ''}|${a}`)
-      const bh = stableHash(`${source?.id || ''}|${b}`)
-      if (ah !== bh) return ah - bh
-      return a.localeCompare(b)
-    })
 }
 
 function sanitizeVocabulary(source) {
@@ -425,7 +467,7 @@ function gradeReading(source, answers = {}) {
       let localTotal = 0
       for (const item of question.items || []) {
         localTotal++
-        if (isBlankCorrect(
+        if (isReadingBlankCorrect(
           answers?.[question.id]?.[item.id],
           item.answer,
           item.acceptedAnswers,
@@ -451,7 +493,7 @@ function gradeReading(source, answers = {}) {
           const user = answers[key]
           const ok = question.mode === 'choose'
             ? user?.toString() === part.answer?.toString()
-            : isBlankCorrect(user, part.answer, part.acceptedAnswers, part.maxWords)
+            : isReadingBlankCorrect(user, part.answer, part.acceptedAnswers, part.maxWords)
           if (ok) localCorrect++
         }
       }
@@ -470,7 +512,7 @@ function gradeReading(source, answers = {}) {
           if (cell.type !== 'blank') continue
           localTotal++
           const key = tableAnswerKey(question.id, row.id, index)
-          if (isBlankCorrect(answers[key], cell.answer, cell.acceptedAnswers, cell.maxWords)) {
+          if (isReadingBlankCorrect(answers[key], cell.answer, cell.acceptedAnswers, cell.maxWords)) {
             localCorrect++
           }
         }
@@ -483,7 +525,9 @@ function gradeReading(source, answers = {}) {
 
     if (type === 'mcq' && question.mode === 'multi') {
       const selected = Array.isArray(answers[question.id])
-        ? answers[question.id].map(item => item?.toString()).filter(Boolean)
+        ? Array.from(new Set(
+            answers[question.id].map(item => item?.toString()).filter(Boolean)
+          ))
         : []
       const expected = Array.isArray(question.answers)
         ? question.answers.map(item => item?.toString()).filter(Boolean)
@@ -498,15 +542,15 @@ function gradeReading(source, answers = {}) {
 
     let ok = false
     if (type === 'fitb') {
-      ok = isBlankCorrect(
+      ok = isReadingBlankCorrect(
         answers[question.id],
         question.answer,
         question.acceptedAnswers,
         question.maxWords
       )
     } else {
-      const user = normalizeIELTSAnswer(answers[question.id])
-      const expected = normalizeIELTSAnswer(question.answer)
+      const user = normalize(answers[question.id])
+      const expected = normalize(question.answer)
       ok = Boolean(user && expected && user === expected)
     }
 
@@ -542,7 +586,13 @@ function normalizeListeningParts(source) {
   }]
 }
 
-function gradeListening(source, answers = {}) {
+function gradeListening(source, answers = {}, options = {}) {
+  const useBasicNormalization = options?.useBasicNormalization === true
+  const normalizeAnswer = useBasicNormalization ? normalize : normalizeIELTSAnswer
+  const isBlankCorrect = useBasicNormalization
+    ? isReadingBlankCorrect
+    : isListeningBlankCorrect
+
   let correct = 0
   let total = 0
   const breakdown = {}
@@ -597,8 +647,8 @@ function gradeListening(source, answers = {}) {
         let localTotal = 0
         for (const item of question.mapItems || []) {
           localTotal++
-          const user = normalizeIELTSAnswer(answers[mapAnswerKey(question.id, item.id)])
-          const expected = normalizeIELTSAnswer(item.answer)
+          const user = normalizeAnswer(answers[mapAnswerKey(question.id, item.id)])
+          const expected = normalizeAnswer(item.answer)
           if (user && expected && user === expected) localCorrect++
         }
         correct += localCorrect
@@ -612,8 +662,8 @@ function gradeListening(source, answers = {}) {
         let localTotal = 0
         for (const item of question.matchingItems || []) {
           localTotal++
-          const user = normalizeIELTSAnswer(answers[matchingAnswerKey(question.id, item.id)])
-          const expected = normalizeIELTSAnswer(item.answer)
+          const user = normalizeAnswer(answers[matchingAnswerKey(question.id, item.id)])
+          const expected = normalizeAnswer(item.answer)
           if (user && expected && user === expected) localCorrect++
         }
         correct += localCorrect
@@ -624,7 +674,9 @@ function gradeListening(source, answers = {}) {
 
       if (type === 'mcq' && question.mode === 'multi') {
         const selected = Array.isArray(answers[question.id])
-          ? answers[question.id].map(item => item?.toString()).filter(Boolean)
+          ? Array.from(new Set(
+              answers[question.id].map(item => item?.toString()).filter(Boolean)
+            ))
           : []
         const expected = Array.isArray(question.answers)
           ? question.answers.map(item => item?.toString()).filter(Boolean)
@@ -637,8 +689,8 @@ function gradeListening(source, answers = {}) {
         continue
       }
 
-      const user = normalizeIELTSAnswer(answers[question.id])
-      const expected = normalizeIELTSAnswer(question.answer)
+      const user = normalizeAnswer(answers[question.id])
+      const expected = normalizeAnswer(question.answer)
       const ok = Boolean(user && expected && user === expected)
       total++
       if (ok) correct++
@@ -657,7 +709,7 @@ function gradeListening(source, answers = {}) {
 
 function gradeVocabulary(source, answers = {}) {
   const questions = Array.isArray(source?.questions) ? source.questions : []
-  const definitions = buildVocabularyDefinitionOrder(source)
+  const matchingOrder = buildVocabularyMatchingOrder(source)
   let correct = 0
   let total = 0
   const breakdown = {}
@@ -668,23 +720,23 @@ function gradeVocabulary(source, answers = {}) {
     let ok = false
 
     if (type === 'match_definition') {
-      const index = definitions.findIndex((_, definitionIndex) =>
+      const selectedIndex = matchingOrder.findIndex((_, definitionIndex) =>
         getMatchingLetter(definitionIndex) === selected
       )
-      const selectedDefinition = index >= 0 ? definitions[index] : ''
-      ok = Boolean(selectedDefinition) &&
-        normalizeTypedAnswer(selectedDefinition) === normalizeTypedAnswer(question.definition)
+
+      if (selectedIndex >= 0) {
+        ok = matchingOrder[selectedIndex]?.id === question.id
+      }
     } else if (type === 'word_bank' || type === 'grammar_form') {
-      const user = normalizeTypedAnswer(selected)
-      const accepted = getAcceptedAnswers(
+      ok = isVocabularyTypedAnswerCorrect(
+        selected,
         question.answerText || question.answer,
         question.acceptedAnswers || ''
-      ).map(normalizeTypedAnswer)
-      ok = Boolean(user) && accepted.includes(user)
+      )
     } else {
       const user = normalize(selected)
       const expected = normalize(question.answer)
-      ok = Boolean(user && expected && user === expected)
+      ok = Boolean(user) && Boolean(expected) && selected === question.answer
     }
 
     total++
@@ -791,7 +843,9 @@ function gradeMock(mock, listeningSources, readingSources, writingSource, payloa
     const aggregate = { correct: 0, total: 0, gradingBreakdown: {} }
     for (const source of listeningSources || []) {
       const namespaced = namespaceListeningForMock(source)
-      const result = gradeListening(namespaced, listeningAnswers)
+      const result = gradeListening(namespaced, listeningAnswers, {
+        useBasicNormalization: true
+      })
       aggregate.correct += result.correct
       aggregate.total += result.total
       mergeBreakdowns(aggregate.gradingBreakdown, result.gradingBreakdown)
