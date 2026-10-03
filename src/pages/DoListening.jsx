@@ -7,8 +7,6 @@ import {
   collection,
   query,
   where,
-  orderBy,
-  limit,
   getDocs
 } from 'firebase/firestore'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
@@ -594,9 +592,7 @@ export default function DoListening() {
         const q = query(
           collection(db, 'listeningSubmissions'),
           where('uid', '==', currentUser.uid),
-          where('listeningId', '==', id),
-          orderBy('submittedAt', 'desc'),
-          limit(1)
+          where('listeningId', '==', id)
         )
 
         const existing = await getDocs(q)
@@ -1323,9 +1319,7 @@ export default function DoListening() {
         const existingQuery = query(
           collection(db, 'listeningSubmissions'),
           where('uid', '==', user.uid),
-          where('listeningId', '==', id),
-          orderBy('submittedAt', 'desc'),
-          limit(1)
+          where('listeningId', '==', id)
         )
         const existing = await getDocs(existingQuery)
 
