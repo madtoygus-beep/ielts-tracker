@@ -167,24 +167,19 @@ async function getOwnedContentIds(collectionName, teacherId) {
 function buildTeacherSubmissionQueries(
   collectionName,
   teacherId,
-  parentFields,
-  parentIds
+  _parentFields,
+  _parentIds
 ) {
   const source = collection(db, collectionName)
-  const queries = [
+
+  // Secure and recent legacy submissions already carry teacherId / teacherIds.
+  // Do not add parent-ID `in` fallback listeners here: Firestore Rules may need
+  // one parent-document access per returned submission, which can exceed the
+  // rules access-call budget and surface as `permission-denied` on busy classes.
+  return [
     query(source, where('teacherIds', 'array-contains', teacherId)),
     query(source, where('teacherId', '==', teacherId))
   ]
-
-  const parentIdChunks = chunkValues(parentIds)
-
-  parentFields.forEach(parentField => {
-    parentIdChunks.forEach(parentIdChunk => {
-      queries.push(query(source, where(parentField, 'in', parentIdChunk)))
-    })
-  })
-
-  return queries
 }
 
 export default function TeacherDashboard() {
@@ -643,12 +638,6 @@ export default function TeacherDashboard() {
               query(
                 collection(db, 'scores'),
                 where('addedBy', '==', currentUser.uid)
-              ),
-              ...chunkValues(ownedMockIds).map(mockIdChunk =>
-                query(
-                  collection(db, 'scores'),
-                  where('mockTestId', 'in', mockIdChunk)
-                )
               )
             ]
 
