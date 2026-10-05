@@ -110,11 +110,7 @@ function toPlain(value) {
   return output
 }
 
-function assertSmallPlainObject(value, label, maxBytes = 1500000) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new HttpsError('invalid-argument', `${label} must be an object.`)
-  }
-
+function assertJsonSize(value, label, maxBytes) {
   let json = ''
   try {
     json = JSON.stringify(value)
@@ -122,9 +118,50 @@ function assertSmallPlainObject(value, label, maxBytes = 1500000) {
     throw new HttpsError('invalid-argument', `${label} could not be serialized.`)
   }
 
-  if (Buffer.byteLength(json, 'utf8') > maxBytes) {
+  if (json === undefined || Buffer.byteLength(json, 'utf8') > maxBytes) {
     throw new HttpsError('invalid-argument', `${label} is too large.`)
   }
+}
+
+function assertSmallPlainObject(value, label, maxBytes = 500000) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new HttpsError('invalid-argument', `${label} must be an object.`)
+  }
+
+  assertJsonSize(value, label, maxBytes)
+}
+
+function safePlainObject(value, label, maxBytes = 50000) {
+  if (value === undefined || value === null) return {}
+  assertSmallPlainObject(value, label, maxBytes)
+  return value
+}
+
+function safeJsonArray(value, label, maxItems = 500, maxBytes = 150000) {
+  if (!Array.isArray(value)) return []
+  const output = value.slice(0, maxItems)
+  assertJsonSize(output, label, maxBytes)
+  return output
+}
+
+function assertDocumentId(value, label = 'Homework ID') {
+  if (typeof value !== 'string') {
+    throw new HttpsError('invalid-argument', `${label} is required.`)
+  }
+
+  const id = value.trim()
+  if (!id || id.includes('/') || Buffer.byteLength(id, 'utf8') > 1500) {
+    throw new HttpsError('invalid-argument', `Invalid ${label.toLowerCase()}.`)
+  }
+
+  return id
+}
+
+function objectiveConfigFor(type) {
+  if (typeof type !== 'string' || !Object.prototype.hasOwnProperty.call(OBJECTIVE_CONFIG, type)) {
+    throw new HttpsError('invalid-argument', 'Unsupported review type.')
+  }
+  return OBJECTIVE_CONFIG[type]
 }
 
 function safeString(value, maxLength = 5000) {
@@ -176,11 +213,8 @@ function assertAvailableAssignedSource(source, student) {
 }
 
 async function getSource(collectionName, id) {
-  if (!id || typeof id !== 'string' || id.includes('/')) {
-    throw new HttpsError('invalid-argument', 'Invalid homework ID.')
-  }
-
-  const snap = await db.doc(`${collectionName}/${id}`).get()
+  const safeId = assertDocumentId(id)
+  const snap = await db.doc(`${collectionName}/${safeId}`).get()
   if (!snap.exists) throw new HttpsError('not-found', 'Homework was not found.')
   return { id: snap.id, ...snap.data() }
 }
@@ -303,12 +337,16 @@ async function requireAssignedMock(mockTestId, student) {
 
 exports.ensureMockObjectiveResource = onCall(async request => {
   const student = await requireStudent(request)
-  const { mockTestId, type, sourceId } = request.data || {}
-  const config = OBJECTIVE_CONFIG[type]
+  const data = request.data || {}
+  const type = data.type
 
-  if (!config || !['reading', 'listening'].includes(type)) {
+  if (!['reading', 'listening'].includes(type)) {
     throw new HttpsError('invalid-argument', 'Only Reading and Listening mock resources are supported.')
   }
+
+  const config = OBJECTIVE_CONFIG[type]
+  const mockTestId = assertDocumentId(data.mockTestId, 'Mock test ID')
+  const sourceId = assertDocumentId(data.sourceId, 'Source ID')
 
   const mock = await requireAssignedMock(mockTestId, student)
   assertMockResourceEnabled(mock, type, sourceId)
@@ -385,8 +423,11 @@ function baseSubmission(source, student) {
 
 exports.submitReadingSecure = onCall(async request => {
   const student = await requireStudent(request)
-  const { readingId, answers = {}, flaggedQuestions = [], studentNote = '', highlights = [], autoSubmitted = false, finishedLate = false } = request.data || {}
+  const data = request.data || {}
+  const readingId = assertDocumentId(data.readingId, 'Reading ID')
+  const { answers = {}, flaggedQuestions = [], studentNote = '', highlights = [], autoSubmitted = false, finishedLate = false } = data
   assertSmallPlainObject(answers, 'Answers')
+  assertJsonSize({ answers, flaggedQuestions, studentNote, highlights }, 'Reading submission payload', 600000)
 
   const source = await getSource('readings', readingId)
   assertAvailableAssignedSource(source, student)
@@ -404,7 +445,7 @@ exports.submitReadingSecure = onCall(async request => {
     answers,
     flaggedQuestions: safeStringArray(flaggedQuestions),
     studentNote: safeString(studentNote, 5000),
-    highlights: Array.isArray(highlights) ? highlights.slice(0, 500) : [],
+    highlights: safeJsonArray(highlights, 'Highlights'),
     result,
     finishedLate: finishedLate === true,
     autoSubmitted: autoSubmitted === true,
@@ -426,8 +467,11 @@ exports.submitReadingSecure = onCall(async request => {
 
 exports.submitListeningSecure = onCall(async request => {
   const student = await requireStudent(request)
-  const { listeningId, answers = {}, flaggedQuestions = [], studentNote = '', autoSubmitted = false, finishedLate = false } = request.data || {}
+  const data = request.data || {}
+  const listeningId = assertDocumentId(data.listeningId, 'Listening ID')
+  const { answers = {}, flaggedQuestions = [], studentNote = '', autoSubmitted = false, finishedLate = false } = data
   assertSmallPlainObject(answers, 'Answers')
+  assertJsonSize({ answers, flaggedQuestions, studentNote }, 'Listening submission payload', 550000)
 
   const source = await getSource('listenings', listeningId)
   assertAvailableAssignedSource(source, student)
@@ -466,8 +510,11 @@ exports.submitListeningSecure = onCall(async request => {
 
 exports.submitVocabularySecure = onCall(async request => {
   const student = await requireStudent(request)
-  const { vocabularyTestId, answers = {}, autoSubmitted = false, finishedLate = false } = request.data || {}
+  const data = request.data || {}
+  const vocabularyTestId = assertDocumentId(data.vocabularyTestId, 'Vocabulary test ID')
+  const { answers = {}, autoSubmitted = false, finishedLate = false } = data
   assertSmallPlainObject(answers, 'Answers')
+  assertJsonSize({ answers }, 'Vocabulary submission payload', 500000)
 
   const source = await getSource('vocabularyTests', vocabularyTestId)
   assertAvailableAssignedSource(source, student)
@@ -549,10 +596,18 @@ function mockReviewSources(sources) {
 exports.submitMockSecure = onCall(async request => {
   const student = await requireStudent(request)
   const data = request.data || {}
-  const { mockTestId, listeningAnswers = {}, readingAnswers = {}, writingAnswers = {}, autoSubmitted = false } = data
-  assertSmallPlainObject(listeningAnswers, 'Listening answers')
-  assertSmallPlainObject(readingAnswers, 'Reading answers')
-  assertSmallPlainObject(writingAnswers, 'Writing answers', 500000)
+  const mockTestId = assertDocumentId(data.mockTestId, 'Mock test ID')
+  const { listeningAnswers = {}, readingAnswers = {}, writingAnswers = {}, autoSubmitted = false } = data
+  assertSmallPlainObject(listeningAnswers, 'Listening answers', 250000)
+  assertSmallPlainObject(readingAnswers, 'Reading answers', 250000)
+  assertSmallPlainObject(writingAnswers, 'Writing answers', 200000)
+  assertJsonSize({
+    listeningAnswers,
+    readingAnswers,
+    writingAnswers,
+    sectionTimeLimits: data.sectionTimeLimits || {},
+    timing: data.timing || {}
+  }, 'Mock submission payload', 650000)
 
   const mock = await requireAssignedMock(mockTestId, student)
   const existing = await findExistingMockSubmission(student, mockTestId)
@@ -590,8 +645,9 @@ exports.submitMockSecure = onCall(async request => {
     writingMode,
     task1Enabled: enabledSections.writing && writingMode !== 'task2_only',
     task2Enabled: enabledSections.writing && writingMode !== 'task1_only',
-    sectionTimeLimits: data.sectionTimeLimits && typeof data.sectionTimeLimits === 'object'
-      ? data.sectionTimeLimits : mock.sectionTimeLimits || {},
+    sectionTimeLimits: data.sectionTimeLimits === undefined || data.sectionTimeLimits === null
+      ? mock.sectionTimeLimits || {}
+      : safePlainObject(data.sectionTimeLimits, 'Section time limits', 25000),
     listeningId: listeningIds[0] || '',
     listeningIds,
     readingIds,
@@ -606,7 +662,7 @@ exports.submitMockSecure = onCall(async request => {
     autoSubmitted: autoSubmitted === true,
     tabSwitchCount: Number.isFinite(Number(data.tabSwitchCount))
       ? Math.max(0, Math.min(10000, Number(data.tabSwitchCount))) : 0,
-    timing: data.timing && typeof data.timing === 'object' ? data.timing : {},
+    timing: safePlainObject(data.timing, 'Timing', 50000),
     status: 'submitted'
   }
 
@@ -663,9 +719,10 @@ exports.submitMockSecure = onCall(async request => {
 
 exports.getCompletedObjectiveReview = onCall(async request => {
   const student = await requireStudent(request)
-  const { type, assignmentId } = request.data || {}
-  const config = OBJECTIVE_CONFIG[type]
-  if (!config) throw new HttpsError('invalid-argument', 'Unsupported review type.')
+  const data = request.data || {}
+  const type = data.type
+  const config = objectiveConfigFor(type)
+  const assignmentId = assertDocumentId(data.assignmentId, 'Assignment ID')
 
   const existing = await findExistingSubmission(config, student, assignmentId)
   if (!existing) throw new HttpsError('permission-denied', 'Submit this homework before opening the answer review.')
@@ -676,7 +733,8 @@ exports.getCompletedObjectiveReview = onCall(async request => {
 
 exports.getCompletedMockReview = onCall(async request => {
   const student = await requireStudent(request)
-  const { mockTestId } = request.data || {}
+  const data = request.data || {}
+  const mockTestId = assertDocumentId(data.mockTestId, 'Mock test ID')
   const existing = await findExistingMockSubmission(student, mockTestId)
   if (!existing) throw new HttpsError('permission-denied', 'Submit this mock before opening the answer review.')
 

@@ -4563,61 +4563,82 @@ Continue permanent delete?`
     const studentMocks = getStudentMockSubmissions(student.id)
     const printWindow = window.open('', '_blank')
 
-    printWindow.document.write(`
-      <html>
-        <head>
-          <title>${student.name} - Mock History</title>
-          <style>
-            body { font-family: sans-serif; padding: 40px; color: #111; }
-            h1 { font-size: 24px; margin-bottom: 4px; }
-            p { color: #666; font-size: 14px; margin-bottom: 30px; }
-            table { width: 100%; border-collapse: collapse; }
-            th { background: #7c3aed; color: white; padding: 10px 14px; text-align: left; font-size: 13px; }
-            td { padding: 10px 14px; font-size: 13px; border-bottom: 1px solid #eee; }
-            .overall { font-weight: bold; color: #7c3aed; }
-            img { height: 50px; margin-bottom: 20px; }
-          </style>
-        </head>
-        <body>
-          <img src="${window.location.origin}/1.png" />
-          <h1>${student.name}</h1>
-          <p>${student.email} — Mock History Report</p>
-          <table>
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Mock</th>
-                <th>Type</th>
-                <th>Listening</th>
-                <th>Reading</th>
-                <th>Writing</th>
-                <th>Overall</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${studentMocks
-                .map(submission => {
-                  const result = submission.result || {}
-                  return `
-                    <tr>
-                      <td>${formatDateShort(submission.submittedAt)}</td>
-                      <td>${getMockTitle(submission)}</td>
-                      <td>${getMockTypeLabelForSubmission(submission)}</td>
-                      <td>${formatBand(result.listening?.band)}</td>
-                      <td>${formatBand(result.reading?.band)}</td>
-                      <td>${getMockWritingBand(submission) ? formatBand(getMockWritingBand(submission)) : 'Pending'}</td>
-                      <td class="overall">${formatBand(getMockOverall(submission))}</td>
-                    </tr>
-                  `
-                })
-                .join('')}
-            </tbody>
-          </table>
-        </body>
-      </html>
-    `)
+    if (!printWindow) {
+      window.alert('Print window could not be opened. Please allow pop-ups and try again.')
+      return
+    }
 
-    printWindow.document.close()
+    const reportDocument = printWindow.document
+    const studentName = student?.name || 'Student'
+    const studentEmail = student?.email || ''
+
+    reportDocument.title = `${studentName} - Mock History`
+    reportDocument.body.replaceChildren()
+
+    const style = reportDocument.createElement('style')
+    style.textContent = `
+      body { font-family: sans-serif; padding: 40px; color: #111; }
+      h1 { font-size: 24px; margin-bottom: 4px; }
+      p { color: #666; font-size: 14px; margin-bottom: 30px; }
+      table { width: 100%; border-collapse: collapse; }
+      th { background: #7c3aed; color: white; padding: 10px 14px; text-align: left; font-size: 13px; }
+      td { padding: 10px 14px; font-size: 13px; border-bottom: 1px solid #eee; }
+      .overall { font-weight: bold; color: #7c3aed; }
+      img { height: 50px; margin-bottom: 20px; }
+    `
+    reportDocument.head.appendChild(style)
+
+    const logo = reportDocument.createElement('img')
+    logo.src = `${window.location.origin}/1.png`
+    logo.alt = 'Maxima'
+    reportDocument.body.appendChild(logo)
+
+    const heading = reportDocument.createElement('h1')
+    heading.textContent = studentName
+    reportDocument.body.appendChild(heading)
+
+    const subtitle = reportDocument.createElement('p')
+    subtitle.textContent = `${studentEmail} — Mock History Report`
+    reportDocument.body.appendChild(subtitle)
+
+    const table = reportDocument.createElement('table')
+    const thead = reportDocument.createElement('thead')
+    const headerRow = reportDocument.createElement('tr')
+    ;['Date', 'Mock', 'Type', 'Listening', 'Reading', 'Writing', 'Overall'].forEach(label => {
+      const header = reportDocument.createElement('th')
+      header.textContent = label
+      headerRow.appendChild(header)
+    })
+    thead.appendChild(headerRow)
+    table.appendChild(thead)
+
+    const tbody = reportDocument.createElement('tbody')
+    const appendCell = (row, value, className = '') => {
+      const cell = reportDocument.createElement('td')
+      cell.textContent = value === undefined || value === null ? '' : String(value)
+      if (className) cell.className = className
+      row.appendChild(cell)
+    }
+
+    studentMocks.forEach(submission => {
+      const result = submission.result || {}
+      const row = reportDocument.createElement('tr')
+
+      appendCell(row, formatDateShort(submission.submittedAt))
+      appendCell(row, getMockTitle(submission))
+      appendCell(row, getMockTypeLabelForSubmission(submission))
+      appendCell(row, formatBand(result.listening?.band))
+      appendCell(row, formatBand(result.reading?.band))
+      appendCell(row, getMockWritingBand(submission) ? formatBand(getMockWritingBand(submission)) : 'Pending')
+      appendCell(row, formatBand(getMockOverall(submission)), 'overall')
+
+      tbody.appendChild(row)
+    })
+
+    table.appendChild(tbody)
+    reportDocument.body.appendChild(table)
+
+    printWindow.focus()
     printWindow.print()
   }
 
