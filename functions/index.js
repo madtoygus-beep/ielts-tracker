@@ -22,6 +22,7 @@ const db = getFirestore()
 
 const OBJECTIVE_CONFIG = {
   reading: {
+    contentType: 'reading',
     sourceCollection: 'readings',
     publicCollection: 'studentReadings',
     submissionCollection: 'readingSubmissions',
@@ -29,6 +30,7 @@ const OBJECTIVE_CONFIG = {
     sanitizer: sanitizeReading
   },
   listening: {
+    contentType: 'listening',
     sourceCollection: 'listenings',
     publicCollection: 'studentListenings',
     submissionCollection: 'listeningSubmissions',
@@ -36,6 +38,7 @@ const OBJECTIVE_CONFIG = {
     sanitizer: sanitizeListening
   },
   vocabulary: {
+    contentType: 'vocabulary',
     sourceCollection: 'vocabularyTests',
     publicCollection: 'studentVocabularyTests',
     submissionCollection: 'vocabularySubmissions',
@@ -75,6 +78,149 @@ function assignmentValues(data) {
     ...(Array.isArray(data?.assignedStudentIds) ? data.assignedStudentIds : []),
     ...(Array.isArray(data?.assignedEmails) ? data.assignedEmails : [])
   ]).map(value => value.toLowerCase())
+}
+
+const STUDENT_ACCESS_SCHEMA_VERSION = 1
+const REVIEW_POLICIES = new Set(['immediate', 'teacher_release', 'scheduled', 'never'])
+
+function looksLikeEmail(value) {
+  return typeof value === 'string' && value.includes('@')
+}
+
+function assignedUidValues(data) {
+  const explicit = uniqueStrings([
+    ...(Array.isArray(data?.studentIds) ? data.studentIds : []),
+    ...(Array.isArray(data?.assignedStudentIds) ? data.assignedStudentIds : [])
+  ])
+
+  const compatible = uniqueStrings([
+    ...(Array.isArray(data?.assignTo) ? data.assignTo : []),
+    ...(Array.isArray(data?.assignedTo) ? data.assignedTo : [])
+  ]).filter(value => !looksLikeEmail(value))
+
+  return uniqueStrings([...explicit, ...compatible])
+}
+
+function hiddenUidValues(data) {
+  return uniqueStrings(Array.isArray(data?.hiddenFor) ? data.hiddenFor : [])
+    .filter(value => !looksLikeEmail(value))
+}
+
+function hasAnyAssignmentSignal(data) {
+  return assignmentValues(data).length > 0
+}
+
+function studentAccessId(uid, contentType, contentId) {
+  return `${uid}_${contentType}_${contentId}`
+}
+
+function reviewPolicyOf(data) {
+  const value = typeof data?.reviewPolicy === 'string'
+    ? data.reviewPolicy.trim()
+    : ''
+  return REVIEW_POLICIES.has(value) ? value : 'immediate'
+}
+
+function studentAccessPayload(contentType, sourceCollection, contentId, source, uid) {
+  const teacherIds = teacherIdsOf(source)
+  const hidden = hiddenUidValues(source).includes(uid)
+
+  return {
+    uid,
+    schoolId: schoolIdOf(source),
+    contentType,
+    contentId,
+    sourceCollection,
+    accessType: 'assignment',
+    status: source?.archived === true || hidden ? 'inactive' : 'active',
+    assignedBy: teacherIds[0] || '',
+    reviewPolicy: reviewPolicyOf(source),
+    reviewReleaseAt: source?.reviewReleaseAt ?? null,
+    dueAt: source?.dueAt ?? source?.dueDate ?? null,
+    schemaVersion: STUDENT_ACCESS_SCHEMA_VERSION,
+    updatedAt: FieldValue.serverTimestamp()
+  }
+}
+
+async function syncStudentAccessChange({
+  contentType,
+  sourceCollection,
+  contentId,
+  beforeSource,
+  afterSource
+}) {
+  if (!contentId) return
+
+  const beforeUids = assignedUidValues(beforeSource)
+  const afterUids = assignedUidValues(afterSource)
+  const beforeSet = new Set(beforeUids)
+  const afterSet = new Set(afterUids)
+
+  // If a legacy record contains only email-based assignment values, do not
+  // infer removals here. Stage 16E backfill resolves those records safely.
+  const afterHasUnresolvedLegacyAssignment =
+    Boolean(afterSource) &&
+    hasAnyAssignmentSignal(afterSource) &&
+    afterUids.length === 0
+
+  const batch = db.batch()
+  let writes = 0
+
+  if (afterSource) {
+    for (const uid of afterUids) {
+      const ref = db.doc(`studentAccess/${studentAccessId(uid, contentType, contentId)}`)
+      const payload = studentAccessPayload(
+        contentType,
+        sourceCollection,
+        contentId,
+        afterSource,
+        uid
+      )
+
+      if (!beforeSet.has(uid)) {
+        payload.assignedAt = FieldValue.serverTimestamp()
+      }
+
+      batch.set(ref, payload, { merge: true })
+      writes++
+    }
+  }
+
+  if (!afterHasUnresolvedLegacyAssignment) {
+    for (const uid of beforeUids) {
+      if (afterSet.has(uid)) continue
+      const ref = db.doc(`studentAccess/${studentAccessId(uid, contentType, contentId)}`)
+      batch.delete(ref)
+      writes++
+    }
+  } else {
+    console.warn(
+      `Skipped studentAccess removals for ${sourceCollection}/${contentId}: ` +
+      'legacy email-only assignments need Stage 16E resolution.'
+    )
+  }
+
+  if (writes > 0) {
+    await batch.commit()
+  }
+}
+
+async function syncStudentAccessWrite(event, contentType, sourceCollection) {
+  const id = event.params?.id
+  if (!id) return
+
+  const before = event.data?.before
+  const after = event.data?.after
+  const beforeSource = before?.exists ? (before.data() || {}) : null
+  const afterSource = after?.exists ? (after.data() || {}) : null
+
+  await syncStudentAccessChange({
+    contentType,
+    sourceCollection,
+    contentId: id,
+    beforeSource,
+    afterSource
+  })
 }
 
 function hiddenValues(data) {
@@ -236,12 +382,33 @@ async function mirrorWrite(event, config) {
   const id = event.params?.id
   if (!id) return
 
+  const beforeSource = before?.exists ? (before.data() || {}) : null
+  const afterSource = after?.exists ? (after.data() || {}) : null
+
   if (!after?.exists) {
-    await db.doc(`${config.publicCollection}/${id}`).delete().catch(() => {})
+    await Promise.all([
+      db.doc(`${config.publicCollection}/${id}`).delete().catch(() => {}),
+      syncStudentAccessChange({
+        contentType: config.contentType,
+        sourceCollection: config.sourceCollection,
+        contentId: id,
+        beforeSource,
+        afterSource: null
+      })
+    ])
     return
   }
 
-  await writeProjection(config, id, after.data() || {})
+  await Promise.all([
+    writeProjection(config, id, afterSource),
+    syncStudentAccessChange({
+      contentType: config.contentType,
+      sourceCollection: config.sourceCollection,
+      contentId: id,
+      beforeSource,
+      afterSource
+    })
+  ])
 }
 
 exports.mirrorReadingForStudents = onDocumentWritten('readings/{id}', event =>
@@ -254,6 +421,14 @@ exports.mirrorListeningForStudents = onDocumentWritten('listenings/{id}', event 
 
 exports.mirrorVocabularyForStudents = onDocumentWritten('vocabularyTests/{id}', event =>
   mirrorWrite(event, OBJECTIVE_CONFIG.vocabulary)
+)
+
+exports.syncWritingStudentAccess = onDocumentWritten('writingHomeworks/{id}', event =>
+  syncStudentAccessWrite(event, 'writing', 'writingHomeworks')
+)
+
+exports.syncMockStudentAccess = onDocumentWritten('mockTests/{id}', event =>
+  syncStudentAccessWrite(event, 'mock', 'mockTests')
 )
 
 async function syncAssignedCollection(config, student) {

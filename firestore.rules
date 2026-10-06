@@ -636,6 +636,25 @@ service cloud.firestore {
     }
 
     // ============================================================
+    // STAGE 16D: CANONICAL STUDENT ACCESS FOUNDATION
+    // Server-side triggers create these documents from the existing
+    // assignment arrays. Existing assignment rules remain authoritative
+    // until the Stage 16E/F backfill and client cutover are completed.
+    // ============================================================
+
+    match /studentAccess/{accessId} {
+      allow get, list: if isAdmin()
+        || (
+          isStudent()
+          && resource.data.get('uid', '') == request.auth.uid
+          && schoolIdOf(resource.data) == currentSchoolId()
+        );
+
+      // Cloud Functions / Admin SDK only during the migration period.
+      allow create, update, delete: if false;
+    }
+
+    // ============================================================
     // 8D-2 SANITIZED STUDENT CONTENT PROJECTIONS
     // Students read answer-key-free copies here.
     // Standalone access follows the same assignment rules as the source.
