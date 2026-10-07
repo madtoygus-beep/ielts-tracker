@@ -223,20 +223,8 @@ async function syncStudentAccessWrite(event, contentType, sourceCollection) {
   })
 }
 
-function hiddenValues(data) {
-  return uniqueStrings(Array.isArray(data?.hiddenFor) ? data.hiddenFor : [])
-    .map(value => value.toLowerCase())
-}
-
 function isAssignedTo(data, uid, email) {
   const values = assignmentValues(data)
-  const candidates = uniqueStrings([uid, email, email?.toLowerCase()])
-    .map(value => value.toLowerCase())
-  return candidates.some(value => values.includes(value))
-}
-
-function isHiddenFor(data, uid, email) {
-  const values = hiddenValues(data)
   const candidates = uniqueStrings([uid, email, email?.toLowerCase()])
     .map(value => value.toLowerCase())
   return candidates.some(value => values.includes(value))
@@ -345,17 +333,62 @@ async function requireStudent(request) {
   }
 }
 
-function assertAvailableAssignedSource(source, student) {
-  if (!source) throw new HttpsError('not-found', 'Homework was not found.')
-  if (!isAssignedTo(source, student.uid, student.email)) {
+async function requireActiveStudentAccess({
+  student,
+  contentType,
+  contentId,
+  sourceCollection
+}) {
+  const ref = db.doc(`studentAccess/${studentAccessId(student.uid, contentType, contentId)}`)
+  const snap = await ref.get()
+
+  if (!snap.exists) {
     throw new HttpsError('permission-denied', 'This homework is not assigned to you.')
   }
-  if (source.archived === true || isHiddenFor(source, student.uid, student.email)) {
+
+  const access = snap.data() || {}
+  if (
+    access.uid !== student.uid ||
+    access.contentType !== contentType ||
+    access.contentId !== contentId ||
+    access.sourceCollection !== sourceCollection ||
+    access.status !== 'active' ||
+    schoolIdOf(access) !== schoolIdOf(student.profile)
+  ) {
     throw new HttpsError('permission-denied', 'This homework is no longer available.')
   }
-  if (schoolIdOf(source) !== schoolIdOf(student.profile)) {
+
+  return access
+}
+
+async function requireAvailableStudentSource({
+  source,
+  student,
+  contentType,
+  contentId,
+  sourceCollection
+}) {
+  if (!source) throw new HttpsError('not-found', 'Homework was not found.')
+
+  const access = await requireActiveStudentAccess({
+    student,
+    contentType,
+    contentId,
+    sourceCollection
+  })
+
+  if (source.archived === true) {
+    throw new HttpsError('permission-denied', 'This homework is no longer available.')
+  }
+
+  if (
+    schoolIdOf(source) !== schoolIdOf(student.profile) ||
+    schoolIdOf(source) !== schoolIdOf(access)
+  ) {
     throw new HttpsError('permission-denied', 'This homework belongs to another school.')
   }
+
+  return access
 }
 
 async function getSource(collectionName, id) {
@@ -506,7 +539,13 @@ function assertMockResourceEnabled(mock, type, sourceId) {
 
 async function requireAssignedMock(mockTestId, student) {
   const mock = await getSource('mockTests', mockTestId)
-  assertAvailableAssignedSource(mock, student)
+  await requireAvailableStudentSource({
+    source: mock,
+    student,
+    contentType: 'mock',
+    contentId: mockTestId,
+    sourceCollection: 'mockTests'
+  })
   return mock
 }
 
@@ -604,10 +643,16 @@ exports.submitReadingSecure = onCall(async request => {
   assertSmallPlainObject(answers, 'Answers')
   assertJsonSize({ answers, flaggedQuestions, studentNote, highlights }, 'Reading submission payload', 600000)
 
-  const source = await getSource('readings', readingId)
-  assertAvailableAssignedSource(source, student)
-
   const config = OBJECTIVE_CONFIG.reading
+  const source = await getSource(config.sourceCollection, readingId)
+  await requireAvailableStudentSource({
+    source,
+    student,
+    contentType: config.contentType,
+    contentId: readingId,
+    sourceCollection: config.sourceCollection
+  })
+
   const existing = await findExistingSubmission(config, student, readingId)
   if (existing) {
     return { alreadySubmitted: true, result: existing.result || null, reviewSource: toPlain(source) }
@@ -648,10 +693,16 @@ exports.submitListeningSecure = onCall(async request => {
   assertSmallPlainObject(answers, 'Answers')
   assertJsonSize({ answers, flaggedQuestions, studentNote }, 'Listening submission payload', 550000)
 
-  const source = await getSource('listenings', listeningId)
-  assertAvailableAssignedSource(source, student)
-
   const config = OBJECTIVE_CONFIG.listening
+  const source = await getSource(config.sourceCollection, listeningId)
+  await requireAvailableStudentSource({
+    source,
+    student,
+    contentType: config.contentType,
+    contentId: listeningId,
+    sourceCollection: config.sourceCollection
+  })
+
   const existing = await findExistingSubmission(config, student, listeningId)
   if (existing) {
     return { alreadySubmitted: true, result: existing.result || null, reviewSource: toPlain(source) }
@@ -691,10 +742,16 @@ exports.submitVocabularySecure = onCall(async request => {
   assertSmallPlainObject(answers, 'Answers')
   assertJsonSize({ answers }, 'Vocabulary submission payload', 500000)
 
-  const source = await getSource('vocabularyTests', vocabularyTestId)
-  assertAvailableAssignedSource(source, student)
-
   const config = OBJECTIVE_CONFIG.vocabulary
+  const source = await getSource(config.sourceCollection, vocabularyTestId)
+  await requireAvailableStudentSource({
+    source,
+    student,
+    contentType: config.contentType,
+    contentId: vocabularyTestId,
+    sourceCollection: config.sourceCollection
+  })
+
   const existing = await findExistingSubmission(config, student, vocabularyTestId)
   if (existing) {
     return { alreadySubmitted: true, result: existing.result || null, reviewSource: toPlain(source) }
