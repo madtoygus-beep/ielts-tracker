@@ -135,30 +135,11 @@ service cloud.firestore {
         && request.resource.data.get('createdAt', null) == resource.data.get('createdAt', null);
     }
 
-    function isAssignedToCurrentUser(data) {
-      // REPAIR 08B: trust the authenticated UID/email, never a client-supplied identity.
-      // Older assignments may store an email in assignTo or assignedTo.
-      let email = request.auth.token.get('email', '');
-      return data.get('assignTo', []).hasAny([request.auth.uid])
-        || data.get('assignedTo', []).hasAny([request.auth.uid])
-        || data.get('studentIds', []).hasAny([request.auth.uid])
-        || data.get('assignedStudentIds', []).hasAny([request.auth.uid])
-        || (email is string && email != ''
-          && (data.get('assignedEmails', []).hasAny([email, email.lower()])
-            || data.get('assignTo', []).hasAny([email, email.lower()])
-            || data.get('assignedTo', []).hasAny([email, email.lower()])));
-    }
-
-    function studentCanReadContent(data) {
-      // Same-school membership alone must not expose unassigned content.
-      // Keep list queries compatible with the existing assignment-based dashboards.
-      return isStudent() && isAssignedToCurrentUser(data);
-    }
-
     // ============================================================
-    // STAGE 16F-A: STUDENTACCESS READ BRIDGE
-    // Adds canonical entitlement checks for narrow document gets while
-    // legacy assignment-array list access remains available during cutover.
+    // STAGE 16F-I: CANONICAL STUDENTACCESS AUTHORIZATION
+    // Student entitlement reads are now authorized by studentAccess.
+    // Legacy assignment arrays remain on source documents only as migration /
+    // teacher-authoring compatibility data; rules no longer trust them.
     // ============================================================
 
     function studentHasActiveAccess(contentType, contentId) {
@@ -185,15 +166,10 @@ service cloud.firestore {
       return collectionName in ['readings', 'listenings', 'writingHomeworks'];
     }
 
-    function activeMockForCurrentStudent(mockData) {
-      let email = request.auth.token.get('email', '');
-      return isStudent()
-        && isAssignedToCurrentUser(mockData)
+    function activeMockForCurrentStudent(mockData, mockTestId) {
+      return studentHasActiveAccess('mock', mockTestId)
         && schoolIdOf(mockData) == currentSchoolId()
-        && mockData.get('archived', false) != true
-        && !mockData.get('hiddenFor', []).hasAny([request.auth.uid])
-        && !(email is string && email != ''
-          && mockData.get('hiddenFor', []).hasAny([email, email.lower()]));
+        && mockData.get('archived', false) != true;
     }
 
     function mockSectionAllowsResource(mockData, collectionName) {
@@ -249,8 +225,8 @@ service cloud.firestore {
         ));
     }
 
-    function validMockResourceContext(mockData, sourceData, collectionName, sourceId) {
-      return activeMockForCurrentStudent(mockData)
+    function validMockResourceContext(mockData, mockTestId, sourceData, collectionName, sourceId) {
+      return activeMockForCurrentStudent(mockData, mockTestId)
         && schoolIdOf(sourceData) == schoolIdOf(mockData)
         && mockLinksResource(mockData, collectionName, sourceId)
         && mockCreatorCanUseSource(mockData, sourceData);
@@ -271,6 +247,7 @@ service cloud.firestore {
         && exists(/databases/$(database)/documents/$(collectionName)/$(sourceId))
         && validMockResourceContext(
           get(/databases/$(database)/documents/mockTests/$(data.mockTestId)).data,
+          data.mockTestId,
           get(/databases/$(database)/documents/$(collectionName)/$(sourceId)).data,
           collectionName,
           sourceId
@@ -289,7 +266,7 @@ service cloud.firestore {
 
     match /mockResourceAccess/{studentId}/{collectionName}/{sourceId} {
       // DoMockTest creates this only after a denied direct read. Rules validate
-      // the current assignment and exact source link before accepting the write.
+      // the active Mock studentAccess entitlement and exact source link first.
       allow create, update: if isStudent()
         && studentId == request.auth.uid
         && request.resource.data.keys().hasOnly([
@@ -317,11 +294,7 @@ service cloud.firestore {
           || data.get('teacherIds', []) == clientTeacherIdsOf(parentData)
         )
         && data.get('teacherId', '') == teacherIdsOf(parentData)[0]
-        && isAssignedToCurrentUser(parentData)
-        && parentData.get('archived', false) != true
-        && !parentData.get('hiddenFor', []).hasAny([
-          request.auth.uid, request.auth.token.get('email', '')
-        ]);
+        && parentData.get('archived', false) != true;
     }
 
     // Repair 08C: new student submissions use one deterministic document
@@ -627,6 +600,7 @@ service cloud.firestore {
         && data.get('source', '') == 'mock_test'
         && validInitialMockScoreFields(data)
         && mockForScoreExists(data)
+        && studentHasActiveAccess('mock', data.mockTestId)
         && validStudentSubmissionBase(
           data,
           get(/databases/$(database)/documents/mockTests/$(data.mockTestId)).data
@@ -655,10 +629,9 @@ service cloud.firestore {
     }
 
     // ============================================================
-    // STAGE 16D: CANONICAL STUDENT ACCESS FOUNDATION
-    // Server-side triggers create these documents from the existing
-    // assignment arrays. Existing assignment rules remain authoritative
-    // until the Stage 16E/F backfill and client cutover are completed.
+    // STAGE 16D / 16F-I: CANONICAL STUDENT ACCESS
+    // Server-side triggers create these documents from the existing teacher
+    // assignment workflow. studentAccess is now authoritative for students.
     // ============================================================
 
     match /studentAccess/{accessId} {
@@ -676,9 +649,8 @@ service cloud.firestore {
     // ============================================================
     // 8D-2 SANITIZED STUDENT CONTENT PROJECTIONS
     // Students read answer-key-free copies here.
-    // Standalone access follows the same assignment rules as the source.
-    // Mock Reading/Listening get access is also allowed only through the
-    // already validated mockResourceAccess reference.
+    // Standalone access is authorized by studentAccess. Mock Reading/Listening
+    // get access is allowed only through the validated mockResourceAccess path.
     // Writes are server-only (Admin SDK / Cloud Functions bypass rules).
     // ============================================================
 
@@ -686,12 +658,10 @@ service cloud.firestore {
       allow get: if isAdmin()
         || (isStudent() && (
           studentHasActiveAccess('reading', id)
-          || studentCanReadContent(resource.data)
           || studentCanGetMockResource('readings', id)
         ));
 
-      allow list: if isAdmin()
-        || studentCanReadContent(resource.data);
+      allow list: if isAdmin();
 
       allow create, update, delete: if false;
     }
@@ -700,23 +670,19 @@ service cloud.firestore {
       allow get: if isAdmin()
         || (isStudent() && (
           studentHasActiveAccess('listening', id)
-          || studentCanReadContent(resource.data)
           || studentCanGetMockResource('listenings', id)
         ));
 
-      allow list: if isAdmin()
-        || studentCanReadContent(resource.data);
+      allow list: if isAdmin();
 
       allow create, update, delete: if false;
     }
 
     match /studentVocabularyTests/{id} {
       allow get: if isAdmin()
-        || studentHasActiveAccess('vocabulary', id)
-        || studentCanReadContent(resource.data);
+        || studentHasActiveAccess('vocabulary', id);
 
-      allow list: if isAdmin()
-        || studentCanReadContent(resource.data);
+      allow list: if isAdmin();
 
       allow create, update, delete: if false;
     }
@@ -812,13 +778,11 @@ service cloud.firestore {
       allow get: if isAdmin()
         || teacherCanReadContent(resource.data)
         || studentHasActiveAccess('writing', id)
-        || studentCanReadContent(resource.data)
         || studentCanGetMockResource('writingHomeworks', id);
 
       // A mock reference permits a single linked document, not library queries.
       allow list: if isAdmin()
-        || teacherCanReadContent(resource.data)
-        || studentCanReadContent(resource.data);
+        || teacherCanReadContent(resource.data);
 
       allow create: if isAdmin() || teacherCanCreateContent(request.resource.data);
       allow update: if isAdmin() || teacherCanUpdateContent();
@@ -845,6 +809,7 @@ service cloud.firestore {
 
       allow create: if hasExpectedSubmissionId(id, request.resource.data.get('writingId', ''))
         && writingParentExists(request.resource.data)
+        && studentHasActiveAccess('writing', request.resource.data.get('writingId', ''))
         && validWritingSubmission(request.resource.data)
         && validStudentSubmissionBase(
           request.resource.data,
@@ -863,12 +828,10 @@ service cloud.firestore {
     match /mockTests/{id} {
       allow get: if isAdmin()
         || teacherCanReadContent(resource.data)
-        || studentHasActiveAccess('mock', id)
-        || (isStudent() && isAssignedToCurrentUser(resource.data));
+        || studentHasActiveAccess('mock', id);
 
       allow list: if isAdmin()
-        || teacherCanReadContent(resource.data)
-        || (isStudent() && isAssignedToCurrentUser(resource.data));
+        || teacherCanReadContent(resource.data);
 
       allow create: if isAdmin() || (
         teacherCanCreateContent(request.resource.data)
@@ -970,9 +933,10 @@ service cloud.firestore {
         );
 
       // Package 49 uses setDoc(..., { merge: true }), so create and update
-      // both validate the complete resulting document against the assigned
-      // vocabulary test.
+      // both validate the complete resulting document against the canonical
+      // studentAccess entitlement and the vocabulary test.
       allow create, update: if vocabularyParentExists(request.resource.data)
+        && studentHasActiveAccess('vocabulary', request.resource.data.get('vocabularyTestId', ''))
         && validStudentSubmissionBase(
           request.resource.data,
           get(
