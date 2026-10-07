@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { auth, db } from '../firebase'
+import { auth, db, functions } from '../firebase'
 import {
   collection,
   addDoc,
@@ -11,12 +11,16 @@ import {
   updateDoc
 } from 'firebase/firestore'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
+import { httpsCallable } from 'firebase/functions'
 import { useNavigate, useParams } from 'react-router-dom'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
 const LEGACY_TYPES = ['fitb', 'summaryOptions', 'summary']
 const DEFAULT_SCHOOL_ID = 'maxima'
+
+const getContentStudentAccessCall = httpsCallable(functions, 'getContentStudentAccess')
+const setContentStudentAccessCall = httpsCallable(functions, 'setContentStudentAccess')
 
 function getProfileSchoolId(profile) {
   return profile?.schoolId || DEFAULT_SCHOOL_ID
@@ -448,24 +452,22 @@ export default function CreateReading() {
       }
 
       const data = snap.data()
+      const assignmentResult = await getContentStudentAccessCall({
+        contentType: 'reading',
+        contentId: id
+      })
+      if (!isActive) return
+
+      const canonicalStudentIds = Array.isArray(assignmentResult.data?.studentIds)
+        ? assignmentResult.data.studentIds.filter(Boolean)
+        : []
 
       setTitle(data.title || '')
       setContentType(data.contentType || 'full_reading')
       setVisibility(data.visibility || data.libraryVisibility || 'private')
       setTimeLimit(data.timeLimit || 60)
       setDueDate(data.dueDate || '')
-      setAssignTo(
-        Array.from(
-          new Set([
-            ...(Array.isArray(data.assignTo) ? data.assignTo : []),
-            ...(Array.isArray(data.assignedTo) ? data.assignedTo : []),
-            ...(Array.isArray(data.studentIds) ? data.studentIds : []),
-            ...(Array.isArray(data.assignedStudentIds)
-              ? data.assignedStudentIds
-              : [])
-          ])
-        )
-      )
+      setAssignTo(canonicalStudentIds)
       setPassageMode(
         data.passageMode || (data.paragraphs ? 'sections' : 'standard')
       )
@@ -2252,11 +2254,6 @@ export default function CreateReading() {
       visibility,
       timeLimit,
       dueDate,
-      assignTo,
-      assignedTo: [],
-      studentIds: [],
-      assignedStudentIds: students.filter(student => assignTo.includes(student.id)).map(student => student.id),
-      assignedEmails: students.filter(student => assignTo.includes(student.id)).map(student => student.email?.toLowerCase()).filter(Boolean),
       schoolId: getProfileSchoolId(profile),
       teacherId: profile?.role === 'teacher' ? user.uid : undefined,
       teacherIds: profile?.role === 'teacher' ? [user.uid] : undefined,
@@ -2269,10 +2266,12 @@ export default function CreateReading() {
     })
 
     try {
+      let savedReadingId = id
+
       if (isEditMode) {
         await updateDoc(doc(db, 'readings', id), payload)
       } else {
-        await addDoc(
+        const createdReading = await addDoc(
           collection(db, 'readings'),
           removeUndefined({
             ...payload,
@@ -2281,6 +2280,33 @@ export default function CreateReading() {
             archived: false
           })
         )
+        savedReadingId = createdReading.id
+      }
+
+      try {
+        await setContentStudentAccessCall({
+          contentType: 'reading',
+          contentId: savedReadingId,
+          studentIds: assignTo
+        })
+      } catch (assignmentError) {
+        console.error('Could not synchronize reading assignments:', assignmentError)
+
+        if (!isEditMode && savedReadingId) {
+          alert(
+            'The reading was created, but student assignments could not be synchronized. ' +
+            'You will be taken to the edit screen so you can retry without creating a duplicate.'
+          )
+          navigate(`/edit-reading/${savedReadingId}`, { replace: true })
+          return
+        }
+
+        alert(
+          `The reading changes were saved, but student assignments could not be synchronized. ` +
+          `Please try saving again. ${assignmentError?.message || ''}`
+        )
+        setSaving(false)
+        return
       }
 
       setSaved(true)
