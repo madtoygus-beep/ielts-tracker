@@ -156,6 +156,25 @@ service cloud.firestore {
     }
 
     // ============================================================
+    // STAGE 16F-A: STUDENTACCESS READ BRIDGE
+    // Adds canonical entitlement checks for narrow document gets while
+    // legacy assignment-array list access remains available during cutover.
+    // ============================================================
+
+    function studentHasActiveAccess(contentType, contentId) {
+      let uid = request.auth != null ? request.auth.uid : '';
+      let accessId = uid + '_' + contentType + '_' + contentId;
+      let accessPath = /databases/$(database)/documents/studentAccess/$(accessId);
+      return isStudent()
+        && exists(accessPath)
+        && get(accessPath).data.get('uid', '') == request.auth.uid
+        && get(accessPath).data.get('contentType', '') == contentType
+        && get(accessPath).data.get('contentId', '') == contentId
+        && get(accessPath).data.get('status', '') == 'active'
+        && schoolIdOf(get(accessPath).data) == currentSchoolId();
+    }
+
+    // ============================================================
     // REPAIR 08B: ASSIGNED MOCK -> LINKED RESOURCE ACCESS
     // A student may request a narrow reference, not grant arbitrary permission.
     // Every source read revalidates the LIVE mock and LIVE source documents.
@@ -666,7 +685,8 @@ service cloud.firestore {
     match /studentReadings/{id} {
       allow get: if isAdmin()
         || (isStudent() && (
-          studentCanReadContent(resource.data)
+          studentHasActiveAccess('reading', id)
+          || studentCanReadContent(resource.data)
           || studentCanGetMockResource('readings', id)
         ));
 
@@ -679,7 +699,8 @@ service cloud.firestore {
     match /studentListenings/{id} {
       allow get: if isAdmin()
         || (isStudent() && (
-          studentCanReadContent(resource.data)
+          studentHasActiveAccess('listening', id)
+          || studentCanReadContent(resource.data)
           || studentCanGetMockResource('listenings', id)
         ));
 
@@ -690,7 +711,11 @@ service cloud.firestore {
     }
 
     match /studentVocabularyTests/{id} {
-      allow get, list: if isAdmin()
+      allow get: if isAdmin()
+        || studentHasActiveAccess('vocabulary', id)
+        || studentCanReadContent(resource.data);
+
+      allow list: if isAdmin()
         || studentCanReadContent(resource.data);
 
       allow create, update, delete: if false;
@@ -786,6 +811,7 @@ service cloud.firestore {
     match /writingHomeworks/{id} {
       allow get: if isAdmin()
         || teacherCanReadContent(resource.data)
+        || studentHasActiveAccess('writing', id)
         || studentCanReadContent(resource.data)
         || studentCanGetMockResource('writingHomeworks', id);
 
@@ -835,7 +861,12 @@ service cloud.firestore {
     // ============================================================
 
     match /mockTests/{id} {
-      allow read: if isAdmin()
+      allow get: if isAdmin()
+        || teacherCanReadContent(resource.data)
+        || studentHasActiveAccess('mock', id)
+        || (isStudent() && isAssignedToCurrentUser(resource.data));
+
+      allow list: if isAdmin()
         || teacherCanReadContent(resource.data)
         || (isStudent() && isAssignedToCurrentUser(resource.data));
 
