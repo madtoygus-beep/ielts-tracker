@@ -21,12 +21,6 @@ function countWords(text) {
 }
 
 
-function normalizeId(value) {
-  return value === undefined || value === null
-    ? ''
-    : value.toString().trim().toLowerCase()
-}
-
 function uniqueCleanValues(values) {
   return Array.from(
     new Set(
@@ -51,52 +45,6 @@ function getSourceTeacherIds(source) {
     source?.teacherId,
     source?.createdBy
   ])
-}
-
-function getCurrentUserAssignmentValues(user, profile) {
-  if (!user) return []
-
-  return uniqueCleanValues([
-    user.uid,
-    user.email,
-    user.email?.toLowerCase(),
-    profile?.uid,
-    profile?.id,
-    profile?.email,
-    profile?.email?.toLowerCase()
-  ])
-}
-
-function getAssignmentValues(item) {
-  return [
-    ...(Array.isArray(item?.assignTo) ? item.assignTo : []),
-    ...(Array.isArray(item?.assignedTo) ? item.assignedTo : []),
-    ...(Array.isArray(item?.studentIds) ? item.studentIds : []),
-    ...(Array.isArray(item?.assignedStudentIds) ? item.assignedStudentIds : []),
-    ...(Array.isArray(item?.assignedEmails) ? item.assignedEmails : [])
-  ]
-}
-
-function isAssignedToCurrentUser(item, user, profile) {
-  const assignedValues = getAssignmentValues(item).map(normalizeId).filter(Boolean)
-  const currentUserValues = getCurrentUserAssignmentValues(user, profile)
-    .map(normalizeId)
-    .filter(Boolean)
-
-  if (assignedValues.length === 0) return false
-
-  return currentUserValues.some(value => assignedValues.includes(value))
-}
-
-function isHiddenForCurrentUser(item, user, profile) {
-  if (!Array.isArray(item?.hiddenFor)) return false
-
-  const hiddenValues = item.hiddenFor.map(normalizeId).filter(Boolean)
-  const currentUserValues = getCurrentUserAssignmentValues(user, profile)
-    .map(normalizeId)
-    .filter(Boolean)
-
-  return currentUserValues.some(value => hiddenValues.includes(value))
 }
 
 function formatTime(seconds) {
@@ -312,6 +260,45 @@ export default function DoWriting() {
 
       setUser(currentUser)
 
+      // Stage 16F-F: studentAccess is the canonical standalone entitlement.
+      const accessId = `${currentUser.uid}_writing_${id}`
+      let accessSnap
+
+      try {
+        accessSnap = await getDoc(doc(db, 'studentAccess', accessId))
+      } catch (accessError) {
+        if (!isCurrentLoad()) return
+
+        if (accessError?.code === 'permission-denied') {
+          setLoadError('This Writing homework is not assigned to you.')
+          setLoading(false)
+          return
+        }
+
+        throw accessError
+      }
+
+      if (!isCurrentLoad()) return
+
+      if (!accessSnap.exists()) {
+        setLoadError('This Writing homework is not assigned to you.')
+        setLoading(false)
+        return
+      }
+
+      const access = accessSnap.data() || {}
+
+      if (
+        access.uid !== currentUser.uid ||
+        access.contentType !== 'writing' ||
+        access.contentId !== id ||
+        access.status !== 'active'
+      ) {
+        setLoadError('This Writing homework is not active. Return to the dashboard and ask your teacher to check the assignment if you think this is a mistake.')
+        setLoading(false)
+        return
+      }
+
       const snap = await getDoc(doc(db, 'writingHomeworks', id))
       if (!isCurrentLoad()) return
 
@@ -324,18 +311,6 @@ export default function DoWriting() {
       const data = {
         id: snap.id,
         ...snap.data()
-      }
-
-      if (!isAssignedToCurrentUser(data, currentUser, profile)) {
-        setLoadError('This Writing homework is not assigned to you.')
-        setLoading(false)
-        return
-      }
-
-      if (isHiddenForCurrentUser(data, currentUser, profile) || data.archived === true) {
-        setLoadError('This Writing homework is hidden, archived, or no longer available.')
-        setLoading(false)
-        return
       }
 
       const mode = data.contentType || data.writingMode || 'full_writing'
