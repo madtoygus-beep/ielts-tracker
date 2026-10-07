@@ -16,7 +16,6 @@ import { useNavigate, useParams } from 'react-router-dom'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
-const syncMyObjectiveAssignments = httpsCallable(functions, 'syncMyObjectiveAssignments')
 const submitVocabularySecure = httpsCallable(functions, 'submitVocabularySecure')
 const getCompletedObjectiveReview = httpsCallable(functions, 'getCompletedObjectiveReview')
 
@@ -75,46 +74,6 @@ function getSourceTeacherIds(source) {
     source?.teacherId,
     source?.createdBy
   ])
-}
-
-function getAssignmentValues(item) {
-  return [
-    ...(Array.isArray(item?.assignTo) ? item.assignTo : []),
-    ...(Array.isArray(item?.assignedTo) ? item.assignedTo : []),
-    ...(Array.isArray(item?.studentIds) ? item.studentIds : []),
-    ...(Array.isArray(item?.assignedStudentIds) ? item.assignedStudentIds : []),
-    ...(Array.isArray(item?.assignedEmails) ? item.assignedEmails : [])
-  ]
-}
-
-function getCurrentUserValues(user, profile) {
-  return [
-    user?.uid,
-    user?.email,
-    user?.email?.toLowerCase(),
-    profile?.uid,
-    profile?.id,
-    profile?.email,
-    profile?.email?.toLowerCase()
-  ]
-    .map(normalizeValue)
-    .filter(Boolean)
-}
-
-function isAssignedToCurrentUser(item, user, profile) {
-  const assignmentValues = getAssignmentValues(item).map(normalizeValue)
-  const currentValues = getCurrentUserValues(user, profile)
-
-  return currentValues.some(value => assignmentValues.includes(value))
-}
-
-function isHiddenForCurrentUser(item, user, profile) {
-  if (!Array.isArray(item?.hiddenFor)) return false
-
-  const hiddenValues = item.hiddenFor.map(normalizeValue)
-  const currentValues = getCurrentUserValues(user, profile)
-
-  return currentValues.some(value => hiddenValues.includes(value))
 }
 
 function isSubmissionForVocabularyTest(submission, vocabularyTestId) {
@@ -357,21 +316,45 @@ export default function DoVocabulary() {
         setUser(currentUser)
         setProfile(loadedProfile)
 
-        // 8D-2: students load the answer-key-free projection, never the source vocabulary test.
-        let testSnap = await getDocFromServer(doc(db, 'studentVocabularyTests', id))
+        // Stage 16F-E: studentAccess is the canonical standalone entitlement.
+        const accessId = `${currentUser.uid}_vocabulary_${id}`
+        let accessSnap
+
+        try {
+          accessSnap = await getDocFromServer(doc(db, 'studentAccess', accessId))
+        } catch (accessError) {
+          if (!isCurrent()) return
+
+          if (accessError?.code === 'permission-denied') {
+            throw new Error('This Vocabulary practice is not assigned to you.')
+          }
+
+          throw accessError
+        }
 
         if (!isCurrent()) return
 
-        // Older assignments may predate the projection collections. Refresh only when needed.
-        if (!testSnap.exists()) {
-          try {
-            await syncMyObjectiveAssignments({})
-            if (!isCurrent()) return
-            testSnap = await getDocFromServer(doc(db, 'studentVocabularyTests', id))
-          } catch (syncError) {
-            console.warn('Could not refresh sanitized vocabulary assignments:', syncError)
-          }
+        if (!accessSnap.exists()) {
+          throw new Error('This Vocabulary practice is not assigned to you.')
         }
+
+        const access = accessSnap.data() || {}
+
+        if (
+          access.uid !== currentUser.uid ||
+          access.contentType !== 'vocabulary' ||
+          access.contentId !== id ||
+          access.status !== 'active'
+        ) {
+          throw new Error(
+            'This Vocabulary practice is not active. Return to the dashboard and ask your teacher to check the assignment if you think this is a mistake.'
+          )
+        }
+
+        // 8D-2: students load the answer-key-free projection, never the source vocabulary test.
+        const testSnap = await getDocFromServer(doc(db, 'studentVocabularyTests', id))
+
+        if (!isCurrent()) return
 
         if (!testSnap.exists()) {
           throw new Error(
@@ -385,14 +368,6 @@ export default function DoVocabulary() {
           questions: Array.isArray(testSnap.data().questions)
             ? testSnap.data().questions
             : []
-        }
-
-        if (!isAssignedToCurrentUser(data, currentUser, loadedProfile)) {
-          throw new Error('This Vocabulary practice is not assigned to you.')
-        }
-
-        if (isHiddenForCurrentUser(data, currentUser, loadedProfile) || data.archived === true) {
-          throw new Error('This Vocabulary practice is hidden, archived, or no longer available.')
         }
 
         setTest(data)
