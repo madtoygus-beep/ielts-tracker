@@ -15,88 +15,8 @@ import { useNavigate, useParams } from 'react-router-dom'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
-const syncMyObjectiveAssignments = httpsCallable(functions, 'syncMyObjectiveAssignments')
 const submitListeningSecure = httpsCallable(functions, 'submitListeningSecure')
 const getCompletedObjectiveReview = httpsCallable(functions, 'getCompletedObjectiveReview')
-
-function normalizeId(value) {
-  return value === undefined || value === null
-    ? ''
-    : value.toString().trim().toLowerCase()
-}
-
-function uniqueCleanValues(values) {
-  return Array.from(
-    new Set(
-      values
-        .filter(value => value !== undefined && value !== null)
-        .map(value => value.toString().trim())
-        .filter(Boolean)
-    )
-  )
-}
-
-function getSourceTeacherIds(source) {
-  const explicitTeacherIds = Array.isArray(source?.teacherIds)
-    ? source.teacherIds
-    : []
-
-  if (explicitTeacherIds.length > 0) {
-    return uniqueCleanValues(explicitTeacherIds)
-  }
-
-  return uniqueCleanValues([
-    source?.teacherId,
-    source?.createdBy
-  ])
-}
-
-function getCurrentUserAssignmentValues(user, profile) {
-  if (!user) return []
-
-  return uniqueCleanValues([
-    user.uid,
-    user.email,
-    user.email?.toLowerCase(),
-    profile?.uid,
-    profile?.id,
-    profile?.email,
-    profile?.email?.toLowerCase()
-  ])
-}
-
-function getAssignmentValues(item) {
-  return [
-    ...(Array.isArray(item?.assignTo) ? item.assignTo : []),
-    ...(Array.isArray(item?.assignedTo) ? item.assignedTo : []),
-    ...(Array.isArray(item?.studentIds) ? item.studentIds : []),
-    ...(Array.isArray(item?.assignedStudentIds) ? item.assignedStudentIds : []),
-    ...(Array.isArray(item?.assignedEmails) ? item.assignedEmails : [])
-  ]
-}
-
-function isAssignedToCurrentUser(item, user, profile) {
-  const assignedValues = getAssignmentValues(item).map(normalizeId).filter(Boolean)
-  const currentUserValues = getCurrentUserAssignmentValues(user, profile)
-    .map(normalizeId)
-    .filter(Boolean)
-
-  if (assignedValues.length === 0) return false
-
-  return currentUserValues.some(value => assignedValues.includes(value))
-}
-
-function isHiddenForCurrentUser(item, user, profile) {
-  if (!Array.isArray(item?.hiddenFor)) return false
-
-  const hiddenValues = item.hiddenFor.map(normalizeId).filter(Boolean)
-  const currentUserValues = getCurrentUserAssignmentValues(user, profile)
-    .map(normalizeId)
-    .filter(Boolean)
-
-  return currentUserValues.some(value => hiddenValues.includes(value))
-}
-
 
 function normalizeListeningParts(listening) {
   if (Array.isArray(listening?.parts) && listening.parts.length) {
@@ -547,20 +467,50 @@ export default function DoListening() {
 
         setUser(currentUser)
 
-        // 8D-2: students load the answer-key-free projection, never the source listening.
-        let snap = await getDocFromServer(doc(db, 'studentListenings', id))
+        // Stage 16F-D: studentAccess is the canonical standalone entitlement.
+        // Mock-only audio access must stay inside DoMockTest, so this page checks
+        // the deterministic standalone Listening access document before loading content.
+        const accessId = `${currentUser.uid}_listening_${id}`
+        let accessSnap
+
+        try {
+          accessSnap = await getDocFromServer(doc(db, 'studentAccess', accessId))
+        } catch (accessError) {
+          if (!isCurrent()) return
+
+          if (accessError?.code === 'permission-denied') {
+            throw new Error(
+              'This Listening homework is not assigned to you. If it belongs to a Mock Test, open it from that Mock instead.'
+            )
+          }
+
+          throw accessError
+        }
+
         if (!isCurrent()) return
 
-        // Older assignments may predate the projection collections. Refresh only when needed.
-        if (!snap.exists()) {
-          try {
-            await syncMyObjectiveAssignments({})
-            if (!isCurrent()) return
-            snap = await getDocFromServer(doc(db, 'studentListenings', id))
-          } catch (syncError) {
-            console.warn('Could not refresh sanitized listening assignments:', syncError)
-          }
+        if (!accessSnap.exists()) {
+          throw new Error(
+            'This Listening homework is not assigned to you. If it belongs to a Mock Test, open it from that Mock instead.'
+          )
         }
+
+        const access = accessSnap.data() || {}
+
+        if (
+          access.uid !== currentUser.uid ||
+          access.contentType !== 'listening' ||
+          access.contentId !== id ||
+          access.status !== 'active'
+        ) {
+          throw new Error(
+            'This Listening homework is not active. Return to the dashboard and ask your teacher to check the assignment if you think this is a mistake.'
+          )
+        }
+
+        // 8D-2: students load the answer-key-free projection, never the source listening.
+        const snap = await getDocFromServer(doc(db, 'studentListenings', id))
+        if (!isCurrent()) return
 
         if (!snap.exists()) {
           throw new Error(
@@ -571,16 +521,6 @@ export default function DoListening() {
         const data = {
           id: snap.id,
           ...snap.data()
-        }
-
-        if (!isAssignedToCurrentUser(data, currentUser, profile)) {
-          throw new Error(
-            'This Listening homework is not assigned to you. If it belongs to a Mock Test, open it from that Mock instead.'
-          )
-        }
-
-        if (isHiddenForCurrentUser(data, currentUser, profile) || data.archived === true) {
-          throw new Error('This Listening homework is hidden, archived, or no longer available.')
         }
 
         const loadedParts = normalizeListeningParts(data)
