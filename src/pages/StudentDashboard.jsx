@@ -1,56 +1,9 @@
   import { useState, useEffect } from 'react'
-  import { auth, db, functions, storage } from '../firebase'
+  import { auth, db, storage } from '../firebase'
   import { collection, query, where, onSnapshot, doc, getDoc, updateDoc, arrayUnion } from 'firebase/firestore'
   import { signOut, onAuthStateChanged, updatePassword } from 'firebase/auth'
   import { ref as storageRef, getDownloadURL } from 'firebase/storage'
-  import { httpsCallable } from 'firebase/functions'
   import { useNavigate } from 'react-router-dom'
-
-  function uniqueCleanValues(values) {
-    return Array.from(
-      new Set(
-        values
-          .filter(value => value !== undefined && value !== null)
-          .map(value => value.toString().trim())
-          .filter(Boolean)
-      )
-    )
-  }
-
-  function getCurrentUserAssignmentValues(userOrUid, profile) {
-    if (!userOrUid) return []
-
-    if (typeof userOrUid === 'string') {
-      return uniqueCleanValues([
-        userOrUid,
-        profile?.uid,
-        profile?.id,
-        profile?.email,
-        profile?.email?.toLowerCase()
-      ])
-    }
-
-    return uniqueCleanValues([
-      userOrUid?.uid,
-      userOrUid?.email,
-      userOrUid?.email?.toLowerCase(),
-      profile?.uid,
-      profile?.id,
-      profile?.email,
-      profile?.email?.toLowerCase()
-    ])
-  }
-
-  const isHiddenForCurrentUser = (item, userOrUid, profile) => {
-    if (!Array.isArray(item?.hiddenFor)) return false
-
-    const hiddenValues = item.hiddenFor.map(normalizeId)
-    const currentUserValues = getCurrentUserAssignmentValues(userOrUid, profile)
-      .map(normalizeId)
-      .filter(Boolean)
-
-    return currentUserValues.some(value => hiddenValues.includes(value))
-  }
 
   function normalizeId(value) {
     return value === undefined || value === null
@@ -58,28 +11,36 @@
       : value.toString().trim().toLowerCase()
   }
 
-  function getAssignmentValues(item) {
-    return [
-      ...(Array.isArray(item?.assignTo) ? item.assignTo : []),
-      ...(Array.isArray(item?.assignedTo) ? item.assignedTo : []),
-      ...(Array.isArray(item?.studentIds) ? item.studentIds : []),
-      ...(Array.isArray(item?.assignedStudentIds) ? item.assignedStudentIds : []),
-      ...(Array.isArray(item?.assignedEmails) ? item.assignedEmails : [])
-    ]
-  }
-
-  function isAssignedToCurrentUser(item, user, profile) {
-    const assignedValues = getAssignmentValues(item).map(normalizeId)
-
-    const currentUserValues = getCurrentUserAssignmentValues(user, profile)
-      .map(normalizeId)
-      .filter(Boolean)
-
-    return currentUserValues.some(value => assignedValues.includes(value))
-  }
-
+  const STUDENT_ACCESS_CONTENT_CONFIG = Object.freeze({
+    studentReadings: {
+      contentType: 'reading',
+      accessSourceCollection: 'readings',
+      contentCollection: 'studentReadings'
+    },
+    studentListenings: {
+      contentType: 'listening',
+      accessSourceCollection: 'listenings',
+      contentCollection: 'studentListenings'
+    },
+    studentVocabularyTests: {
+      contentType: 'vocabulary',
+      accessSourceCollection: 'vocabularyTests',
+      contentCollection: 'studentVocabularyTests'
+    },
+    writingHomeworks: {
+      contentType: 'writing',
+      accessSourceCollection: 'writingHomeworks',
+      contentCollection: 'writingHomeworks'
+    },
+    mockTests: {
+      contentType: 'mock',
+      accessSourceCollection: 'mockTests',
+      contentCollection: 'mockTests'
+    }
+  })
 
   const sharedStudentSnapshotRegistry = new Map()
+  const sharedStudentAccessContentRegistry = new Map()
   const STUDENT_DATA_ERROR_EVENT = 'maxima-student-data-error'
 
   function emitStudentDataError(key, error = null) {
@@ -172,107 +133,183 @@
     )
   }
 
-  function listenAssignedCollection(collectionName, user, profile, onItems, options = {}) {
-    if (!user) return () => {}
+  function studentAccessTimestampKey(value) {
+    if (!value) return ''
 
-    const uidValues = uniqueCleanValues([
-      user.uid,
-      profile?.uid,
-      profile?.id
-    ])
+    if (typeof value.toMillis === 'function') {
+      return value.toMillis().toString()
+    }
 
-    const emailValues = uniqueCleanValues([
-      user.email,
-      user.email?.toLowerCase(),
-      profile?.email,
-      profile?.email?.toLowerCase()
-    ])
+    if (Number.isFinite(value.seconds)) {
+      return `${value.seconds}:${value.nanoseconds || 0}`
+    }
 
-    const allAssignmentValues = uniqueCleanValues([
-      ...uidValues,
-      ...emailValues
-    ])
+    return value.toString()
+  }
 
-    const querySpecs = [
-      ['assignTo', allAssignmentValues],
-      ['assignedTo', allAssignmentValues],
-      ['studentIds', uidValues],
-      ['assignedStudentIds', uidValues],
-      ['assignedEmails', emailValues]
-    ]
-
-    const queryTargets = []
-    const seenTargets = new Set()
-
-    querySpecs.forEach(([fieldName, values]) => {
-      values.forEach(value => {
-        const key = `${fieldName}:${normalizeId(value)}`
-
-        if (!value || seenTargets.has(key)) return
-
-        seenTargets.add(key)
-        queryTargets.push({ fieldName, value })
-      })
-    })
-
-    if (queryTargets.length === 0) {
+  function listenStudentAccessCollection(collectionName, user, profile, onItems, options = {}) {
+    if (!user?.uid) {
       onItems([])
       return () => {}
     }
 
-    let active = true
-    const resultBuckets = {}
+    const config = STUDENT_ACCESS_CONTENT_CONFIG[collectionName]
 
-    const emit = () => {
-      if (!active) return
+    if (!config) {
+      console.warn(`Unknown studentAccess collection mapping: ${collectionName}`)
+      onItems([])
+      return () => {}
+    }
 
-      const mergedMap = new Map()
+    const uid = user.uid
+    const schoolId = profile?.schoolId?.toString().trim() || 'maxima'
+    const registryKey = `access-content:${uid}:${schoolId}:${config.contentType}:${collectionName}`
 
-      Object.values(resultBuckets).forEach(items => {
-        items.forEach(item => {
-          mergedMap.set(item.id, item)
-        })
-      })
+    let entry = sharedStudentAccessContentRegistry.get(registryKey)
 
-      let merged = Array.from(mergedMap.values()).filter(item =>
-        isAssignedToCurrentUser(item, user, profile) &&
-        !isHiddenForCurrentUser(item, user, profile)
+    if (!entry) {
+      entry = {
+        subscribers: new Set(),
+        lastItems: null,
+        lastAccessSignature: null,
+        loadVersion: 0,
+        unsubscribe: null
+      }
+
+      const accessQuery = query(
+        collection(db, 'studentAccess'),
+        where('uid', '==', uid),
+        where('schoolId', '==', schoolId)
       )
 
+      entry.unsubscribe = subscribeSharedSnapshot(
+        `studentAccess:${uid}:${schoolId}`,
+        accessQuery,
+        accessItems => {
+          const matchingAccess = accessItems
+            .filter(access =>
+              access.accessType === 'assignment' &&
+              access.status === 'active' &&
+              access.contentType === config.contentType &&
+              access.sourceCollection === config.accessSourceCollection &&
+              Boolean(access.contentId)
+            )
+            .sort((a, b) => a.id.localeCompare(b.id))
+
+          const accessSignature = matchingAccess
+            .map(access =>
+              `${access.id}:${studentAccessTimestampKey(access.updatedAt)}`
+            )
+            .join('|')
+
+          if (
+            entry.lastItems !== null &&
+            entry.lastAccessSignature === accessSignature
+          ) {
+            return
+          }
+
+          entry.lastAccessSignature = accessSignature
+          const loadVersion = ++entry.loadVersion
+
+          if (matchingAccess.length === 0) {
+            entry.lastItems = []
+            emitStudentDataError(registryKey)
+
+            entry.subscribers.forEach(subscriber => {
+              subscriber([])
+            })
+
+            return
+          }
+
+          Promise.all(
+            matchingAccess.map(async access => {
+              const contentSnap = await getDoc(
+                doc(db, config.contentCollection, access.contentId)
+              )
+
+              if (!contentSnap.exists()) {
+                console.warn(
+                  `studentAccess points to missing ${config.contentCollection}/${access.contentId}`
+                )
+                return null
+              }
+
+              return {
+                id: contentSnap.id,
+                ...contentSnap.data(),
+                studentAccess: {
+                  id: access.id,
+                  status: access.status,
+                  assignedAt: access.assignedAt || null,
+                  dueAt: access.dueAt || null,
+                  reviewPolicy: access.reviewPolicy || 'immediate',
+                  reviewReleaseAt: access.reviewReleaseAt || null
+                }
+              }
+            })
+          )
+            .then(items => {
+              if (entry.loadVersion !== loadVersion) return
+
+              const loadedItems = items.filter(Boolean)
+              entry.lastItems = loadedItems
+              emitStudentDataError(registryKey)
+
+              entry.subscribers.forEach(subscriber => {
+                subscriber(loadedItems)
+              })
+            })
+            .catch(error => {
+              if (entry.loadVersion !== loadVersion) return
+
+              console.warn(
+                `Student dashboard content load failed: ${registryKey}`,
+                error
+              )
+              emitStudentDataError(registryKey, error)
+            })
+        }
+      )
+
+      sharedStudentAccessContentRegistry.set(registryKey, entry)
+    }
+
+    const subscriber = items => {
+      let nextItems = items.filter(item => item.archived !== true)
+
       if (typeof options.filter === 'function') {
-        merged = merged.filter(options.filter)
+        nextItems = nextItems.filter(options.filter)
       }
 
       if (typeof options.sort === 'function') {
-        merged = [...merged].sort(options.sort)
+        nextItems = [...nextItems].sort(options.sort)
       }
 
-      onItems(merged)
+      onItems(nextItems)
     }
 
-    const unsubscribers = queryTargets.map(({ fieldName, value }) => {
-      const key = `${fieldName}:${normalizeId(value)}`
-      const q = query(
-        collection(db, collectionName),
-        where(fieldName, 'array-contains', value)
-      )
+    entry.subscribers.add(subscriber)
 
-      return subscribeSharedSnapshot(
-        `assigned:${collectionName}:${fieldName}:${normalizeId(value)}`,
-        q,
-        items => {
-          resultBuckets[key] = items
-          emit()
-        }
-      )
-    })
+    if (entry.lastItems !== null) {
+      subscriber(entry.lastItems)
+    }
 
     return () => {
-      active = false
-      unsubscribers.forEach(unsubscribe => unsubscribe())
+      const currentEntry = sharedStudentAccessContentRegistry.get(registryKey)
+      if (!currentEntry) return
+
+      currentEntry.subscribers.delete(subscriber)
+
+      if (currentEntry.subscribers.size === 0) {
+        currentEntry.loadVersion++
+        currentEntry.unsubscribe?.()
+        sharedStudentAccessContentRegistry.delete(registryKey)
+        emitStudentDataError(registryKey)
+      }
     }
   }
-
 
   function getBandColor(value) {
     const band = Number(value)
@@ -831,7 +868,7 @@
     useEffect(() => {
       if (!user) return
 
-      return listenAssignedCollection(
+      return listenStudentAccessCollection(
         'studentReadings',
         user,
         profile,
@@ -856,7 +893,7 @@
     useEffect(() => {
       if (!user) return
 
-      return listenAssignedCollection(
+      return listenStudentAccessCollection(
         'studentListenings',
         user,
         profile,
@@ -1108,7 +1145,7 @@
     useEffect(() => {
       if (!user) return
 
-      return listenAssignedCollection(
+      return listenStudentAccessCollection(
         'studentReadings',
         user,
         profile,
@@ -1249,7 +1286,7 @@
     useEffect(() => {
       if (!user) return
 
-      return listenAssignedCollection(
+      return listenStudentAccessCollection(
         'studentListenings',
         user,
         profile,
@@ -1404,7 +1441,7 @@
     useEffect(() => {
       if (!user) return
 
-      return listenAssignedCollection(
+      return listenStudentAccessCollection(
         'mockTests',
         user,
         profile,
@@ -1751,7 +1788,7 @@
     useEffect(() => {
       if (!user) return
 
-      return listenAssignedCollection(
+      return listenStudentAccessCollection(
         'studentVocabularyTests',
         user,
         profile,
@@ -2036,7 +2073,7 @@
     useEffect(() => {
       if (!user) return
 
-      return listenAssignedCollection(
+      return listenStudentAccessCollection(
         'mockTests',
         user,
         profile,
@@ -2232,7 +2269,7 @@
     useEffect(() => {
       if (!user) return
 
-      return listenAssignedCollection(
+      return listenStudentAccessCollection(
         'writingHomeworks',
         user,
         profile,
@@ -2543,7 +2580,7 @@
     useEffect(() => {
       if (!user) return
 
-      return listenAssignedCollection(
+      return listenStudentAccessCollection(
         'writingHomeworks',
         user,
         profile,
@@ -2871,7 +2908,7 @@
     useEffect(() => {
       if (!user) return
 
-      const unsubReadings = listenAssignedCollection(
+      const unsubReadings = listenStudentAccessCollection(
         'studentReadings',
         user,
         profile,
@@ -2882,7 +2919,7 @@
         }
       )
 
-      const unsubListenings = listenAssignedCollection(
+      const unsubListenings = listenStudentAccessCollection(
         'studentListenings',
         user,
         profile,
@@ -2893,7 +2930,7 @@
         }
       )
 
-      const unsubWritings = listenAssignedCollection(
+      const unsubWritings = listenStudentAccessCollection(
         'writingHomeworks',
         user,
         profile,
@@ -2904,7 +2941,7 @@
         }
       )
 
-      const unsubVocabularyTests = listenAssignedCollection(
+      const unsubVocabularyTests = listenStudentAccessCollection(
         'studentVocabularyTests',
         user,
         profile,
@@ -2915,7 +2952,7 @@
         }
       )
 
-      const unsubMocks = listenAssignedCollection(
+      const unsubMocks = listenStudentAccessCollection(
         'mockTests',
         user,
         profile,
@@ -3540,23 +3577,6 @@
         }
       }
     }, [navigate, authRetryKey])
-
-    useEffect(() => {
-      if (!user) return
-
-      let active = true
-      const syncObjectiveAssignments = httpsCallable(functions, 'syncMyObjectiveAssignments')
-
-      syncObjectiveAssignments().catch(error => {
-        if (active) {
-          console.warn('Could not sync secure objective assignments:', error)
-        }
-      })
-
-      return () => {
-        active = false
-      }
-    }, [user])
 
     const dataSyncErrorCount = Object.keys(dataSyncErrors).length
 
