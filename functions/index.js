@@ -223,13 +223,6 @@ async function syncStudentAccessWrite(event, contentType, sourceCollection) {
   })
 }
 
-function isAssignedTo(data, uid, email) {
-  const values = assignmentValues(data)
-  const candidates = uniqueStrings([uid, email, email?.toLowerCase()])
-    .map(value => value.toLowerCase())
-  return candidates.some(value => values.includes(value))
-}
-
 function toPlain(value) {
   if (value === null || value === undefined) return value
   if (Array.isArray(value)) return value.map(toPlain)
@@ -463,52 +456,6 @@ exports.syncWritingStudentAccess = onDocumentWritten('writingHomeworks/{id}', ev
 exports.syncMockStudentAccess = onDocumentWritten('mockTests/{id}', event =>
   syncStudentAccessWrite(event, 'mock', 'mockTests')
 )
-
-async function syncAssignedCollection(config, student) {
-  const candidateSpecs = [
-    ['assignTo', student.uid],
-    ['assignedTo', student.uid],
-    ['studentIds', student.uid],
-    ['assignedStudentIds', student.uid],
-    ['assignedEmails', student.email],
-    ['assignTo', student.email],
-    ['assignedTo', student.email]
-  ].filter(([, value]) => Boolean(value))
-
-  const docs = new Map()
-
-  await Promise.all(candidateSpecs.map(async ([field, value]) => {
-    try {
-      const snap = await db.collection(config.sourceCollection)
-        .where(field, 'array-contains', value)
-        .get()
-      snap.docs.forEach(docSnap => docs.set(docSnap.id, docSnap.data()))
-    } catch (error) {
-      console.warn(`Could not sync ${config.sourceCollection} by ${field}:`, error?.message || error)
-    }
-  }))
-
-  let count = 0
-  for (const [id, source] of docs.entries()) {
-    if (!isAssignedTo(source, student.uid, student.email)) continue
-    if (schoolIdOf(source) !== schoolIdOf(student.profile)) continue
-    await writeProjection(config, id, source)
-    count++
-  }
-
-  return count
-}
-
-exports.syncMyObjectiveAssignments = onCall(async request => {
-  const student = await requireStudent(request)
-  const [readings, listenings, vocabulary] = await Promise.all([
-    syncAssignedCollection(OBJECTIVE_CONFIG.reading, student),
-    syncAssignedCollection(OBJECTIVE_CONFIG.listening, student),
-    syncAssignedCollection(OBJECTIVE_CONFIG.vocabulary, student)
-  ])
-
-  return { ok: true, readings, listenings, vocabulary }
-})
 
 function mockLinkedIds(mock, type) {
   if (type === 'reading') {
