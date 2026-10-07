@@ -780,12 +780,6 @@ function getReadingNoteBlankQuestionNumber(reading, questionId, paragraphId, par
 }
 
 
-function normalizeId(value) {
-  return value === undefined || value === null
-    ? ''
-    : value.toString().trim().toLowerCase()
-}
-
 function uniqueCleanValues(values) {
   return Array.from(
     new Set(
@@ -812,52 +806,6 @@ function getSourceTeacherIds(source) {
   ])
 }
 
-function getCurrentUserAssignmentValues(user, profile) {
-  if (!user) return []
-
-  return uniqueCleanValues([
-    user.uid,
-    user.email,
-    user.email?.toLowerCase(),
-    profile?.uid,
-    profile?.id,
-    profile?.email,
-    profile?.email?.toLowerCase()
-  ])
-}
-
-function getAssignmentValues(item) {
-  return [
-    ...(Array.isArray(item?.assignTo) ? item.assignTo : []),
-    ...(Array.isArray(item?.assignedTo) ? item.assignedTo : []),
-    ...(Array.isArray(item?.studentIds) ? item.studentIds : []),
-    ...(Array.isArray(item?.assignedStudentIds) ? item.assignedStudentIds : []),
-    ...(Array.isArray(item?.assignedEmails) ? item.assignedEmails : [])
-  ]
-}
-
-function isAssignedToCurrentUser(item, user, profile) {
-  const assignedValues = getAssignmentValues(item).map(normalizeId).filter(Boolean)
-  const currentUserValues = getCurrentUserAssignmentValues(user, profile)
-    .map(normalizeId)
-    .filter(Boolean)
-
-  if (assignedValues.length === 0) return false
-
-  return currentUserValues.some(value => assignedValues.includes(value))
-}
-
-function isHiddenForCurrentUser(item, user, profile) {
-  if (!Array.isArray(item?.hiddenFor)) return false
-
-  const hiddenValues = item.hiddenFor.map(normalizeId).filter(Boolean)
-  const currentUserValues = getCurrentUserAssignmentValues(user, profile)
-    .map(normalizeId)
-    .filter(Boolean)
-
-  return currentUserValues.some(value => hiddenValues.includes(value))
-}
-
 // REPAIR 08B: load a linked source without assigning it as standalone homework.
 // Read-first keeps this client compatible with both pre-08B and 08B rules.
 // If direct access is denied, request a source-scoped reference. The server
@@ -866,6 +814,7 @@ async function getAssignedMockResource({
   collectionName,
   sourceId,
   mockData,
+  mockAccess,
   currentUser,
   profile,
   isCurrent = () => true
@@ -891,8 +840,11 @@ async function getAssignedMockResource({
     !section || !validId(sourceId) || !validId(mockData?.id) ||
     !validId(currentUser?.uid) || profile?.role !== 'student' ||
     profile?.status !== 'approved' || profile?.deleted === true ||
-    !isAssignedToCurrentUser(mockData, currentUser, profile) ||
-    isHiddenForCurrentUser(mockData, currentUser, profile) ||
+    mockAccess?.uid !== currentUser.uid ||
+    mockAccess?.contentType !== 'mock' ||
+    mockAccess?.contentId !== mockData.id ||
+    mockAccess?.status !== 'active' ||
+    (mockAccess?.schoolId || 'maxima') !== (profile.schoolId || 'maxima') ||
     mockData.archived === true ||
     (mockData.schoolId || 'maxima') !== (profile.schoolId || 'maxima') ||
     !getMockEnabledSections(mockData)[section]
@@ -1112,6 +1064,40 @@ export default function DoMockTest() {
 
         setUser(currentUser)
 
+        // Stage 16F-G: studentAccess is the canonical Mock entitlement.
+        const accessId = `${currentUser.uid}_mock_${id}`
+        let accessSnap
+
+        try {
+          accessSnap = await getDocFromServer(doc(db, 'studentAccess', accessId))
+        } catch (accessError) {
+          if (!isCurrent()) return
+
+          if (accessError?.code === 'permission-denied') {
+            throw new Error('This Mock Test is not assigned to you.')
+          }
+
+          throw accessError
+        }
+
+        if (!isCurrent()) return
+
+        if (!accessSnap.exists()) {
+          throw new Error('This Mock Test is not assigned to you.')
+        }
+
+        const mockAccess = accessSnap.data() || {}
+
+        if (
+          mockAccess.uid !== currentUser.uid ||
+          mockAccess.contentType !== 'mock' ||
+          mockAccess.contentId !== id ||
+          mockAccess.status !== 'active' ||
+          (mockAccess.schoolId || 'maxima') !== (profile.schoolId || 'maxima')
+        ) {
+          throw new Error('This Mock Test is not active. Return to the dashboard and ask your teacher to check the assignment if you think this is a mistake.')
+        }
+
         const mockSnap = await getDocFromServer(doc(db, 'mockTests', id))
 
         if (!isCurrent()) return
@@ -1125,12 +1111,8 @@ export default function DoMockTest() {
           ...mockSnap.data()
         }
 
-        if (!isAssignedToCurrentUser(mockData, currentUser, profile)) {
-          throw new Error('This Mock Test is not assigned to you.')
-        }
-
-        if (isHiddenForCurrentUser(mockData, currentUser, profile) || mockData.archived === true) {
-          throw new Error('This Mock Test is hidden, archived, or no longer available.')
+        if (mockData.archived === true) {
+          throw new Error('This Mock Test is archived or no longer available.')
         }
 
         setMock(mockData)
@@ -1259,6 +1241,7 @@ export default function DoMockTest() {
             collectionName,
             sourceId,
             mockData,
+            mockAccess,
             currentUser,
             profile,
             isCurrent
