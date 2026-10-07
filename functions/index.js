@@ -568,6 +568,48 @@ exports.syncMockStudentAccess = onDocumentWritten('mockTests/{id}', event =>
   syncStudentAccessWrite(event, 'mock', 'mockTests')
 )
 
+// Stage 16G-B2: canonical assignment reader for staff edit screens. This keeps
+// assignment UI state sourced from studentAccess instead of stale legacy arrays.
+exports.getContentStudentAccess = onCall(async request => {
+  const manager = await requireAssignmentManager(request)
+  const data = request.data || {}
+  const config = accessContentConfigFor(data.contentType)
+  const contentId = assertDocumentId(data.contentId, 'Content ID')
+  const source = await getSource(config.sourceCollection, contentId)
+
+  if (!managerCanManageSource(manager, source)) {
+    throw new HttpsError('permission-denied', 'You cannot view assignments for this content.')
+  }
+
+  const sourceSchoolId = schoolIdOf(source)
+  const currentSnap = await db.collection('studentAccess')
+    .where('contentId', '==', contentId)
+    .get()
+
+  const studentIds = []
+  for (const docSnap of currentSnap.docs) {
+    const access = docSnap.data() || {}
+    if (
+      access.contentType === config.contentType &&
+      access.sourceCollection === config.sourceCollection &&
+      schoolIdOf(access) === sourceSchoolId &&
+      access.accessType === 'assignment' &&
+      access.status === 'active' &&
+      typeof access.uid === 'string' &&
+      access.uid
+    ) {
+      studentIds.push(access.uid)
+    }
+  }
+
+  return {
+    ok: true,
+    contentType: config.contentType,
+    contentId,
+    studentIds: uniqueStrings(studentIds)
+  }
+})
+
 // Stage 16G-B: canonical assignment writer. Existing Create/Teacher screens are
 // migrated to this callable in later 16G steps; legacy source arrays remain
 // temporarily as a compatibility bridge until every writer has cut over.
