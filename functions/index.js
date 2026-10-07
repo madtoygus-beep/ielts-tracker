@@ -626,7 +626,7 @@ exports.setContentStudentAccess = onCall(async request => {
   }
 
   const sourceSchoolId = schoolIdOf(source)
-  await loadAssignableStudents(studentIds, sourceSchoolId)
+  const selectedStudents = await loadAssignableStudents(studentIds, sourceSchoolId)
 
   const currentSnap = await db.collection('studentAccess')
     .where('contentId', '==', contentId)
@@ -684,6 +684,33 @@ exports.setContentStudentAccess = onCall(async request => {
 
   await commitAccessOperations(operations)
 
+  // Temporary Stage 16G compatibility bridge: keep legacy assignment arrays
+  // synchronized from the canonical writer until every Teacher/Create writer
+  // and the legacy Firestore triggers have been retired. Clients no longer
+  // need to write these fields directly once they cut over to this callable.
+  const selectedEmails = uniqueStrings(
+    selectedStudents
+      .map(student => student.profile?.email)
+      .filter(Boolean)
+  ).map(email => email.toLowerCase())
+
+  const selectedLegacyValues = new Set(
+    uniqueStrings([...studentIds, ...selectedEmails]).map(value => value.toLowerCase())
+  )
+
+  const bridgedHiddenFor = uniqueStrings(
+    Array.isArray(source?.hiddenFor) ? source.hiddenFor : []
+  ).filter(value => !selectedLegacyValues.has(value.toLowerCase()))
+
+  await db.doc(`${config.sourceCollection}/${contentId}`).set({
+    assignTo: studentIds,
+    assignedTo: [],
+    studentIds: [],
+    assignedStudentIds: studentIds,
+    assignedEmails: selectedEmails,
+    hiddenFor: bridgedHiddenFor
+  }, { merge: true })
+
   return {
     ok: true,
     contentType: config.contentType,
@@ -692,7 +719,8 @@ exports.setContentStudentAccess = onCall(async request => {
     created,
     updated,
     removed,
-    inactive
+    inactive,
+    legacyBridgeUpdated: true
   }
 })
 
