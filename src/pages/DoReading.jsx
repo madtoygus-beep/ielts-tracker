@@ -15,88 +15,8 @@ import { useNavigate, useParams } from 'react-router-dom'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
-const syncMyObjectiveAssignments = httpsCallable(functions, 'syncMyObjectiveAssignments')
 const submitReadingSecure = httpsCallable(functions, 'submitReadingSecure')
 const getCompletedObjectiveReview = httpsCallable(functions, 'getCompletedObjectiveReview')
-
-function normalizeId(value) {
-  return value === undefined || value === null
-    ? ''
-    : value.toString().trim().toLowerCase()
-}
-
-function uniqueCleanValues(values) {
-  return Array.from(
-    new Set(
-      values
-        .filter(value => value !== undefined && value !== null)
-        .map(value => value.toString().trim())
-        .filter(Boolean)
-    )
-  )
-}
-
-function getSourceTeacherIds(source) {
-  const explicitTeacherIds = Array.isArray(source?.teacherIds)
-    ? source.teacherIds
-    : []
-
-  if (explicitTeacherIds.length > 0) {
-    return uniqueCleanValues(explicitTeacherIds)
-  }
-
-  return uniqueCleanValues([
-    source?.teacherId,
-    source?.createdBy
-  ])
-}
-
-function getCurrentUserAssignmentValues(user, profile) {
-  if (!user) return []
-
-  return uniqueCleanValues([
-    user.uid,
-    user.email,
-    user.email?.toLowerCase(),
-    profile?.uid,
-    profile?.id,
-    profile?.email,
-    profile?.email?.toLowerCase()
-  ])
-}
-
-function getAssignmentValues(item) {
-  return [
-    ...(Array.isArray(item?.assignTo) ? item.assignTo : []),
-    ...(Array.isArray(item?.assignedTo) ? item.assignedTo : []),
-    ...(Array.isArray(item?.studentIds) ? item.studentIds : []),
-    ...(Array.isArray(item?.assignedStudentIds) ? item.assignedStudentIds : []),
-    ...(Array.isArray(item?.assignedEmails) ? item.assignedEmails : [])
-  ]
-}
-
-function isAssignedToCurrentUser(item, user, profile) {
-  const assignedValues = getAssignmentValues(item).map(normalizeId).filter(Boolean)
-  const currentUserValues = getCurrentUserAssignmentValues(user, profile)
-    .map(normalizeId)
-    .filter(Boolean)
-
-  if (assignedValues.length === 0) return false
-
-  return currentUserValues.some(value => assignedValues.includes(value))
-}
-
-function isHiddenForCurrentUser(item, user, profile) {
-  if (!Array.isArray(item?.hiddenFor)) return false
-
-  const hiddenValues = item.hiddenFor.map(normalizeId).filter(Boolean)
-  const currentUserValues = getCurrentUserAssignmentValues(user, profile)
-    .map(normalizeId)
-    .filter(Boolean)
-
-  return currentUserValues.some(value => hiddenValues.includes(value))
-}
-
 
 function getBandFromPercentage(correct, total) {
   const percentage = total ? correct / total : 0
@@ -245,20 +165,59 @@ export default function DoReading() {
       setUser(currentUser)
       setLoadError(null)
 
-      // 8D-2: students load the answer-key-free projection, never the source reading.
-      let snap = await getDocFromServer(doc(db, 'studentReadings', id))
+      // Stage 16F-C: studentAccess is the canonical standalone entitlement.
+      // Mock-only passage access must stay inside DoMockTest, so this page checks
+      // the deterministic standalone Reading access document before loading content.
+      const accessId = `${currentUser.uid}_reading_${id}`
+      let accessSnap
+
+      try {
+        accessSnap = await getDocFromServer(doc(db, 'studentAccess', accessId))
+      } catch (accessError) {
+        if (!isCurrent()) return
+
+        if (accessError?.code === 'permission-denied') {
+          setLoadError({
+            title: 'This reading is not assigned as standalone homework.',
+            message: 'If this passage belongs to your mock test, open the mock from your dashboard instead.',
+            readingId: id
+          })
+          return
+        }
+
+        throw accessError
+      }
+
       if (!isCurrent()) return
 
-      // Older assignments may predate the projection collections. Refresh only when needed.
-      if (!snap.exists()) {
-        try {
-          await syncMyObjectiveAssignments({})
-          if (!isCurrent()) return
-          snap = await getDocFromServer(doc(db, 'studentReadings', id))
-        } catch (syncError) {
-          console.warn('Could not refresh sanitized reading assignments:', syncError)
-        }
+      if (!accessSnap.exists()) {
+        setLoadError({
+          title: 'This reading is not assigned as standalone homework.',
+          message: 'If this passage belongs to your mock test, open the mock from your dashboard instead.',
+          readingId: id
+        })
+        return
       }
+
+      const access = accessSnap.data() || {}
+
+      if (
+        access.uid !== currentUser.uid ||
+        access.contentType !== 'reading' ||
+        access.contentId !== id ||
+        access.status !== 'active'
+      ) {
+        setLoadError({
+          title: 'This reading homework is not active.',
+          message: 'Return to the dashboard and ask your teacher to check the assignment if you think this is a mistake.',
+          readingId: id
+        })
+        return
+      }
+
+      // 8D-2: students load the answer-key-free projection, never the source reading.
+      const snap = await getDocFromServer(doc(db, 'studentReadings', id))
+      if (!isCurrent()) return
 
       if (!snap.exists()) {
         setLoadError({
@@ -273,29 +232,6 @@ export default function DoReading() {
         id: snap.id,
         ...snap.data()
       }
-
-      // REPAIR 08B: this route is standalone homework, not a Mock entry point.
-      // A source authorized only through a Mock must be opened inside that Mock.
-      if (!isAssignedToCurrentUser(data, currentUser, profile)) {
-        setLoadError({
-          title: 'This reading is not assigned as standalone homework.',
-          message: 'If this passage belongs to your mock test, open the mock from your dashboard instead.',
-          readingId: data.id
-        })
-        return
-      }
-
-      if (isHiddenForCurrentUser(data, currentUser, profile) || data.archived === true) {
-        setLoadError({
-          title: 'This reading homework is hidden or archived.',
-          message: 'DoReading is working, but this item is marked as hidden/archived for this student. Check hiddenFor and archived fields in Firestore.',
-          readingId: data.id,
-          archived: data.archived === true,
-          hiddenFor: data.hiddenFor || []
-        })
-        return
-      }
-
 
       let locallySavedHighlights = []
 
