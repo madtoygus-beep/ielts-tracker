@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { auth, db, storage } from '../firebase'
+import { auth, db, functions, storage } from '../firebase'
 import {
   addDoc,
   collection,
@@ -11,6 +11,7 @@ import {
   where
 } from 'firebase/firestore'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
+import { httpsCallable } from 'firebase/functions'
 import {
   getDownloadURL,
   ref,
@@ -26,6 +27,9 @@ const MAX_MAP_IMAGE_SIZE = 8 * 1024 * 1024
 
 const ACCEPTED_AUDIO_EXTENSIONS = ['mp3', 'm4a', 'wav', 'aac', 'mpeg', 'mp4']
 const ACCEPTED_IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp']
+
+const getContentStudentAccessCall = httpsCallable(functions, 'getContentStudentAccess')
+const setContentStudentAccessCall = httpsCallable(functions, 'setContentStudentAccess')
 
 function isAcceptedAudioFile(file) {
   if (!file) return false
@@ -438,18 +442,16 @@ export default function CreateListening() {
         setDueDate(data.dueDate || '')
         setTimeLimit(data.timeLimit || 30)
 
-        setAssignTo(
-          Array.from(
-            new Set([
-              ...(Array.isArray(data.assignTo) ? data.assignTo : []),
-              ...(Array.isArray(data.assignedTo) ? data.assignedTo : []),
-              ...(Array.isArray(data.studentIds) ? data.studentIds : []),
-              ...(Array.isArray(data.assignedStudentIds)
-                ? data.assignedStudentIds
-                : [])
-            ])
-          )
-        )
+        const assignmentResult = await getContentStudentAccessCall({
+          contentType: 'listening',
+          contentId: id
+        })
+
+        const canonicalStudentIds = Array.isArray(assignmentResult.data?.studentIds)
+          ? assignmentResult.data.studentIds.filter(Boolean)
+          : []
+
+        setAssignTo(canonicalStudentIds)
 
         const loadedParts = normalizeParts(data)
         setParts(loadedParts)
@@ -1965,11 +1967,6 @@ export default function CreateListening() {
       instructions,
       dueDate,
       timeLimit: Number(timeLimit) || 30,
-      assignTo,
-      assignedTo: [],
-      studentIds: [],
-      assignedStudentIds: selectedStudents.map(student => student.id),
-      assignedEmails: selectedStudents.map(student => student.email?.toLowerCase()).filter(Boolean),
       schoolId: getProfileSchoolId(profile),
       parts: cleanParts,
       questions: cleanParts.flatMap(part =>
@@ -1983,10 +1980,12 @@ export default function CreateListening() {
     }
 
     try {
+      let savedListeningId = id
+
       if (isEditMode) {
         await updateDoc(doc(db, 'listenings', id), payload)
       } else {
-        await addDoc(collection(db, 'listenings'), {
+        const createdListening = await addDoc(collection(db, 'listenings'), {
           ...payload,
           createdBy: user.uid,
           teacherId: profile?.role === 'teacher' ? user.uid : '',
@@ -1994,6 +1993,32 @@ export default function CreateListening() {
           createdAt: new Date().toISOString(),
           archived: false
         })
+        savedListeningId = createdListening.id
+      }
+
+      try {
+        await setContentStudentAccessCall({
+          contentType: 'listening',
+          contentId: savedListeningId,
+          studentIds: assignTo
+        })
+      } catch (assignmentError) {
+        console.error('Could not synchronize listening assignments:', assignmentError)
+
+        if (!isEditMode && savedListeningId) {
+          alert(
+            'The listening homework was created, but student assignments could not be synchronized. ' +
+            'You will be taken to the edit screen so you can retry without creating a duplicate.'
+          )
+          navigate(`/edit-listening/${savedListeningId}`, { replace: true })
+          return
+        }
+
+        alert(
+          `The listening changes were saved, but student assignments could not be synchronized. ` +
+          `Please try saving again. ${assignmentError?.message || ''}`
+        )
+        return
       }
 
       setSaved(true)
