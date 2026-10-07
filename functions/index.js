@@ -47,6 +47,20 @@ const OBJECTIVE_CONFIG = {
   }
 }
 
+const ACCESS_CONTENT_CONFIG = {
+  reading: OBJECTIVE_CONFIG.reading,
+  listening: OBJECTIVE_CONFIG.listening,
+  vocabulary: OBJECTIVE_CONFIG.vocabulary,
+  writing: {
+    contentType: 'writing',
+    sourceCollection: 'writingHomeworks'
+  },
+  mock: {
+    contentType: 'mock',
+    sourceCollection: 'mockTests'
+  }
+}
+
 function asString(value) {
   return value === undefined || value === null ? '' : value.toString()
 }
@@ -326,6 +340,103 @@ async function requireStudent(request) {
   }
 }
 
+function accessContentConfigFor(type) {
+  const key = typeof type === 'string' ? type.trim() : ''
+  const config = ACCESS_CONTENT_CONFIG[key]
+  if (!config) {
+    throw new HttpsError('invalid-argument', 'Unsupported content type.')
+  }
+  return {
+    contentType: config.contentType,
+    sourceCollection: config.sourceCollection
+  }
+}
+
+async function requireAssignmentManager(request) {
+  if (!request.auth?.uid) {
+    throw new HttpsError('unauthenticated', 'Please sign in again.')
+  }
+
+  const uid = request.auth.uid
+  const userSnap = await db.doc(`users/${uid}`).get()
+  if (!userSnap.exists) {
+    throw new HttpsError('permission-denied', 'Staff profile was not found.')
+  }
+
+  const profile = userSnap.data() || {}
+  const allowedRole = profile.role === 'teacher' || profile.role === 'admin'
+  if (!allowedRole || profile.status !== 'approved' || profile.deleted === true) {
+    throw new HttpsError('permission-denied', 'This account cannot manage assignments.')
+  }
+
+  return { uid, profile }
+}
+
+function assertStudentUidList(value) {
+  if (!Array.isArray(value)) {
+    throw new HttpsError('invalid-argument', 'Student IDs must be an array.')
+  }
+  if (value.length > 250) {
+    throw new HttpsError('invalid-argument', 'Too many students were selected at once.')
+  }
+
+  return uniqueStrings(value).map(uid => assertDocumentId(uid, 'Student ID'))
+}
+
+function managerCanManageSource(manager, source) {
+  if (manager.profile.role === 'admin') return true
+  return schoolIdOf(source) === schoolIdOf(manager.profile)
+    && teacherIdsOf(source).includes(manager.uid)
+}
+
+async function loadAssignableStudents(studentIds, schoolId) {
+  if (studentIds.length === 0) return []
+
+  const refs = studentIds.map(uid => db.doc(`users/${uid}`))
+  const snaps = await db.getAll(...refs)
+  const students = []
+
+  for (let index = 0; index < snaps.length; index++) {
+    const snap = snaps[index]
+    const uid = studentIds[index]
+    if (!snap.exists) {
+      throw new HttpsError('failed-precondition', `Student ${uid} no longer exists.`)
+    }
+
+    const profile = snap.data() || {}
+    if (
+      profile.role !== 'student' ||
+      profile.status !== 'approved' ||
+      profile.deleted === true ||
+      schoolIdOf(profile) !== schoolId
+    ) {
+      throw new HttpsError(
+        'failed-precondition',
+        `Student ${uid} is not an active student in this school.`
+      )
+    }
+
+    students.push({ uid, profile })
+  }
+
+  return students
+}
+
+async function commitAccessOperations(operations) {
+  const chunkSize = 400
+  for (let start = 0; start < operations.length; start += chunkSize) {
+    const batch = db.batch()
+    for (const operation of operations.slice(start, start + chunkSize)) {
+      if (operation.type === 'delete') {
+        batch.delete(operation.ref)
+      } else {
+        batch.set(operation.ref, operation.data, { merge: true })
+      }
+    }
+    await batch.commit()
+  }
+}
+
 async function requireActiveStudentAccess({
   student,
   contentType,
@@ -456,6 +567,92 @@ exports.syncWritingStudentAccess = onDocumentWritten('writingHomeworks/{id}', ev
 exports.syncMockStudentAccess = onDocumentWritten('mockTests/{id}', event =>
   syncStudentAccessWrite(event, 'mock', 'mockTests')
 )
+
+// Stage 16G-B: canonical assignment writer. Existing Create/Teacher screens are
+// migrated to this callable in later 16G steps; legacy source arrays remain
+// temporarily as a compatibility bridge until every writer has cut over.
+exports.setContentStudentAccess = onCall(async request => {
+  const manager = await requireAssignmentManager(request)
+  const data = request.data || {}
+  const config = accessContentConfigFor(data.contentType)
+  const contentId = assertDocumentId(data.contentId, 'Content ID')
+  const studentIds = assertStudentUidList(data.studentIds)
+  const source = await getSource(config.sourceCollection, contentId)
+
+  if (!managerCanManageSource(manager, source)) {
+    throw new HttpsError('permission-denied', 'You cannot manage assignments for this content.')
+  }
+
+  const sourceSchoolId = schoolIdOf(source)
+  await loadAssignableStudents(studentIds, sourceSchoolId)
+
+  const currentSnap = await db.collection('studentAccess')
+    .where('contentId', '==', contentId)
+    .get()
+
+  const currentAssignments = new Map()
+  for (const docSnap of currentSnap.docs) {
+    const access = docSnap.data() || {}
+    if (
+      access.contentType === config.contentType &&
+      access.sourceCollection === config.sourceCollection &&
+      schoolIdOf(access) === sourceSchoolId &&
+      access.accessType === 'assignment' &&
+      typeof access.uid === 'string' &&
+      access.uid
+    ) {
+      currentAssignments.set(access.uid, { ref: docSnap.ref, access })
+    }
+  }
+
+  const targetSet = new Set(studentIds)
+  const operations = []
+  let created = 0
+  let updated = 0
+  let removed = 0
+  let inactive = 0
+
+  for (const uid of studentIds) {
+    const existing = currentAssignments.get(uid)
+    const ref = db.doc(`studentAccess/${studentAccessId(uid, config.contentType, contentId)}`)
+    const payload = studentAccessPayload(
+      config.contentType,
+      config.sourceCollection,
+      contentId,
+      source,
+      uid
+    )
+
+    if (!existing) {
+      payload.assignedAt = FieldValue.serverTimestamp()
+      created++
+    } else {
+      updated++
+    }
+    if (payload.status !== 'active') inactive++
+
+    operations.push({ type: 'set', ref, data: payload })
+  }
+
+  for (const [uid, existing] of currentAssignments.entries()) {
+    if (targetSet.has(uid)) continue
+    operations.push({ type: 'delete', ref: existing.ref })
+    removed++
+  }
+
+  await commitAccessOperations(operations)
+
+  return {
+    ok: true,
+    contentType: config.contentType,
+    contentId,
+    assigned: studentIds.length,
+    created,
+    updated,
+    removed,
+    inactive
+  }
+})
 
 function mockLinkedIds(mock, type) {
   if (type === 'reading') {
