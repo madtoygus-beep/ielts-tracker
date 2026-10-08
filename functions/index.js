@@ -84,16 +84,6 @@ function teacherIdsOf(data) {
   return uniqueStrings([data?.teacherId, data?.createdBy])
 }
 
-function assignmentValues(data) {
-  return uniqueStrings([
-    ...(Array.isArray(data?.assignTo) ? data.assignTo : []),
-    ...(Array.isArray(data?.assignedTo) ? data.assignedTo : []),
-    ...(Array.isArray(data?.studentIds) ? data.studentIds : []),
-    ...(Array.isArray(data?.assignedStudentIds) ? data.assignedStudentIds : []),
-    ...(Array.isArray(data?.assignedEmails) ? data.assignedEmails : [])
-  ]).map(value => value.toLowerCase())
-}
-
 const STUDENT_ACCESS_SCHEMA_VERSION = 1
 const REVIEW_POLICIES = new Set(['immediate', 'teacher_release', 'scheduled', 'never'])
 
@@ -101,27 +91,9 @@ function looksLikeEmail(value) {
   return typeof value === 'string' && value.includes('@')
 }
 
-function assignedUidValues(data) {
-  const explicit = uniqueStrings([
-    ...(Array.isArray(data?.studentIds) ? data.studentIds : []),
-    ...(Array.isArray(data?.assignedStudentIds) ? data.assignedStudentIds : [])
-  ])
-
-  const compatible = uniqueStrings([
-    ...(Array.isArray(data?.assignTo) ? data.assignTo : []),
-    ...(Array.isArray(data?.assignedTo) ? data.assignedTo : [])
-  ]).filter(value => !looksLikeEmail(value))
-
-  return uniqueStrings([...explicit, ...compatible])
-}
-
 function hiddenUidValues(data) {
   return uniqueStrings(Array.isArray(data?.hiddenFor) ? data.hiddenFor : [])
     .filter(value => !looksLikeEmail(value))
-}
-
-function hasAnyAssignmentSignal(data) {
-  return assignmentValues(data).length > 0
 }
 
 function studentAccessId(uid, contentType, contentId) {
@@ -156,84 +128,40 @@ function studentAccessPayload(contentType, sourceCollection, contentId, source, 
   }
 }
 
-async function syncStudentAccessChange({
+async function cleanupStudentAccessForDeletedContent({
   contentType,
   sourceCollection,
-  contentId,
-  beforeSource,
-  afterSource
+  contentId
 }) {
-  if (!contentId) return
+  if (!contentId) return 0
 
-  const beforeUids = assignedUidValues(beforeSource)
-  const afterUids = assignedUidValues(afterSource)
-  const beforeSet = new Set(beforeUids)
-  const afterSet = new Set(afterUids)
+  const snap = await db.collection('studentAccess')
+    .where('contentId', '==', contentId)
+    .get()
 
-  // If a legacy record contains only email-based assignment values, do not
-  // infer removals here. Stage 16E backfill resolves those records safely.
-  const afterHasUnresolvedLegacyAssignment =
-    Boolean(afterSource) &&
-    hasAnyAssignmentSignal(afterSource) &&
-    afterUids.length === 0
-
-  const batch = db.batch()
-  let writes = 0
-
-  if (afterSource) {
-    for (const uid of afterUids) {
-      const ref = db.doc(`studentAccess/${studentAccessId(uid, contentType, contentId)}`)
-      const payload = studentAccessPayload(
-        contentType,
-        sourceCollection,
-        contentId,
-        afterSource,
-        uid
-      )
-
-      if (!beforeSet.has(uid)) {
-        payload.assignedAt = FieldValue.serverTimestamp()
-      }
-
-      batch.set(ref, payload, { merge: true })
-      writes++
-    }
-  }
-
-  if (!afterHasUnresolvedLegacyAssignment) {
-    for (const uid of beforeUids) {
-      if (afterSet.has(uid)) continue
-      const ref = db.doc(`studentAccess/${studentAccessId(uid, contentType, contentId)}`)
-      batch.delete(ref)
-      writes++
-    }
-  } else {
-    console.warn(
-      `Skipped studentAccess removals for ${sourceCollection}/${contentId}: ` +
-      'legacy email-only assignments need Stage 16E resolution.'
+  const operations = snap.docs
+    .map(docSnap => ({ docSnap, access: docSnap.data() || {} }))
+    .filter(({ access }) =>
+      access.accessType === 'assignment' &&
+      access.contentType === contentType &&
+      access.sourceCollection === sourceCollection
     )
-  }
+    .map(({ docSnap }) => ({ type: 'delete', ref: docSnap.ref }))
 
-  if (writes > 0) {
-    await batch.commit()
-  }
+  await commitAccessOperations(operations)
+  return operations.length
 }
 
-async function syncStudentAccessWrite(event, contentType, sourceCollection) {
+async function cleanupStudentAccessOnSourceDelete(event, contentType, sourceCollection) {
   const id = event.params?.id
-  if (!id) return
-
-  const before = event.data?.before
   const after = event.data?.after
-  const beforeSource = before?.exists ? (before.data() || {}) : null
-  const afterSource = after?.exists ? (after.data() || {}) : null
 
-  await syncStudentAccessChange({
+  if (!id || after?.exists) return
+
+  await cleanupStudentAccessForDeletedContent({
     contentType,
     sourceCollection,
-    contentId: id,
-    beforeSource,
-    afterSource
+    contentId: id
   })
 }
 
@@ -523,37 +451,22 @@ async function writeProjection(config, id, source) {
 
 async function mirrorWrite(event, config) {
   const after = event.data?.after
-  const before = event.data?.before
   const id = event.params?.id
   if (!id) return
-
-  const beforeSource = before?.exists ? (before.data() || {}) : null
-  const afterSource = after?.exists ? (after.data() || {}) : null
 
   if (!after?.exists) {
     await Promise.all([
       db.doc(`${config.publicCollection}/${id}`).delete().catch(() => {}),
-      syncStudentAccessChange({
+      cleanupStudentAccessForDeletedContent({
         contentType: config.contentType,
         sourceCollection: config.sourceCollection,
-        contentId: id,
-        beforeSource,
-        afterSource: null
+        contentId: id
       })
     ])
     return
   }
 
-  await Promise.all([
-    writeProjection(config, id, afterSource),
-    syncStudentAccessChange({
-      contentType: config.contentType,
-      sourceCollection: config.sourceCollection,
-      contentId: id,
-      beforeSource,
-      afterSource
-    })
-  ])
+  await writeProjection(config, id, after.data() || {})
 }
 
 exports.mirrorReadingForStudents = onDocumentWritten('readings/{id}', event =>
@@ -568,12 +481,15 @@ exports.mirrorVocabularyForStudents = onDocumentWritten('vocabularyTests/{id}', 
   mirrorWrite(event, OBJECTIVE_CONFIG.vocabulary)
 )
 
+// Stage 16G-I3: keep these deployed trigger names during the transition, but
+// retire legacy assignment-array syncing. They now clean canonical access only
+// when the source content is physically deleted.
 exports.syncWritingStudentAccess = onDocumentWritten('writingHomeworks/{id}', event =>
-  syncStudentAccessWrite(event, 'writing', 'writingHomeworks')
+  cleanupStudentAccessOnSourceDelete(event, 'writing', 'writingHomeworks')
 )
 
 exports.syncMockStudentAccess = onDocumentWritten('mockTests/{id}', event =>
-  syncStudentAccessWrite(event, 'mock', 'mockTests')
+  cleanupStudentAccessOnSourceDelete(event, 'mock', 'mockTests')
 )
 
 // Stage 16G-B2: canonical assignment reader for staff edit screens. This keeps
