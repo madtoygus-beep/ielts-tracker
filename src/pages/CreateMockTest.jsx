@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { auth, db } from '../firebase'
+import { auth, db, functions } from '../firebase'
 import {
   addDoc,
   collection,
@@ -11,9 +11,13 @@ import {
   where
 } from 'firebase/firestore'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
+import { httpsCallable } from 'firebase/functions'
 import { useNavigate, useParams } from 'react-router-dom'
 
 const DEFAULT_SCHOOL_ID = 'maxima'
+
+const getContentStudentAccessCall = httpsCallable(functions, 'getContentStudentAccess')
+const setContentStudentAccessCall = httpsCallable(functions, 'setContentStudentAccess')
 
 const FULL_MOCK_TIMES = {
   listening: 35,
@@ -460,18 +464,16 @@ export default function CreateMockTest() {
         setReadingIds([...loadedReadingIds, '', '', ''].slice(0, 3))
         setWritingId(data.writingId || '')
 
-        setAssignTo(
-          Array.from(
-            new Set([
-              ...(Array.isArray(data.assignTo) ? data.assignTo : []),
-              ...(Array.isArray(data.assignedTo) ? data.assignedTo : []),
-              ...(Array.isArray(data.studentIds) ? data.studentIds : []),
-              ...(Array.isArray(data.assignedStudentIds)
-                ? data.assignedStudentIds
-                : [])
-            ])
-          )
-        )
+        const assignmentResult = await getContentStudentAccessCall({
+          contentType: 'mock',
+          contentId: id
+        })
+
+        const canonicalStudentIds = Array.isArray(assignmentResult.data?.studentIds)
+          ? assignmentResult.data.studentIds.filter(Boolean)
+          : []
+
+        setAssignTo(canonicalStudentIds)
       } catch (error) {
         console.error('Could not load mock test for editing:', error)
         alert(
@@ -1006,13 +1008,6 @@ export default function CreateMockTest() {
       writingMode: selectedWritingMode,
       sectionTimeLimits: cleanSectionTimeLimits,
       totalTimeMinutes: savedTotalTimeMinutes,
-      assignTo,
-      assignedTo: [],
-      studentIds: [],
-      assignedStudentIds: selectedStudents.map(student => student.id),
-      assignedEmails: selectedStudents
-        .map(student => student.email?.toLowerCase())
-        .filter(Boolean),
       schoolId: getProfileSchoolId(profile),
       mode: 'single-page-flow',
       updatedAt: now,
@@ -1020,6 +1015,8 @@ export default function CreateMockTest() {
     }
 
     try {
+      let savedMockId = id
+
       if (isEditMode) {
         await updateDoc(doc(db, 'mockTests', id), {
           ...payload,
@@ -1036,7 +1033,7 @@ export default function CreateMockTest() {
                 : []
         })
       } else {
-        await addDoc(collection(db, 'mockTests'), {
+        const createdMock = await addDoc(collection(db, 'mockTests'), {
           ...payload,
           teacherId: profile?.role === 'teacher' ? user.uid : '',
           teacherIds: profile?.role === 'teacher' ? [user.uid] : [],
@@ -1044,6 +1041,32 @@ export default function CreateMockTest() {
           createdAt: now,
           archived: false
         })
+        savedMockId = createdMock.id
+      }
+
+      try {
+        await setContentStudentAccessCall({
+          contentType: 'mock',
+          contentId: savedMockId,
+          studentIds: assignTo
+        })
+      } catch (assignmentError) {
+        console.error('Could not synchronize mock assignments:', assignmentError)
+
+        if (!isEditMode && savedMockId) {
+          alert(
+            'The mock test was created, but student assignments could not be synchronized. ' +
+            'You will be taken to the edit screen so you can retry without creating a duplicate.'
+          )
+          navigate(`/edit-mock/${savedMockId}`, { replace: true })
+          return
+        }
+
+        alert(
+          `The mock test changes were saved, but student assignments could not be synchronized. ` +
+          `Please try saving again. ${assignmentError?.message || ''}`
+        )
+        return
       }
 
       setSaved(true)
