@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { auth, db } from '../firebase'
+import { auth, db, functions } from '../firebase'
 import {
   collection,
   onSnapshot,
@@ -9,14 +9,18 @@ import {
   deleteDoc,
   getDocs,
   query,
-  where,
-  arrayUnion,
-  arrayRemove
+  where
 } from 'firebase/firestore'
 import { signOut, onAuthStateChanged, sendPasswordResetEmail } from 'firebase/auth'
+import { httpsCallable } from 'firebase/functions'
 import { useNavigate } from 'react-router-dom'
 
 const DEFAULT_SCHOOL_ID = 'maxima'
+
+const setStudentAssignmentVisibilityCall = httpsCallable(
+  functions,
+  'setStudentAssignmentVisibility'
+)
 
 export default function AdminDashboard() {
   const [users, setUsers] = useState([])
@@ -238,87 +242,25 @@ export default function AdminDashboard() {
     Boolean(item.mockTestId) ||
     Boolean(item.mockId)
 
-  const getStudentReferenceValues = student => {
-    return Array.from(
-      new Set(
-        [
-          student?.id,
-          student?.uid,
-          student?.authUid,
-          student?.email,
-          student?.email?.toLowerCase()
-        ]
-          .filter(value => value !== undefined && value !== null)
-          .map(value => value.toString().trim())
-          .filter(Boolean)
-      )
-    )
-  }
+  const updateAssignmentsVisibilityForStudent = async (student, scope, hidden) => {
+    if (!student?.id) return 0
 
-  const updateAssignmentsVisibilityForStudent = async (collectionNames, student, hidden) => {
-    const referenceValues = getStudentReferenceValues(student)
-    const assignmentFields = [
-      'assignTo',
-      'assignedTo',
-      'studentIds',
-      'assignedStudentIds',
-      'assignedEmails'
-    ]
-    const updatedDocumentKeys = new Set()
-    let updatedCount = 0
+    const result = await setStudentAssignmentVisibilityCall({
+      studentId: student.id,
+      scope,
+      hidden
+    })
 
-    if (referenceValues.length === 0) return 0
-
-    for (const collectionName of collectionNames) {
-      for (const field of assignmentFields) {
-        for (const referenceValue of referenceValues) {
-          const q = query(
-            collection(db, collectionName),
-            where(field, 'array-contains', referenceValue)
-          )
-
-          const snap = await getDocs(q)
-
-          for (const item of snap.docs) {
-            const documentKey = `${collectionName}/${item.id}`
-            if (updatedDocumentKeys.has(documentKey)) continue
-
-            await updateDoc(doc(db, collectionName, item.id), {
-              hiddenFor: hidden
-                ? arrayUnion(...referenceValues)
-                : arrayRemove(...referenceValues),
-              updatedAt: new Date().toISOString()
-            })
-
-            updatedDocumentKeys.add(documentKey)
-            updatedCount++
-          }
-        }
-      }
-    }
-
-    return updatedCount
+    const affectedAssignments = Number(result.data?.affectedAssignments)
+    return Number.isFinite(affectedAssignments) ? affectedAssignments : 0
   }
 
   const updateHomeworkAssignmentsVisibility = async (student, hidden) => {
-    return updateAssignmentsVisibilityForStudent(
-      [
-        'readings',
-        'listenings',
-        'writingHomeworks',
-        'vocabularyTests'
-      ],
-      student,
-      hidden
-    )
+    return updateAssignmentsVisibilityForStudent(student, 'homework', hidden)
   }
 
   const updateMockAssignmentsVisibility = async (student, hidden) => {
-    return updateAssignmentsVisibilityForStudent(
-      ['mockTests'],
-      student,
-      hidden
-    )
+    return updateAssignmentsVisibilityForStudent(student, 'mock', hidden)
   }
 
   const hideStudentRecords = async (student, type) => {

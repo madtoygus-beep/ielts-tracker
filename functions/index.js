@@ -372,6 +372,14 @@ async function requireAssignmentManager(request) {
   return { uid, profile }
 }
 
+async function requireAdmin(request) {
+  const manager = await requireAssignmentManager(request)
+  if (manager.profile.role !== 'admin') {
+    throw new HttpsError('permission-denied', 'Admin access is required for this action.')
+  }
+  return manager
+}
+
 function assertStudentUidList(value) {
   if (!Array.isArray(value)) {
     throw new HttpsError('invalid-argument', 'Student IDs must be an array.')
@@ -594,7 +602,6 @@ exports.getContentStudentAccess = onCall(async request => {
       access.sourceCollection === config.sourceCollection &&
       schoolIdOf(access) === sourceSchoolId &&
       access.accessType === 'assignment' &&
-      access.status === 'active' &&
       typeof access.uid === 'string' &&
       access.uid
     ) {
@@ -648,6 +655,14 @@ exports.setContentStudentAccess = onCall(async request => {
   }
 
   const targetSet = new Set(studentIds)
+  const selectedStudentByUid = new Map(
+    selectedStudents.map(student => [student.uid, student])
+  )
+  const sourceHiddenSet = new Set(
+    uniqueStrings(Array.isArray(source?.hiddenFor) ? source.hiddenFor : [])
+      .map(value => value.toLowerCase())
+  )
+  const effectiveAdminHiddenUids = new Set()
   const operations = []
   let created = 0
   let updated = 0
@@ -656,6 +671,18 @@ exports.setContentStudentAccess = onCall(async request => {
 
   for (const uid of studentIds) {
     const existing = currentAssignments.get(uid)
+    const selectedStudent = selectedStudentByUid.get(uid)
+    const legacyStudentValues = uniqueStrings([
+      uid,
+      selectedStudent?.profile?.uid,
+      selectedStudent?.profile?.authUid,
+      selectedStudent?.profile?.email,
+      selectedStudent?.profile?.email?.toLowerCase()
+    ])
+    const legacyHidden = legacyStudentValues.some(value =>
+      sourceHiddenSet.has(value.toLowerCase())
+    )
+    const adminHidden = existing?.access?.adminHidden === true || legacyHidden
     const ref = db.doc(`studentAccess/${studentAccessId(uid, config.contentType, contentId)}`)
     const payload = studentAccessPayload(
       config.contentType,
@@ -664,6 +691,12 @@ exports.setContentStudentAccess = onCall(async request => {
       source,
       uid
     )
+
+    if (adminHidden) {
+      payload.status = 'inactive'
+      payload.adminHidden = true
+      effectiveAdminHiddenUids.add(uid)
+    }
 
     if (!existing) {
       payload.assignedAt = FieldValue.serverTimestamp()
@@ -694,13 +727,23 @@ exports.setContentStudentAccess = onCall(async request => {
       .filter(Boolean)
   ).map(email => email.toLowerCase())
 
-  const selectedLegacyValues = new Set(
-    uniqueStrings([...studentIds, ...selectedEmails]).map(value => value.toLowerCase())
+  const adminHiddenLegacyValues = uniqueStrings(
+    selectedStudents.flatMap(student => {
+      if (!effectiveAdminHiddenUids.has(student.uid)) return []
+      return [
+        student.uid,
+        student.profile?.uid,
+        student.profile?.authUid,
+        student.profile?.email,
+        student.profile?.email?.toLowerCase()
+      ]
+    })
   )
 
-  const bridgedHiddenFor = uniqueStrings(
-    Array.isArray(source?.hiddenFor) ? source.hiddenFor : []
-  ).filter(value => !selectedLegacyValues.has(value.toLowerCase()))
+  // During the bridge, hiddenFor should describe only currently assigned
+  // students that are genuinely admin-hidden. This prevents stale legacy
+  // markers from silently hiding a student after a later re-assignment.
+  const bridgedHiddenFor = adminHiddenLegacyValues
 
   await db.doc(`${config.sourceCollection}/${contentId}`).set({
     assignTo: studentIds,
@@ -750,7 +793,7 @@ exports.setContentArchivedState = onCall(async request => {
     .where('contentId', '==', contentId)
     .get()
 
-  const targetStatus = archived ? 'inactive' : 'active'
+  const legacyHiddenUids = new Set(hiddenUidValues(source))
   const operations = []
 
   for (const docSnap of currentSnap.docs) {
@@ -763,11 +806,14 @@ exports.setContentArchivedState = onCall(async request => {
       typeof access.uid === 'string' &&
       access.uid
     ) {
+      const shouldStayInactive =
+        archived || access.adminHidden === true || legacyHiddenUids.has(access.uid)
+
       operations.push({
         type: 'set',
         ref: docSnap.ref,
         data: {
-          status: targetStatus,
+          status: shouldStayInactive ? 'inactive' : 'active',
           updatedAt: FieldValue.serverTimestamp()
         }
       })
@@ -798,6 +844,135 @@ exports.setContentArchivedState = onCall(async request => {
     contentId,
     archived,
     affectedAssignments: operations.length
+  }
+})
+
+// Stage 16G-I2A: admin-only replacement for legacy hiddenFor assignment
+// visibility. Submission/result archiving remains in AdminDashboard for now;
+// this callable only controls canonical assignment availability.
+exports.setStudentAssignmentVisibility = onCall(async request => {
+  const admin = await requireAdmin(request)
+  const data = request.data || {}
+  const studentId = assertDocumentId(data.studentId, 'Student ID')
+  const scope = typeof data.scope === 'string' ? data.scope.trim() : ''
+
+  if (scope !== 'homework' && scope !== 'mock') {
+    throw new HttpsError('invalid-argument', 'Visibility scope must be homework or mock.')
+  }
+  if (typeof data.hidden !== 'boolean') {
+    throw new HttpsError('invalid-argument', 'Hidden state must be true or false.')
+  }
+
+  const hidden = data.hidden
+  const studentSnap = await db.doc(`users/${studentId}`).get()
+  if (!studentSnap.exists) {
+    throw new HttpsError('not-found', 'Student profile was not found.')
+  }
+
+  const studentProfile = studentSnap.data() || {}
+  if (studentProfile.role !== 'student') {
+    throw new HttpsError('failed-precondition', 'The selected profile is not a student.')
+  }
+
+  const studentSchoolId = schoolIdOf(studentProfile)
+  const allowedTypes = scope === 'mock'
+    ? new Set(['mock'])
+    : new Set(['reading', 'listening', 'writing', 'vocabulary'])
+
+  const accessSnap = await db.collection('studentAccess')
+    .where('uid', '==', studentId)
+    .get()
+
+  const candidates = accessSnap.docs
+    .map(docSnap => ({ docSnap, access: docSnap.data() || {} }))
+    .filter(({ access }) =>
+      access.accessType === 'assignment' &&
+      allowedTypes.has(access.contentType) &&
+      schoolIdOf(access) === studentSchoolId &&
+      typeof access.contentId === 'string' &&
+      access.contentId &&
+      typeof access.sourceCollection === 'string' &&
+      access.sourceCollection
+    )
+
+  const sourceRefs = candidates.map(({ access }) =>
+    db.doc(`${access.sourceCollection}/${access.contentId}`)
+  )
+  const sourceSnaps = sourceRefs.length > 0
+    ? await db.getAll(...sourceRefs)
+    : []
+
+  const studentIsActive =
+    studentProfile.status === 'approved' && studentProfile.deleted !== true
+  const now = FieldValue.serverTimestamp()
+  const accessOperations = []
+  const sourceOperations = []
+  const legacyReferenceValues = uniqueStrings([
+    studentId,
+    studentProfile.uid,
+    studentProfile.authUid,
+    studentProfile.email,
+    studentProfile.email?.toLowerCase()
+  ])
+
+  for (let index = 0; index < candidates.length; index++) {
+    const { docSnap, access } = candidates[index]
+    const sourceSnap = sourceSnaps[index]
+    const sourceExists = Boolean(sourceSnap?.exists)
+    const source = sourceExists ? (sourceSnap.data() || {}) : {}
+    const sourceArchived = !sourceExists || source.archived === true
+    const status = hidden || !studentIsActive || sourceArchived
+      ? 'inactive'
+      : 'active'
+
+    accessOperations.push({
+      type: 'set',
+      ref: docSnap.ref,
+      data: {
+        status,
+        adminHidden: hidden,
+        visibilityUpdatedAt: now,
+        visibilityUpdatedBy: admin.uid,
+        ...(hidden
+          ? { adminHiddenAt: now, adminHiddenBy: admin.uid }
+          : { adminRestoredAt: now, adminRestoredBy: admin.uid }),
+        updatedAt: now
+      }
+    })
+
+    if (sourceExists && legacyReferenceValues.length > 0) {
+      sourceOperations.push({
+        type: 'set',
+        ref: sourceSnap.ref,
+        data: {
+          hiddenFor: hidden
+            ? FieldValue.arrayUnion(...legacyReferenceValues)
+            : FieldValue.arrayRemove(...legacyReferenceValues),
+          updatedBy: admin.uid,
+          updatedAt: now
+        }
+      })
+    }
+  }
+
+  // Hide access first to avoid an exposure window. Restore the compatibility
+  // source marker first, then canonical access, so legacy triggers cannot
+  // immediately undo the requested state during the transition.
+  if (hidden) {
+    await commitAccessOperations(accessOperations)
+    await commitAccessOperations(sourceOperations)
+  } else {
+    await commitAccessOperations(sourceOperations)
+    await commitAccessOperations(accessOperations)
+  }
+
+  return {
+    ok: true,
+    studentId,
+    scope,
+    hidden,
+    affectedAssignments: accessOperations.length,
+    legacyBridgeUpdated: sourceOperations.length
   }
 })
 
