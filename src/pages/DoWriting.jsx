@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { auth, db } from '../firebase'
+import { auth, db, functions } from '../firebase'
 import {
-  setDoc,
   collection,
   doc,
   getDoc,
@@ -11,6 +10,7 @@ import {
   where
 } from 'firebase/firestore'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
+import { httpsCallable } from 'firebase/functions'
 import { useNavigate, useParams } from 'react-router-dom'
 
 function countWords(text) {
@@ -21,30 +21,48 @@ function countWords(text) {
 }
 
 
-function uniqueCleanValues(values) {
-  return Array.from(
-    new Set(
-      values
-        .filter(value => value !== undefined && value !== null)
-        .map(value => value.toString().trim())
-        .filter(Boolean)
-    )
+const submitWritingSecureCall = httpsCallable(functions, 'submitWritingSecure')
+const getStudentSubmissionAttemptStateCall = httpsCallable(functions, 'getStudentSubmissionAttemptState')
+
+function attemptNumberOfSubmission(submission) {
+  const value = Number(submission?.attemptNumber)
+  return Number.isInteger(value) && value >= 1 ? value : 1
+}
+
+function submittedAtMillis(submission) {
+  const parsed = Date.parse(submission?.submittedAt || '')
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function hasMeaningfulWritingAnswers(submission) {
+  return Boolean(
+    (typeof submission?.task1Answer === 'string' && submission.task1Answer.trim()) ||
+    (typeof submission?.task2Answer === 'string' && submission.task2Answer.trim())
   )
 }
 
-function getSourceTeacherIds(source) {
-  const explicitTeacherIds = Array.isArray(source?.teacherIds)
-    ? source.teacherIds
-    : []
+function selectCurrentWritingSubmission(snapshot) {
+  if (!snapshot || snapshot.empty) return null
 
-  if (explicitTeacherIds.length > 0) {
-    return uniqueCleanValues(explicitTeacherIds)
-  }
+  return snapshot.docs
+    .map(item => ({ id: item.id, ...item.data() }))
+    .sort((a, b) => {
+      const attemptDifference = attemptNumberOfSubmission(b) - attemptNumberOfSubmission(a)
+      if (attemptDifference !== 0) return attemptDifference
 
-  return uniqueCleanValues([
-    source?.teacherId,
-    source?.createdBy
-  ])
+      const aMeaningful = hasMeaningfulWritingAnswers(a)
+      const bMeaningful = hasMeaningfulWritingAnswers(b)
+      if (aMeaningful !== bMeaningful) return aMeaningful ? -1 : 1
+
+      const submittedDifference = submittedAtMillis(b) - submittedAtMillis(a)
+      if (submittedDifference !== 0) return submittedDifference
+
+      if ((a.autoSubmitted === true) !== (b.autoSubmitted === true)) {
+        return a.autoSubmitted === true ? 1 : -1
+      }
+
+      return a.id.localeCompare(b.id)
+    })[0]
 }
 
 function formatTime(seconds) {
@@ -92,6 +110,7 @@ export default function DoWriting() {
   const [draftError, setDraftError] = useState('')
   const [loadError, setLoadError] = useState('')
   const [reloadCount, setReloadCount] = useState(0)
+  const [attemptState, setAttemptState] = useState(null)
 
   const draftKey = user ? `writingDraft_${id}_${user.uid}` : null
 
@@ -229,6 +248,8 @@ export default function DoWriting() {
       setLoadError('')
       setImageZoomOpen(false)
       setWriting(null)
+      setAttemptState(null)
+      setCompletedSubmission(null)
 
       if (!currentUser) {
         setUser(null)
@@ -324,24 +345,55 @@ export default function DoWriting() {
       setCurrentTask(mode === 'task2_only' ? 2 : 1)
       setTimeLeft((data.timeLimit || defaultMinutes) * 60)
 
-      const q = query(
-        collection(db, 'writingSubmissions'),
-        where('uid', '==', currentUser.uid),
-        where('writingId', '==', id)
-      )
-
-      const existing = await getDocs(q)
+      const [attemptResponse, existing] = await Promise.all([
+        getStudentSubmissionAttemptStateCall({
+          contentType: 'writing',
+          contentId: id
+        }),
+        getDocs(query(
+          collection(db, 'writingSubmissions'),
+          where('uid', '==', currentUser.uid),
+          where('writingId', '==', id)
+        ))
+      ])
       if (!isCurrentLoad()) return
 
-      if (!existing.empty) {
-        const existingDoc = existing.docs[0]
-        const sub = { id: existingDoc.id, ...existingDoc.data() }
+      const secureAttemptState = attemptResponse?.data || { open: false, currentAttemptNumber: 0 }
+      const currentSubmission = selectCurrentWritingSubmission(existing)
+      setAttemptState(secureAttemptState)
 
+      if (secureAttemptState.open === true) {
+        const resume = secureAttemptState.mode === 'reopen_answers'
+          ? (secureAttemptState.resume || {})
+          : {}
+
+        setAlreadyDone(false)
+        setSubmitted(false)
+        setCompletedSubmission(null)
+        setTask1Answer(typeof resume.task1Answer === 'string' ? resume.task1Answer : '')
+        setTask2Answer(typeof resume.task2Answer === 'string' ? resume.task2Answer : '')
+        setCurrentTask(mode === 'task2_only' ? 2 : 1)
+        setTimeLeft((data.timeLimit || defaultMinutes) * 60)
+
+        // A reopened attempt is initialized from authoritative server state.
+        // Do not let a stale browser draft from the previous attempt override it.
+        const reopenedDraftKey = `writingDraft_${id}_${currentUser.uid}`
+        if (reopenedDraftKey) {
+          try {
+            localStorage.removeItem(reopenedDraftKey)
+          } catch (draftCleanupError) {
+            console.warn('Could not clear stale writing draft for reopened attempt:', draftCleanupError)
+          }
+        }
+        loadedDraftKeyRef.current = reopenedDraftKey
+        savedDraftKeyRef.current = null
+        setDraftLoaded(true)
+      } else if (currentSubmission) {
         setAlreadyDone(true)
         setSubmitted(true)
-        setCompletedSubmission(sub)
-        setTask1Answer(sub.task1Answer || '')
-        setTask2Answer(sub.task2Answer || '')
+        setCompletedSubmission(currentSubmission)
+        setTask1Answer(currentSubmission.task1Answer || '')
+        setTask2Answer(currentSubmission.task2Answer || '')
       }
 
       setLoading(false)
@@ -609,10 +661,12 @@ export default function DoWriting() {
         return
       }
 
-      const ok = window.confirm(
-        'Submit your writing homework? You cannot retake it after submission.'
-      )
+      const nextAttemptNumber = Number(attemptState?.nextAttemptNumber) || 0
+      const confirmationText = attemptState?.open === true && nextAttemptNumber > 1
+        ? `Submit Writing Attempt ${nextAttemptNumber}?`
+        : 'Submit your writing homework?'
 
+      const ok = window.confirm(confirmationText)
       if (!ok) return
     }
 
@@ -622,38 +676,27 @@ export default function DoWriting() {
     const submissionVersion = loadVersionRef.current
     submittingRef.current = true
     setSubmitting(true)
-
-    // Effects stop intervals while submitting. Do not cancel them manually:
-    // an immediately rejected request may batch true -> false in one render.
-    const submissionTeacherIds = getSourceTeacherIds(writing)
-
-    const submissionRef = doc(db, 'writingSubmissions', `${user.uid}_${id}`)
-    const submissionData = {
-      uid: user.uid,
-      studentId: user.uid,
-      studentEmail: user.email || '',
-      writingId: id,
-      schoolId: writing.schoolId || 'maxima',
-      teacherId: submissionTeacherIds[0] || '',
-      teacherIds: submissionTeacherIds,
-      contentType: writingMode,
-      writingMode,
-      task1Enabled: hasTask1,
-      task2Enabled: hasTask2,
-      task1Answer: hasTask1 ? task1Answer : '',
-      task2Answer: hasTask2 ? task2Answer : '',
-      task1WordCount: hasTask1 ? countWords(task1Answer) : 0,
-      task2WordCount: hasTask2 ? countWords(task2Answer) : 0,
-      submittedAt: new Date().toISOString(),
-      finishedLate: timeLeft <= 0,
-      autoSubmitted: autoSubmit || expired,
-      reviewed: false,
-      review: null
-    }
+    const expectedAttemptNumber = attemptState?.open === true
+      ? (Number(attemptState.nextAttemptNumber) || 2)
+      : 1
 
     try {
-      // Repair 08C: the first create is immutable for the student.
-      await setDoc(submissionRef, submissionData)
+      const response = await submitWritingSecureCall({
+        writingId: id,
+        task1Answer,
+        task2Answer,
+        finishedLate: expired,
+        autoSubmitted: autoSubmit || expired
+      })
+
+      const secureData = response?.data || {}
+      const storedSubmission = secureData.submission && typeof secureData.submission === 'object'
+        ? secureData.submission
+        : null
+
+      if (!storedSubmission?.id) {
+        throw new Error('Secure Writing submission did not return the stored submission.')
+      }
 
       if (latestDraftRef.current?.key === submittedDraftKey) {
         latestDraftRef.current.completed = true
@@ -661,29 +704,52 @@ export default function DoWriting() {
       clearDraft(submittedDraftKey)
 
       if (mountedRef.current && loadVersionRef.current === submissionVersion) {
-        setCompletedSubmission({ id: submissionRef.id, ...submissionData })
+        setCompletedSubmission(storedSubmission)
+        setTask1Answer(storedSubmission.task1Answer || '')
+        setTask2Answer(storedSubmission.task2Answer || '')
+        setAttemptState({
+          open: false,
+          currentAttemptNumber: Number(secureData.attemptNumber) || attemptNumberOfSubmission(storedSubmission)
+        })
+        setAlreadyDone(secureData.alreadySubmitted === true)
         setSubmitted(true)
+        submittingRef.current = false
+        setSubmitting(false)
       }
     } catch (error) {
-      console.error(error)
+      console.error('Secure Writing submission failed:', error)
 
-      // If another tab already submitted, show the durable result instead of
-      // inviting the student to create a second attempt.
+      // If the request reached the server but the response was lost, recover the
+      // durable current submission instead of inviting a duplicate submit.
       try {
-        const existingSnap = await getDoc(submissionRef)
-        if (existingSnap.exists()) {
+        const existing = await getDocs(query(
+          collection(db, 'writingSubmissions'),
+          where('uid', '==', user.uid),
+          where('writingId', '==', id)
+        ))
+        const durableSubmission = selectCurrentWritingSubmission(existing)
+
+        if (
+          durableSubmission &&
+          submittedAtMillis(durableSubmission) > 0 &&
+          attemptNumberOfSubmission(durableSubmission) >= expectedAttemptNumber
+        ) {
           if (latestDraftRef.current?.key === submittedDraftKey) {
             latestDraftRef.current.completed = true
           }
           clearDraft(submittedDraftKey)
 
           if (mountedRef.current && loadVersionRef.current === submissionVersion) {
-            const data = { id: existingSnap.id, ...existingSnap.data() }
-            setCompletedSubmission(data)
-            setTask1Answer(data.task1Answer || '')
-            setTask2Answer(data.task2Answer || '')
+            setCompletedSubmission(durableSubmission)
+            setTask1Answer(durableSubmission.task1Answer || '')
+            setTask2Answer(durableSubmission.task2Answer || '')
+            setAttemptState({
+              open: false,
+              currentAttemptNumber: attemptNumberOfSubmission(durableSubmission)
+            })
             setAlreadyDone(true)
             setSubmitted(true)
+            submittingRef.current = false
             setSubmitting(false)
           }
           return
@@ -770,7 +836,7 @@ export default function DoWriting() {
 
             {alreadyDone && (
               <p className="text-amber-600 text-sm bg-amber-50 rounded-xl py-2 px-4 mb-6">
-                You already completed this writing homework. You can review your submitted answers, but you cannot retake it.
+                You already completed this writing homework. You can review your submitted answers. If another attempt is needed, your teacher can reopen it.
               </p>
             )}
 
@@ -932,6 +998,16 @@ export default function DoWriting() {
           </div>
         </div>
       </nav>
+
+      {attemptState?.open === true && (
+        <div className="mx-6 mt-4 rounded-xl border border-purple-200 bg-purple-50 px-4 py-3 text-sm text-purple-800">
+          <span className="font-semibold">Writing Attempt {attemptState.nextAttemptNumber || 2}</span>
+          {' · '}
+          {attemptState.mode === 'reopen_answers'
+            ? 'Your previous answers were restored. The timer has restarted for this new attempt.'
+            : 'A fresh attempt was opened. The timer has restarted and previous answers were not copied.'}
+        </div>
+      )}
 
       {draftError && (
         <div role="alert" className="mx-6 mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
