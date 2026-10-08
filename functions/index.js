@@ -1,6 +1,7 @@
 'use strict'
 
 const { onCall, HttpsError } = require('firebase-functions/v2/https')
+const { createHash } = require('crypto')
 const { onDocumentWritten } = require('firebase-functions/v2/firestore')
 const { initializeApp } = require('firebase-admin/app')
 const { getFirestore, FieldValue } = require('firebase-admin/firestore')
@@ -60,6 +61,47 @@ const ACCESS_CONTENT_CONFIG = {
     sourceCollection: 'mockTests'
   }
 }
+
+// Stage 16L-1: submission-attempt foundation. Existing submission collections
+// remain the current/latest head documents; immutable prior attempts live in
+// submissionAttemptHistory and reopen permissions live in submissionAttemptControls.
+const SUBMISSION_CONTENT_CONFIG = {
+  reading: {
+    contentType: 'reading',
+    sourceCollection: 'readings',
+    submissionCollection: 'readingSubmissions',
+    parentFields: ['readingId']
+  },
+  listening: {
+    contentType: 'listening',
+    sourceCollection: 'listenings',
+    submissionCollection: 'listeningSubmissions',
+    parentFields: ['listeningId']
+  },
+  vocabulary: {
+    contentType: 'vocabulary',
+    sourceCollection: 'vocabularyTests',
+    submissionCollection: 'vocabularySubmissions',
+    parentFields: ['vocabularyTestId', 'vocabularyId', 'testId', 'homeworkId']
+  },
+  writing: {
+    contentType: 'writing',
+    sourceCollection: 'writingHomeworks',
+    submissionCollection: 'writingSubmissions',
+    parentFields: ['writingId']
+  },
+  mock: {
+    contentType: 'mock',
+    sourceCollection: 'mockTests',
+    submissionCollection: 'mockSubmissions',
+    parentFields: ['mockTestId']
+  }
+}
+
+const ATTEMPT_SCHEMA_VERSION = 1
+const ATTEMPT_CONTROL_COLLECTION = 'submissionAttemptControls'
+const ATTEMPT_HISTORY_COLLECTION = 'submissionAttemptHistory'
+const ATTEMPT_MODES = new Set(['reopen_answers', 'start_fresh'])
 
 function asString(value) {
   return value === undefined || value === null ? '' : value.toString()
@@ -268,6 +310,38 @@ function accessContentConfigFor(type) {
     contentType: config.contentType,
     sourceCollection: config.sourceCollection
   }
+}
+
+function submissionContentConfigFor(type) {
+  const key = typeof type === 'string' ? type.trim() : ''
+  const config = SUBMISSION_CONTENT_CONFIG[key]
+  if (!config) {
+    throw new HttpsError('invalid-argument', 'Unsupported submission content type.')
+  }
+  return config
+}
+
+function assertAttemptMode(value) {
+  const mode = typeof value === 'string' ? value.trim() : ''
+  if (!ATTEMPT_MODES.has(mode)) {
+    throw new HttpsError('invalid-argument', 'Attempt mode must be reopen_answers or start_fresh.')
+  }
+  return mode
+}
+
+function attemptNumberOf(data) {
+  const value = Number(data?.attemptNumber)
+  return Number.isInteger(value) && value >= 1 ? value : 1
+}
+
+function attemptControlId(uid, contentType, contentId) {
+  return createHash('sha256')
+    .update(`${uid}\u001f${contentType}\u001f${contentId}`, 'utf8')
+    .digest('hex')
+}
+
+function attemptHistoryId(controlId, attemptNumber) {
+  return `${controlId}_attempt_${attemptNumber}`
 }
 
 async function requireAssignmentManager(request) {
@@ -984,26 +1058,482 @@ exports.ensureMockObjectiveResource = onCall(async request => {
   return { ok: true }
 })
 
-async function findExistingSubmission(config, student, assignmentId) {
-  const deterministicId = `${student.uid}_${assignmentId}`
+function submittedAtMillis(data) {
+  const value = data?.submittedAt
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value)
+    return Number.isFinite(parsed) ? parsed : 0
+  }
+  if (value instanceof Date) return value.getTime()
+  if (typeof value?.toMillis === 'function') return value.toMillis()
+  if (typeof value?.toDate === 'function') return value.toDate().getTime()
+  return 0
+}
+
+function hasMeaningfulValue(value) {
+  if (value === undefined || value === null) return false
+  if (typeof value === 'string') return value.trim().length > 0
+  if (typeof value === 'number' || typeof value === 'boolean') return true
+  if (Array.isArray(value)) return value.some(hasMeaningfulValue)
+  if (typeof value === 'object') return Object.values(value).some(hasMeaningfulValue)
+  return false
+}
+
+function submissionHasMeaningfulAnswers(config, data) {
+  if (config.contentType === 'reading' || config.contentType === 'listening' || config.contentType === 'vocabulary') {
+    return hasMeaningfulValue(data?.answers)
+  }
+  if (config.contentType === 'writing') {
+    return hasMeaningfulValue(data?.task1Answer) || hasMeaningfulValue(data?.task2Answer)
+  }
+  if (config.contentType === 'mock') {
+    return hasMeaningfulValue(data?.listeningAnswers) ||
+      hasMeaningfulValue(data?.readingAnswers) ||
+      hasMeaningfulValue(data?.writingAnswers)
+  }
+  return false
+}
+
+function submissionMatchesContent(config, data, contentId) {
+  return config.parentFields.some(field => data?.[field] === contentId)
+}
+
+function recordFromSubmissionSnap(config, snap, deterministic = false) {
+  const data = snap.data() || {}
+  return {
+    id: snap.id,
+    ref: snap.ref,
+    data,
+    deterministic,
+    meaningful: submissionHasMeaningfulAnswers(config, data),
+    submittedAtMillis: submittedAtMillis(data),
+    updateTime: snap.updateTime || null,
+    ...data
+  }
+}
+
+function chooseLegacyCurrentSubmission(records) {
+  if (records.length === 0) return null
+
+  return [...records].sort((a, b) => {
+    if (a.meaningful !== b.meaningful) return a.meaningful ? -1 : 1
+    if (a.submittedAtMillis !== b.submittedAtMillis) {
+      return b.submittedAtMillis - a.submittedAtMillis
+    }
+    if ((a.data?.autoSubmitted === true) !== (b.data?.autoSubmitted === true)) {
+      return a.data?.autoSubmitted === true ? 1 : -1
+    }
+    return a.id.localeCompare(b.id)
+  })[0]
+}
+
+async function findCurrentSubmissionRecord(config, uid, contentId) {
+  const deterministicId = `${uid}_${contentId}`
   const deterministic = await db.doc(`${config.submissionCollection}/${deterministicId}`).get()
   if (deterministic.exists) {
-    return { id: deterministic.id, ...deterministic.data() }
+    return recordFromSubmissionSnap(config, deterministic, true)
   }
 
-  const legacy = await db.collection(config.submissionCollection)
-    .where('uid', '==', student.uid)
-    .where(config.parentField, '==', assignmentId)
-    .limit(1)
-    .get()
+  const [uidSnap, studentIdSnap] = await Promise.all([
+    db.collection(config.submissionCollection).where('uid', '==', uid).get(),
+    db.collection(config.submissionCollection).where('studentId', '==', uid).get()
+  ])
 
-  if (!legacy.empty) {
-    const docSnap = legacy.docs[0]
-    return { id: docSnap.id, ...docSnap.data() }
+  const byId = new Map()
+  for (const docSnap of [...uidSnap.docs, ...studentIdSnap.docs]) {
+    if (byId.has(docSnap.id)) continue
+    const data = docSnap.data() || {}
+    if (!submissionMatchesContent(config, data, contentId)) continue
+    byId.set(docSnap.id, recordFromSubmissionSnap(config, docSnap, false))
   }
 
-  return null
+  return chooseLegacyCurrentSubmission(Array.from(byId.values()))
 }
+
+async function findExistingSubmission(config, student, assignmentId) {
+  const submissionConfig = submissionContentConfigFor(config.contentType)
+  return findCurrentSubmissionRecord(submissionConfig, student.uid, assignmentId)
+}
+
+async function findCurrentMockScoreRecord(uid, mockTestId) {
+  const deterministic = await db.doc(`scores/${uid}_${mockTestId}`).get()
+  if (deterministic.exists) {
+    return {
+      id: deterministic.id,
+      ref: deterministic.ref,
+      data: deterministic.data() || {},
+      updateTime: deterministic.updateTime || null
+    }
+  }
+
+  const [uidSnap, studentIdSnap] = await Promise.all([
+    db.collection('scores').where('uid', '==', uid).get(),
+    db.collection('scores').where('studentId', '==', uid).get()
+  ])
+
+  const records = new Map()
+  for (const docSnap of [...uidSnap.docs, ...studentIdSnap.docs]) {
+    if (records.has(docSnap.id)) continue
+    const data = docSnap.data() || {}
+    if (data.mockTestId !== mockTestId && data.mockId !== mockTestId) continue
+    records.set(docSnap.id, {
+      id: docSnap.id,
+      ref: docSnap.ref,
+      data,
+      submittedAtMillis: submittedAtMillis({ submittedAt: data.createdAt || data.date }),
+      updateTime: docSnap.updateTime || null
+    })
+  }
+
+  return Array.from(records.values()).sort((a, b) => {
+    if (a.submittedAtMillis !== b.submittedAtMillis) {
+      return b.submittedAtMillis - a.submittedAtMillis
+    }
+    return a.id.localeCompare(b.id)
+  })[0] || null
+}
+
+function attemptResumePayload(config, submission) {
+  const data = submission?.data || submission || {}
+
+  if (config.contentType === 'reading') {
+    return {
+      answers: data.answers || {},
+      flaggedQuestions: Array.isArray(data.flaggedQuestions) ? data.flaggedQuestions : [],
+      studentNote: typeof data.studentNote === 'string' ? data.studentNote : '',
+      highlights: Array.isArray(data.highlights) ? data.highlights : []
+    }
+  }
+
+  if (config.contentType === 'listening') {
+    return {
+      answers: data.answers || {},
+      flaggedQuestions: Array.isArray(data.flaggedQuestions) ? data.flaggedQuestions : [],
+      studentNote: typeof data.studentNote === 'string' ? data.studentNote : ''
+    }
+  }
+
+  if (config.contentType === 'vocabulary') {
+    return {
+      answers: data.answers || {},
+      matchingViewVersion: data.matchingViewVersion === 1 ? 1 : 0
+    }
+  }
+
+  if (config.contentType === 'writing') {
+    return {
+      task1Answer: typeof data.task1Answer === 'string' ? data.task1Answer : '',
+      task2Answer: typeof data.task2Answer === 'string' ? data.task2Answer : ''
+    }
+  }
+
+  if (config.contentType === 'mock') {
+    return {
+      listeningAnswers: data.listeningAnswers || {},
+      readingAnswers: data.readingAnswers || {},
+      writingAnswers: data.writingAnswers || { task1: '', task2: '' },
+      timing: data.timing || {},
+      sectionTimeLimits: data.sectionTimeLimits || {},
+      tabSwitchCount: Number.isFinite(Number(data.tabSwitchCount)) ? Number(data.tabSwitchCount) : 0
+    }
+  }
+
+  return {}
+}
+
+async function requireManagedStudentAssignment(manager, config, source, studentId, contentId) {
+  const sourceSchoolId = schoolIdOf(source)
+  const [student] = await loadAssignableStudents([studentId], sourceSchoolId)
+  const accessRef = db.doc(`studentAccess/${studentAccessId(studentId, config.contentType, contentId)}`)
+  const accessSnap = await accessRef.get()
+
+  if (!accessSnap.exists) {
+    throw new HttpsError('failed-precondition', 'This homework is not currently assigned to the selected student.')
+  }
+
+  const access = accessSnap.data() || {}
+  if (
+    access.accessType !== 'assignment' ||
+    access.uid !== studentId ||
+    access.contentType !== config.contentType ||
+    access.contentId !== contentId ||
+    access.sourceCollection !== config.sourceCollection ||
+    access.status !== 'active' ||
+    schoolIdOf(access) !== sourceSchoolId ||
+    access.adminHidden === true
+  ) {
+    throw new HttpsError('failed-precondition', 'Restore or reassign this homework before reopening an attempt.')
+  }
+
+  return { uid: studentId, profile: student.profile, accessRef, access }
+}
+
+function attemptControlClientState(control, current) {
+  if (!control || control.status !== 'open') {
+    return {
+      open: false,
+      currentAttemptNumber: current ? attemptNumberOf(current.data) : 0
+    }
+  }
+
+  return {
+    open: true,
+    mode: control.mode,
+    baseAttemptNumber: Number(control.baseAttemptNumber) || 1,
+    nextAttemptNumber: Number(control.nextAttemptNumber) || 2,
+    baseSubmissionId: control.baseSubmissionId || '',
+    baseSubmittedAt: control.baseSubmittedAt || '',
+    currentAttemptNumber: current ? attemptNumberOf(current.data) : Number(control.baseAttemptNumber) || 1
+  }
+}
+
+exports.getManagedSubmissionAttemptState = onCall(async request => {
+  const manager = await requireAssignmentManager(request)
+  const data = request.data || {}
+  const config = submissionContentConfigFor(data.contentType)
+  const contentId = assertDocumentId(data.contentId, 'Content ID')
+  const studentId = assertDocumentId(data.studentId, 'Student ID')
+  const source = await getSource(config.sourceCollection, contentId)
+
+  if (!managerCanManageSource(manager, source)) {
+    throw new HttpsError('permission-denied', 'You cannot manage attempts for this content.')
+  }
+
+  const studentSnap = await db.doc(`users/${studentId}`).get()
+  if (!studentSnap.exists || schoolIdOf(studentSnap.data() || {}) !== schoolIdOf(source)) {
+    throw new HttpsError('not-found', 'The selected student was not found in this school.')
+  }
+
+  const [current, controlSnap] = await Promise.all([
+    findCurrentSubmissionRecord(config, studentId, contentId),
+    db.doc(`${ATTEMPT_CONTROL_COLLECTION}/${attemptControlId(studentId, config.contentType, contentId)}`).get()
+  ])
+
+  return {
+    ok: true,
+    contentType: config.contentType,
+    contentId,
+    studentId,
+    hasSubmission: Boolean(current),
+    currentSubmissionId: current?.id || '',
+    ...attemptControlClientState(controlSnap.exists ? (controlSnap.data() || {}) : null, current)
+  }
+})
+
+exports.setSubmissionAttemptControl = onCall(async request => {
+  const manager = await requireAssignmentManager(request)
+  const data = request.data || {}
+  const config = submissionContentConfigFor(data.contentType)
+  const contentId = assertDocumentId(data.contentId, 'Content ID')
+  const studentId = assertDocumentId(data.studentId, 'Student ID')
+  const mode = assertAttemptMode(data.mode)
+  const source = await getSource(config.sourceCollection, contentId)
+
+  if (!managerCanManageSource(manager, source)) {
+    throw new HttpsError('permission-denied', 'You cannot reopen attempts for this content.')
+  }
+  if (source.archived === true) {
+    throw new HttpsError('failed-precondition', 'Restore this content before reopening an attempt.')
+  }
+
+  await requireManagedStudentAssignment(manager, config, source, studentId, contentId)
+
+  const current = await findCurrentSubmissionRecord(config, studentId, contentId)
+  if (!current) {
+    throw new HttpsError('failed-precondition', 'This student has no submitted attempt to reopen.')
+  }
+
+  const controlId = attemptControlId(studentId, config.contentType, contentId)
+  const controlRef = db.doc(`${ATTEMPT_CONTROL_COLLECTION}/${controlId}`)
+  const mockScore = config.contentType === 'mock'
+    ? await findCurrentMockScoreRecord(studentId, contentId)
+    : null
+
+  const expectedUpdateMillis = typeof current.updateTime?.toMillis === 'function'
+    ? current.updateTime.toMillis()
+    : null
+
+  const result = await db.runTransaction(async transaction => {
+    const freshSnap = await transaction.get(current.ref)
+    if (!freshSnap.exists) {
+      throw new HttpsError('aborted', 'The current submission changed. Refresh and try again.')
+    }
+
+    if (
+      expectedUpdateMillis !== null &&
+      typeof freshSnap.updateTime?.toMillis === 'function' &&
+      freshSnap.updateTime.toMillis() !== expectedUpdateMillis
+    ) {
+      throw new HttpsError('aborted', 'The current submission changed. Refresh and try again.')
+    }
+
+    const freshData = freshSnap.data() || {}
+    if (
+      (freshData.uid || freshData.studentId) !== studentId ||
+      !submissionMatchesContent(config, freshData, contentId)
+    ) {
+      throw new HttpsError('failed-precondition', 'The selected submission no longer matches this student and content.')
+    }
+
+    const baseAttemptNumber = attemptNumberOf(freshData)
+    const nextAttemptNumber = baseAttemptNumber + 1
+    const historyRef = db.doc(`${ATTEMPT_HISTORY_COLLECTION}/${attemptHistoryId(controlId, baseAttemptNumber)}`)
+
+    const [controlSnap, historySnap, scoreSnap] = await Promise.all([
+      transaction.get(controlRef),
+      transaction.get(historyRef),
+      mockScore?.ref ? transaction.get(mockScore.ref) : Promise.resolve(null)
+    ])
+
+    if (controlSnap.exists) {
+      const existingControl = controlSnap.data() || {}
+      if (
+        existingControl.status === 'open' &&
+        existingControl.baseSubmissionId === freshSnap.id &&
+        Number(existingControl.baseAttemptNumber) === baseAttemptNumber
+      ) {
+        transaction.set(controlRef, {
+          mode,
+          updatedBy: manager.uid,
+          updatedAt: FieldValue.serverTimestamp()
+        }, { merge: true })
+
+        return {
+          ok: true,
+          alreadyOpen: true,
+          mode,
+          baseAttemptNumber,
+          nextAttemptNumber,
+          currentSubmissionId: freshSnap.id
+        }
+      }
+
+      if (existingControl.status === 'open') {
+        throw new HttpsError('failed-precondition', 'A different reopen request is already active for this student and content.')
+      }
+    }
+
+    if (!historySnap.exists) {
+      const historyData = {
+        schemaVersion: ATTEMPT_SCHEMA_VERSION,
+        uid: studentId,
+        studentId,
+        schoolId: schoolIdOf(source),
+        contentType: config.contentType,
+        contentId,
+        sourceCollection: config.sourceCollection,
+        submissionCollection: config.submissionCollection,
+        attemptNumber: baseAttemptNumber,
+        sourceSubmissionId: freshSnap.id,
+        submittedAt: freshData.submittedAt || '',
+        archivedReason: 'reopened_for_new_attempt',
+        archivedBy: manager.uid,
+        archivedByRole: manager.profile.role,
+        archivedAt: FieldValue.serverTimestamp(),
+        submissionSnapshot: toPlain(freshData)
+      }
+
+      if (scoreSnap?.exists) {
+        historyData.sourceScoreId = scoreSnap.id
+        historyData.scoreSnapshot = toPlain(scoreSnap.data() || {})
+      }
+
+      transaction.create(historyRef, historyData)
+    }
+
+    transaction.set(controlRef, {
+      schemaVersion: ATTEMPT_SCHEMA_VERSION,
+      uid: studentId,
+      studentId,
+      schoolId: schoolIdOf(source),
+      contentType: config.contentType,
+      contentId,
+      sourceCollection: config.sourceCollection,
+      submissionCollection: config.submissionCollection,
+      status: 'open',
+      mode,
+      baseAttemptNumber,
+      nextAttemptNumber,
+      baseSubmissionId: freshSnap.id,
+      baseSubmittedAt: freshData.submittedAt || '',
+      baseSubmissionUpdateTime: toPlain(freshSnap.updateTime),
+      openedBy: manager.uid,
+      openedByRole: manager.profile.role,
+      openedAt: FieldValue.serverTimestamp(),
+      updatedBy: manager.uid,
+      updatedAt: FieldValue.serverTimestamp()
+    })
+
+    return {
+      ok: true,
+      alreadyOpen: false,
+      mode,
+      baseAttemptNumber,
+      nextAttemptNumber,
+      currentSubmissionId: freshSnap.id
+    }
+  })
+
+  return result
+})
+
+exports.getStudentSubmissionAttemptState = onCall(async request => {
+  const student = await requireStudent(request)
+  const data = request.data || {}
+  const config = submissionContentConfigFor(data.contentType)
+  const contentId = assertDocumentId(data.contentId, 'Content ID')
+  const source = await getSource(config.sourceCollection, contentId)
+
+  await requireAvailableStudentSource({
+    source,
+    student,
+    contentType: config.contentType,
+    contentId,
+    sourceCollection: config.sourceCollection
+  })
+
+  const controlRef = db.doc(`${ATTEMPT_CONTROL_COLLECTION}/${attemptControlId(student.uid, config.contentType, contentId)}`)
+  const [controlSnap, current] = await Promise.all([
+    controlRef.get(),
+    findCurrentSubmissionRecord(config, student.uid, contentId)
+  ])
+
+  const control = controlSnap.exists ? (controlSnap.data() || {}) : null
+  const state = attemptControlClientState(control, current)
+
+  if (!state.open) {
+    return {
+      ok: true,
+      contentType: config.contentType,
+      contentId,
+      ...state,
+      resume: {}
+    }
+  }
+
+  if (
+    control.uid !== student.uid ||
+    control.contentType !== config.contentType ||
+    control.contentId !== contentId ||
+    schoolIdOf(control) !== schoolIdOf(source)
+  ) {
+    throw new HttpsError('permission-denied', 'This reopen request is not valid for your account.')
+  }
+
+  if (!current || current.id !== control.baseSubmissionId) {
+    throw new HttpsError('failed-precondition', 'Your reopen request is out of date. Ask your teacher to reopen the attempt again.')
+  }
+
+  return {
+    ok: true,
+    contentType: config.contentType,
+    contentId,
+    ...state,
+    resume: control.mode === 'reopen_answers'
+      ? attemptResumePayload(config, current)
+      : {}
+  }
+})
 
 async function createImmutableSubmission(config, student, assignmentId, data) {
   const ref = db.doc(`${config.submissionCollection}/${student.uid}_${assignmentId}`)
@@ -1030,6 +1560,8 @@ function baseSubmission(source, student) {
     teacherId: teacherIds[0] || '',
     teacherIds,
     submittedAt: new Date().toISOString(),
+    attemptNumber: 1,
+    attemptSchemaVersion: ATTEMPT_SCHEMA_VERSION,
     gradedByServer: true,
     gradingSchemaVersion: 1
   }
@@ -1204,17 +1736,11 @@ async function getMockSources(mock) {
 }
 
 async function findExistingMockSubmission(student, mockTestId) {
-  const ref = db.doc(`mockSubmissions/${student.uid}_${mockTestId}`)
-  const snap = await ref.get()
-  if (snap.exists) return { id: snap.id, ...snap.data() }
-
-  const legacy = await db.collection('mockSubmissions')
-    .where('uid', '==', student.uid)
-    .where('mockTestId', '==', mockTestId)
-    .limit(1)
-    .get()
-  if (!legacy.empty) return { id: legacy.docs[0].id, ...legacy.docs[0].data() }
-  return null
+  return findCurrentSubmissionRecord(
+    submissionContentConfigFor('mock'),
+    student.uid,
+    mockTestId
+  )
 }
 
 function mockReviewSources(sources) {
