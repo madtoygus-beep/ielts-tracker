@@ -724,6 +724,83 @@ exports.setContentStudentAccess = onCall(async request => {
   }
 })
 
+// Stage 16G-H2A: canonical archive/restore writer. Archive state remains source
+// metadata, while assignment availability is updated directly in studentAccess.
+// The legacy source triggers may mirror the same status during transition, but
+// this callable no longer depends on them for archive/restore correctness.
+exports.setContentArchivedState = onCall(async request => {
+  const manager = await requireAssignmentManager(request)
+  const data = request.data || {}
+  const config = accessContentConfigFor(data.contentType)
+  const contentId = assertDocumentId(data.contentId, 'Content ID')
+
+  if (typeof data.archived !== 'boolean') {
+    throw new HttpsError('invalid-argument', 'Archived state must be true or false.')
+  }
+
+  const archived = data.archived
+  const source = await getSource(config.sourceCollection, contentId)
+
+  if (!managerCanManageSource(manager, source)) {
+    throw new HttpsError('permission-denied', 'You cannot archive or restore this content.')
+  }
+
+  const sourceSchoolId = schoolIdOf(source)
+  const currentSnap = await db.collection('studentAccess')
+    .where('contentId', '==', contentId)
+    .get()
+
+  const targetStatus = archived ? 'inactive' : 'active'
+  const operations = []
+
+  for (const docSnap of currentSnap.docs) {
+    const access = docSnap.data() || {}
+    if (
+      access.contentType === config.contentType &&
+      access.sourceCollection === config.sourceCollection &&
+      schoolIdOf(access) === sourceSchoolId &&
+      access.accessType === 'assignment' &&
+      typeof access.uid === 'string' &&
+      access.uid
+    ) {
+      operations.push({
+        type: 'set',
+        ref: docSnap.ref,
+        data: {
+          status: targetStatus,
+          updatedAt: FieldValue.serverTimestamp()
+        }
+      })
+    }
+  }
+
+  const sourceRef = db.doc(`${config.sourceCollection}/${contentId}`)
+  const sourceUpdate = {
+    archived,
+    updatedBy: manager.uid,
+    updatedAt: FieldValue.serverTimestamp()
+  }
+
+  // Safe ordering: archive access first, then the source. Restore the source
+  // first, then access. This avoids a window where students gain availability
+  // before the source itself is restored.
+  if (archived) {
+    await commitAccessOperations(operations)
+    await sourceRef.set(sourceUpdate, { merge: true })
+  } else {
+    await sourceRef.set(sourceUpdate, { merge: true })
+    await commitAccessOperations(operations)
+  }
+
+  return {
+    ok: true,
+    contentType: config.contentType,
+    contentId,
+    archived,
+    affectedAssignments: operations.length
+  }
+})
+
 function mockLinkedIds(mock, type) {
   if (type === 'reading') {
     return Array.isArray(mock?.readingIds)

@@ -24,6 +24,7 @@ const DEFAULT_SCHOOL_ID = 'maxima'
 
 const getContentStudentAccessCall = httpsCallable(functions, 'getContentStudentAccess')
 const setContentStudentAccessCall = httpsCallable(functions, 'setContentStudentAccess')
+const setContentArchivedStateCall = httpsCallable(functions, 'setContentArchivedState')
 
 function getSchoolId(item) {
   return item?.schoolId || DEFAULT_SCHOOL_ID
@@ -2061,20 +2062,29 @@ export default function TeacherDashboard() {
 
     if (!ok) return
 
-    await updateDoc(doc(db, 'readings', reading.id), {
-      archived: true,
-      assignTo: [],
-      assignedTo: [],
-      studentIds: [],
-      assignedStudentIds: [],
-      assignedEmails: []
-    })
+    try {
+      await setContentArchivedStateCall({
+        contentType: 'reading',
+        contentId: reading.id,
+        archived: true
+      })
+    } catch (error) {
+      console.error('Could not archive reading homework:', error)
+      alert('Could not archive this reading homework. Please check permissions and try again.')
+    }
   }
 
   const restoreReadingHomework = async reading => {
-    await updateDoc(doc(db, 'readings', reading.id), {
-      archived: false
-    })
+    try {
+      await setContentArchivedStateCall({
+        contentType: 'reading',
+        contentId: reading.id,
+        archived: false
+      })
+    } catch (error) {
+      console.error('Could not restore reading homework:', error)
+      alert('Could not restore this reading homework. Please check permissions and try again.')
+    }
   }
 
   const deleteReadingHomework = async reading => {
@@ -2161,20 +2171,29 @@ Continue permanent delete?`
 
     if (!ok) return
 
-    await updateDoc(doc(db, 'writingHomeworks', writing.id), {
-      archived: true,
-      assignTo: [],
-      assignedTo: [],
-      studentIds: [],
-      assignedStudentIds: [],
-      assignedEmails: []
-    })
+    try {
+      await setContentArchivedStateCall({
+        contentType: 'writing',
+        contentId: writing.id,
+        archived: true
+      })
+    } catch (error) {
+      console.error('Could not archive writing homework:', error)
+      alert('Could not archive this writing homework. Please check permissions and try again.')
+    }
   }
 
   const restoreWritingHomework = async writing => {
-    await updateDoc(doc(db, 'writingHomeworks', writing.id), {
-      archived: false
-    })
+    try {
+      await setContentArchivedStateCall({
+        contentType: 'writing',
+        contentId: writing.id,
+        archived: false
+      })
+    } catch (error) {
+      console.error('Could not restore writing homework:', error)
+      alert('Could not restore this writing homework. Please check permissions and try again.')
+    }
   }
 
   const deleteWritingHomework = async writing => {
@@ -2261,20 +2280,29 @@ Continue permanent delete?`
 
     if (!ok) return
 
-    await updateDoc(doc(db, 'listenings', listening.id), {
-      archived: true,
-      assignTo: [],
-      assignedTo: [],
-      studentIds: [],
-      assignedStudentIds: [],
-      assignedEmails: []
-    })
+    try {
+      await setContentArchivedStateCall({
+        contentType: 'listening',
+        contentId: listening.id,
+        archived: true
+      })
+    } catch (error) {
+      console.error('Could not archive listening homework:', error)
+      alert('Could not archive this listening homework. Please check permissions and try again.')
+    }
   }
 
   const restoreListeningHomework = async listening => {
-    await updateDoc(doc(db, 'listenings', listening.id), {
-      archived: false
-    })
+    try {
+      await setContentArchivedStateCall({
+        contentType: 'listening',
+        contentId: listening.id,
+        archived: false
+      })
+    } catch (error) {
+      console.error('Could not restore listening homework:', error)
+      alert('Could not restore this listening homework. Please check permissions and try again.')
+    }
   }
 
   const deleteListeningHomework = async listening => {
@@ -2361,20 +2389,29 @@ Continue permanent delete?`
 
     if (!ok) return
 
-    await updateDoc(doc(db, 'vocabularyTests', vocabularyTest.id), {
-      archived: true,
-      assignTo: [],
-      assignedTo: [],
-      studentIds: [],
-      assignedStudentIds: [],
-      assignedEmails: []
-    })
+    try {
+      await setContentArchivedStateCall({
+        contentType: 'vocabulary',
+        contentId: vocabularyTest.id,
+        archived: true
+      })
+    } catch (error) {
+      console.error('Could not archive vocabulary test:', error)
+      alert('Could not archive this vocabulary test. Please check permissions and try again.')
+    }
   }
 
   const restoreVocabularyTest = async vocabularyTest => {
-    await updateDoc(doc(db, 'vocabularyTests', vocabularyTest.id), {
-      archived: false
-    })
+    try {
+      await setContentArchivedStateCall({
+        contentType: 'vocabulary',
+        contentId: vocabularyTest.id,
+        archived: false
+      })
+    } catch (error) {
+      console.error('Could not restore vocabulary test:', error)
+      alert('Could not restore this vocabulary test. Please check permissions and try again.')
+    }
   }
 
   const deleteVocabularyTest = async vocabularyTest => {
@@ -2461,20 +2498,29 @@ Continue permanent delete?`
 
     if (!ok) return
 
-    await updateDoc(doc(db, 'mockTests', mockTest.id), {
-      archived: true,
-      assignTo: [],
-      assignedTo: [],
-      studentIds: [],
-      assignedStudentIds: [],
-      assignedEmails: []
-    })
+    try {
+      await setContentArchivedStateCall({
+        contentType: 'mock',
+        contentId: mockTest.id,
+        archived: true
+      })
+    } catch (error) {
+      console.error('Could not archive mock test:', error)
+      alert('Could not archive this mock test. Please check permissions and try again.')
+    }
   }
 
   const restoreMockTest = async mockTest => {
-    await updateDoc(doc(db, 'mockTests', mockTest.id), {
-      archived: false
-    })
+    try {
+      await setContentArchivedStateCall({
+        contentType: 'mock',
+        contentId: mockTest.id,
+        archived: false
+      })
+    } catch (error) {
+      console.error('Could not restore mock test:', error)
+      alert('Could not restore this mock test. Please check permissions and try again.')
+    }
   }
 
   const deleteMockTest = async mockTest => {
