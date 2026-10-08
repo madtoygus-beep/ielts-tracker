@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { auth, db } from '../firebase'
+import { auth, db, functions } from '../firebase'
 import {
   addDoc,
   collection,
@@ -11,10 +11,14 @@ import {
   where
 } from 'firebase/firestore'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
+import { httpsCallable } from 'firebase/functions'
 import { useNavigate, useParams } from 'react-router-dom'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 const DEFAULT_SCHOOL_ID = 'maxima'
+
+const getContentStudentAccessCall = httpsCallable(functions, 'getContentStudentAccess')
+const setContentStudentAccessCall = httpsCallable(functions, 'setContentStudentAccess')
 
 const questionTypes = [
   ['mcq', 'Multiple Choice'],
@@ -322,18 +326,18 @@ export default function CreateVocabulary() {
                 )
               : [emptyQuestion('mcq')]
           )
-          setAssignTo(
-            Array.from(
-              new Set([
-                ...(Array.isArray(data.assignTo) ? data.assignTo : []),
-                ...(Array.isArray(data.assignedTo) ? data.assignedTo : []),
-                ...(Array.isArray(data.studentIds) ? data.studentIds : []),
-                ...(Array.isArray(data.assignedStudentIds)
-                  ? data.assignedStudentIds
-                  : [])
-              ])
-            )
-          )
+          const assignmentResult = await getContentStudentAccessCall({
+            contentType: 'vocabulary',
+            contentId: id
+          })
+
+          if (!isActive) return
+
+          const canonicalStudentIds = Array.isArray(assignmentResult.data?.studentIds)
+            ? assignmentResult.data.studentIds.filter(Boolean)
+            : []
+
+          setAssignTo(canonicalStudentIds)
         }
 
         setLoading(false)
@@ -1257,29 +1261,50 @@ export default function CreateVocabulary() {
       questionCount: preparedQuestions.length,
       hasWorkbookTasks: preparedQuestions.some(question => question.type !== 'mcq'),
       matchingShuffle: true,
-      assignTo,
-      assignedTo: [],
-      studentIds: [],
-      assignedStudentIds: selectedStudents.map(student => student.id),
-      assignedEmails: selectedStudents
-        .map(student => student.email?.toLowerCase())
-        .filter(Boolean),
       schoolId: getProfileSchoolId(profile),
       archived: false,
       updatedAt: now
     }
 
     try {
+      let savedVocabularyId = id
+
       if (isEditMode) {
         await updateDoc(doc(db, 'vocabularyTests', id), payload)
       } else {
-        await addDoc(collection(db, 'vocabularyTests'), {
+        const createdVocabulary = await addDoc(collection(db, 'vocabularyTests'), {
           ...payload,
           createdBy: user.uid,
           teacherId: profile?.role === 'teacher' ? user.uid : '',
           teacherIds: profile?.role === 'teacher' ? [user.uid] : [],
           createdAt: now
         })
+        savedVocabularyId = createdVocabulary.id
+      }
+
+      try {
+        await setContentStudentAccessCall({
+          contentType: 'vocabulary',
+          contentId: savedVocabularyId,
+          studentIds: assignTo
+        })
+      } catch (assignmentError) {
+        console.error('Could not synchronize vocabulary assignments:', assignmentError)
+
+        if (!isEditMode && savedVocabularyId) {
+          alert(
+            'The vocabulary practice was created, but student assignments could not be synchronized. ' +
+            'You will be taken to the edit screen so you can retry without creating a duplicate.'
+          )
+          navigate(`/edit-vocabulary/${savedVocabularyId}`, { replace: true })
+          return
+        }
+
+        alert(
+          `The vocabulary changes were saved, but student assignments could not be synchronized. ` +
+          `Please try saving again. ${assignmentError?.message || ''}`
+        )
+        return
       }
 
       navigate('/teacher')
