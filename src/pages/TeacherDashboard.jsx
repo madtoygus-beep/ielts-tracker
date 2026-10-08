@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { auth, db, storage } from '../firebase'
+import { auth, db, storage, functions } from '../firebase'
 import {
   collection,
   addDoc,
@@ -16,10 +16,14 @@ import {
 import { signOut, onAuthStateChanged, updatePassword } from 'firebase/auth'
 import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage'
 import { useNavigate } from 'react-router-dom'
+import { httpsCallable } from 'firebase/functions'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
 const DEFAULT_SCHOOL_ID = 'maxima'
+
+const getContentStudentAccessCall = httpsCallable(functions, 'getContentStudentAccess')
+const setContentStudentAccessCall = httpsCallable(functions, 'setContentStudentAccess')
 
 function getSchoolId(item) {
   return item?.schoolId || DEFAULT_SCHOOL_ID
@@ -1895,7 +1899,7 @@ export default function TeacherDashboard() {
     'full_mock'
   )
 
-  const openAssignmentManager = (homework, type) => {
+  const openAssignmentManager = async (homework, type) => {
     if (!isOwnedByCurrentTeacher(homework)) {
       alert(
         'This is a School Library item. Duplicate it into My Library before assigning it to students.'
@@ -1903,9 +1907,27 @@ export default function TeacherDashboard() {
       return
     }
 
-    setSelectedHomework(homework)
-    setSelectedHomeworkType(type)
-    setAssignmentDraft(mapHomeworkAssignmentsToStudentIds(homework))
+    try {
+      const assignmentResult = await getContentStudentAccessCall({
+        contentType: type,
+        contentId: homework.id
+      })
+
+      const canonicalStudentIds = Array.isArray(assignmentResult.data?.studentIds)
+        ? assignmentResult.data.studentIds.filter(Boolean)
+        : []
+
+      const draftStudentIds = canonicalStudentIds
+        .map(studentUid => getStudentByAnyId(studentUid)?.id)
+        .filter(Boolean)
+
+      setSelectedHomework(homework)
+      setSelectedHomeworkType(type)
+      setAssignmentDraft(Array.from(new Set(draftStudentIds)))
+    } catch (error) {
+      console.error('Could not load canonical homework assignments:', error)
+      alert('Could not load student assignments. Please try again.')
+    }
   }
 
   const toggleAssignment = studentId => {
@@ -1957,17 +1979,6 @@ export default function TeacherDashboard() {
   const saveAssignments = async () => {
     if (!selectedHomework || !selectedHomeworkType) return
 
-    const collectionName =
-      selectedHomeworkType === 'reading'
-        ? 'readings'
-        : selectedHomeworkType === 'listening'
-          ? 'listenings'
-          : selectedHomeworkType === 'mock'
-            ? 'mockTests'
-            : selectedHomeworkType === 'vocabulary'
-              ? 'vocabularyTests'
-              : 'writingHomeworks'
-
     const allowedStudentIds = new Set(students.map(student => student.id))
     const allowedDraftIds = profile?.role === 'admin'
       ? assignmentDraft
@@ -1981,50 +1992,20 @@ export default function TeacherDashboard() {
       selectedStudents.map(student => getStudentPrimaryAssignmentId(student))
     )
 
-    const assignedStudentIds = uniqueCleanValues(
-      selectedStudents.map(student => student.id)
-    )
+    try {
+      await setContentStudentAccessCall({
+        contentType: selectedHomeworkType,
+        contentId: selectedHomework.id,
+        studentIds: finalAssignment
+      })
 
-    const assignedEmails = uniqueCleanValues(
-      selectedStudents
-        .map(student => student.email?.toLowerCase())
-        .filter(Boolean)
-    )
-
-    const selectedVisibilityValues = new Set(
-      selectedStudents
-        .flatMap(student => getStudentAssignmentValues(student))
-        .map(normalizeAssignmentId)
-    )
-
-    const hiddenFor = Array.isArray(selectedHomework.hiddenFor)
-      ? selectedHomework.hiddenFor.filter(value =>
-          !selectedVisibilityValues.has(normalizeAssignmentId(value))
-        )
-      : []
-
-    await updateDoc(doc(db, collectionName, selectedHomework.id), {
-      assignTo: finalAssignment,
-      assignedTo: [],
-      studentIds: [],
-      assignedStudentIds,
-      assignedEmails,
-      hiddenFor,
-      archived: false,
-      schoolId: profile?.schoolId || DEFAULT_SCHOOL_ID,
-      teacherId: profile?.role === 'teacher'
-        ? user.uid
-        : selectedHomework.teacherId || selectedHomework.createdBy || user.uid,
-      teacherIds: profile?.role === 'teacher'
-        ? [user.uid]
-        : selectedHomework.teacherIds || (selectedHomework.teacherId ? [selectedHomework.teacherId] : []),
-      updatedBy: user.uid,
-      updatedAt: new Date().toISOString()
-    })
-
-    setSelectedHomework(null)
-    setSelectedHomeworkType(null)
-    setAssignmentDraft([])
+      setSelectedHomework(null)
+      setSelectedHomeworkType(null)
+      setAssignmentDraft([])
+    } catch (error) {
+      console.error('Could not save canonical homework assignments:', error)
+      alert('Could not save student assignments. Please check permissions and try again.')
+    }
   }
 
   const removeHomeworkFromStudent = async (homework, type, student) => {
@@ -2047,40 +2028,25 @@ export default function TeacherDashboard() {
 
     if (!confirmed) return
 
-    const collectionName =
-      type === 'reading'
-        ? 'readings'
-        : type === 'listening'
-          ? 'listenings'
-          : type === 'mock'
-            ? 'mockTests'
-            : type === 'vocabulary'
-              ? 'vocabularyTests'
-              : 'writingHomeworks'
+    try {
+      const assignmentResult = await getContentStudentAccessCall({
+        contentType: type,
+        contentId: homework.id
+      })
 
-    const studentValues = getStudentAssignmentValues(student)
-    const normalizedStudentValues = new Set(
-      studentValues.map(normalizeAssignmentId)
-    )
-
-    const removeStudentValues = values =>
-      Array.isArray(values)
-        ? values.filter(value => !normalizedStudentValues.has(normalizeAssignmentId(value)))
+      const currentStudentIds = Array.isArray(assignmentResult.data?.studentIds)
+        ? assignmentResult.data.studentIds.filter(Boolean)
         : []
 
-    try {
-      await updateDoc(doc(db, collectionName, homework.id), {
-        assignTo: removeStudentValues(homework.assignTo),
-        assignedTo: removeStudentValues(homework.assignedTo),
-        studentIds: removeStudentValues(homework.studentIds),
-        assignedStudentIds: removeStudentValues(homework.assignedStudentIds),
-        assignedEmails: removeStudentValues(homework.assignedEmails),
-        hiddenFor: uniqueCleanValues([
-          ...(Array.isArray(homework.hiddenFor) ? homework.hiddenFor : []),
-          ...studentValues
-        ]),
-        updatedBy: user.uid,
-        updatedAt: new Date().toISOString()
+      const targetUid = normalizeAssignmentId(getStudentPrimaryAssignmentId(student))
+      const remainingStudentIds = currentStudentIds.filter(
+        uid => normalizeAssignmentId(uid) !== targetUid
+      )
+
+      await setContentStudentAccessCall({
+        contentType: type,
+        contentId: homework.id,
+        studentIds: remainingStudentIds
       })
     } catch (error) {
       console.error('Could not remove homework from student:', error)
