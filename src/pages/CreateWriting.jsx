@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { auth, db } from '../firebase'
+import { auth, db, functions } from '../firebase'
 import {
   addDoc,
   collection,
@@ -11,9 +11,13 @@ import {
   where
 } from 'firebase/firestore'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
+import { httpsCallable } from 'firebase/functions'
 import { useNavigate, useParams } from 'react-router-dom'
 
 const DEFAULT_SCHOOL_ID = 'maxima'
+
+const getContentStudentAccessCall = httpsCallable(functions, 'getContentStudentAccess')
+const setContentStudentAccessCall = httpsCallable(functions, 'setContentStudentAccess')
 
 function getProfileSchoolId(profile) {
   return profile?.schoolId || DEFAULT_SCHOOL_ID
@@ -218,10 +222,13 @@ export default function CreateWriting() {
   }, [user, profile])
 
   useEffect(() => {
+    let isActive = true
+
     const loadWriting = async () => {
-      if (!isEditMode) return
+      if (!isEditMode || !user || !profile) return
 
       const snap = await getDoc(doc(db, 'writingHomeworks', id))
+      if (!isActive) return
 
       if (!snap.exists()) {
         alert('Writing homework not found.')
@@ -230,6 +237,15 @@ export default function CreateWriting() {
       }
 
       const data = snap.data()
+      const assignmentResult = await getContentStudentAccessCall({
+        contentType: 'writing',
+        contentId: id
+      })
+      if (!isActive) return
+
+      const canonicalStudentIds = Array.isArray(assignmentResult.data?.studentIds)
+        ? assignmentResult.data.studentIds.filter(Boolean)
+        : []
 
       setTitle(data.title || '')
       const loadedContentType = data.contentType || data.writingMode || 'full_writing'
@@ -238,18 +254,7 @@ export default function CreateWriting() {
       setVisibility(data.visibility || data.libraryVisibility || 'private')
       setDueDate(data.dueDate || '')
       setTimeLimit(Number(data.timeLimit) || getDefaultWritingTimeLimit(loadedContentType))
-      setAssignTo(
-        Array.from(
-          new Set([
-            ...(Array.isArray(data.assignTo) ? data.assignTo : []),
-            ...(Array.isArray(data.assignedTo) ? data.assignedTo : []),
-            ...(Array.isArray(data.studentIds) ? data.studentIds : []),
-            ...(Array.isArray(data.assignedStudentIds)
-              ? data.assignedStudentIds
-              : [])
-          ])
-        )
-      )
+      setAssignTo(canonicalStudentIds)
 
       setTask1Title(data.task1?.title || 'Writing Task 1')
       setTask1Prompt(data.task1?.prompt || '')
@@ -261,7 +266,11 @@ export default function CreateWriting() {
     }
 
     loadWriting()
-  }, [id, isEditMode, navigate])
+
+    return () => {
+      isActive = false
+    }
+  }, [id, isEditMode, navigate, user, profile])
 
   const filteredStudents = useMemo(() => {
     const term = search.trim().toLowerCase()
@@ -360,11 +369,6 @@ export default function CreateWriting() {
     writingMode: contentType,
     visibility,
     dueDate: cleanString(dueDate),
-    assignTo: assignTo.map(id => cleanString(id)).filter(Boolean),
-    assignedTo: [],
-    studentIds: [],
-    assignedStudentIds: students.filter(student => assignTo.includes(student.id)).map(student => student.id),
-    assignedEmails: students.filter(student => assignTo.includes(student.id)).map(student => student.email?.toLowerCase()).filter(Boolean),
     schoolId: getProfileSchoolId(profile),
     timeLimit: safeTimeLimit,
     task1Enabled: hasTask1,
@@ -509,10 +513,12 @@ export default function CreateWriting() {
     }
 
     try {
+      let savedWritingId = id
+
       if (isEditMode) {
         await updateDoc(doc(db, 'writingHomeworks', id), payload)
       } else {
-        await addDoc(collection(db, 'writingHomeworks'), {
+        const createdWriting = await addDoc(collection(db, 'writingHomeworks'), {
           ...payload,
           createdBy: user.uid,
           teacherId: profile?.role === 'teacher' ? user.uid : '',
@@ -520,6 +526,32 @@ export default function CreateWriting() {
           createdAt: new Date().toISOString(),
           archived: false
         })
+        savedWritingId = createdWriting.id
+      }
+
+      try {
+        await setContentStudentAccessCall({
+          contentType: 'writing',
+          contentId: savedWritingId,
+          studentIds: assignTo
+        })
+      } catch (assignmentError) {
+        console.error('Could not synchronize writing assignments:', assignmentError)
+
+        if (!isEditMode && savedWritingId) {
+          alert(
+            'The writing homework was created, but student assignments could not be synchronized. ' +
+            'You will be taken to the edit screen so you can retry without creating a duplicate.'
+          )
+          navigate(`/edit-writing/${savedWritingId}`, { replace: true })
+          return
+        }
+
+        alert(
+          `The writing changes were saved, but student assignments could not be synchronized. ` +
+          `Please try saving again. ${assignmentError?.message || ''}`
+        )
+        return
       }
 
       setSaved(true)
