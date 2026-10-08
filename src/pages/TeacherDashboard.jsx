@@ -2204,12 +2204,6 @@ Continue permanent delete?`
       createdAt,
       updatedAt,
       createdBy,
-      assignTo,
-      assignedTo,
-      studentIds,
-      assignedStudentIds,
-      assignedEmails,
-      hiddenFor,
       archived,
       ...copyData
     } = reading
@@ -2307,12 +2301,6 @@ Continue permanent delete?`
       createdAt,
       updatedAt,
       createdBy,
-      assignTo,
-      assignedTo,
-      studentIds,
-      assignedStudentIds,
-      assignedEmails,
-      hiddenFor,
       archived,
       ...copyData
     } = writing
@@ -2410,12 +2398,6 @@ Continue permanent delete?`
       createdAt,
       updatedAt,
       createdBy,
-      assignTo,
-      assignedTo,
-      studentIds,
-      assignedStudentIds,
-      assignedEmails,
-      hiddenFor,
       archived,
       ...copyData
     } = listening
@@ -2513,12 +2495,6 @@ Continue permanent delete?`
       createdAt,
       updatedAt,
       createdBy,
-      assignTo,
-      assignedTo,
-      studentIds,
-      assignedStudentIds,
-      assignedEmails,
-      hiddenFor,
       archived,
       ...copyData
     } = vocabularyTest
