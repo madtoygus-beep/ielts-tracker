@@ -807,14 +807,9 @@ service cloud.firestore {
         || teacherOwnsWritingParent(resource.data)
         || (isStudent() && resource.data.uid == request.auth.uid);
 
-      allow create: if hasExpectedSubmissionId(id, request.resource.data.get('writingId', ''))
-        && writingParentExists(request.resource.data)
-        && studentHasActiveAccess('writing', request.resource.data.get('writingId', ''))
-        && validWritingSubmission(request.resource.data)
-        && validStudentSubmissionBase(
-          request.resource.data,
-          get(/databases/$(database)/documents/writingHomeworks/$(request.resource.data.writingId)).data
-        );
+      // Stage 16L-2B3: student Writing submissions are server-authored by
+      // submitWritingSecure. Cloud Functions use the Admin SDK and bypass rules.
+      allow create: if isAdmin();
 
       allow update, delete: if isAdmin()
         || teacherListedOn(resource.data)
