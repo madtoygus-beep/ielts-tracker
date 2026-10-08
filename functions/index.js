@@ -1761,6 +1761,167 @@ function baseSubmission(source, student) {
   }
 }
 
+function countSubmissionWords(value) {
+  const text = typeof value === 'string' ? value.trim() : ''
+  if (!text) return 0
+  return text.split(/\s+/).filter(Boolean).length
+}
+
+function writingSubmissionBase(source, student) {
+  const teacherIds = teacherIdsOf(source)
+  return {
+    uid: student.uid,
+    studentId: student.uid,
+    studentEmail: student.email || '',
+    studentName: student.profile.name || student.profile.fullName || student.email || '',
+    schoolId: schoolIdOf(source),
+    teacherId: teacherIds[0] || '',
+    teacherIds,
+    submittedAt: new Date().toISOString(),
+    attemptNumber: 1,
+    attemptSchemaVersion: ATTEMPT_SCHEMA_VERSION
+  }
+}
+
+exports.submitWritingSecure = onCall(async request => {
+  const student = await requireStudent(request)
+  const data = request.data || {}
+  const writingId = assertDocumentId(data.writingId, 'Writing ID')
+  const rawTask1Answer = typeof data.task1Answer === 'string' ? data.task1Answer : ''
+  const rawTask2Answer = typeof data.task2Answer === 'string' ? data.task2Answer : ''
+  const autoSubmitted = data.autoSubmitted === true
+  const finishedLate = data.finishedLate === true
+
+  assertJsonSize(
+    { task1Answer: rawTask1Answer, task2Answer: rawTask2Answer },
+    'Writing submission payload',
+    180000
+  )
+
+  const config = submissionContentConfigFor('writing')
+  const source = await getSource(config.sourceCollection, writingId)
+  await requireAvailableStudentSource({
+    source,
+    student,
+    contentType: config.contentType,
+    contentId: writingId,
+    sourceCollection: config.sourceCollection
+  })
+
+  const writingMode = source.contentType || source.writingMode || 'full_writing'
+  const task1Enabled = writingMode !== 'task2_only'
+  const task2Enabled = writingMode !== 'task1_only'
+  const task1Answer = task1Enabled ? safeString(rawTask1Answer, 50000) : ''
+  const task2Answer = task2Enabled ? safeString(rawTask2Answer, 80000) : ''
+
+  const existing = await findCurrentSubmissionRecord(config, student.uid, writingId)
+  if (existing) {
+    const openControl = await getOpenSubmissionAttemptControl(
+      config,
+      student.uid,
+      writingId,
+      existing
+    )
+
+    if (!openControl) {
+      return {
+        alreadySubmitted: true,
+        attemptNumber: attemptNumberOf(existing.data),
+        submission: {
+          id: existing.id,
+          ...toPlain(existing.data)
+        }
+      }
+    }
+  }
+
+  const submission = {
+    ...writingSubmissionBase(source, student),
+    writingId,
+    contentType: writingMode,
+    writingMode,
+    task1Enabled,
+    task2Enabled,
+    task1Answer,
+    task2Answer,
+    task1WordCount: task1Enabled ? countSubmissionWords(task1Answer) : 0,
+    task2WordCount: task2Enabled ? countSubmissionWords(task2Answer) : 0,
+    finishedLate,
+    autoSubmitted,
+    reviewed: false,
+    review: null,
+    archived: false
+  }
+
+  if (existing) {
+    const attemptResult = await replaceCurrentSubmissionForOpenAttempt({
+      config,
+      student,
+      contentId: writingId,
+      source,
+      current: existing,
+      submissionData: submission
+    })
+
+    if (!attemptResult.reopened) {
+      const raced = await findCurrentSubmissionRecord(config, student.uid, writingId)
+      return {
+        alreadySubmitted: true,
+        attemptNumber: raced ? attemptNumberOf(raced.data) : attemptNumberOf(existing.data),
+        submission: raced
+          ? { id: raced.id, ...toPlain(raced.data) }
+          : { id: existing.id, ...toPlain(existing.data) }
+      }
+    }
+
+    const stored = {
+      ...submission,
+      attemptNumber: attemptResult.attemptNumber,
+      attemptSchemaVersion: ATTEMPT_SCHEMA_VERSION,
+      previousAttemptNumber: attemptNumberOf(existing.data),
+      reopenMode: attemptResult.mode
+    }
+
+    return {
+      alreadySubmitted: false,
+      reopenedAttempt: true,
+      attemptNumber: attemptResult.attemptNumber,
+      submission: {
+        id: attemptResult.submissionId,
+        ...toPlain(stored)
+      }
+    }
+  }
+
+  try {
+    const submissionId = await createImmutableSubmission(config, student, writingId, submission)
+    return {
+      alreadySubmitted: false,
+      reopenedAttempt: false,
+      attemptNumber: 1,
+      submission: {
+        id: submissionId,
+        ...toPlain(submission)
+      }
+    }
+  } catch (error) {
+    if (error instanceof HttpsError && error.code === 'already-exists') {
+      const raced = await findCurrentSubmissionRecord(config, student.uid, writingId)
+      if (raced) {
+        return {
+          alreadySubmitted: true,
+          attemptNumber: attemptNumberOf(raced.data),
+          submission: {
+            id: raced.id,
+            ...toPlain(raced.data)
+          }
+        }
+      }
+    }
+    throw error
+  }
+})
+
 exports.submitReadingSecure = onCall(async request => {
   const student = await requireStudent(request)
   const data = request.data || {}
