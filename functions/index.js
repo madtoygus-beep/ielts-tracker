@@ -87,15 +87,6 @@ function teacherIdsOf(data) {
 const STUDENT_ACCESS_SCHEMA_VERSION = 1
 const REVIEW_POLICIES = new Set(['immediate', 'teacher_release', 'scheduled', 'never'])
 
-function looksLikeEmail(value) {
-  return typeof value === 'string' && value.includes('@')
-}
-
-function hiddenUidValues(data) {
-  return uniqueStrings(Array.isArray(data?.hiddenFor) ? data.hiddenFor : [])
-    .filter(value => !looksLikeEmail(value))
-}
-
 function studentAccessId(uid, contentType, contentId) {
   return `${uid}_${contentType}_${contentId}`
 }
@@ -109,7 +100,6 @@ function reviewPolicyOf(data) {
 
 function studentAccessPayload(contentType, sourceCollection, contentId, source, uid) {
   const teacherIds = teacherIdsOf(source)
-  const hidden = hiddenUidValues(source).includes(uid)
 
   return {
     uid,
@@ -118,7 +108,7 @@ function studentAccessPayload(contentType, sourceCollection, contentId, source, 
     contentId,
     sourceCollection,
     accessType: 'assignment',
-    status: source?.archived === true || hidden ? 'inactive' : 'active',
+    status: source?.archived === true ? 'inactive' : 'active',
     assignedBy: teacherIds[0] || '',
     reviewPolicy: reviewPolicyOf(source),
     reviewReleaseAt: source?.reviewReleaseAt ?? null,
@@ -653,9 +643,8 @@ exports.getManagedContentStudentAccessSnapshot = onCall(async request => {
   }
 })
 
-// Stage 16G-B: canonical assignment writer. Existing Create/Teacher screens are
-// migrated to this callable in later 16G steps; legacy source arrays remain
-// temporarily as a compatibility bridge until every writer has cut over.
+// Stage 16G-I4C: canonical assignment writer. studentAccess is authoritative;
+// legacy source assignment arrays are no longer read or written here.
 exports.setContentStudentAccess = onCall(async request => {
   const manager = await requireAssignmentManager(request)
   const data = request.data || {}
@@ -669,7 +658,7 @@ exports.setContentStudentAccess = onCall(async request => {
   }
 
   const sourceSchoolId = schoolIdOf(source)
-  const selectedStudents = await loadAssignableStudents(studentIds, sourceSchoolId)
+  await loadAssignableStudents(studentIds, sourceSchoolId)
 
   const currentSnap = await db.collection('studentAccess')
     .where('contentId', '==', contentId)
@@ -691,14 +680,6 @@ exports.setContentStudentAccess = onCall(async request => {
   }
 
   const targetSet = new Set(studentIds)
-  const selectedStudentByUid = new Map(
-    selectedStudents.map(student => [student.uid, student])
-  )
-  const sourceHiddenSet = new Set(
-    uniqueStrings(Array.isArray(source?.hiddenFor) ? source.hiddenFor : [])
-      .map(value => value.toLowerCase())
-  )
-  const effectiveAdminHiddenUids = new Set()
   const operations = []
   let created = 0
   let updated = 0
@@ -707,18 +688,7 @@ exports.setContentStudentAccess = onCall(async request => {
 
   for (const uid of studentIds) {
     const existing = currentAssignments.get(uid)
-    const selectedStudent = selectedStudentByUid.get(uid)
-    const legacyStudentValues = uniqueStrings([
-      uid,
-      selectedStudent?.profile?.uid,
-      selectedStudent?.profile?.authUid,
-      selectedStudent?.profile?.email,
-      selectedStudent?.profile?.email?.toLowerCase()
-    ])
-    const legacyHidden = legacyStudentValues.some(value =>
-      sourceHiddenSet.has(value.toLowerCase())
-    )
-    const adminHidden = existing?.access?.adminHidden === true || legacyHidden
+    const adminHidden = existing?.access?.adminHidden === true
     const ref = db.doc(`studentAccess/${studentAccessId(uid, config.contentType, contentId)}`)
     const payload = studentAccessPayload(
       config.contentType,
@@ -731,7 +701,6 @@ exports.setContentStudentAccess = onCall(async request => {
     if (adminHidden) {
       payload.status = 'inactive'
       payload.adminHidden = true
-      effectiveAdminHiddenUids.add(uid)
     }
 
     if (!existing) {
@@ -753,42 +722,6 @@ exports.setContentStudentAccess = onCall(async request => {
 
   await commitAccessOperations(operations)
 
-  // Temporary Stage 16G compatibility bridge: keep legacy assignment arrays
-  // synchronized from the canonical writer until every Teacher/Create writer
-  // and the legacy Firestore triggers have been retired. Clients no longer
-  // need to write these fields directly once they cut over to this callable.
-  const selectedEmails = uniqueStrings(
-    selectedStudents
-      .map(student => student.profile?.email)
-      .filter(Boolean)
-  ).map(email => email.toLowerCase())
-
-  const adminHiddenLegacyValues = uniqueStrings(
-    selectedStudents.flatMap(student => {
-      if (!effectiveAdminHiddenUids.has(student.uid)) return []
-      return [
-        student.uid,
-        student.profile?.uid,
-        student.profile?.authUid,
-        student.profile?.email,
-        student.profile?.email?.toLowerCase()
-      ]
-    })
-  )
-
-  // During the bridge, hiddenFor should describe only currently assigned
-  // students that are genuinely admin-hidden. This prevents stale legacy
-  // markers from silently hiding a student after a later re-assignment.
-  const bridgedHiddenFor = adminHiddenLegacyValues
-
-  await db.doc(`${config.sourceCollection}/${contentId}`).set({
-    assignTo: studentIds,
-    assignedTo: [],
-    studentIds: [],
-    assignedStudentIds: studentIds,
-    assignedEmails: selectedEmails,
-    hiddenFor: bridgedHiddenFor
-  }, { merge: true })
 
   return {
     ok: true,
@@ -799,14 +732,12 @@ exports.setContentStudentAccess = onCall(async request => {
     updated,
     removed,
     inactive,
-    legacyBridgeUpdated: true
+    legacyBridgeUpdated: false
   }
 })
 
-// Stage 16G-H2A: canonical archive/restore writer. Archive state remains source
+// Stage 16G-I4C: canonical archive/restore writer. Archive state remains source
 // metadata, while assignment availability is updated directly in studentAccess.
-// The legacy source triggers may mirror the same status during transition, but
-// this callable no longer depends on them for archive/restore correctness.
 exports.setContentArchivedState = onCall(async request => {
   const manager = await requireAssignmentManager(request)
   const data = request.data || {}
@@ -829,7 +760,6 @@ exports.setContentArchivedState = onCall(async request => {
     .where('contentId', '==', contentId)
     .get()
 
-  const legacyHiddenUids = new Set(hiddenUidValues(source))
   const operations = []
 
   for (const docSnap of currentSnap.docs) {
@@ -842,8 +772,7 @@ exports.setContentArchivedState = onCall(async request => {
       typeof access.uid === 'string' &&
       access.uid
     ) {
-      const shouldStayInactive =
-        archived || access.adminHidden === true || legacyHiddenUids.has(access.uid)
+      const shouldStayInactive = archived || access.adminHidden === true
 
       operations.push({
         type: 'set',
@@ -883,9 +812,9 @@ exports.setContentArchivedState = onCall(async request => {
   }
 })
 
-// Stage 16G-I2A: admin-only replacement for legacy hiddenFor assignment
-// visibility. Submission/result archiving remains in AdminDashboard for now;
-// this callable only controls canonical assignment availability.
+// Stage 16G-I4C: admin-only canonical assignment visibility. Submission/result
+// archiving remains in AdminDashboard for now; this callable controls only
+// studentAccess availability and no longer writes legacy source markers.
 exports.setStudentAssignmentVisibility = onCall(async request => {
   const admin = await requireAdmin(request)
   const data = request.data || {}
@@ -942,14 +871,6 @@ exports.setStudentAssignmentVisibility = onCall(async request => {
     studentProfile.status === 'approved' && studentProfile.deleted !== true
   const now = FieldValue.serverTimestamp()
   const accessOperations = []
-  const sourceOperations = []
-  const legacyReferenceValues = uniqueStrings([
-    studentId,
-    studentProfile.uid,
-    studentProfile.authUid,
-    studentProfile.email,
-    studentProfile.email?.toLowerCase()
-  ])
 
   for (let index = 0; index < candidates.length; index++) {
     const { docSnap, access } = candidates[index]
@@ -975,32 +896,9 @@ exports.setStudentAssignmentVisibility = onCall(async request => {
         updatedAt: now
       }
     })
-
-    if (sourceExists && legacyReferenceValues.length > 0) {
-      sourceOperations.push({
-        type: 'set',
-        ref: sourceSnap.ref,
-        data: {
-          hiddenFor: hidden
-            ? FieldValue.arrayUnion(...legacyReferenceValues)
-            : FieldValue.arrayRemove(...legacyReferenceValues),
-          updatedBy: admin.uid,
-          updatedAt: now
-        }
-      })
-    }
   }
 
-  // Hide access first to avoid an exposure window. Restore the compatibility
-  // source marker first, then canonical access, so legacy triggers cannot
-  // immediately undo the requested state during the transition.
-  if (hidden) {
-    await commitAccessOperations(accessOperations)
-    await commitAccessOperations(sourceOperations)
-  } else {
-    await commitAccessOperations(sourceOperations)
-    await commitAccessOperations(accessOperations)
-  }
+  await commitAccessOperations(accessOperations)
 
   return {
     ok: true,
@@ -1008,7 +906,7 @@ exports.setStudentAssignmentVisibility = onCall(async request => {
     scope,
     hidden,
     affectedAssignments: accessOperations.length,
-    legacyBridgeUpdated: sourceOperations.length
+    legacyBridgeUpdated: 0
   }
 })
 
