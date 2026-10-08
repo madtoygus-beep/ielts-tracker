@@ -1116,6 +1116,8 @@ function chooseLegacyCurrentSubmission(records) {
   if (records.length === 0) return null
 
   return [...records].sort((a, b) => {
+    const attemptDifference = attemptNumberOf(b.data) - attemptNumberOf(a.data)
+    if (attemptDifference !== 0) return attemptDifference
     if (a.meaningful !== b.meaningful) return a.meaningful ? -1 : 1
     if (a.submittedAtMillis !== b.submittedAtMillis) {
       return b.submittedAtMillis - a.submittedAtMillis
@@ -1549,6 +1551,198 @@ async function createImmutableSubmission(config, student, assignmentId, data) {
   return ref.id
 }
 
+async function getOpenSubmissionAttemptControl(config, uid, contentId, current = null) {
+  const controlRef = db.doc(
+    `${ATTEMPT_CONTROL_COLLECTION}/${attemptControlId(uid, config.contentType, contentId)}`
+  )
+  const controlSnap = await controlRef.get()
+  if (!controlSnap.exists) return null
+
+  const control = controlSnap.data() || {}
+  if (
+    control.status !== 'open' ||
+    control.uid !== uid ||
+    control.contentType !== config.contentType ||
+    control.contentId !== contentId ||
+    control.sourceCollection !== config.sourceCollection ||
+    control.submissionCollection !== config.submissionCollection
+  ) {
+    return null
+  }
+
+  if (current && control.baseSubmissionId !== current.id) return null
+
+  return { ref: controlRef, data: control }
+}
+
+function attemptHistoryPayload({
+  config,
+  student,
+  contentId,
+  source,
+  managerUid = '',
+  managerRole = '',
+  currentSnap,
+  currentData,
+  attemptNumber,
+  scoreSnap = null
+}) {
+  const historyData = {
+    schemaVersion: ATTEMPT_SCHEMA_VERSION,
+    uid: student.uid,
+    studentId: student.uid,
+    schoolId: schoolIdOf(source),
+    contentType: config.contentType,
+    contentId,
+    sourceCollection: config.sourceCollection,
+    submissionCollection: config.submissionCollection,
+    attemptNumber,
+    sourceSubmissionId: currentSnap.id,
+    submittedAt: currentData.submittedAt || '',
+    archivedReason: 'reopened_for_new_attempt',
+    archivedBy: managerUid,
+    archivedByRole: managerRole,
+    archivedAt: FieldValue.serverTimestamp(),
+    submissionSnapshot: toPlain(currentData)
+  }
+
+  if (scoreSnap?.exists) {
+    historyData.sourceScoreId = scoreSnap.id
+    historyData.scoreSnapshot = toPlain(scoreSnap.data() || {})
+  }
+
+  return historyData
+}
+
+async function replaceCurrentSubmissionForOpenAttempt({
+  config,
+  student,
+  contentId,
+  source,
+  current,
+  submissionData,
+  scoreRecord = null,
+  scoreData = null
+}) {
+  const controlId = attemptControlId(student.uid, config.contentType, contentId)
+  const controlRef = db.doc(`${ATTEMPT_CONTROL_COLLECTION}/${controlId}`)
+
+  return db.runTransaction(async transaction => {
+    const [currentSnap, controlSnap] = await Promise.all([
+      transaction.get(current.ref),
+      transaction.get(controlRef)
+    ])
+
+    if (!currentSnap.exists || !controlSnap.exists) {
+      return { reopened: false }
+    }
+
+    const currentData = currentSnap.data() || {}
+    const control = controlSnap.data() || {}
+
+    if (
+      control.status !== 'open' ||
+      control.uid !== student.uid ||
+      control.contentType !== config.contentType ||
+      control.contentId !== contentId ||
+      control.sourceCollection !== config.sourceCollection ||
+      control.submissionCollection !== config.submissionCollection ||
+      control.baseSubmissionId !== currentSnap.id ||
+      (currentData.uid || currentData.studentId) !== student.uid ||
+      !submissionMatchesContent(config, currentData, contentId)
+    ) {
+      return { reopened: false }
+    }
+
+    const baseAttemptNumber = attemptNumberOf(currentData)
+    const controlBaseAttemptNumber = Number(control.baseAttemptNumber) || 1
+    const nextAttemptNumber = Number(control.nextAttemptNumber) || (baseAttemptNumber + 1)
+
+    if (
+      controlBaseAttemptNumber !== baseAttemptNumber ||
+      nextAttemptNumber !== baseAttemptNumber + 1
+    ) {
+      throw new HttpsError(
+        'failed-precondition',
+        'This reopen request is out of date. Ask your teacher to reopen the attempt again.'
+      )
+    }
+
+    const historyRef = db.doc(
+      `${ATTEMPT_HISTORY_COLLECTION}/${attemptHistoryId(controlId, baseAttemptNumber)}`
+    )
+
+    const historySnap = await transaction.get(historyRef)
+    const scoreRef = scoreData
+      ? (scoreRecord?.ref || db.doc(`scores/${student.uid}_${contentId}`))
+      : null
+    const scoreSnap = scoreRef ? await transaction.get(scoreRef) : null
+
+    if (!historySnap.exists) {
+      transaction.create(historyRef, attemptHistoryPayload({
+        config,
+        student,
+        contentId,
+        source,
+        managerUid: control.openedBy || '',
+        managerRole: control.openedByRole || '',
+        currentSnap,
+        currentData,
+        attemptNumber: baseAttemptNumber,
+        scoreSnap
+      }))
+    }
+
+    const nextSubmission = {
+      ...submissionData,
+      attemptNumber: nextAttemptNumber,
+      attemptSchemaVersion: ATTEMPT_SCHEMA_VERSION,
+      previousAttemptNumber: baseAttemptNumber,
+      reopenMode: control.mode,
+      reopenedBy: control.openedBy || '',
+      reopenedAt: control.openedAt || null
+    }
+
+    transaction.set(current.ref, nextSubmission)
+
+    if (scoreRef && scoreData) {
+      transaction.set(scoreRef, {
+        ...scoreData,
+        attemptNumber: nextAttemptNumber,
+        attemptSchemaVersion: ATTEMPT_SCHEMA_VERSION,
+        previousAttemptNumber: baseAttemptNumber,
+        reopenMode: control.mode
+      })
+    }
+
+    transaction.set(controlRef, {
+      status: 'consumed',
+      consumedBy: student.uid,
+      consumedAt: FieldValue.serverTimestamp(),
+      completedAttemptNumber: nextAttemptNumber,
+      latestSubmissionId: currentSnap.id,
+      updatedAt: FieldValue.serverTimestamp()
+    }, { merge: true })
+
+    return {
+      reopened: true,
+      mode: control.mode,
+      attemptNumber: nextAttemptNumber,
+      submissionId: currentSnap.id
+    }
+  })
+}
+
+async function assertAttemptReviewAvailable(config, student, contentId, current) {
+  const control = await getOpenSubmissionAttemptControl(config, student.uid, contentId, current)
+  if (control) {
+    throw new HttpsError(
+      'failed-precondition',
+      'This homework has been reopened. Submit the new attempt before opening the answer review.'
+    )
+  }
+}
+
 function baseSubmission(source, student) {
   const teacherIds = teacherIdsOf(source)
   return {
@@ -1587,7 +1781,15 @@ exports.submitReadingSecure = onCall(async request => {
 
   const existing = await findExistingSubmission(config, student, readingId)
   if (existing) {
-    return { alreadySubmitted: true, result: existing.result || null, reviewSource: toPlain(source) }
+    const openControl = await getOpenSubmissionAttemptControl(
+      submissionContentConfigFor('reading'),
+      student.uid,
+      readingId,
+      existing
+    )
+    if (!openControl) {
+      return { alreadySubmitted: true, result: existing.result || null, reviewSource: toPlain(source) }
+    }
   }
 
   const result = gradeReading(source, answers)
@@ -1604,6 +1806,30 @@ exports.submitReadingSecure = onCall(async request => {
     archived: false
   }
 
+  if (existing) {
+    const attemptResult = await replaceCurrentSubmissionForOpenAttempt({
+      config: submissionContentConfigFor('reading'),
+      student,
+      contentId: readingId,
+      source,
+      current: existing,
+      submissionData: submission
+    })
+
+    if (!attemptResult.reopened) {
+      const raced = await findExistingSubmission(config, student, readingId)
+      return { alreadySubmitted: true, result: raced?.result || existing.result || result, reviewSource: toPlain(source) }
+    }
+
+    return {
+      alreadySubmitted: false,
+      reopenedAttempt: true,
+      attemptNumber: attemptResult.attemptNumber,
+      result,
+      reviewSource: toPlain(source)
+    }
+  }
+
   try {
     await createImmutableSubmission(config, student, readingId, submission)
   } catch (error) {
@@ -1614,7 +1840,7 @@ exports.submitReadingSecure = onCall(async request => {
     throw error
   }
 
-  return { alreadySubmitted: false, result, reviewSource: toPlain(source) }
+  return { alreadySubmitted: false, attemptNumber: 1, result, reviewSource: toPlain(source) }
 })
 
 exports.submitListeningSecure = onCall(async request => {
@@ -1637,7 +1863,15 @@ exports.submitListeningSecure = onCall(async request => {
 
   const existing = await findExistingSubmission(config, student, listeningId)
   if (existing) {
-    return { alreadySubmitted: true, result: existing.result || null, reviewSource: toPlain(source) }
+    const openControl = await getOpenSubmissionAttemptControl(
+      submissionContentConfigFor('listening'),
+      student.uid,
+      listeningId,
+      existing
+    )
+    if (!openControl) {
+      return { alreadySubmitted: true, result: existing.result || null, reviewSource: toPlain(source) }
+    }
   }
 
   const result = gradeListening(source, answers)
@@ -1653,6 +1887,30 @@ exports.submitListeningSecure = onCall(async request => {
     archived: false
   }
 
+  if (existing) {
+    const attemptResult = await replaceCurrentSubmissionForOpenAttempt({
+      config: submissionContentConfigFor('listening'),
+      student,
+      contentId: listeningId,
+      source,
+      current: existing,
+      submissionData: submission
+    })
+
+    if (!attemptResult.reopened) {
+      const raced = await findExistingSubmission(config, student, listeningId)
+      return { alreadySubmitted: true, result: raced?.result || existing.result || result, reviewSource: toPlain(source) }
+    }
+
+    return {
+      alreadySubmitted: false,
+      reopenedAttempt: true,
+      attemptNumber: attemptResult.attemptNumber,
+      result,
+      reviewSource: toPlain(source)
+    }
+  }
+
   try {
     await createImmutableSubmission(config, student, listeningId, submission)
   } catch (error) {
@@ -1663,7 +1921,7 @@ exports.submitListeningSecure = onCall(async request => {
     throw error
   }
 
-  return { alreadySubmitted: false, result, reviewSource: toPlain(source) }
+  return { alreadySubmitted: false, attemptNumber: 1, result, reviewSource: toPlain(source) }
 })
 
 exports.submitVocabularySecure = onCall(async request => {
@@ -1686,7 +1944,15 @@ exports.submitVocabularySecure = onCall(async request => {
 
   const existing = await findExistingSubmission(config, student, vocabularyTestId)
   if (existing) {
-    return { alreadySubmitted: true, result: existing.result || null, reviewSource: toPlain(source) }
+    const openControl = await getOpenSubmissionAttemptControl(
+      submissionContentConfigFor('vocabulary'),
+      student.uid,
+      vocabularyTestId,
+      existing
+    )
+    if (!openControl) {
+      return { alreadySubmitted: true, result: existing.result || null, reviewSource: toPlain(source) }
+    }
   }
 
   const result = gradeVocabulary(source, answers)
@@ -1705,6 +1971,31 @@ exports.submitVocabularySecure = onCall(async request => {
     autoSubmitted: autoSubmitted === true
   }
 
+  if (existing) {
+    const attemptResult = await replaceCurrentSubmissionForOpenAttempt({
+      config: submissionContentConfigFor('vocabulary'),
+      student,
+      contentId: vocabularyTestId,
+      source,
+      current: existing,
+      submissionData: submission
+    })
+
+    if (!attemptResult.reopened) {
+      const raced = await findExistingSubmission(config, student, vocabularyTestId)
+      return { alreadySubmitted: true, result: raced?.result || existing.result || result, reviewSource: toPlain(source) }
+    }
+
+    await db.doc(`vocabularyDrafts/${student.uid}_${vocabularyTestId}`).delete().catch(() => {})
+    return {
+      alreadySubmitted: false,
+      reopenedAttempt: true,
+      attemptNumber: attemptResult.attemptNumber,
+      result,
+      reviewSource: toPlain(source)
+    }
+  }
+
   try {
     await createImmutableSubmission(config, student, vocabularyTestId, submission)
   } catch (error) {
@@ -1716,7 +2007,7 @@ exports.submitVocabularySecure = onCall(async request => {
   }
 
   await db.doc(`vocabularyDrafts/${student.uid}_${vocabularyTestId}`).delete().catch(() => {})
-  return { alreadySubmitted: false, result, reviewSource: toPlain(source) }
+  return { alreadySubmitted: false, attemptNumber: 1, result, reviewSource: toPlain(source) }
 })
 
 async function getMockSources(mock) {
@@ -1772,10 +2063,18 @@ exports.submitMockSecure = onCall(async request => {
   const sources = await getMockSources(mock)
 
   if (existing) {
-    return {
-      alreadySubmitted: true,
-      result: existing.result || null,
-      reviewSources: mockReviewSources(sources)
+    const openControl = await getOpenSubmissionAttemptControl(
+      submissionContentConfigFor('mock'),
+      student.uid,
+      mockTestId,
+      existing
+    )
+    if (!openControl) {
+      return {
+        alreadySubmitted: true,
+        result: existing.result || null,
+        reviewSources: mockReviewSources(sources)
+      }
     }
   }
 
@@ -1847,6 +2146,37 @@ exports.submitMockSecure = onCall(async request => {
   const submissionRef = db.doc(`mockSubmissions/${student.uid}_${mockTestId}`)
   const scoreRef = db.doc(`scores/${student.uid}_${mockTestId}`)
 
+  if (existing) {
+    const scoreRecord = await findCurrentMockScoreRecord(student.uid, mockTestId)
+    const attemptResult = await replaceCurrentSubmissionForOpenAttempt({
+      config: submissionContentConfigFor('mock'),
+      student,
+      contentId: mockTestId,
+      source: mock,
+      current: existing,
+      submissionData,
+      scoreRecord,
+      scoreData
+    })
+
+    if (!attemptResult.reopened) {
+      const raced = await findExistingMockSubmission(student, mockTestId)
+      return {
+        alreadySubmitted: true,
+        result: raced?.result || existing.result || result,
+        reviewSources: mockReviewSources(sources)
+      }
+    }
+
+    return {
+      alreadySubmitted: false,
+      reopenedAttempt: true,
+      attemptNumber: attemptResult.attemptNumber,
+      result,
+      reviewSources: mockReviewSources(sources)
+    }
+  }
+
   try {
     await db.runTransaction(async transaction => {
       const snap = await transaction.get(submissionRef)
@@ -1854,7 +2184,7 @@ exports.submitMockSecure = onCall(async request => {
         throw new HttpsError('already-exists', 'You already submitted this mock test.')
       }
       transaction.create(submissionRef, submissionData)
-      transaction.set(scoreRef, scoreData)
+      transaction.set(scoreRef, { ...scoreData, attemptNumber: 1, attemptSchemaVersion: ATTEMPT_SCHEMA_VERSION })
     })
   } catch (error) {
     if (error instanceof HttpsError && error.code === 'already-exists') {
@@ -1870,6 +2200,7 @@ exports.submitMockSecure = onCall(async request => {
 
   return {
     alreadySubmitted: false,
+    attemptNumber: 1,
     result,
     reviewSources: mockReviewSources(sources)
   }
@@ -1885,6 +2216,13 @@ exports.getCompletedObjectiveReview = onCall(async request => {
   const existing = await findExistingSubmission(config, student, assignmentId)
   if (!existing) throw new HttpsError('permission-denied', 'Submit this homework before opening the answer review.')
 
+  await assertAttemptReviewAvailable(
+    submissionContentConfigFor(config.contentType),
+    student,
+    assignmentId,
+    existing
+  )
+
   const source = await getSource(config.sourceCollection, assignmentId)
   return { source: toPlain(source), result: existing.result || null }
 })
@@ -1895,6 +2233,13 @@ exports.getCompletedMockReview = onCall(async request => {
   const mockTestId = assertDocumentId(data.mockTestId, 'Mock test ID')
   const existing = await findExistingMockSubmission(student, mockTestId)
   if (!existing) throw new HttpsError('permission-denied', 'Submit this mock before opening the answer review.')
+
+  await assertAttemptReviewAvailable(
+    submissionContentConfigFor('mock'),
+    student,
+    mockTestId,
+    existing
+  )
 
   const mock = await getSource('mockTests', mockTestId)
   const sources = await getMockSources(mock)
