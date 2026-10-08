@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { auth, db, storage, functions } from '../firebase'
 import {
   collection,
@@ -23,8 +23,16 @@ const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 const DEFAULT_SCHOOL_ID = 'maxima'
 
 const getContentStudentAccessCall = httpsCallable(functions, 'getContentStudentAccess')
+const getManagedContentStudentAccessSnapshotCall = httpsCallable(
+  functions,
+  'getManagedContentStudentAccessSnapshot'
+)
 const setContentStudentAccessCall = httpsCallable(functions, 'setContentStudentAccess')
 const setContentArchivedStateCall = httpsCallable(functions, 'setContentArchivedState')
+
+function assignmentAccessKey(contentType, contentId) {
+  return `${contentType}:${contentId}`
+}
 
 function getSchoolId(item) {
   return item?.schoolId || DEFAULT_SCHOOL_ID
@@ -206,6 +214,8 @@ export default function TeacherDashboard() {
 
   const [vocabularyTests, setVocabularyTests] = useState([])
   const [vocabularySubmissions, setVocabularySubmissions] = useState([])
+  const [assignmentStudentIdsByContent, setAssignmentStudentIdsByContent] = useState({})
+  const assignmentSnapshotRequestRef = useRef(0)
 
   const [teacherMessages, setTeacherMessages] = useState([])
   const [teacherMaterials, setTeacherMaterials] = useState([])
@@ -301,6 +311,68 @@ export default function TeacherDashboard() {
       'Some dashboard data could not be refreshed. Existing data is being kept on screen. Firestore listeners will retry automatically.'
     )
   }
+
+  const refreshCanonicalAssignmentSnapshot = async () => {
+    if (!user || !profile) return
+
+    const requestId = ++assignmentSnapshotRequestRef.current
+    const items = [
+      ...readings.map(item => ({ contentType: 'reading', contentId: item.id })),
+      ...writings.map(item => ({ contentType: 'writing', contentId: item.id })),
+      ...listenings.map(item => ({ contentType: 'listening', contentId: item.id })),
+      ...vocabularyTests.map(item => ({ contentType: 'vocabulary', contentId: item.id })),
+      ...mockTests.map(item => ({ contentType: 'mock', contentId: item.id }))
+    ].filter(item => item.contentId)
+
+    if (items.length === 0) {
+      if (requestId === assignmentSnapshotRequestRef.current) {
+        setAssignmentStudentIdsByContent({})
+      }
+      return
+    }
+
+    try {
+      const result = await getManagedContentStudentAccessSnapshotCall({ items })
+      if (requestId !== assignmentSnapshotRequestRef.current) return
+
+      const next = {}
+      const assignments = Array.isArray(result.data?.assignments)
+        ? result.data.assignments
+        : []
+
+      assignments.forEach(assignment => {
+        if (!assignment?.contentType || !assignment?.contentId) return
+        next[assignmentAccessKey(assignment.contentType, assignment.contentId)] = Array.from(
+          new Set(
+            (Array.isArray(assignment.studentIds) ? assignment.studentIds : [])
+              .filter(Boolean)
+          )
+        )
+      })
+
+      setAssignmentStudentIdsByContent(next)
+    } catch (error) {
+      if (requestId !== assignmentSnapshotRequestRef.current) return
+      console.error('Could not refresh canonical assignment snapshot:', error)
+      setDashboardDataError(
+        'Assignment data could not be refreshed. Existing assignment information is being kept on screen.'
+      )
+    }
+  }
+
+  useEffect(() => {
+    if (!user || !profile) {
+      assignmentSnapshotRequestRef.current += 1
+      setAssignmentStudentIdsByContent({})
+      return undefined
+    }
+
+    const timer = window.setTimeout(() => {
+      refreshCanonicalAssignmentSnapshot()
+    }, 120)
+
+    return () => window.clearTimeout(timer)
+  }, [user, profile, readings, writings, listenings, vocabularyTests, mockTests])
 
   useEffect(() => {
     let isActive = true
@@ -750,28 +822,24 @@ export default function TeacherDashboard() {
       student?.email?.toLowerCase()
     ])
 
-  const getHomeworkAssignmentValues = homework =>
-    uniqueCleanValues([
-      ...(Array.isArray(homework?.assignTo) ? homework.assignTo : []),
-      ...(Array.isArray(homework?.assignedTo) ? homework.assignedTo : []),
-      ...(Array.isArray(homework?.studentIds) ? homework.studentIds : []),
-      ...(Array.isArray(homework?.assignedStudentIds) ? homework.assignedStudentIds : []),
-      ...(Array.isArray(homework?.assignedEmails) ? homework.assignedEmails : [])
-    ])
-
-  const isHomeworkAssignedToStudent = (homework, student) => {
-    if (!homework || !student) return false
-
-    const homeworkValues = getHomeworkAssignmentValues(homework).map(normalizeAssignmentId)
-    const studentValues = getStudentAssignmentValues(student).map(normalizeAssignmentId)
-
-    return studentValues.some(value => homeworkValues.includes(value))
+  const getCanonicalAssignmentStudentIds = (contentType, contentId) => {
+    if (!contentType || !contentId) return []
+    const value = assignmentStudentIdsByContent[assignmentAccessKey(contentType, contentId)]
+    return Array.isArray(value) ? value : []
   }
 
-  const mapHomeworkAssignmentsToStudentIds = homework =>
-    students
-      .filter(student => isHomeworkAssignedToStudent(homework, student))
-      .map(student => student.id)
+  const getCanonicalAssignmentCount = (contentType, contentId) =>
+    getCanonicalAssignmentStudentIds(contentType, contentId).length
+
+  const isHomeworkAssignedToStudent = (homework, student, contentType) => {
+    if (!homework || !student || !contentType) return false
+
+    const canonicalValues = getCanonicalAssignmentStudentIds(contentType, homework.id)
+      .map(normalizeAssignmentId)
+    const studentValues = getStudentAssignmentValues(student).map(normalizeAssignmentId)
+
+    return studentValues.some(value => canonicalValues.includes(value))
+  }
 
   const getStudentByAnyId = studentId => {
     const normalized = normalizeAssignmentId(studentId)
@@ -849,7 +917,7 @@ export default function TeacherDashboard() {
     const student = getStudentByAnyId(studentId)
 
     const assignedReadings = activeReadings.filter(reading =>
-      isHomeworkAssignedToStudent(reading, student)
+      isHomeworkAssignedToStudent(reading, student, 'reading')
     )
 
     const submittedReadingIds = new Set(
@@ -870,7 +938,7 @@ export default function TeacherDashboard() {
     const student = getStudentByAnyId(studentId)
 
     const assignedWritings = activeWritings.filter(writing =>
-      isHomeworkAssignedToStudent(writing, student)
+      isHomeworkAssignedToStudent(writing, student, 'writing')
     )
 
     const submittedWritingIds = new Set(
@@ -891,7 +959,7 @@ export default function TeacherDashboard() {
     const student = getStudentByAnyId(studentId)
 
     const assignedListenings = activeListenings.filter(listening =>
-      isHomeworkAssignedToStudent(listening, student)
+      isHomeworkAssignedToStudent(listening, student, 'listening')
     )
 
     const submittedListeningIds = new Set(
@@ -912,7 +980,7 @@ export default function TeacherDashboard() {
     const student = getStudentByAnyId(studentId)
 
     const assignedVocabularyTests = activeVocabularyTests.filter(vocabularyTest =>
-      isHomeworkAssignedToStudent(vocabularyTest, student)
+      isHomeworkAssignedToStudent(vocabularyTest, student, 'vocabulary')
     )
 
     const submittedVocabularyTests = vocabularyTests.filter(vocabularyTest =>
@@ -990,7 +1058,7 @@ export default function TeacherDashboard() {
         key: 'reading',
         label: 'Reading',
         items: activeReadings.filter(item =>
-          isHomeworkAssignedToStudent(item, student)
+          isHomeworkAssignedToStudent(item, student, 'reading')
         ),
         isDone: item => Boolean(getSubmission(studentId, item.id))
       },
@@ -998,7 +1066,7 @@ export default function TeacherDashboard() {
         key: 'listening',
         label: 'Listening',
         items: activeListenings.filter(item =>
-          isHomeworkAssignedToStudent(item, student)
+          isHomeworkAssignedToStudent(item, student, 'listening')
         ),
         isDone: item => Boolean(getListeningSubmission(studentId, item.id))
       },
@@ -1006,7 +1074,7 @@ export default function TeacherDashboard() {
         key: 'vocabulary',
         label: 'Vocabulary',
         items: activeVocabularyTests.filter(item =>
-          isHomeworkAssignedToStudent(item, student)
+          isHomeworkAssignedToStudent(item, student, 'vocabulary')
         ),
         isDone: item => Boolean(getVocabularySubmission(studentId, item.id))
       },
@@ -1014,7 +1082,7 @@ export default function TeacherDashboard() {
         key: 'writing',
         label: 'Writing',
         items: activeWritings.filter(item =>
-          isHomeworkAssignedToStudent(item, student)
+          isHomeworkAssignedToStudent(item, student, 'writing')
         ),
         isDone: item => Boolean(getWritingSubmission(studentId, item.id))
       },
@@ -1022,7 +1090,7 @@ export default function TeacherDashboard() {
         key: 'mock',
         label: 'Mock Tests',
         items: activeMockTests.filter(item =>
-          isHomeworkAssignedToStudent(item, student)
+          isHomeworkAssignedToStudent(item, student, 'mock')
         ),
         isDone: item =>
           getStudentMockSubmissions(studentId).some(
@@ -1999,6 +2067,7 @@ export default function TeacherDashboard() {
         contentId: selectedHomework.id,
         studentIds: finalAssignment
       })
+      await refreshCanonicalAssignmentSnapshot()
 
       setSelectedHomework(null)
       setSelectedHomeworkType(null)
@@ -2049,6 +2118,7 @@ export default function TeacherDashboard() {
         contentId: homework.id,
         studentIds: remainingStudentIds
       })
+      await refreshCanonicalAssignmentSnapshot()
     } catch (error) {
       console.error('Could not remove homework from student:', error)
       alert('Could not remove homework from this student. Please check permissions and try again.')
@@ -3218,7 +3288,7 @@ Continue permanent delete?`
 
   const getReadingCompletionStats = () => {
     const assigned = activeReadings.reduce(
-      (sum, reading) => sum + (reading.assignTo?.length || 0),
+      (sum, reading) => sum + getCanonicalAssignmentCount('reading', reading.id),
       0
     )
 
@@ -4205,7 +4275,7 @@ Continue permanent delete?`
 
   const getListeningCompletionStats = () => {
     const assigned = activeListenings.reduce(
-      (sum, listening) => sum + (listening.assignTo?.length || 0),
+      (sum, listening) => sum + getCanonicalAssignmentCount('listening', listening.id),
       0
     )
 
@@ -5043,7 +5113,7 @@ Continue permanent delete?`
   }
 
   const getMockAssignedCount = mockTest => {
-    return mockTest.assignTo?.length || 0
+    return getCanonicalAssignmentCount('mock', mockTest.id)
   }
 
   const getMockType = mockTest =>
@@ -5271,7 +5341,7 @@ Continue permanent delete?`
         </div>
 
         <p className="text-xs text-gray-400 mt-0.5">
-          Assigned to {reading.assignTo?.length || 0} students · Completed by{' '}
+          Assigned to {getCanonicalAssignmentCount('reading', reading.id)} students · Completed by{' '}
           {getCompletedCount(reading.id)} students · {reading.timeLimit} min
         </p>
 
@@ -5375,7 +5445,7 @@ Continue permanent delete?`
           </div>
 
           <p className="text-xs text-gray-400 mt-0.5">
-            Assigned to {writing.assignTo?.length || 0} students · Submitted by{' '}
+            Assigned to {getCanonicalAssignmentCount('writing', writing.id)} students · Submitted by{' '}
             {submitted} students · Reviewed {reviewed}/{submitted} ·{' '}
             {writing.timeLimit || 60} min
           </p>
@@ -5483,7 +5553,7 @@ Continue permanent delete?`
         </div>
 
         <p className="text-xs text-gray-400 mt-0.5">
-          Assigned to {listening.assignTo?.length || 0} students · Completed by{' '}
+          Assigned to {getCanonicalAssignmentCount('listening', listening.id)} students · Completed by{' '}
           {getListeningCompletedCount(listening.id)} students · {listening.timeLimit || 30} min
         </p>
 
@@ -5584,7 +5654,7 @@ Continue permanent delete?`
         </div>
 
         <p className="text-xs text-gray-400 mt-0.5">
-          Assigned to {vocabularyTest.assignTo?.length || 0} students · Completed by{' '}
+          Assigned to {getCanonicalAssignmentCount('vocabulary', vocabularyTest.id)} students · Completed by{' '}
           {getVocabularyCompletedCount(vocabularyTest.id)} students · {vocabularyTest.timeLimit || 20} min · {vocabularyTest.questions?.length || 0} questions
         </p>
 

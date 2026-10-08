@@ -319,6 +319,39 @@ function assertStudentUidList(value) {
   return uniqueStrings(value).map(uid => assertDocumentId(uid, 'Student ID'))
 }
 
+function normalizeManagedAssignmentSnapshotItems(value) {
+  if (!Array.isArray(value)) {
+    throw new HttpsError('invalid-argument', 'Content items must be an array.')
+  }
+  if (value.length > 400) {
+    throw new HttpsError('invalid-argument', 'Too many content items were requested at once.')
+  }
+
+  const items = []
+  const seen = new Set()
+
+  for (const rawItem of value) {
+    if (!rawItem || typeof rawItem !== 'object' || Array.isArray(rawItem)) {
+      throw new HttpsError('invalid-argument', 'Each content item must be an object.')
+    }
+
+    const config = accessContentConfigFor(rawItem.contentType)
+    const contentId = assertDocumentId(rawItem.contentId, 'Content ID')
+    const key = `${config.contentType}:${contentId}`
+
+    if (seen.has(key)) continue
+    seen.add(key)
+    items.push({
+      key,
+      contentType: config.contentType,
+      sourceCollection: config.sourceCollection,
+      contentId
+    })
+  }
+
+  return items
+}
+
 function managerCanManageSource(manager, source) {
   if (manager.profile.role === 'admin') return true
   return schoolIdOf(source) === schoolIdOf(manager.profile)
@@ -530,6 +563,93 @@ exports.getContentStudentAccess = onCall(async request => {
     contentType: config.contentType,
     contentId,
     studentIds: uniqueStrings(studentIds)
+  }
+})
+
+// Stage 16G-I4A: one server-authorized canonical assignment snapshot for the
+// TeacherDashboard. Teachers only receive assignment membership for source
+// content they are allowed to manage; admins receive the requested content
+// they can manage. Inactive/admin-hidden membership is intentionally included
+// because this snapshot represents assignment membership, not student access.
+exports.getManagedContentStudentAccessSnapshot = onCall(async request => {
+  const manager = await requireAssignmentManager(request)
+  const data = request.data || {}
+  const items = normalizeManagedAssignmentSnapshotItems(data.items)
+
+  if (items.length === 0) {
+    return { ok: true, assignments: [] }
+  }
+
+  const sourceRefs = items.map(item =>
+    db.doc(`${item.sourceCollection}/${item.contentId}`)
+  )
+  const sourceSnaps = await db.getAll(...sourceRefs)
+  const allowedByKey = new Map()
+
+  for (let index = 0; index < items.length; index++) {
+    const item = items[index]
+    const sourceSnap = sourceSnaps[index]
+    if (!sourceSnap?.exists) continue
+
+    const source = sourceSnap.data() || {}
+    if (!managerCanManageSource(manager, source)) continue
+
+    allowedByKey.set(item.key, {
+      contentType: item.contentType,
+      contentId: item.contentId,
+      sourceCollection: item.sourceCollection,
+      schoolId: schoolIdOf(source),
+      studentIds: []
+    })
+  }
+
+  if (allowedByKey.size > 0) {
+    const contentIds = uniqueStrings(
+      Array.from(allowedByKey.values()).map(item => item.contentId)
+    )
+    const queryChunkSize = 10
+
+    for (let start = 0; start < contentIds.length; start += queryChunkSize) {
+      const contentIdChunk = contentIds.slice(start, start + queryChunkSize)
+      const accessSnap = await db.collection('studentAccess')
+        .where('contentId', 'in', contentIdChunk)
+        .get()
+
+      for (const docSnap of accessSnap.docs) {
+        const access = docSnap.data() || {}
+        if (
+          access.accessType !== 'assignment' ||
+          typeof access.contentType !== 'string' ||
+          typeof access.contentId !== 'string' ||
+          typeof access.uid !== 'string' ||
+          !access.uid
+        ) {
+          continue
+        }
+
+        const key = `${access.contentType}:${access.contentId}`
+        const target = allowedByKey.get(key)
+        if (!target) continue
+
+        if (
+          access.sourceCollection !== target.sourceCollection ||
+          schoolIdOf(access) !== target.schoolId
+        ) {
+          continue
+        }
+
+        target.studentIds.push(access.uid)
+      }
+    }
+  }
+
+  return {
+    ok: true,
+    assignments: Array.from(allowedByKey.values()).map(item => ({
+      contentType: item.contentType,
+      contentId: item.contentId,
+      studentIds: uniqueStrings(item.studentIds)
+    }))
   }
 })
 
