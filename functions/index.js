@@ -1678,19 +1678,28 @@ async function replaceCurrentSubmissionForOpenAttempt({
       : null
     const scoreSnap = scoreRef ? await transaction.get(scoreRef) : null
 
-    if (!historySnap.exists) {
-      transaction.create(historyRef, attemptHistoryPayload({
-        config,
-        student,
-        contentId,
-        source,
-        managerUid: control.openedBy || '',
-        managerRole: control.openedByRole || '',
-        currentSnap,
-        currentData,
-        attemptNumber: baseAttemptNumber,
-        scoreSnap
-      }))
+    const latestHistoryPayload = attemptHistoryPayload({
+      config,
+      student,
+      contentId,
+      source,
+      managerUid: control.openedBy || '',
+      managerRole: control.openedByRole || '',
+      currentSnap,
+      currentData,
+      attemptNumber: baseAttemptNumber,
+      scoreSnap
+    })
+
+    // Stage 16L-3A: a teacher may review the current attempt after reopening it
+    // but before the student resubmits. Refresh the archived snapshot at the
+    // replacement boundary so history preserves the final state of that prior
+    // attempt (including any late review/score changes). After the control is
+    // consumed this history document is no longer rewritten.
+    if (historySnap.exists) {
+      transaction.set(historyRef, latestHistoryPayload)
+    } else {
+      transaction.create(historyRef, latestHistoryPayload)
     }
 
     const nextSubmission = {
