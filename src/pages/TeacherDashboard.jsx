@@ -29,6 +29,14 @@ const getManagedContentStudentAccessSnapshotCall = httpsCallable(
 )
 const setContentStudentAccessCall = httpsCallable(functions, 'setContentStudentAccess')
 const setContentArchivedStateCall = httpsCallable(functions, 'setContentArchivedState')
+const getManagedSubmissionAttemptStateCall = httpsCallable(
+  functions,
+  'getManagedSubmissionAttemptState'
+)
+const setSubmissionAttemptControlCall = httpsCallable(
+  functions,
+  'setSubmissionAttemptControl'
+)
 
 function assignmentAccessKey(contentType, contentId) {
   return `${contentType}:${contentId}`
@@ -265,6 +273,11 @@ export default function TeacherDashboard() {
 
   const [selectedWritingReview, setSelectedWritingReview] = useState(null)
   const [selectedMockWritingReview, setSelectedMockWritingReview] = useState(null)
+  const [attemptManager, setAttemptManager] = useState(null)
+  const [attemptManagerLoading, setAttemptManagerLoading] = useState(false)
+  const [attemptManagerSaving, setAttemptManagerSaving] = useState(false)
+  const [attemptManagerError, setAttemptManagerError] = useState('')
+  const [attemptManagerNotice, setAttemptManagerNotice] = useState('')
   const [writingReviewForm, setWritingReviewForm] = useState({
     task1Band: '',
     task2Band: '',
@@ -2075,6 +2088,144 @@ export default function TeacherDashboard() {
     } catch (error) {
       console.error('Could not save canonical homework assignments:', error)
       alert('Could not save student assignments. Please check permissions and try again.')
+    }
+  }
+
+  const getCallableErrorMessage = (error, fallback) => {
+    const raw = error?.message || ''
+    const clean = raw
+      .replace(/^FirebaseError:\s*/i, '')
+      .replace(/^functions\/[a-z-]+:\s*/i, '')
+      .trim()
+
+    return clean || fallback
+  }
+
+  const loadManagedAttemptState = async ({ contentType, contentId, student }) => {
+    const studentId = getStudentPrimaryAssignmentId(student)
+
+    if (!contentType || !contentId || !studentId) {
+      throw new Error('The selected student or homework is missing an ID.')
+    }
+
+    const result = await getManagedSubmissionAttemptStateCall({
+      contentType,
+      contentId,
+      studentId
+    })
+
+    return result.data || null
+  }
+
+  const openSubmissionAttemptManager = async ({
+    contentType,
+    contentId,
+    title,
+    student
+  }) => {
+    if (!contentType || !contentId || !student) return
+
+    const base = {
+      contentType,
+      contentId,
+      title: title || 'Homework',
+      student,
+      state: null
+    }
+
+    setAttemptManager(base)
+    setAttemptManagerError('')
+    setAttemptManagerNotice('')
+    setAttemptManagerLoading(true)
+
+    try {
+      const state = await loadManagedAttemptState(base)
+      setAttemptManager(current =>
+        current &&
+        current.contentType === contentType &&
+        current.contentId === contentId &&
+        current.student?.id === student.id
+          ? { ...current, state }
+          : current
+      )
+    } catch (error) {
+      console.error('Could not load submission attempt state:', error)
+      setAttemptManagerError(
+        getCallableErrorMessage(error, 'Could not load attempt status. Please try again.')
+      )
+    } finally {
+      setAttemptManagerLoading(false)
+    }
+  }
+
+  const closeSubmissionAttemptManager = () => {
+    if (attemptManagerSaving) return
+
+    setAttemptManager(null)
+    setAttemptManagerError('')
+    setAttemptManagerNotice('')
+    setAttemptManagerLoading(false)
+  }
+
+  const setManagedAttemptMode = async mode => {
+    if (!attemptManager?.student || !attemptManager.contentId || !attemptManager.contentType) {
+      return
+    }
+
+    if (!attemptManager.state?.hasSubmission) {
+      setAttemptManagerError('This student has no submitted attempt to reopen.')
+      return
+    }
+
+    const studentName =
+      attemptManager.student.name || attemptManager.student.email || 'this student'
+    const nextAttempt =
+      Number(attemptManager.state?.nextAttemptNumber) ||
+      (Number(attemptManager.state?.currentAttemptNumber) || 1) + 1
+    const modeLabel = mode === 'reopen_answers' ? 'Reopen Answers' : 'Start Fresh'
+    const detail = mode === 'reopen_answers'
+      ? "The new attempt will begin with the student's previous answers restored."
+      : 'The new attempt will begin blank. The previous submitted attempt will remain saved in history.'
+
+    const confirmed = window.confirm(
+      `${modeLabel} for ${studentName}?\n\nThis will open Attempt ${nextAttempt}. ${detail}\n\nThe previous submitted attempt, score/review and original submission data will not be deleted.`
+    )
+
+    if (!confirmed) return
+
+    setAttemptManagerSaving(true)
+    setAttemptManagerError('')
+    setAttemptManagerNotice('')
+
+    try {
+      const studentId = getStudentPrimaryAssignmentId(attemptManager.student)
+
+      await setSubmissionAttemptControlCall({
+        contentType: attemptManager.contentType,
+        contentId: attemptManager.contentId,
+        studentId,
+        mode
+      })
+
+      const state = await loadManagedAttemptState(attemptManager)
+
+      setAttemptManager(current =>
+        current
+          ? { ...current, state }
+          : current
+      )
+      setAttemptManagerNotice(
+        mode === 'reopen_answers'
+          ? `Attempt ${state?.nextAttemptNumber || nextAttempt} is open with previous answers restored.`
+          : `Attempt ${state?.nextAttemptNumber || nextAttempt} is open as a fresh attempt.`
+      )
+    } catch (error) {
+      console.error('Could not reopen submission attempt:', error)
+      setAttemptManagerError(
+        getCallableErrorMessage(error, 'Could not reopen this attempt. Please try again.')
+      )
+    } finally {
+      setAttemptManagerSaving(false)
     }
   }
 
@@ -8108,6 +8259,21 @@ Continue permanent delete?`
                                       </button>
 
                                       <button
+                                        type="button"
+                                        onClick={() =>
+                                          openSubmissionAttemptManager({
+                                            contentType: 'writing',
+                                            contentId: writing.id,
+                                            title: writing.title,
+                                            student
+                                          })
+                                        }
+                                        className="text-xs bg-blue-50 text-blue-700 px-3 py-2 rounded-xl hover:bg-blue-100"
+                                      >
+                                        Retake Options
+                                      </button>
+
+                                      <button
                                         onClick={() => removeHomeworkFromStudent(writing, 'writing', student)}
                                         className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
                                       >
@@ -8148,6 +8314,129 @@ Continue permanent delete?`
         )}
 
       </div>
+
+      {attemptManager && (
+        <div className="fixed inset-0 bg-black/40 z-[60] flex items-center justify-center px-4">
+          <div className="bg-white rounded-2xl w-full max-w-lg p-6 shadow-xl">
+            <div className="flex items-start justify-between gap-4 mb-5">
+              <div>
+                <p className="text-xs font-semibold text-blue-600 uppercase tracking-wide">
+                  Writing Retake
+                </p>
+                <h2 className="text-xl font-bold text-gray-900 mt-1">
+                  {attemptManager.title}
+                </h2>
+                <p className="text-sm text-gray-500 mt-1">
+                  {attemptManager.student?.name || attemptManager.student?.email || 'Student'}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={closeSubmissionAttemptManager}
+                disabled={attemptManagerSaving}
+                className="text-gray-400 hover:text-gray-700 disabled:opacity-50 text-xl leading-none"
+                aria-label="Close retake options"
+              >
+                ×
+              </button>
+            </div>
+
+            {attemptManagerLoading ? (
+              <div className="bg-gray-50 rounded-xl p-5 text-sm text-gray-500">
+                Loading attempt status...
+              </div>
+            ) : attemptManagerError && !attemptManager.state ? (
+              <div className="bg-red-50 border border-red-100 rounded-xl p-4 text-sm text-red-700">
+                {attemptManagerError}
+              </div>
+            ) : (
+              <>
+                <div className="bg-gray-50 border border-gray-100 rounded-xl p-4 mb-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs text-gray-400">Current submitted attempt</p>
+                      <p className="text-lg font-bold text-gray-800 mt-0.5">
+                        Attempt {attemptManager.state?.currentAttemptNumber || 1}
+                      </p>
+                    </div>
+
+                    {attemptManager.state?.open ? (
+                      <span className="text-xs bg-blue-100 text-blue-700 px-3 py-1.5 rounded-full font-semibold">
+                        Attempt {attemptManager.state?.nextAttemptNumber || 2} open
+                      </span>
+                    ) : (
+                      <span className="text-xs bg-green-50 text-green-700 px-3 py-1.5 rounded-full font-semibold">
+                        Submitted
+                      </span>
+                    )}
+                  </div>
+
+                  {attemptManager.state?.open && (
+                    <p className="text-xs text-blue-700 mt-3">
+                      {attemptManager.state.mode === 'reopen_answers'
+                        ? 'The next attempt is open with the previous answers restored.'
+                        : 'The next attempt is open as a fresh blank attempt.'}
+                    </p>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setManagedAttemptMode('reopen_answers')}
+                    disabled={attemptManagerSaving || !attemptManager.state?.hasSubmission}
+                    className="text-left border border-purple-200 bg-purple-50 hover:bg-purple-100 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl p-4"
+                  >
+                    <span className="block text-sm font-semibold text-purple-700">
+                      Reopen Answers
+                    </span>
+                    <span className="block text-xs text-purple-600/80 mt-1 leading-relaxed">
+                      Start the new attempt with the student's previous Task 1 / Task 2 answers.
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setManagedAttemptMode('start_fresh')}
+                    disabled={attemptManagerSaving || !attemptManager.state?.hasSubmission}
+                    className="text-left border border-blue-200 bg-blue-50 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl p-4"
+                  >
+                    <span className="block text-sm font-semibold text-blue-700">
+                      Start Fresh
+                    </span>
+                    <span className="block text-xs text-blue-600/80 mt-1 leading-relaxed">
+                      Start the new attempt blank while keeping the previous submission in history.
+                    </span>
+                  </button>
+                </div>
+
+                <p className="text-xs text-gray-400 mt-4 leading-relaxed">
+                  Reopening never deletes the current submitted attempt. The previous answers, submission time and review are preserved for attempt history when the student resubmits.
+                </p>
+
+                {attemptManagerNotice && (
+                  <div className="bg-green-50 border border-green-100 rounded-xl p-3 text-sm text-green-700 mt-4">
+                    {attemptManagerNotice}
+                  </div>
+                )}
+
+                {attemptManagerError && (
+                  <div className="bg-red-50 border border-red-100 rounded-xl p-3 text-sm text-red-700 mt-4">
+                    {attemptManagerError}
+                  </div>
+                )}
+
+                {attemptManagerSaving && (
+                  <p className="text-xs text-gray-400 mt-4">
+                    Saving retake option...
+                  </p>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {selectedHomework && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center px-4">

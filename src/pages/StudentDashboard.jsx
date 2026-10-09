@@ -1,9 +1,15 @@
   import { useState, useEffect } from 'react'
-  import { auth, db, storage } from '../firebase'
+  import { auth, db, storage, functions } from '../firebase'
   import { collection, query, where, onSnapshot, doc, getDoc, updateDoc, arrayUnion } from 'firebase/firestore'
   import { signOut, onAuthStateChanged, updatePassword } from 'firebase/auth'
   import { ref as storageRef, getDownloadURL } from 'firebase/storage'
   import { useNavigate } from 'react-router-dom'
+  import { httpsCallable } from 'firebase/functions'
+
+  const getStudentSubmissionAttemptStateCall = httpsCallable(
+    functions,
+    'getStudentSubmissionAttemptState'
+  )
 
   function normalizeId(value) {
     return value === undefined || value === null
@@ -429,6 +435,86 @@
 
   function sortByAssignedDateDesc(a, b) {
     return getAssignedSortTime(b) - getAssignedSortTime(a)
+  }
+
+
+  function useWritingAttemptStates(user, writings, submissions) {
+    const [attemptStates, setAttemptStates] = useState({})
+    const [attemptStatesLoading, setAttemptStatesLoading] = useState(false)
+
+    useEffect(() => {
+      let active = true
+      let loadVersion = 0
+
+      if (!user?.uid) {
+        setAttemptStates({})
+        setAttemptStatesLoading(false)
+        return () => {
+          active = false
+        }
+      }
+
+      const submittedWritingIds = writings
+        .filter(writing =>
+          submissions.some(submission => submission.writingId === writing.id)
+        )
+        .map(writing => writing.id)
+        .filter(Boolean)
+
+      if (submittedWritingIds.length === 0) {
+        setAttemptStates({})
+        setAttemptStatesLoading(false)
+        return () => {
+          active = false
+        }
+      }
+
+      const loadAttemptStates = async () => {
+        const version = ++loadVersion
+        setAttemptStatesLoading(true)
+
+        const entries = await Promise.all(
+          submittedWritingIds.map(async contentId => {
+            try {
+              const response = await getStudentSubmissionAttemptStateCall({
+                contentType: 'writing',
+                contentId
+              })
+
+              return [contentId, response?.data || { open: false }]
+            } catch (error) {
+              console.warn(
+                `Could not load Writing attempt state for ${contentId}:`,
+                error
+              )
+
+              return [contentId, { open: false }]
+            }
+          })
+        )
+
+        if (!active || version !== loadVersion) return
+
+        setAttemptStates(Object.fromEntries(entries))
+        setAttemptStatesLoading(false)
+      }
+
+      loadAttemptStates()
+
+      const refreshOnFocus = () => {
+        loadAttemptStates()
+      }
+
+      window.addEventListener('focus', refreshOnFocus)
+
+      return () => {
+        active = false
+        loadVersion++
+        window.removeEventListener('focus', refreshOnFocus)
+      }
+    }, [user?.uid, writings, submissions])
+
+    return { attemptStates, attemptStatesLoading }
   }
 
 
@@ -2602,10 +2688,22 @@
       )
     }, [user])
 
+    const { attemptStates, attemptStatesLoading } = useWritingAttemptStates(
+      user,
+      writings,
+      submissions
+    )
+
     const getSubmission = writingId =>
       submissions.find(s => s.writingId === writingId)
 
-    const isDone = writingId => Boolean(getSubmission(writingId))
+    const getAttemptState = writingId => attemptStates[writingId] || null
+
+    const hasOpenRetake = writingId =>
+      getAttemptState(writingId)?.open === true
+
+    const isDone = writingId =>
+      Boolean(getSubmission(writingId)) && !hasOpenRetake(writingId)
 
     const todoWritings = writings.filter(w => !isDone(w.id))
     const completedWritings = writings.filter(w => isDone(w.id))
@@ -2627,6 +2725,9 @@
             <div className="flex flex-col gap-3">
               {todoWritings.map((w, index) => {
                 const badge = dueLabel(w)
+                const submission = getSubmission(w.id)
+                const attemptState = getAttemptState(w.id)
+                const retakeOpen = attemptState?.open === true
 
                 return (
                   <div
@@ -2647,21 +2748,38 @@
                           {badge.text}
                         </span>
 
-                        <span className="text-xs bg-red-50 text-red-500 px-3 py-1 rounded-full">
-                          Not completed
-                        </span>
+                        {retakeOpen ? (
+                          <>
+                            <span className="text-xs bg-amber-50 text-amber-700 px-3 py-1 rounded-full">
+                              Attempt {attemptState.nextAttemptNumber || 2} reopened
+                            </span>
 
-                        <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1 rounded-full">
-                          Teacher graded
-                        </span>
+                            <span className="text-xs bg-blue-50 text-blue-600 px-3 py-1 rounded-full">
+                              {attemptState.mode === 'reopen_answers'
+                                ? 'Previous answers restored'
+                                : 'Start fresh'}
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            <span className="text-xs bg-red-50 text-red-500 px-3 py-1 rounded-full">
+                              Not completed
+                            </span>
+
+                            <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1 rounded-full">
+                              Teacher graded
+                            </span>
+                          </>
+                        )}
                       </div>
                     </div>
 
                     <button
                       onClick={() => navigate(`/do-writing/${w.id}`)}
-                      className="bg-purple-600 text-white px-4 py-2 rounded-xl text-xs font-medium hover:bg-purple-700"
+                      disabled={Boolean(submission) && attemptStatesLoading && !attemptState}
+                      className="bg-purple-600 text-white px-4 py-2 rounded-xl text-xs font-medium hover:bg-purple-700 disabled:opacity-60 disabled:cursor-not-allowed"
                     >
-                      Start →
+                      {retakeOpen ? 'Continue Retake →' : 'Start →'}
                     </button>
                   </div>
                 )
@@ -2903,6 +3021,12 @@
     const [vocabularySubmissions, setVocabularySubmissions] = useState([])
     const [mockSubmissions, setMockSubmissions] = useState([])
 
+    const { attemptStates: writingAttemptStates } = useWritingAttemptStates(
+      user,
+      writings,
+      writingSubmissions
+    )
+
     const navigate = useNavigate()
 
     useEffect(() => {
@@ -3020,7 +3144,11 @@
     const hasListeningSubmission = listeningId =>
       listeningSubmissions.some(submission => submission.listeningId === listeningId)
 
+    const hasOpenWritingRetake = writingId =>
+      writingAttemptStates[writingId]?.open === true
+
     const hasWritingSubmission = writingId =>
+      !hasOpenWritingRetake(writingId) &&
       writingSubmissions.some(submission => submission.writingId === writingId)
 
     const hasVocabularySubmission = vocabularyTestId =>
@@ -3064,7 +3192,9 @@
           type: 'Writing',
           icon: '✍️',
           path: `/do-writing/${item.id}`,
-          color: 'amber'
+          color: 'amber',
+          isRetake: hasOpenWritingRetake(item.id),
+          retakeState: writingAttemptStates[item.id] || null
         })),
       ...vocabularyTests
         .filter(item => !hasVocabularySubmission(item.id))
@@ -3210,7 +3340,9 @@
                     </p>
 
                     <p className="text-xs text-gray-400 mt-0.5">
-                      Not completed yet
+                      {item.isRetake
+                        ? `Attempt ${item.retakeState?.nextAttemptNumber || 2} reopened by teacher`
+                        : 'Not completed yet'}
                     </p>
                   </div>
 
@@ -3218,7 +3350,7 @@
                     onClick={() => navigate(item.path)}
                     className="bg-purple-600 text-white px-4 py-2 rounded-xl text-xs font-medium hover:bg-purple-700"
                   >
-                    Start →
+                    {item.isRetake ? 'Continue Retake →' : 'Start →'}
                   </button>
                 </div>
               )
