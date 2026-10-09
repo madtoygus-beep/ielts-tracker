@@ -38,6 +38,10 @@ const getCompletedMockReviewCall = httpsCallable(
   functions,
   'getCompletedMockReview'
 )
+const getStudentSubmissionAttemptStateCall = httpsCallable(
+  functions,
+  'getStudentSubmissionAttemptState'
+)
 
 function getMockType(mock) {
   return mock?.mockType || mock?.contentType || 'full_mock'
@@ -940,6 +944,23 @@ async function getAssignedMockResource({
   }
 }
 
+function getAttemptStorageSuffix(attemptNumber, mode = '') {
+  const number = Number(attemptNumber)
+  if (!Number.isInteger(number) || number < 2) return ''
+
+  const modeSuffix = mode === 'reopen_answers'
+    ? ':reopen'
+    : mode === 'start_fresh'
+      ? ':fresh'
+      : ''
+
+  return `:attempt-${number}${modeSuffix}`
+}
+
+function getMockProgressStorageKey(userId, mockId, attemptNumber = 1, mode = '') {
+  return `mock_progress_${mockId}_${userId}${getAttemptStorageSuffix(attemptNumber, mode)}`
+}
+
 function getSavedMockState(storageKey) {
   try {
     const saved = localStorage.getItem(storageKey)
@@ -962,6 +983,7 @@ export default function DoMockTest() {
   const [loadError, setLoadError] = useState('')
   const [reloadCount, setReloadCount] = useState(0)
   const [alreadySubmitted, setAlreadySubmitted] = useState(false)
+  const [attemptState, setAttemptState] = useState(null)
 
   const [sectionIndex, setSectionIndex] = useState(0)
   const [maxUnlockedSectionIndex, setMaxUnlockedSectionIndex] = useState(0)
@@ -1013,9 +1035,24 @@ export default function DoMockTest() {
   const [audioResumePending, setAudioResumePending] = useState(false)
   const [tabWarning, setTabWarning] = useState('')
 
+  const activeDraftAttemptNumber = attemptState?.open
+    ? Number(attemptState.nextAttemptNumber) || 2
+    : attemptState && Number(attemptState.currentAttemptNumber) === 0
+      ? 1
+      : null
+
+  const activeDraftMode = attemptState?.open ? attemptState.mode || '' : ''
+
   const storageKey = useMemo(() => {
-    return user?.uid && id ? `mock_progress_${id}_${user.uid}` : null
-  }, [id, user?.uid])
+    return user?.uid && id && activeDraftAttemptNumber
+      ? getMockProgressStorageKey(
+          user.uid,
+          id,
+          activeDraftAttemptNumber,
+          activeDraftMode
+        )
+      : null
+  }, [activeDraftAttemptNumber, activeDraftMode, id, user?.uid])
 
   useEffect(() => {
     loadingRef.current = loading
@@ -1031,6 +1068,30 @@ export default function DoMockTest() {
 
       setLoading(true)
       setLoadError('')
+      setAttemptState(null)
+      setAlreadySubmitted(false)
+      setFinalResult(null)
+      setCompletedSubmission(null)
+      setSectionIndex(0)
+      setMaxUnlockedSectionIndex(0)
+      setListeningAnswers({})
+      setReadingAnswers({})
+      setWritingAnswers({ task1: '', task2: '' })
+      setListeningStarted(false)
+      setReadingStarted(false)
+      setWritingStarted(false)
+      setAudioStarted(false)
+      setAudioLocked(false)
+      setAudioWarning('')
+      setAudioCurrentTime(0)
+      setAudioDuration(0)
+      setAudioResumePending(false)
+      setTabWarning('')
+      restoredRef.current = false
+      pendingAudioRestoreRef.current = null
+      audioLastTimeRef.current = 0
+      activeAudioKeyRef.current = ''
+      tabSwitchCountRef.current = 0
 
       if (!currentUser) {
         navigate('/login')
@@ -1126,48 +1187,104 @@ export default function DoMockTest() {
           getMockSectionSeconds(mockData, 'writing')
         )
 
-        const existingQuery = query(
-          collection(db, 'mockSubmissions'),
-          where('uid', '==', currentUser.uid),
-          where('mockTestId', '==', id),
-          orderBy('submittedAt', 'desc'),
-          limit(1)
-        )
-
-        const existingSnap = await getDocs(existingQuery)
+        const attemptResponse = await getStudentSubmissionAttemptStateCall({
+          contentType: 'mock',
+          contentId: id
+        })
 
         if (!isCurrent()) return
 
+        const nextAttemptState = attemptResponse?.data || {
+          open: false,
+          currentAttemptNumber: 0,
+          resume: {}
+        }
+
+        setAttemptState(nextAttemptState)
+
+        const retakeOpen = nextAttemptState.open === true
+        const retakeResume = nextAttemptState.resume || {}
+        const reopenAnswers =
+          retakeOpen && nextAttemptState.mode === 'reopen_answers'
+
+        if (retakeOpen) {
+          setAlreadySubmitted(false)
+          setCompletedSubmission(null)
+          setFinalResult(null)
+          setSectionIndex(0)
+          setMaxUnlockedSectionIndex(0)
+          setListeningAnswers(
+            reopenAnswers ? (retakeResume.listeningAnswers || {}) : {}
+          )
+          setReadingAnswers(
+            reopenAnswers ? (retakeResume.readingAnswers || {}) : {}
+          )
+          setWritingAnswers(
+            reopenAnswers
+              ? (retakeResume.writingAnswers || { task1: '', task2: '' })
+              : { task1: '', task2: '' }
+          )
+          setListeningTimeLeft(getMockSectionSeconds(mockData, 'listening'))
+          setReadingTimeLeft(getMockSectionSeconds(mockData, 'reading'))
+          setWritingTimeLeft(getMockSectionSeconds(mockData, 'writing'))
+          setListeningStarted(false)
+          setReadingStarted(false)
+          setWritingStarted(false)
+          setAudioStarted(false)
+          setAudioWarning('')
+          setAudioCurrentTime(0)
+          setAudioDuration(0)
+          setAudioResumePending(false)
+          pendingAudioRestoreRef.current = null
+          audioLastTimeRef.current = 0
+          activeAudioKeyRef.current = ''
+          tabSwitchCountRef.current = 0
+        }
+
         let completedReviewSources = null
 
-        if (!existingSnap.empty) {
-          setAlreadySubmitted(true)
-
-          const submission = {
-            id: existingSnap.docs[0].id,
-            ...existingSnap.docs[0].data()
-          }
-
-          setCompletedSubmission(submission)
-          setListeningAnswers(submission.listeningAnswers || {})
-          setReadingAnswers(submission.readingAnswers || {})
-          setWritingAnswers(
-            submission.writingAnswers || {
-              task1: '',
-              task2: ''
-            }
+        if (!retakeOpen) {
+          const existingQuery = query(
+            collection(db, 'mockSubmissions'),
+            where('uid', '==', currentUser.uid),
+            where('mockTestId', '==', id),
+            orderBy('submittedAt', 'desc'),
+            limit(1)
           )
 
-          const reviewResponse = await getCompletedMockReviewCall({
-            mockTestId: id
-          })
-          ensureCurrent()
-          const reviewPayload = reviewResponse?.data || {}
-          completedReviewSources = reviewPayload.reviewSources || null
-          setFinalResult(reviewPayload.result || submission.result || null)
+          const existingSnap = await getDocs(existingQuery)
 
-          const key = `mock_progress_${id}_${currentUser.uid}`
-          localStorage.removeItem(key)
+          if (!isCurrent()) return
+
+          if (!existingSnap.empty) {
+            setAlreadySubmitted(true)
+
+            const submission = {
+              id: existingSnap.docs[0].id,
+              ...existingSnap.docs[0].data()
+            }
+
+            setCompletedSubmission(submission)
+            setListeningAnswers(submission.listeningAnswers || {})
+            setReadingAnswers(submission.readingAnswers || {})
+            setWritingAnswers(
+              submission.writingAnswers || {
+                task1: '',
+                task2: ''
+              }
+            )
+
+            const reviewResponse = await getCompletedMockReviewCall({
+              mockTestId: id
+            })
+            if (!isCurrent()) return
+            const reviewPayload = reviewResponse?.data || {}
+            completedReviewSources = reviewPayload.reviewSources || null
+            setFinalResult(reviewPayload.result || submission.result || null)
+
+            const key = getMockProgressStorageKey(currentUser.uid, id)
+            localStorage.removeItem(key)
+          }
         }
 
         const enabledSections = getMockEnabledSections(mockData)
@@ -3213,7 +3330,7 @@ export default function DoMockTest() {
       }
 
       const ok = window.confirm(
-        `Submit this ${mockTypeLabel}? You cannot edit it after submission.`
+        `Submit this ${mockTypeLabel} attempt? After submission, another attempt requires your teacher to reopen it.`
       )
 
       if (!ok) return
@@ -3223,57 +3340,59 @@ export default function DoMockTest() {
     setSubmitting(true)
 
     try {
-      const existingQuery = query(
-        collection(db, 'mockSubmissions'),
-        where('uid', '==', user.uid),
-        where('mockTestId', '==', mock.id),
-        orderBy('submittedAt', 'desc'),
-        limit(1)
-      )
+      if (!attemptState?.open) {
+        const existingQuery = query(
+          collection(db, 'mockSubmissions'),
+          where('uid', '==', user.uid),
+          where('mockTestId', '==', mock.id),
+          orderBy('submittedAt', 'desc'),
+          limit(1)
+        )
 
-      const existingSnap = await getDocs(existingQuery)
+        const existingSnap = await getDocs(existingQuery)
 
-      if (!existingSnap.empty) {
-        const existingSubmission = {
-          id: existingSnap.docs[0].id,
-          ...existingSnap.docs[0].data()
-        }
-        const reviewResponse = await getCompletedMockReviewCall({
-          mockTestId: mock.id
-        })
-        const reviewPayload = reviewResponse?.data || {}
-
-        setAlreadySubmitted(true)
-        setCompletedSubmission(existingSubmission)
-        setFinalResult(reviewPayload.result || existingSubmission.result || null)
-        setListeningAnswers(existingSubmission.listeningAnswers || {})
-        setReadingAnswers(existingSubmission.readingAnswers || {})
-        setWritingAnswers(
-          existingSubmission.writingAnswers || {
-            task1: '',
-            task2: ''
+        if (!existingSnap.empty) {
+          const existingSubmission = {
+            id: existingSnap.docs[0].id,
+            ...existingSnap.docs[0].data()
           }
-        )
-        setListenings(
-          Array.isArray(reviewPayload.reviewSources?.listenings)
-            ? reviewPayload.reviewSources.listenings
-            : []
-        )
-        setReadings(
-          Array.isArray(reviewPayload.reviewSources?.readings)
-            ? reviewPayload.reviewSources.readings
-            : []
-        )
-        setWriting(reviewPayload.reviewSources?.writing || null)
+          const reviewResponse = await getCompletedMockReviewCall({
+            mockTestId: mock.id
+          })
+          const reviewPayload = reviewResponse?.data || {}
 
-        if (storageKey) localStorage.removeItem(storageKey)
-        setSectionIndex(sections.length - 1)
+          setAlreadySubmitted(true)
+          setCompletedSubmission(existingSubmission)
+          setFinalResult(reviewPayload.result || existingSubmission.result || null)
+          setListeningAnswers(existingSubmission.listeningAnswers || {})
+          setReadingAnswers(existingSubmission.readingAnswers || {})
+          setWritingAnswers(
+            existingSubmission.writingAnswers || {
+              task1: '',
+              task2: ''
+            }
+          )
+          setListenings(
+            Array.isArray(reviewPayload.reviewSources?.listenings)
+              ? reviewPayload.reviewSources.listenings
+              : []
+          )
+          setReadings(
+            Array.isArray(reviewPayload.reviewSources?.readings)
+              ? reviewPayload.reviewSources.readings
+              : []
+          )
+          setWriting(reviewPayload.reviewSources?.writing || null)
 
-        if (!auto) {
-          alert('You already submitted this mock test.')
+          if (storageKey) localStorage.removeItem(storageKey)
+          setSectionIndex(sections.length - 1)
+
+          if (!auto) {
+            alert('You already submitted this mock test.')
+          }
+
+          return
         }
-
-        return
       }
 
       const response = await submitMockSecureCall({
@@ -3362,14 +3481,23 @@ export default function DoMockTest() {
 
       setCompletedSubmission(submissionForReview)
       setFinalResult(result)
+      setAttemptState(previous => ({
+        ...(previous || {}),
+        open: false,
+        currentAttemptNumber:
+          Number(payload.attemptNumber) ||
+          Number(previous?.nextAttemptNumber) ||
+          Number(previous?.currentAttemptNumber) ||
+          1
+      }))
       setAlreadySubmitted(true)
       setSectionIndex(sections.length - 1)
     } catch (error) {
       console.error('Could not submit mock test.', error)
 
-      // If another tab won the race, recover the immutable submission instead
-      // of presenting it as a failed new attempt.
-      try {
+      // If another tab won a normal first-attempt race, recover the immutable
+      // submission. During an open retake, keep the attempt open on errors.
+      if (!attemptState?.open) try {
         const deterministicRef = doc(db, 'mockSubmissions', `${user.uid}_${mock.id}`)
         const existingSnap = await getDoc(deterministicRef)
         if (existingSnap.exists()) {
@@ -3417,6 +3545,7 @@ export default function DoMockTest() {
     }
   }, [
     alreadySubmitted,
+    attemptState,
     user,
     mock,
     writingAnswers,
@@ -6615,6 +6744,24 @@ ${previousLabel} will be permanently locked and you will not be able to return t
       </nav>
 
       <div className="max-w-7xl mx-auto px-6 py-8">
+        {attemptState?.open && (
+          <div className="mb-5 bg-purple-50 border border-purple-100 rounded-2xl px-5 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-purple-700">
+                Attempt {attemptState.nextAttemptNumber || 2} reopened
+              </p>
+              <p className="text-xs text-purple-600 mt-1">
+                {attemptState.mode === 'reopen_answers'
+                  ? 'Your previous Listening, Reading and Writing answers were restored. Section timers, audio state and navigation restart for this new attempt.'
+                  : 'This attempt starts fresh. Previous answers and the earlier submitted mock remain preserved in attempt history.'}
+              </p>
+            </div>
+            <span className="text-xs bg-white text-purple-600 border border-purple-100 px-3 py-1.5 rounded-full font-semibold">
+              {attemptState.mode === 'reopen_answers' ? 'Reopen Answers' : 'Start Fresh'}
+            </span>
+          </div>
+        )}
+
         <div className="bg-white border border-gray-100 rounded-2xl p-4 mb-6 sticky top-[73px] z-20">
           <div className="flex gap-2 overflow-x-auto">
             {sections.map((section, index) => {

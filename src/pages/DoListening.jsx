@@ -17,6 +17,10 @@ const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
 const submitListeningSecure = httpsCallable(functions, 'submitListeningSecure')
 const getCompletedObjectiveReview = httpsCallable(functions, 'getCompletedObjectiveReview')
+const getStudentSubmissionAttemptState = httpsCallable(
+  functions,
+  'getStudentSubmissionAttemptState'
+)
 
 function normalizeListeningParts(listening) {
   if (Array.isArray(listening?.parts) && listening.parts.length) {
@@ -253,6 +257,76 @@ function getSavedListeningState(storageKey) {
 }
 
 
+function getAttemptStorageSuffix(attemptNumber, mode = '') {
+  const number = Number(attemptNumber)
+  if (!Number.isInteger(number) || number < 2) return ''
+
+  const modeSuffix = mode === 'reopen_answers'
+    ? ':reopen'
+    : mode === 'start_fresh'
+      ? ':fresh'
+      : ''
+
+  return `:attempt-${number}${modeSuffix}`
+}
+
+function getListeningProgressStorageKey(userId, listeningId, attemptNumber = 1, mode = '') {
+  return `listening_progress_${listeningId}_${userId}${getAttemptStorageSuffix(attemptNumber, mode)}`
+}
+
+function submittedAtMillis(value) {
+  if (!value) return 0
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value)
+    return Number.isFinite(parsed) ? parsed : 0
+  }
+  if (typeof value?.toMillis === 'function') return value.toMillis()
+  if (typeof value?.toDate === 'function') return value.toDate().getTime()
+  return 0
+}
+
+function hasMeaningfulValue(value) {
+  if (value === undefined || value === null) return false
+  if (typeof value === 'string') return value.trim().length > 0
+  if (typeof value === 'number' || typeof value === 'boolean') return true
+  if (Array.isArray(value)) return value.some(hasMeaningfulValue)
+  if (typeof value === 'object') return Object.values(value).some(hasMeaningfulValue)
+  return false
+}
+
+function selectCurrentListeningSubmission(documents, deterministicId = '') {
+  const records = (documents || []).map(item => {
+    const data = item?.data ? item.data() : item?.data || item || {}
+    return {
+      id: item?.id || '',
+      data,
+      meaningful: hasMeaningfulValue(data.answers),
+      submittedAtMillis: submittedAtMillis(data.submittedAt)
+    }
+  })
+
+  const deterministic = deterministicId
+    ? records.find(record => record.id === deterministicId)
+    : null
+
+  if (deterministic) return deterministic.data
+
+  return [...records].sort((a, b) => {
+    const attemptDifference =
+      (Number(b.data?.attemptNumber) || 1) - (Number(a.data?.attemptNumber) || 1)
+    if (attemptDifference !== 0) return attemptDifference
+    if (a.meaningful !== b.meaningful) return a.meaningful ? -1 : 1
+    if (a.submittedAtMillis !== b.submittedAtMillis) {
+      return b.submittedAtMillis - a.submittedAtMillis
+    }
+    if ((a.data?.autoSubmitted === true) !== (b.data?.autoSubmitted === true)) {
+      return a.data?.autoSubmitted === true ? 1 : -1
+    }
+    return a.id.localeCompare(b.id)
+  })[0]?.data || null
+}
+
+
 function getManualQuestionNumber(item) {
   const value =
     item?.questionNumber ||
@@ -401,6 +475,7 @@ export default function DoListening() {
   const [showQuestionMap, setShowQuestionMap] = useState(true)
   const [loadError, setLoadError] = useState('')
   const [reloadCount, setReloadCount] = useState(0)
+  const [attemptState, setAttemptState] = useState(null)
 
   const timerRef = useRef(null)
   const submittingRef = useRef(false)
@@ -408,7 +483,22 @@ export default function DoListening() {
   const questionRefs = useRef({})
   const navigate = useNavigate()
 
-  const storageKey = user?.uid && id ? `listening_progress_${id}_${user.uid}` : null
+  const activeDraftAttemptNumber = attemptState?.open
+    ? Number(attemptState.nextAttemptNumber) || 2
+    : attemptState && Number(attemptState.currentAttemptNumber) === 0
+      ? 1
+      : null
+
+  const activeDraftMode = attemptState?.open ? attemptState.mode || '' : ''
+
+  const storageKey = user?.uid && id && activeDraftAttemptNumber
+    ? getListeningProgressStorageKey(
+        user.uid,
+        id,
+        activeDraftAttemptNumber,
+        activeDraftMode
+      )
+    : null
 
   const parts = listening ? normalizeListeningParts(listening) : []
   const activePart = parts.find(part => part.id === activePartId) || parts[0]
@@ -437,6 +527,7 @@ export default function DoListening() {
       setAlreadyDone(false)
       setFlaggedQuestions([])
       setStudentNote('')
+      setAttemptState(null)
 
       if (!currentUser) {
         navigate('/login')
@@ -525,9 +616,44 @@ export default function DoListening() {
 
         const loadedParts = normalizeListeningParts(data)
 
+        const attemptResponse = await getStudentSubmissionAttemptState({
+          contentType: 'listening',
+          contentId: id
+        })
+        if (!isCurrent()) return
+
+        const nextAttemptState = attemptResponse?.data || {
+          open: false,
+          currentAttemptNumber: 0,
+          resume: {}
+        }
+
+        setAttemptState(nextAttemptState)
         setListening(data)
         setActivePartId(loadedParts[0]?.id || null)
         setTimeLeft((data.timeLimit || 30) * 60)
+
+        if (nextAttemptState.open) {
+          const resume = nextAttemptState.resume || {}
+          const reopenAnswers = nextAttemptState.mode === 'reopen_answers'
+
+          setAlreadyDone(false)
+          setSubmitted(false)
+          setResult(null)
+          setAnswers(reopenAnswers ? (resume.answers || {}) : {})
+          setFlaggedQuestions(
+            reopenAnswers && Array.isArray(resume.flaggedQuestions)
+              ? resume.flaggedQuestions
+              : []
+          )
+          setStudentNote(
+            reopenAnswers && typeof resume.studentNote === 'string'
+              ? resume.studentNote
+              : ''
+          )
+
+          return
+        }
 
         const q = query(
           collection(db, 'listeningSubmissions'),
@@ -539,7 +665,14 @@ export default function DoListening() {
         if (!isCurrent()) return
 
         if (!existing.empty) {
-          const sub = existing.docs[0].data()
+          const sub = selectCurrentListeningSubmission(
+            existing.docs,
+            `${currentUser.uid}_${id}`
+          )
+
+          if (!sub) {
+            throw new Error('Completed Listening submission could not be resolved. Please retry.')
+          }
 
           // Answer keys are returned only after the server confirms this student submitted.
           const reviewResponse = await getCompletedObjectiveReview({
@@ -575,7 +708,7 @@ export default function DoListening() {
           setSubmitted(true)
 
           try {
-            const key = `listening_progress_${id}_${currentUser.uid}`
+            const key = getListeningProgressStorageKey(currentUser.uid, id)
             localStorage.removeItem(key)
           } catch (storageError) {
             console.warn('Could not clear saved Listening progress:', storageError)
@@ -1202,7 +1335,7 @@ export default function DoListening() {
         .map(status => status.label)
 
       const warningLines = [
-        'Submit your answers? You cannot retake this homework after submitting.'
+        'Submit this attempt? After submission, another attempt requires your teacher to reopen it.'
       ]
 
       if (unansweredLabels.length > 0) {
@@ -1264,7 +1397,14 @@ export default function DoListening() {
         const existing = await getDocs(existingQuery)
 
         if (!existing.empty) {
-          const stored = existing.docs[0].data()
+          const stored = selectCurrentListeningSubmission(
+            existing.docs,
+            `${user.uid}_${id}`
+          )
+
+          if (!stored) {
+            throw new Error('Completed Listening submission could not be resolved.')
+          }
           setAnswers(stored.answers || {})
           setFlaggedQuestions(
             Array.isArray(stored.flaggedQuestions) ? stored.flaggedQuestions : []
@@ -1289,6 +1429,15 @@ export default function DoListening() {
       setListening(reviewListening)
       setActivePartId(reviewParts[0]?.id || null)
       setResult(secureResult)
+      setAttemptState(previous => ({
+        ...(previous || {}),
+        open: false,
+        currentAttemptNumber:
+          Number(secureData.attemptNumber) ||
+          Number(previous?.nextAttemptNumber) ||
+          Number(previous?.currentAttemptNumber) ||
+          1
+      }))
       setSubmitted(true)
       setSubmitting(false)
     } catch (error) {
@@ -1678,7 +1827,7 @@ export default function DoListening() {
 
             {alreadyDone ? (
               <p className="text-amber-600 text-sm bg-amber-50 rounded-xl py-2 px-4 inline-block">
-                You already completed this homework. You can review your answers, but you cannot retake it.
+                You already completed this homework. You can review your answers. Your teacher can reopen another attempt if needed.
               </p>
             ) : (
               <p className="text-green-600 text-sm bg-green-50 rounded-xl py-2 px-4 inline-block">
@@ -2050,6 +2199,24 @@ export default function DoListening() {
       </nav>
 
       <div className="max-w-5xl mx-auto px-6 py-8">
+        {attemptState?.open && (
+          <div className="mb-5 bg-purple-50 border border-purple-100 rounded-2xl px-5 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-purple-700">
+                Attempt {attemptState.nextAttemptNumber || 2} reopened
+              </p>
+              <p className="text-xs text-purple-600 mt-1">
+                {attemptState.mode === 'reopen_answers'
+                  ? 'Your previous answers, flags and scratch note were restored. You can edit them before submitting this attempt.'
+                  : 'This attempt starts fresh. Previous answers, flags and notes remain preserved in your earlier attempt history.'}
+              </p>
+            </div>
+            <span className="text-xs bg-white text-purple-600 border border-purple-100 px-3 py-1.5 rounded-full font-semibold">
+              {attemptState.mode === 'reopen_answers' ? 'Reopen Answers' : 'Start Fresh'}
+            </span>
+          </div>
+        )}
+
         <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-6 sticky top-[76px] z-10 shadow-sm">
           <h1 className="text-xl font-bold text-gray-900 mb-2">
             {listening.title}

@@ -18,6 +18,10 @@ const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
 const submitVocabularySecure = httpsCallable(functions, 'submitVocabularySecure')
 const getCompletedObjectiveReview = httpsCallable(functions, 'getCompletedObjectiveReview')
+const getStudentSubmissionAttemptState = httpsCallable(
+  functions,
+  'getStudentSubmissionAttemptState'
+)
 
 function getVocabularyBand(correct, total) {
   if (!total) return 0
@@ -242,6 +246,7 @@ export default function DoVocabulary() {
   const [operationError, setOperationError] = useState('')
   const [operationSlow, setOperationSlow] = useState(false)
   const [timerVersion, setTimerVersion] = useState(0)
+  const [attemptState, setAttemptState] = useState(null)
 
   const timerRef = useRef(null)
   const submittingRef = useRef(false)
@@ -284,6 +289,7 @@ export default function DoVocabulary() {
       setMatchingReviewVersion(1)
       setOperationError('')
       setLoadError('')
+      setAttemptState(null)
       setLoading(true)
       if (!currentUser) {
         navigate('/login')
@@ -372,6 +378,93 @@ export default function DoVocabulary() {
 
         setTest(data)
         setTimeLeft((data.timeLimit || 20) * 60)
+
+        const attemptResponse = await getStudentSubmissionAttemptState({
+          contentType: 'vocabulary',
+          contentId: id
+        })
+
+        if (!isCurrent()) return
+
+        const nextAttemptState = attemptResponse?.data || {
+          open: false,
+          currentAttemptNumber: 0,
+          resume: {}
+        }
+
+        setAttemptState(nextAttemptState)
+
+        if (nextAttemptState.open) {
+          const resume = nextAttemptState.resume || {}
+          const reopenAnswers = nextAttemptState.mode === 'reopen_answers'
+          const fullTime = (data.timeLimit || 20) * 60
+
+          submittedRef.current = false
+          setAlreadyDone(false)
+          setSubmitted(false)
+          setResult(null)
+          setAnswers(
+            reopenAnswers && resume.answers && typeof resume.answers === 'object' &&
+              !Array.isArray(resume.answers)
+              ? resume.answers
+              : {}
+          )
+          setMatchingReviewVersion(
+            reopenAnswers && resume.matchingViewVersion === 0 ? 0 : 1
+          )
+          setTimeLeft(fullTime)
+
+          try {
+            const draftSnap = await getDocFromServer(
+              doc(db, 'vocabularyDrafts', `${currentUser.uid}_${id}`)
+            )
+
+            if (!isCurrent()) return
+
+            if (draftSnap.exists()) {
+              const draft = draftSnap.data()
+
+              if (
+                draft.uid !== currentUser.uid ||
+                draft.studentId !== currentUser.uid ||
+                draft.vocabularyTestId !== id
+              ) {
+                throw new Error('The saved progress does not belong to this practice.')
+              }
+
+              const draftMatchesAttempt =
+                Number(draft.attemptNumber) ===
+                  (Number(nextAttemptState.nextAttemptNumber) || 2) &&
+                draft.reopenMode === (nextAttemptState.mode || '')
+
+              if (draftMatchesAttempt) {
+                setAnswers(
+                  draft.answers && typeof draft.answers === 'object' &&
+                    !Array.isArray(draft.answers)
+                    ? draft.answers
+                    : {}
+                )
+                setTimeLeft(
+                  draft.timeLeft !== null && draft.timeLeft !== '' &&
+                    Number.isFinite(Number(draft.timeLeft))
+                    ? Math.min(Math.max(Number(draft.timeLeft), 0), fullTime)
+                    : fullTime
+                )
+                setDraftRestored(true)
+              }
+            }
+          } catch (draftError) {
+            console.warn('Could not restore vocabulary retake draft:', draftError)
+            throw new Error(
+              'Saved retake progress could not be checked. Your previous submitted attempt is safe. Check your connection and permissions, then retry.'
+            )
+          }
+
+          if (!isCurrent()) return
+          readyRef.current = true
+          setLoading(false)
+          return
+        }
 
         const existingQuery = query(
           collection(db, 'vocabularySubmissions'),
@@ -828,6 +921,10 @@ export default function DoVocabulary() {
       schoolId: test.schoolId || profile?.schoolId || 'maxima',
       answers: { ...answers },
       timeLeft: Math.max(Number(timeLeft) || 0, 0),
+      attemptNumber: attemptState?.open
+        ? Number(attemptState.nextAttemptNumber) || 2
+        : 1,
+      reopenMode: attemptState?.open ? attemptState.mode || '' : '',
       updatedAt: new Date().toISOString()
     }
 
@@ -865,7 +962,9 @@ export default function DoVocabulary() {
     }
 
     if (!autoSubmit) {
-      const ok = window.confirm('Submit your vocabulary practice? You cannot retake it after submitting.')
+      const ok = window.confirm(
+        'Submit this vocabulary attempt? After submission, another attempt requires your teacher to reopen it.'
+      )
       if (!ok) return
     }
 
@@ -947,6 +1046,15 @@ export default function DoVocabulary() {
       })
       submittedRef.current = true
       setResult(secureResult)
+      setAttemptState(previous => ({
+        ...(previous || {}),
+        open: false,
+        currentAttemptNumber:
+          Number(secureData.attemptNumber) ||
+          Number(previous?.nextAttemptNumber) ||
+          Number(previous?.currentAttemptNumber) ||
+          1
+      }))
       setSubmitted(true)
       setDraftRestored(false)
       setSubmitting(false)
@@ -1430,7 +1538,7 @@ export default function DoVocabulary() {
 
             <p className="text-green-600 text-sm bg-green-50 rounded-xl py-2 px-4 inline-block">
               {alreadyDone
-                ? 'You already completed this vocabulary practice. You can review your answers.'
+                ? 'You already completed this vocabulary practice. You can review your answers. Your teacher can reopen another attempt if needed.'
                 : 'Submitted successfully. Review your answers below.'}
             </p>
           </div>
@@ -1526,6 +1634,24 @@ export default function DoVocabulary() {
       </nav>
 
       <div className="max-w-5xl mx-auto px-6 py-8">
+        {attemptState?.open && (
+          <div className="mb-5 bg-purple-50 border border-purple-100 rounded-2xl px-5 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-purple-700">
+                Attempt {attemptState.nextAttemptNumber || 2} reopened
+              </p>
+              <p className="text-xs text-purple-600 mt-1">
+                {attemptState.mode === 'reopen_answers'
+                  ? 'Your previous vocabulary answers were restored. You can edit them before submitting this attempt.'
+                  : 'This attempt starts fresh. Previous answers remain preserved in your earlier attempt history.'}
+              </p>
+            </div>
+            <span className="text-xs bg-white text-purple-600 border border-purple-100 px-3 py-1.5 rounded-full font-semibold">
+              {attemptState.mode === 'reopen_answers' ? 'Reopen Answers' : 'Start Fresh'}
+            </span>
+          </div>
+        )}
+
         <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-6 shadow-sm">
           <h1 className="text-xl font-bold text-gray-900 mb-2">{test.title}</h1>
 

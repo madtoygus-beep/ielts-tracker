@@ -600,6 +600,256 @@
 
 
 
+  function useListeningAttemptStates(user, listenings, submissions) {
+    const [attemptStates, setAttemptStates] = useState({})
+    const [attemptStatesLoading, setAttemptStatesLoading] = useState(false)
+
+    useEffect(() => {
+      let active = true
+      let loadVersion = 0
+
+      if (!user?.uid) {
+        setAttemptStates({})
+        setAttemptStatesLoading(false)
+        return () => {
+          active = false
+        }
+      }
+
+      const submittedListeningIds = listenings
+        .filter(listening =>
+          submissions.some(submission => submission.listeningId === listening.id)
+        )
+        .map(listening => listening.id)
+        .filter(Boolean)
+
+      if (submittedListeningIds.length === 0) {
+        setAttemptStates({})
+        setAttemptStatesLoading(false)
+        return () => {
+          active = false
+        }
+      }
+
+      const loadAttemptStates = async () => {
+        const version = ++loadVersion
+        setAttemptStatesLoading(true)
+
+        const entries = await Promise.all(
+          submittedListeningIds.map(async contentId => {
+            try {
+              const response = await getStudentSubmissionAttemptStateCall({
+                contentType: 'listening',
+                contentId
+              })
+
+              return [contentId, response?.data || { open: false }]
+            } catch (error) {
+              console.warn(
+                `Could not load Listening attempt state for ${contentId}:`,
+                error
+              )
+
+              return [contentId, { open: false }]
+            }
+          })
+        )
+
+        if (!active || version !== loadVersion) return
+
+        setAttemptStates(Object.fromEntries(entries))
+        setAttemptStatesLoading(false)
+      }
+
+      loadAttemptStates()
+
+      const refreshOnFocus = () => {
+        loadAttemptStates()
+      }
+
+      window.addEventListener('focus', refreshOnFocus)
+
+      return () => {
+        active = false
+        loadVersion++
+        window.removeEventListener('focus', refreshOnFocus)
+      }
+    }, [user?.uid, listenings, submissions])
+
+    return { attemptStates, attemptStatesLoading }
+  }
+
+
+  function useVocabularyAttemptStates(user, vocabularyTests, submissions) {
+    const [attemptStates, setAttemptStates] = useState({})
+    const [attemptStatesLoading, setAttemptStatesLoading] = useState(false)
+
+    useEffect(() => {
+      let active = true
+      let loadVersion = 0
+
+      if (!user?.uid) {
+        setAttemptStates({})
+        setAttemptStatesLoading(false)
+        return () => {
+          active = false
+        }
+      }
+
+      const submissionMatches = (submission, contentId) =>
+        [
+          submission?.vocabularyTestId,
+          submission?.vocabularyId,
+          submission?.testId,
+          submission?.homeworkId
+        ]
+          .map(normalizeId)
+          .includes(normalizeId(contentId))
+
+      const submittedVocabularyIds = vocabularyTests
+        .filter(test =>
+          submissions.some(submission => submissionMatches(submission, test.id))
+        )
+        .map(test => test.id)
+        .filter(Boolean)
+
+      if (submittedVocabularyIds.length === 0) {
+        setAttemptStates({})
+        setAttemptStatesLoading(false)
+        return () => {
+          active = false
+        }
+      }
+
+      const loadAttemptStates = async () => {
+        const version = ++loadVersion
+        setAttemptStatesLoading(true)
+
+        const entries = await Promise.all(
+          submittedVocabularyIds.map(async contentId => {
+            try {
+              const response = await getStudentSubmissionAttemptStateCall({
+                contentType: 'vocabulary',
+                contentId
+              })
+
+              return [contentId, response?.data || { open: false }]
+            } catch (error) {
+              console.warn(
+                `Could not load Vocabulary attempt state for ${contentId}:`,
+                error
+              )
+
+              return [contentId, { open: false }]
+            }
+          })
+        )
+
+        if (!active || version !== loadVersion) return
+
+        setAttemptStates(Object.fromEntries(entries))
+        setAttemptStatesLoading(false)
+      }
+
+      loadAttemptStates()
+
+      const refreshOnFocus = () => {
+        loadAttemptStates()
+      }
+
+      window.addEventListener('focus', refreshOnFocus)
+
+      return () => {
+        active = false
+        loadVersion++
+        window.removeEventListener('focus', refreshOnFocus)
+      }
+    }, [user?.uid, vocabularyTests, submissions])
+
+    return { attemptStates, attemptStatesLoading }
+  }
+
+
+  function useMockAttemptStates(user, mocks, submissions) {
+    const [attemptStates, setAttemptStates] = useState({})
+    const [attemptStatesLoading, setAttemptStatesLoading] = useState(false)
+
+    useEffect(() => {
+      let active = true
+      let loadVersion = 0
+
+      if (!user?.uid) {
+        setAttemptStates({})
+        setAttemptStatesLoading(false)
+        return () => {
+          active = false
+        }
+      }
+
+      const submittedMockIds = mocks
+        .filter(mock =>
+          submissions.some(submission => submission.mockTestId === mock.id)
+        )
+        .map(mock => mock.id)
+        .filter(Boolean)
+
+      if (submittedMockIds.length === 0) {
+        setAttemptStates({})
+        setAttemptStatesLoading(false)
+        return () => {
+          active = false
+        }
+      }
+
+      const loadAttemptStates = async () => {
+        const version = ++loadVersion
+        setAttemptStatesLoading(true)
+
+        const entries = await Promise.all(
+          submittedMockIds.map(async contentId => {
+            try {
+              const response = await getStudentSubmissionAttemptStateCall({
+                contentType: 'mock',
+                contentId
+              })
+
+              return [contentId, response?.data || { open: false }]
+            } catch (error) {
+              console.warn(
+                `Could not load Mock attempt state for ${contentId}:`,
+                error
+              )
+
+              return [contentId, { open: false }]
+            }
+          })
+        )
+
+        if (!active || version !== loadVersion) return
+
+        setAttemptStates(Object.fromEntries(entries))
+        setAttemptStatesLoading(false)
+      }
+
+      loadAttemptStates()
+
+      const refreshOnFocus = () => {
+        loadAttemptStates()
+      }
+
+      window.addEventListener('focus', refreshOnFocus)
+
+      return () => {
+        active = false
+        loadVersion++
+        window.removeEventListener('focus', refreshOnFocus)
+      }
+    }, [user?.uid, mocks, submissions])
+
+    return { attemptStates, attemptStatesLoading }
+  }
+
+
   function getStudentDisplayName(profile, user) {
     const rawName = profile?.name || profile?.fullName || user?.displayName || user?.email || 'Student'
     const cleanName = rawName.toString().trim()
@@ -1507,11 +1757,25 @@
       )
     }, [user])
 
+    const { attemptStates, attemptStatesLoading } = useListeningAttemptStates(
+      user,
+      listenings,
+      submissions
+    )
+
+    const getSubmission = listeningId =>
+      submissions.find(s => s.listeningId === listeningId)
+
+    const getAttemptState = listeningId => attemptStates[listeningId] || null
+
+    const hasOpenRetake = listeningId =>
+      getAttemptState(listeningId)?.open === true
+
     const isDone = listeningId =>
-      submissions.some(s => s.listeningId === listeningId)
+      Boolean(getSubmission(listeningId)) && !hasOpenRetake(listeningId)
 
     const getResult = listeningId =>
-      submissions.find(s => s.listeningId === listeningId)?.result
+      getSubmission(listeningId)?.result
 
     const todoListenings = listenings.filter(l => !isDone(l.id))
     const completedListenings = listenings.filter(l => isDone(l.id))
@@ -1533,6 +1797,9 @@
             <div className="flex flex-col gap-3">
               {todoListenings.map((l, index) => {
                 const badge = dueLabel(l)
+                const submission = getSubmission(l.id)
+                const attemptState = getAttemptState(l.id)
+                const retakeOpen = attemptState?.open === true
 
                 return (
                   <div
@@ -1553,17 +1820,31 @@
                           {badge.text}
                         </span>
 
-                        <span className="text-xs bg-red-50 text-red-500 px-3 py-1 rounded-full">
-                          Not completed
-                        </span>
+                        {retakeOpen ? (
+                          <>
+                            <span className="text-xs bg-amber-50 text-amber-700 px-3 py-1 rounded-full">
+                              Attempt {attemptState.nextAttemptNumber || 2} reopened
+                            </span>
+                            <span className="text-xs bg-blue-50 text-blue-600 px-3 py-1 rounded-full">
+                              {attemptState.mode === 'reopen_answers'
+                                ? 'Previous answers restored'
+                                : 'Start fresh'}
+                            </span>
+                          </>
+                        ) : (
+                          <span className="text-xs bg-red-50 text-red-500 px-3 py-1 rounded-full">
+                            Not completed
+                          </span>
+                        )}
                       </div>
                     </div>
 
                     <button
                       onClick={() => navigate(`/do-listening/${l.id}`)}
-                      className="bg-purple-600 text-white px-4 py-2 rounded-xl text-xs font-medium hover:bg-purple-700"
+                      disabled={Boolean(submission) && attemptStatesLoading && !attemptState}
+                      className="bg-purple-600 text-white px-4 py-2 rounded-xl text-xs font-medium hover:bg-purple-700 disabled:opacity-60 disabled:cursor-not-allowed"
                     >
-                      Start →
+                      {retakeOpen ? 'Continue Retake →' : 'Start →'}
                     </button>
                   </div>
                 )
@@ -2019,15 +2300,28 @@
         .map(normalizeId)
         .includes(normalizeId(vocabularyTestId))
 
-    const isDone = vocabularyTestId =>
-      submissions.some(submission =>
+    const { attemptStates, attemptStatesLoading } = useVocabularyAttemptStates(
+      user,
+      vocabularyTests,
+      submissions
+    )
+
+    const getSubmission = vocabularyTestId =>
+      submissions.find(submission =>
         isVocabularySubmissionForTest(submission, vocabularyTestId)
       )
 
+    const getAttemptState = vocabularyTestId =>
+      attemptStates[vocabularyTestId] || null
+
+    const hasOpenRetake = vocabularyTestId =>
+      getAttemptState(vocabularyTestId)?.open === true
+
+    const isDone = vocabularyTestId =>
+      Boolean(getSubmission(vocabularyTestId)) && !hasOpenRetake(vocabularyTestId)
+
     const getResult = vocabularyTestId =>
-      submissions.find(submission =>
-        isVocabularySubmissionForTest(submission, vocabularyTestId)
-      )?.result
+      getSubmission(vocabularyTestId)?.result
 
     const todoVocabularyTests = vocabularyTests.filter(item => !isDone(item.id))
     const completedVocabularyTests = vocabularyTests.filter(item => isDone(item.id))
@@ -2049,6 +2343,9 @@
             <div className="flex flex-col gap-3">
               {todoVocabularyTests.map((item, index) => {
                 const badge = dueLabel(item)
+                const submission = getSubmission(item.id)
+                const attemptState = getAttemptState(item.id)
+                const retakeOpen = attemptState?.open === true
 
                 return (
                   <div
@@ -2069,17 +2366,31 @@
                           {badge.text}
                         </span>
 
-                        <span className="text-xs bg-red-50 text-red-500 px-3 py-1 rounded-full">
-                          Not completed
-                        </span>
+                        {retakeOpen ? (
+                          <>
+                            <span className="text-xs bg-amber-50 text-amber-700 px-3 py-1 rounded-full">
+                              Attempt {attemptState.nextAttemptNumber || 2} reopened
+                            </span>
+                            <span className="text-xs bg-blue-50 text-blue-600 px-3 py-1 rounded-full">
+                              {attemptState.mode === 'reopen_answers'
+                                ? 'Previous answers restored'
+                                : 'Start fresh'}
+                            </span>
+                          </>
+                        ) : (
+                          <span className="text-xs bg-red-50 text-red-500 px-3 py-1 rounded-full">
+                            Not completed
+                          </span>
+                        )}
                       </div>
                     </div>
 
                     <button
                       onClick={() => navigate(`/do-vocabulary/${item.id}`)}
-                      className="bg-purple-600 text-white px-4 py-2 rounded-xl text-xs font-medium hover:bg-purple-700"
+                      disabled={Boolean(submission) && attemptStatesLoading && !attemptState}
+                      className="bg-purple-600 text-white px-4 py-2 rounded-xl text-xs font-medium hover:bg-purple-700 disabled:opacity-60 disabled:cursor-not-allowed"
                     >
-                      Start →
+                      {retakeOpen ? 'Continue Retake →' : 'Start →'}
                     </button>
                   </div>
                 )
@@ -2294,11 +2605,25 @@
       )
     }, [user])
 
+    const { attemptStates, attemptStatesLoading } = useMockAttemptStates(
+      user,
+      mocks,
+      submissions
+    )
+
     const getSubmission = mockId =>
       submissions.find(submission => submission.mockTestId === mockId)
 
-    const todoMocks = mocks.filter(mock => !getSubmission(mock.id))
-    const completedMocks = mocks.filter(mock => getSubmission(mock.id))
+    const getAttemptState = mockId => attemptStates[mockId] || null
+
+    const hasOpenRetake = mockId =>
+      getAttemptState(mockId)?.open === true
+
+    const isDone = mockId =>
+      Boolean(getSubmission(mockId)) && !hasOpenRetake(mockId)
+
+    const todoMocks = mocks.filter(mock => !isDone(mock.id))
+    const completedMocks = mocks.filter(mock => isDone(mock.id))
 
     if (mocks.length === 0) return null
 
@@ -2317,6 +2642,9 @@
             <div className="flex flex-col gap-3">
               {todoMocks.map((mock, index) => {
                 const badge = dueLabel(mock)
+                const submission = getSubmission(mock.id)
+                const attemptState = getAttemptState(mock.id)
+                const retakeOpen = attemptState?.open === true
 
                 return (
                   <div
@@ -2345,11 +2673,24 @@
                           {badge.text}
                         </span>
 
-                        <span className="text-xs bg-red-50 text-red-500 px-3 py-1 rounded-full">
-                          Not completed
-                        </span>
+                        {retakeOpen ? (
+                          <>
+                            <span className="text-xs bg-amber-50 text-amber-700 px-3 py-1 rounded-full">
+                              Attempt {attemptState.nextAttemptNumber || 2} reopened
+                            </span>
+                            <span className="text-xs bg-blue-50 text-blue-600 px-3 py-1 rounded-full">
+                              {attemptState.mode === 'reopen_answers'
+                                ? 'Previous answers restored'
+                                : 'Start fresh'}
+                            </span>
+                          </>
+                        ) : (
+                          <span className="text-xs bg-red-50 text-red-500 px-3 py-1 rounded-full">
+                            Not completed
+                          </span>
+                        )}
 
-                        {hasSavedMockProgress(mock.id) && (
+                        {hasSavedMockProgress(mock.id) && !retakeOpen && (
                           <span className="text-xs bg-blue-50 text-blue-600 px-3 py-1 rounded-full">
                             Progress saved
                           </span>
@@ -2359,9 +2700,14 @@
 
                     <button
                       onClick={() => navigate(`/do-mock/${mock.id}`)}
-                      className="bg-purple-600 text-white px-4 py-2 rounded-xl text-xs font-medium hover:bg-purple-700"
+                      disabled={Boolean(submission) && attemptStatesLoading && !attemptState}
+                      className="bg-purple-600 text-white px-4 py-2 rounded-xl text-xs font-medium hover:bg-purple-700 disabled:opacity-60 disabled:cursor-not-allowed"
                     >
-                      {hasSavedMockProgress(mock.id) ? 'Resume →' : 'Start →'}
+                      {retakeOpen
+                        ? 'Continue Retake →'
+                        : hasSavedMockProgress(mock.id)
+                          ? 'Resume →'
+                          : 'Start →'}
                     </button>
                   </div>
                 )
@@ -3146,6 +3492,24 @@
       writingSubmissions
     )
 
+    const { attemptStates: listeningAttemptStates } = useListeningAttemptStates(
+      user,
+      listenings,
+      listeningSubmissions
+    )
+
+    const { attemptStates: vocabularyAttemptStates } = useVocabularyAttemptStates(
+      user,
+      vocabularyTests,
+      vocabularySubmissions
+    )
+
+    const { attemptStates: mockAttemptStates } = useMockAttemptStates(
+      user,
+      mocks,
+      mockSubmissions
+    )
+
     const navigate = useNavigate()
 
     useEffect(() => {
@@ -3264,7 +3628,11 @@
       !hasOpenReadingRetake(readingId) &&
       readingSubmissions.some(submission => submission.readingId === readingId)
 
+    const hasOpenListeningRetake = listeningId =>
+      listeningAttemptStates[listeningId]?.open === true
+
     const hasListeningSubmission = listeningId =>
+      !hasOpenListeningRetake(listeningId) &&
       listeningSubmissions.some(submission => submission.listeningId === listeningId)
 
     const hasOpenWritingRetake = writingId =>
@@ -3274,7 +3642,11 @@
       !hasOpenWritingRetake(writingId) &&
       writingSubmissions.some(submission => submission.writingId === writingId)
 
+    const hasOpenVocabularyRetake = vocabularyTestId =>
+      vocabularyAttemptStates[vocabularyTestId]?.open === true
+
     const hasVocabularySubmission = vocabularyTestId =>
+      !hasOpenVocabularyRetake(vocabularyTestId) &&
       vocabularySubmissions.some(submission =>
         [
           submission?.vocabularyTestId,
@@ -3286,7 +3658,11 @@
           .includes(normalizeId(vocabularyTestId))
       )
 
+    const hasOpenMockRetake = mockId =>
+      mockAttemptStates[mockId]?.open === true
+
     const hasMockSubmission = mockId =>
+      !hasOpenMockRetake(mockId) &&
       mockSubmissions.some(submission => submission.mockTestId === mockId)
 
     const todoItems = [
@@ -3308,7 +3684,9 @@
           type: 'Listening',
           icon: '🎧',
           path: `/do-listening/${item.id}`,
-          color: 'purple'
+          color: 'purple',
+          isRetake: hasOpenListeningRetake(item.id),
+          retakeState: listeningAttemptStates[item.id] || null
         })),
       ...writings
         .filter(item => !hasWritingSubmission(item.id))
@@ -3328,7 +3706,9 @@
           type: 'Vocabulary',
           icon: '🧩',
           path: `/do-vocabulary/${item.id}`,
-          color: 'violet'
+          color: 'violet',
+          isRetake: hasOpenVocabularyRetake(item.id),
+          retakeState: vocabularyAttemptStates[item.id] || null
         })),
       ...mocks
         .filter(item => !hasMockSubmission(item.id))
@@ -3337,7 +3717,9 @@
           type: 'Mock Test',
           icon: '🧠',
           path: `/do-mock/${item.id}`,
-          color: 'green'
+          color: 'green',
+          isRetake: hasOpenMockRetake(item.id),
+          retakeState: mockAttemptStates[item.id] || null
         }))
     ].sort(sortByAssignedDateDesc)
 

@@ -2119,6 +2119,18 @@ export default function TeacherDashboard() {
       return "Start the new attempt with the student's previous answers, flags, scratch note and highlights restored."
     }
 
+    if (contentType === 'listening') {
+      return "Start the new attempt with the student's previous answers, flags and scratch note restored."
+    }
+
+    if (contentType === 'vocabulary') {
+      return "Start the new attempt with the student's previous vocabulary answers restored."
+    }
+
+    if (contentType === 'mock') {
+      return "Start the new mock attempt with the student's previous Listening, Reading and Writing answers restored. Timers and test flow restart."
+    }
+
     return "Start the new attempt with the student's previous answers restored."
   }
 
@@ -7749,6 +7761,14 @@ Continue permanent delete?`
                               {getStudentMockSubmissions(student.id).map(submission => {
                                 const result = submission.result || {}
                                 const overall = getMockOverall(submission)
+                                const mock = mockTests.find(
+                                  item => item.id === submission.mockTestId
+                                )
+                                const canRetakeMock = Boolean(
+                                  mock &&
+                                  !mock.archived &&
+                                  isHomeworkAssignedToStudent(mock, student, 'mock')
+                                )
 
                                 return (
                                   <div
@@ -7775,9 +7795,28 @@ Continue permanent delete?`
                                         </p>
                                       </div>
 
-                                      <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1.5 rounded-full font-semibold">
-                                        Overall {formatBand(overall)}
-                                      </span>
+                                      <div className="flex items-center gap-2 flex-wrap justify-end">
+                                        <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1.5 rounded-full font-semibold">
+                                          Overall {formatBand(overall)}
+                                        </span>
+
+                                        {canRetakeMock && (
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              openSubmissionAttemptManager({
+                                                contentType: 'mock',
+                                                contentId: submission.mockTestId,
+                                                title: getMockTitle(submission),
+                                                student
+                                              })
+                                            }
+                                            className="text-xs bg-blue-50 text-blue-700 px-3 py-2 rounded-xl hover:bg-blue-100"
+                                          >
+                                            Retake Options
+                                          </button>
+                                        )}
+                                      </div>
                                     </div>
 
                                     <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
@@ -8063,6 +8102,21 @@ Continue permanent delete?`
                                       </span>
 
                                       <button
+                                        type="button"
+                                        onClick={() =>
+                                          openSubmissionAttemptManager({
+                                            contentType: 'listening',
+                                            contentId: listening.id,
+                                            title: listening.title,
+                                            student
+                                          })
+                                        }
+                                        className="text-xs bg-blue-50 text-blue-700 px-3 py-2 rounded-xl hover:bg-blue-100"
+                                      >
+                                        Retake Options
+                                      </button>
+
+                                      <button
                                         onClick={() => removeHomeworkFromStudent(listening, 'listening', student)}
                                         className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
                                       >
@@ -8164,6 +8218,21 @@ Continue permanent delete?`
                                         className="text-xs bg-purple-600 text-white px-3 py-2 rounded-xl hover:bg-purple-700"
                                       >
                                         Review
+                                      </button>
+
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          openSubmissionAttemptManager({
+                                            contentType: 'vocabulary',
+                                            contentId: vocabularyTest.id,
+                                            title: vocabularyTest.title,
+                                            student
+                                          })
+                                        }
+                                        className="text-xs bg-blue-50 text-blue-700 px-3 py-2 rounded-xl hover:bg-blue-100"
+                                      >
+                                        Retake Options
                                       </button>
 
                                       <span className="text-xs bg-green-50 text-green-600 px-3 py-1.5 rounded-full">
