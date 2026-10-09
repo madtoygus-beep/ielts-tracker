@@ -60,6 +60,18 @@ const saveManagedSchoolCall = httpsCallable(
 
 )
 
+const deleteManagedSchoolCall = httpsCallable(functions, 'deleteManagedSchool')
+
+const createManagedUserCall = httpsCallable(functions, 'createManagedUser')
+
+const approveManagedUserCall = httpsCallable(functions, 'approveManagedUser')
+
+const rejectManagedUserCall = httpsCallable(functions, 'rejectManagedUser')
+
+const updateManagedUserCall = httpsCallable(functions, 'updateManagedUser')
+
+const deleteManagedUserCall = httpsCallable(functions, 'deleteManagedUser')
+
 
 
 export default function AdminDashboard() {
@@ -108,6 +120,28 @@ export default function AdminDashboard() {
 
   })
 
+  const [accountCreating, setAccountCreating] = useState(false)
+
+  const [accountError, setAccountError] = useState('')
+
+  const [accountNotice, setAccountNotice] = useState('')
+
+  const [accountForm, setAccountForm] = useState({
+
+    name: '',
+
+    email: '',
+
+    role: 'student',
+
+    schoolId: '',
+
+    targetBand: ''
+
+  })
+
+  const [pendingSchoolSelections, setPendingSchoolSelections] = useState({})
+
   const navigate = useNavigate()
 
 
@@ -129,6 +163,26 @@ export default function AdminDashboard() {
         : []
 
       setSchools(managedSchools)
+
+      setAccountForm(previous => {
+
+        const selectedIsActive = managedSchools.some(
+
+          school => school.schoolId === previous.schoolId && school.status === 'active'
+
+        )
+
+        if (selectedIsActive) return previous
+
+        return {
+
+          ...previous,
+
+          schoolId: ''
+
+        }
+
+      })
 
     } catch (error) {
 
@@ -576,31 +630,269 @@ export default function AdminDashboard() {
 
 
 
+  const handleDeleteSchool = async school => {
+
+    if (school.schoolId === DEFAULT_SCHOOL_ID) {
+
+      setSchoolsError('The default Maxima school cannot be permanently deleted.')
+
+      return
+
+    }
+
+    if (school.status !== 'inactive') {
+
+      setSchoolsError('Deactivate this school before permanently deleting it.')
+
+      return
+
+    }
+
+    const ok = window.confirm(
+
+      `Permanently delete ${school.name}?\n\nThis cannot be undone. The server will refuse deletion if any users, classes, content, submissions or history still reference this school.`
+
+    )
+
+    if (!ok) return
+
+
+
+    setSchoolSaving(true)
+
+    setSchoolsError('')
+
+    setSchoolNotice('')
+
+
+
+    try {
+
+      await deleteManagedSchoolCall({ schoolId: school.schoolId })
+
+
+
+      if (editingSchoolId === school.schoolId) {
+
+        resetSchoolForm()
+
+      }
+
+
+
+      await loadSchools()
+
+      setSchoolNotice(`${school.name} was permanently deleted.`)
+
+    } catch (error) {
+
+      console.error(error)
+
+      setSchoolsError(error?.message || 'Could not permanently delete this school.')
+
+    } finally {
+
+      setSchoolSaving(false)
+
+    }
+
+  }
+
+
+
   const schoolMembers = schoolId =>
 
     users.filter(user => (user.schoolId || DEFAULT_SCHOOL_ID) === schoolId)
 
 
 
+  const schoolLabel = schoolId => {
+
+    const id = schoolId || DEFAULT_SCHOOL_ID
+
+    const school = schools.find(item => item.schoolId === id)
+
+    return school ? school.name : id
+
+  }
+
+
+
+  const handleCreateManagedUser = async () => {
+
+    const name = accountForm.name.trim()
+
+    const email = accountForm.email.trim().toLowerCase()
+
+    const schoolId = accountForm.schoolId
+
+    const targetBand = accountForm.targetBand === '' ? null : Number(accountForm.targetBand)
+
+
+
+    setAccountError('')
+
+    setAccountNotice('')
+
+
+
+    if (name.length < 2 || !email || !schoolId) {
+
+      setAccountError('Full name, email and school are required.')
+
+      return
+
+    }
+
+
+
+    if (
+
+      accountForm.role === 'student' &&
+
+      accountForm.targetBand !== '' &&
+
+      (
+
+        Number.isNaN(targetBand) ||
+
+        targetBand < 0 ||
+
+        targetBand > 9 ||
+
+        Math.round(targetBand * 2) !== targetBand * 2
+
+      )
+
+    ) {
+
+      setAccountError('Target Band must be between 0 and 9 in 0.5 increments.')
+
+      return
+
+    }
+
+
+
+    setAccountCreating(true)
+
+
+
+    try {
+
+      await createManagedUserCall({
+
+        name,
+
+        email,
+
+        role: accountForm.role,
+
+        schoolId,
+
+        targetBand: accountForm.role === 'student' ? targetBand : null
+
+      })
+
+
+
+      let resetSent = false
+
+      try {
+
+        await sendPasswordResetEmail(auth, email)
+
+        resetSent = true
+
+      } catch (resetError) {
+
+        console.error('Account created but password setup email failed:', resetError)
+
+      }
+
+
+
+      setAccountNotice(
+
+        resetSent
+
+          ? `${name} was created in ${schoolLabel(schoolId)}. Password setup email sent to ${email}.`
+
+          : `${name} was created in ${schoolLabel(schoolId)}, but the password setup email could not be sent. Use Reset Password from the user list.`
+
+      )
+
+
+
+      setAccountForm(previous => ({
+
+        ...previous,
+
+        name: '',
+
+        email: '',
+
+        schoolId: '',
+
+        targetBand: ''
+
+      }))
+
+    } catch (error) {
+
+      console.error(error)
+
+      setAccountError(error?.message || 'Could not create account.')
+
+    } finally {
+
+      setAccountCreating(false)
+
+    }
+
+  }
+
+
+
   const approveUser = async (userId, roleType) => {
 
-    await updateDoc(doc(db, 'users', userId), {
+    const schoolId = pendingSchoolSelections[userId] || ''
 
-      status: 'approved',
 
-      role: roleType,
 
-      schoolId: DEFAULT_SCHOOL_ID,
+    if (!schoolId) {
 
-      teacherIds: roleType === 'student' ? [] : [],
+      alert('Select an active school before approving this account.')
 
-      deleted: false,
+      return
 
-      approvedAt: new Date().toISOString(),
+    }
 
-      updatedAt: new Date().toISOString()
 
-    })
+
+    try {
+
+      await approveManagedUserCall({ userId, role: roleType, schoolId })
+
+
+
+      setPendingSchoolSelections(previous => {
+
+        const next = { ...previous }
+
+        delete next[userId]
+
+        return next
+
+      })
+
+    } catch (error) {
+
+      console.error(error)
+
+      alert(error?.message || 'Could not approve this account.')
+
+    }
 
   }
 
@@ -610,15 +902,19 @@ export default function AdminDashboard() {
 
     if (!window.confirm('Reject this request?')) return
 
-    await updateDoc(doc(db, 'users', userId), {
 
-      status: 'rejected',
 
-      role: null,
+    try {
 
-      rejectedAt: new Date().toISOString()
+      await rejectManagedUserCall({ userId })
 
-    })
+    } catch (error) {
+
+      console.error(error)
+
+      alert(error?.message || 'Could not reject this account.')
+
+    }
 
   }
 
@@ -626,19 +922,21 @@ export default function AdminDashboard() {
 
   const handleDelete = async (id) => {
 
-    if (!window.confirm('Are you sure you want to remove this account from the panel?')) return
+    if (!window.confirm('Remove this account and disable Firebase Auth login? Existing history will be preserved.')) return
 
 
 
-    await updateDoc(doc(db, 'users', id), {
+    try {
 
-      deleted: true,
+      await deleteManagedUserCall({ userId: id })
 
-      status: 'deleted',
+    } catch (error) {
 
-      deletedAt: new Date().toISOString()
+      console.error(error)
 
-    })
+      alert(error?.message || 'Could not remove this account.')
+
+    }
 
   }
 
@@ -1216,6 +1514,8 @@ export default function AdminDashboard() {
 
     if (
 
+      editRole === 'student' &&
+
       editTargetBand !== '' &&
 
       (
@@ -1224,13 +1524,15 @@ export default function AdminDashboard() {
 
         cleanTargetBand < 0 ||
 
-        cleanTargetBand > 9
+        cleanTargetBand > 9 ||
+
+        Math.round(cleanTargetBand * 2) !== cleanTargetBand * 2
 
       )
 
     ) {
 
-      alert('Target Band must be between 0 and 9.')
+      alert('Target Band must be between 0 and 9 in 0.5 increments.')
 
       return
 
@@ -1238,29 +1540,29 @@ export default function AdminDashboard() {
 
 
 
-    await updateDoc(doc(db, 'users', editUser.id), {
+    try {
 
-      name: editName,
+      await updateManagedUserCall({
 
-      role: editRole,
+        userId: editUser.id,
 
-      targetBand: cleanTargetBand,
+        name: editName,
 
-      schoolId: editUser.schoolId || DEFAULT_SCHOOL_ID,
+        targetBand: editRole === 'student' ? cleanTargetBand : null
 
-      teacherIds: editRole === 'student' ? editUser.teacherIds || [] : [],
+      })
 
-      status: 'approved',
+      setEditUser(null)
 
-      deleted: false,
+      setEditTargetBand('')
 
-      updatedAt: new Date().toISOString()
+    } catch (error) {
 
-    })
+      console.error(error)
 
-    setEditUser(null)
+      alert(error?.message || 'Could not update this account.')
 
-    setEditTargetBand('')
+    }
 
   }
 
@@ -1476,7 +1778,7 @@ export default function AdminDashboard() {
 
             <h1 className="text-2xl font-bold text-gray-900 mb-1">Admin Panel</h1>
 
-            <p className="text-gray-400 text-sm">Manage schools, accounts, mock history and classes</p>
+            <p className="text-gray-400 text-sm">Manage schools, institution accounts, mock history and classes</p>
 
           </div>
 
@@ -1780,6 +2082,24 @@ export default function AdminDashboard() {
 
                     </button>
 
+                    {school.status === 'inactive' && school.schoolId !== DEFAULT_SCHOOL_ID && (
+
+                      <button
+
+                        onClick={() => handleDeleteSchool(school)}
+
+                        disabled={schoolSaving}
+
+                        className="text-xs bg-red-50 hover:bg-red-100 disabled:text-red-300 text-red-600 px-3 py-1.5 rounded-lg"
+
+                      >
+
+                        Delete
+
+                      </button>
+
+                    )}
+
                   </div>
 
                 </div>
@@ -1791,6 +2111,194 @@ export default function AdminDashboard() {
           </div>
 
         )}
+
+      </div>
+
+
+
+      <div className="bg-white border border-gray-100 rounded-2xl p-5 mb-8">
+
+        <div className="flex items-start justify-between gap-4 mb-4">
+
+          <div>
+
+            <div className="flex items-center gap-2">
+
+              <h2 className="font-semibold text-gray-800">Create account</h2>
+
+              <span className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded-full">Stage 18B</span>
+
+            </div>
+
+            <p className="text-xs text-gray-400 mt-1">
+
+              Create an approved Student or Teacher directly in an active school. The user receives a Firebase password setup email.
+
+            </p>
+
+          </div>
+
+        </div>
+
+
+
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+
+          <div className="md:col-span-3">
+
+            <label className="text-xs text-gray-400 mb-1 block">Full name</label>
+
+            <input
+
+              value={accountForm.name}
+
+              onChange={e => setAccountForm(previous => ({ ...previous, name: e.target.value }))}
+
+              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400"
+
+              placeholder="Student or teacher name"
+
+            />
+
+          </div>
+
+
+
+          <div className="md:col-span-3">
+
+            <label className="text-xs text-gray-400 mb-1 block">Email</label>
+
+            <input
+
+              type="email"
+
+              value={accountForm.email}
+
+              onChange={e => setAccountForm(previous => ({ ...previous, email: e.target.value }))}
+
+              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400"
+
+              placeholder="name@example.com"
+
+            />
+
+          </div>
+
+
+
+          <div className="md:col-span-2">
+
+            <label className="text-xs text-gray-400 mb-1 block">School</label>
+
+            <select
+
+              value={accountForm.schoolId}
+
+              onChange={e => setAccountForm(previous => ({ ...previous, schoolId: e.target.value }))}
+
+              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 bg-white"
+
+            >
+
+              <option value="" disabled>Select school</option>
+
+              {schools.map(school => (
+
+                <option key={school.schoolId} value={school.schoolId} disabled={school.status !== 'active'}>
+
+                  {school.name}{school.status !== 'active' ? ' (Inactive)' : ''}
+
+                </option>
+
+              ))}
+
+            </select>
+
+          </div>
+
+
+
+          <div className="md:col-span-2">
+
+            <label className="text-xs text-gray-400 mb-1 block">Role</label>
+
+            <select
+
+              value={accountForm.role}
+
+              onChange={e => setAccountForm(previous => ({ ...previous, role: e.target.value }))}
+
+              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 bg-white"
+
+            >
+
+              <option value="student">Student</option>
+
+              <option value="teacher">Teacher</option>
+
+            </select>
+
+          </div>
+
+
+
+          <div className="md:col-span-2">
+
+            <label className="text-xs text-gray-400 mb-1 block">Target Band</label>
+
+            <input
+
+              type="number"
+
+              min="0"
+
+              max="9"
+
+              step="0.5"
+
+              disabled={accountForm.role !== 'student'}
+
+              value={accountForm.targetBand}
+
+              onChange={e => setAccountForm(previous => ({ ...previous, targetBand: e.target.value }))}
+
+              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 disabled:bg-gray-100 disabled:text-gray-400"
+
+              placeholder="6.5"
+
+            />
+
+          </div>
+
+        </div>
+
+
+
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mt-4">
+
+          <div className="min-h-5">
+
+            {accountError && <p className="text-xs text-red-600">{accountError}</p>}
+
+            {accountNotice && <p className="text-xs text-green-700">{accountNotice}</p>}
+
+          </div>
+
+          <button
+
+            onClick={handleCreateManagedUser}
+
+            disabled={accountCreating || schoolsLoading || !schools.some(school => school.status === 'active')}
+
+            className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white px-5 py-2.5 rounded-xl text-sm font-medium"
+
+          >
+
+            {accountCreating ? 'Creating...' : 'Create account'}
+
+          </button>
+
+        </div>
 
       </div>
 
@@ -1890,7 +2398,31 @@ export default function AdminDashboard() {
 
 
 
-                <div className="flex gap-2">
+                <div className="flex gap-2 items-center flex-wrap justify-end">
+
+                  <select
+
+                    value={pendingSchoolSelections[u.id] || ''}
+
+                    onChange={e => setPendingSchoolSelections(previous => ({ ...previous, [u.id]: e.target.value }))}
+
+                    className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white"
+
+                  >
+
+                    <option value="" disabled>Select school</option>
+
+                    {schools.map(school => (
+
+                      <option key={school.schoolId} value={school.schoolId} disabled={school.status !== 'active'}>
+
+                        {school.name}{school.status !== 'active' ? ' (Inactive)' : ''}
+
+                      </option>
+
+                    ))}
+
+                  </select>
 
                   <button onClick={() => approveUser(u.id, 'student')} className="text-xs bg-purple-100 hover:bg-purple-200 text-purple-700 px-3 py-1.5 rounded-lg">Approve Student</button>
 
@@ -1942,7 +2474,31 @@ export default function AdminDashboard() {
 
 
 
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 items-center flex-wrap justify-end">
+
+                    <select
+
+                      value={pendingSchoolSelections[u.id] || ''}
+
+                      onChange={e => setPendingSchoolSelections(previous => ({ ...previous, [u.id]: e.target.value }))}
+
+                      className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white"
+
+                    >
+
+                      <option value="" disabled>Select school</option>
+
+                      {schools.map(school => (
+
+                        <option key={school.schoolId} value={school.schoolId} disabled={school.status !== 'active'}>
+
+                          {school.name}{school.status !== 'active' ? ' (Inactive)' : ''}
+
+                        </option>
+
+                      ))}
+
+                    </select>
 
                     <button onClick={() => approveUser(u.id, 'student')} className="text-xs bg-purple-100 hover:bg-purple-200 text-purple-700 px-3 py-1.5 rounded-lg">Approve Student</button>
 
@@ -1991,6 +2547,8 @@ export default function AdminDashboard() {
                     <p className="text-sm font-medium text-gray-800">{u.name}</p>
 
                     <p className="text-xs text-gray-400">{u.email}</p>
+
+                  <p className="text-[11px] text-gray-400 mt-0.5">School: {schoolLabel(u.schoolId)}</p>
 
                   {u.role === 'student' && (
 
@@ -2061,6 +2619,8 @@ export default function AdminDashboard() {
                       <p className="text-sm font-medium text-gray-800">{u.name}</p>
 
                       <p className="text-xs text-gray-400">{u.email}</p>
+
+                    <p className="text-[11px] text-gray-400 mt-0.5">School: {schoolLabel(u.schoolId)}</p>
 
                   {u.role === 'student' && (
 
@@ -2218,19 +2778,39 @@ export default function AdminDashboard() {
 
               </div>
 
-              <div>
+              <div className="grid grid-cols-2 gap-3">
 
-                <label className="text-xs text-gray-400 mb-1 block">Role</label>
+                <div>
 
-                <div className="flex gap-2">
+                  <label className="text-xs text-gray-400 mb-1 block">Role</label>
 
-                  <button onClick={() => setEditRole('student')} className={`flex-1 py-2 rounded-full text-sm font-medium border transition-all ${editRole === 'student' ? 'bg-purple-600 text-white border-purple-600' : 'border-gray-200 text-gray-500'}`}>Student</button>
+                  <div className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm bg-gray-50 text-gray-500 capitalize">
 
-                  <button onClick={() => setEditRole('teacher')} className={`flex-1 py-2 rounded-full text-sm font-medium border transition-all ${editRole === 'teacher' ? 'bg-purple-600 text-white border-purple-600' : 'border-gray-200 text-gray-500'}`}>Teacher</button>
+                    {editRole}
+
+                  </div>
+
+                </div>
+
+                <div>
+
+                  <label className="text-xs text-gray-400 mb-1 block">School</label>
+
+                  <div className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm bg-gray-50 text-gray-500 truncate">
+
+                    {schoolLabel(editUser.schoolId)}
+
+                  </div>
 
                 </div>
 
               </div>
+
+              <p className="text-[11px] text-amber-600">
+
+                Role and school are locked after account creation to protect assignment and submission history.
+
+              </p>
 
 
 
@@ -2248,9 +2828,11 @@ export default function AdminDashboard() {
 
                   step="0.5"
 
+                  disabled={editRole !== 'student'}
+
                   placeholder="Example: 6.5"
 
-                  className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-purple-400"
+                  className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-purple-400 disabled:bg-gray-100 disabled:text-gray-400"
 
                   value={editTargetBand}
 

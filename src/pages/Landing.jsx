@@ -15,13 +15,6 @@ export default function Landing() {
           >
             Login
           </button>
-
-          <button
-            onClick={() => navigate('/signup')}
-            className="px-5 py-2 rounded-full border border-gray-200 text-sm font-medium text-gray-600 hover:bg-gray-50 bg-white"
-          >
-            Request access
-          </button>
         </div>
       </nav>
 
@@ -46,17 +39,10 @@ export default function Landing() {
           >
             Login to your account
           </button>
-
-          <button
-            onClick={() => navigate('/signup')}
-            className="w-full sm:w-auto px-8 py-4 bg-white border border-gray-200 text-gray-600 rounded-full text-base font-medium hover:bg-gray-50"
-          >
-            New user? Request access
-          </button>
         </div>
 
         <p className="text-xs text-gray-400 mt-5 max-w-md">
-          If you already have an account, please use Login. Do not create a second account.
+          Student and teacher accounts are created by your institution administrator. If you need access, please contact your institution.
         </p>
       </div>
     </div>

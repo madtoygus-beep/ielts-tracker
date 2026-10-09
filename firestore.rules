@@ -354,17 +354,6 @@ service cloud.firestore {
           : (createdBy != '' ? [createdBy] : []);
     }
 
-    function validSignupFields(data) {
-      return data.keys().hasOnly([
-          'name', 'email', 'role', 'requestedRole', 'status', 'deleted',
-          'createdAt', 'updatedAt'
-        ])
-        && data.get('name', '') is string
-        && data.get('email', '') is string
-        && data.get('email', '') == request.auth.token.get('email', '')
-        && data.get('requestedRole', 'student') in ['student', 'teacher'];
-    }
-
     function initialSubmissionFields() {
       return [
         'uid', 'studentId', 'studentEmail', 'studentName', 'schoolId',
@@ -560,17 +549,16 @@ service cloud.firestore {
     // USERS
     // ============================================================
 
+    // Stage 18B: user provisioning and privileged account changes are server-only.
+    // Admin SDK Cloud Functions create/approve/reject/edit/delete managed accounts and
+    // bypass these client rules. End users may only update their own non-privileged
+    // profile fields already covered by privilegedFieldsUnchanged().
     match /users/{userId} {
       allow read: if isAdmin() || isOwner(userId) || teacherCanReadUser();
 
-      allow create: if isOwner(userId)
-        && validSignupFields(request.resource.data)
-        && request.resource.data.status == 'pending'
-        && request.resource.data.get('role', null) == null
-        && request.resource.data.get('deleted', false) == false;
+      allow create: if false;
 
-      allow update: if isAdmin()
-        || (isOwner(userId) && privilegedFieldsUnchanged());
+      allow update: if isOwner(userId) && privilegedFieldsUnchanged();
 
       allow delete: if false;
     }

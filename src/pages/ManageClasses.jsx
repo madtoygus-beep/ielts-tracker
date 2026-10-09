@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { auth, db } from '../firebase'
+import { auth, db, functions } from '../firebase'
 import {
   collection,
   addDoc,
@@ -9,13 +9,18 @@ import {
   doc,
   updateDoc,
   getDoc,
-  deleteDoc,
-  arrayUnion
+  deleteDoc
 } from 'firebase/firestore'
 import { onAuthStateChanged } from 'firebase/auth'
+import { httpsCallable } from 'firebase/functions'
 import { useNavigate } from 'react-router-dom'
 
 const DEFAULT_SCHOOL_ID = 'maxima'
+
+const syncManagedClassStudentLinksCall = httpsCallable(
+  functions,
+  'syncManagedClassStudentLinks'
+)
 
 const COLOR_OPTIONS = [
   { id: 'purple', label: 'Purple', bg: 'bg-purple-50', text: 'text-purple-700', border: 'border-purple-200', dot: 'bg-purple-500' },
@@ -199,11 +204,18 @@ export default function ManageClasses() {
   // ============================================================
   // Student/class helpers
   // ============================================================
-  const activeStudentIds = new Set(students.map(student => student.id))
+  const schoolIdOf = data => data?.schoolId || DEFAULT_SCHOOL_ID
 
-  const getValidStudentIdsForClass = classItem =>
-    (Array.isArray(classItem?.studentIds) ? classItem.studentIds : [])
-      .filter(studentId => activeStudentIds.has(studentId))
+
+  const getValidStudentIdsForClass = classItem => {
+    const classSchoolId = schoolIdOf(classItem)
+
+    return (Array.isArray(classItem?.studentIds) ? classItem.studentIds : [])
+      .filter(studentId => {
+        const student = students.find(item => item.id === studentId)
+        return Boolean(student) && schoolIdOf(student) === classSchoolId
+      })
+  }
 
   const getStudentName = studentId => {
     const student = students.find(s => s.id === studentId)
@@ -271,20 +283,53 @@ export default function ManageClasses() {
 
     try {
       const now = new Date().toISOString()
-      const schoolId = userProfile?.schoolId || DEFAULT_SCHOOL_ID
-      const teacherId = userRole === 'admin'
-        ? formTeacherId || ''
-        : user.uid
+      let teacherId = user.uid
+      let schoolId = schoolIdOf(userProfile)
 
-      if (userRole === 'admin' && !teacherId) {
-        alert('Please select a teacher for this class.')
-        setSaving(false)
+      if (userRole === 'admin') {
+        teacherId = editingClass?.teacherId || formTeacherId || ''
+
+        if (!teacherId) {
+          alert('Please select a teacher for this class.')
+          return
+        }
+
+        if (editingClass?.teacherId && formTeacherId !== editingClass.teacherId) {
+          alert('The teacher is locked after class creation. Create a new class for a different teacher.')
+          return
+        }
+
+        const selectedTeacher = teachers.find(teacher => teacher.id === teacherId)
+        if (!selectedTeacher) {
+          alert('The selected teacher is not available.')
+          return
+        }
+
+        const teacherSchoolId = schoolIdOf(selectedTeacher)
+        schoolId = editingClass ? schoolIdOf(editingClass) : teacherSchoolId
+
+        if (teacherSchoolId !== schoolId) {
+          alert('The selected teacher belongs to a different school than this class.')
+          return
+        }
+      }
+
+      const eligibleStudentIds = new Set(
+        students
+          .filter(student => schoolIdOf(student) === schoolId)
+          .map(student => student.id)
+      )
+
+      const hasCrossSchoolSelection = formStudentIds.some(
+        studentId => !eligibleStudentIds.has(studentId)
+      )
+
+      if (hasCrossSchoolSelection) {
+        alert('Every selected student must belong to the same school as the class teacher.')
         return
       }
 
-      const cleanedStudentIds = Array.from(
-        new Set(formStudentIds.filter(studentId => activeStudentIds.has(studentId)))
-      )
+      const cleanedStudentIds = Array.from(new Set(formStudentIds))
 
       if (editingClass) {
         await updateDoc(doc(db, 'classes', editingClass.id), {
@@ -315,24 +360,20 @@ export default function ManageClasses() {
         })
       }
 
-      // Firestore rules allow teachers to create/update their own classes,
-      // but only admins can update other user documents. Therefore teacherIds
-      // on student profiles are updated here only when an admin manages the class.
-      // Teacher-created classes use students already linked to that teacher.
-      if (userRole === 'admin') {
-        for (const studentId of cleanedStudentIds) {
-          await updateDoc(doc(db, 'users', studentId), {
-            teacherIds: arrayUnion(teacherId),
-            schoolId,
-            updatedAt: now
-          })
-        }
+      // Stage 18: privileged student-profile teacherIds links are server-only.
+      // The callable verifies that the teacher and every selected student already
+      // belong to this same school. It never changes a student's schoolId.
+      if (userRole === 'admin' && cleanedStudentIds.length > 0) {
+        await syncManagedClassStudentLinksCall({
+          schoolId,
+          teacherId,
+          studentIds: cleanedStudentIds
+        })
       }
 
       // Removing a student from a class should only remove them from that class.
       // It must not remove teacherIds from the student profile, because the same
       // student may still belong to another class or still be assigned to this teacher.
-      // Deleted/missing students are also cleaned from studentIds when the class is saved.
       closeModal()
     } catch (error) {
       console.error(error)
@@ -389,7 +430,27 @@ export default function ManageClasses() {
   // ============================================================
   // Search filter for students inside modal
   // ============================================================
-  const filteredStudents = students.filter(student => {
+  const selectedTeacherForForm = userRole === 'admin'
+    ? teachers.find(teacher => teacher.id === formTeacherId)
+    : null
+
+  const formSchoolId = userRole === 'admin'
+    ? (editingClass
+        ? schoolIdOf(editingClass)
+        : selectedTeacherForForm
+          ? schoolIdOf(selectedTeacherForForm)
+          : '')
+    : schoolIdOf(userProfile)
+
+  const availableTeachers = userRole === 'admin' && editingClass
+    ? teachers.filter(teacher => schoolIdOf(teacher) === schoolIdOf(editingClass))
+    : teachers
+
+  const schoolEligibleStudents = formSchoolId
+    ? students.filter(student => schoolIdOf(student) === formSchoolId)
+    : []
+
+  const filteredStudents = schoolEligibleStudents.filter(student => {
     if (!formSearch.trim()) return true
     const searchQuery = formSearch.toLowerCase()
     return (
@@ -592,20 +653,36 @@ export default function ManageClasses() {
 
                   <select
                     value={formTeacherId}
-                    onChange={e => setFormTeacherId(e.target.value)}
-                    className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white"
+                    disabled={Boolean(editingClass?.teacherId)}
+                    onChange={e => {
+                      const nextTeacherId = e.target.value
+                      setFormTeacherId(nextTeacherId)
+
+                      const nextTeacher = teachers.find(teacher => teacher.id === nextTeacherId)
+                      const nextSchoolId = nextTeacher ? schoolIdOf(nextTeacher) : ''
+
+                      setFormStudentIds(previous =>
+                        previous.filter(studentId => {
+                          const student = students.find(item => item.id === studentId)
+                          return Boolean(student) && schoolIdOf(student) === nextSchoolId
+                        })
+                      )
+                    }}
+                    className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white disabled:bg-gray-100 disabled:text-gray-500"
                   >
                     <option value="">Select teacher</option>
 
-                    {teachers.map(teacher => (
+                    {availableTeachers.map(teacher => (
                       <option key={teacher.id} value={teacher.id}>
-                        {teacher.name || teacher.email}
+                        {teacher.name || teacher.email} · {schoolIdOf(teacher)}
                       </option>
                     ))}
                   </select>
 
                   <p className="text-[11px] text-gray-400 mt-1">
-                    This teacher will be able to see and manage this class.
+                    {editingClass?.teacherId
+                      ? 'Teacher and school are locked after class creation.'
+                      : 'Selecting a teacher also fixes the class school. Only students from that school can be added.'}
                   </p>
                 </div>
               )}
@@ -687,9 +764,13 @@ export default function ManageClasses() {
                   To move a student, remove them from this class, save, then add them to the other class. This will not delete the student or their homework history.
                 </p>
 
-                {students.length === 0 ? (
+                {userRole === 'admin' && !formSchoolId ? (
                   <p className="text-sm text-gray-400 text-center py-6 bg-gray-50 rounded-xl">
-                    No students found.
+                    Select a teacher first to load students from the correct school.
+                  </p>
+                ) : schoolEligibleStudents.length === 0 ? (
+                  <p className="text-sm text-gray-400 text-center py-6 bg-gray-50 rounded-xl">
+                    No active students found in this school.
                   </p>
                 ) : filteredStudents.length === 0 ? (
                   <p className="text-sm text-gray-400 text-center py-6 bg-gray-50 rounded-xl">

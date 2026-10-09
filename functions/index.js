@@ -1,9 +1,10 @@
 'use strict'
 
 const { onCall, HttpsError } = require('firebase-functions/v2/https')
-const { createHash } = require('crypto')
+const { createHash, randomBytes } = require('crypto')
 const { onDocumentWritten } = require('firebase-functions/v2/firestore')
 const { initializeApp } = require('firebase-admin/app')
+const { getAuth } = require('firebase-admin/auth')
 const { getFirestore, FieldValue } = require('firebase-admin/firestore')
 
 const {
@@ -20,6 +21,7 @@ const {
 
 initializeApp()
 const db = getFirestore()
+const adminAuth = getAuth()
 
 // Stage 17D: school / institution status enforcement. Existing data keeps the
 // historical `maxima` fallback, but student and teacher product flows now require
@@ -28,6 +30,28 @@ const db = getFirestore()
 const SCHOOL_SCHEMA_VERSION = 1
 const DEFAULT_SCHOOL_ID = 'maxima'
 const SCHOOL_STATUSES = new Set(['active', 'inactive'])
+
+// A school may be permanently removed only after it is inactive and no
+// school-bound records remain. This keeps user/content/history references from
+// becoming orphaned when an institution is deleted from the platform.
+const SCHOOL_REFERENCE_COLLECTIONS = [
+  'users',
+  'classes',
+  'readings',
+  'listenings',
+  'vocabularyTests',
+  'writingHomeworks',
+  'mockTests',
+  'studentAccess',
+  'readingSubmissions',
+  'listeningSubmissions',
+  'vocabularySubmissions',
+  'writingSubmissions',
+  'mockSubmissions',
+  'scores',
+  'submissionAttemptControls',
+  'submissionAttemptHistory'
+]
 
 const OBJECTIVE_CONFIG = {
   reading: {
@@ -501,6 +525,580 @@ exports.saveManagedSchool = onCall(async request => {
       status,
       schemaVersion: SCHOOL_SCHEMA_VERSION
     }
+  }
+})
+
+
+async function getSchoolReferenceCounts(schoolId) {
+  const entries = await Promise.all(
+    SCHOOL_REFERENCE_COLLECTIONS.map(async collectionName => {
+      const aggregate = await db.collection(collectionName)
+        .where('schoolId', '==', schoolId)
+        .count()
+        .get()
+      return [collectionName, Number(aggregate.data().count) || 0]
+    })
+  )
+
+  return Object.fromEntries(entries.filter(([, count]) => count > 0))
+}
+
+// Permanent school deletion is intentionally strict. The default Maxima school
+// can never be deleted here, the target school must first be inactive, and every
+// known school-bound collection must be empty. Soft-deleted users still count as
+// references so UID/history preservation cannot silently orphan school metadata.
+exports.deleteManagedSchool = onCall(async request => {
+  await requireAdmin(request)
+
+  const data = request.data || {}
+  const schoolId = normalizeSchoolId(data.schoolId)
+
+  if (schoolId === DEFAULT_SCHOOL_ID) {
+    throw new HttpsError(
+      'failed-precondition',
+      'The default Maxima school cannot be permanently deleted.'
+    )
+  }
+
+  const schoolRef = db.doc(`schools/${schoolId}`)
+  const schoolSnap = await schoolRef.get()
+  if (!schoolSnap.exists) {
+    throw new HttpsError('not-found', 'The selected school does not exist.')
+  }
+
+  const school = schoolSnap.data() || {}
+  if (school.status !== 'inactive') {
+    throw new HttpsError(
+      'failed-precondition',
+      'Deactivate this school before permanently deleting it.'
+    )
+  }
+
+  const blockers = await getSchoolReferenceCounts(schoolId)
+  const blockerEntries = Object.entries(blockers)
+
+  if (blockerEntries.length > 0) {
+    const summary = blockerEntries
+      .map(([collectionName, count]) => `${collectionName}: ${count}`)
+      .join(', ')
+
+    throw new HttpsError(
+      'failed-precondition',
+      `School cannot be deleted while referenced records remain (${summary}).`,
+      { schoolId, blockers }
+    )
+  }
+
+  // Re-read immediately before deletion so a concurrent status change back to
+  // active cannot be ignored after the reference audit.
+  const latestSchoolSnap = await schoolRef.get()
+  if (!latestSchoolSnap.exists) {
+    return { ok: true, schoolId, alreadyDeleted: true }
+  }
+  if ((latestSchoolSnap.data() || {}).status !== 'inactive') {
+    throw new HttpsError(
+      'failed-precondition',
+      'School status changed during deletion. Deactivate it and try again.'
+    )
+  }
+
+  await schoolRef.delete()
+
+  return { ok: true, schoolId, alreadyDeleted: false }
+})
+
+
+// Stage 18B: institution accounts are provisioned by the platform admin through
+// trusted Cloud Functions. The browser never chooses a privileged role/school by
+// writing directly to users/{uid}, and Firebase Auth + Firestore profile creation
+// are kept together with rollback if profile creation fails.
+const MANAGED_ACCOUNT_ROLES = new Set(['student', 'teacher'])
+
+function normalizeManagedAccountRole(value) {
+  const role = typeof value === 'string' ? value.trim().toLowerCase() : ''
+  if (!MANAGED_ACCOUNT_ROLES.has(role)) {
+    throw new HttpsError('invalid-argument', 'Account role must be student or teacher.')
+  }
+  return role
+}
+
+function normalizeManagedName(value) {
+  const name = safeString(value, 120).trim()
+  if (name.length < 2) {
+    throw new HttpsError('invalid-argument', 'Full name must be at least 2 characters.')
+  }
+  return name
+}
+
+function normalizeManagedEmail(value) {
+  const email = safeString(value, 320).trim().toLowerCase()
+  if (!email || !email.includes('@') || email.startsWith('@') || email.endsWith('@')) {
+    throw new HttpsError('invalid-argument', 'A valid email address is required.')
+  }
+  return email
+}
+
+function normalizeManagedTargetBand(value, role) {
+  if (role !== 'student' || value === '' || value === null || value === undefined) {
+    return null
+  }
+
+  const band = Number(value)
+  if (!Number.isFinite(band) || band < 0 || band > 9 || Math.round(band * 2) !== band * 2) {
+    throw new HttpsError('invalid-argument', 'Target Band must be between 0 and 9 in 0.5 increments.')
+  }
+  return band
+}
+
+async function requireManagedAccountSchool(value) {
+  const schoolId = normalizeSchoolId(value)
+  const schoolSnap = await db.doc(`schools/${schoolId}`).get()
+  if (!schoolSnap.exists) {
+    throw new HttpsError('failed-precondition', 'The selected school does not exist.')
+  }
+
+  const school = schoolSnap.data() || {}
+  if (school.status !== 'active') {
+    throw new HttpsError('failed-precondition', 'The selected school is inactive.')
+  }
+
+  return { schoolId, school }
+}
+
+function isAuthUserNotFound(error) {
+  return error?.code === 'auth/user-not-found'
+}
+
+async function authUserForManagedProfile(uid) {
+  try {
+    return await adminAuth.getUser(uid)
+  } catch (error) {
+    if (isAuthUserNotFound(error)) {
+      throw new HttpsError(
+        'failed-precondition',
+        'This Firestore profile does not have a matching Firebase Auth account.'
+      )
+    }
+    throw error
+  }
+}
+
+async function assertNoManagedEmailConflict(email) {
+  const profileSnap = await db.collection('users')
+    .where('email', '==', email)
+    .limit(1)
+    .get()
+
+  if (!profileSnap.empty) {
+    throw new HttpsError('already-exists', 'A user profile already exists with this email address.')
+  }
+
+  try {
+    const authUser = await adminAuth.getUserByEmail(email)
+    if (authUser) {
+      throw new HttpsError(
+        'already-exists',
+        'A Firebase Auth account already exists with this email address. Do not create a duplicate account.'
+      )
+    }
+  } catch (error) {
+    if (error instanceof HttpsError) throw error
+    if (!isAuthUserNotFound(error)) throw error
+  }
+}
+
+exports.createManagedUser = onCall(async request => {
+  const admin = await requireAdmin(request)
+  const data = request.data || {}
+  const name = normalizeManagedName(data.name)
+  const email = normalizeManagedEmail(data.email)
+  const role = normalizeManagedAccountRole(data.role)
+  const { schoolId } = await requireManagedAccountSchool(data.schoolId)
+  const targetBand = normalizeManagedTargetBand(data.targetBand, role)
+
+  await assertNoManagedEmailConflict(email)
+
+  const temporaryPassword = `${randomBytes(32).toString('base64url')}Aa1!`
+  let authUser = null
+
+  try {
+    authUser = await adminAuth.createUser({
+      email,
+      password: temporaryPassword,
+      displayName: name,
+      emailVerified: false,
+      disabled: false
+    })
+
+    const now = new Date().toISOString()
+    await db.doc(`users/${authUser.uid}`).set({
+      name,
+      email,
+      role,
+      requestedRole: role,
+      status: 'approved',
+      deleted: false,
+      schoolId,
+      teacherIds: [],
+      targetBand,
+      accountSource: 'admin_created',
+      createdBy: admin.uid,
+      approvedBy: admin.uid,
+      createdAt: now,
+      approvedAt: now,
+      updatedAt: now,
+      updatedBy: admin.uid
+    })
+  } catch (error) {
+    if (authUser?.uid) {
+      await adminAuth.deleteUser(authUser.uid).catch(() => {})
+    }
+
+    if (error?.code === 'auth/email-already-exists') {
+      throw new HttpsError('already-exists', 'A Firebase Auth account already exists with this email address.')
+    }
+    if (error?.code === 'auth/invalid-email') {
+      throw new HttpsError('invalid-argument', 'A valid email address is required.')
+    }
+    throw error
+  }
+
+  return {
+    ok: true,
+    user: {
+      id: authUser.uid,
+      uid: authUser.uid,
+      name,
+      email,
+      role,
+      status: 'approved',
+      deleted: false,
+      schoolId,
+      targetBand
+    },
+    passwordSetupRequired: true
+  }
+})
+
+exports.approveManagedUser = onCall(async request => {
+  const admin = await requireAdmin(request)
+  const data = request.data || {}
+  const userId = assertDocumentId(data.userId, 'User ID')
+  const role = normalizeManagedAccountRole(data.role)
+  const { schoolId } = await requireManagedAccountSchool(data.schoolId)
+  const userRef = db.doc(`users/${userId}`)
+  const userSnap = await userRef.get()
+
+  if (!userSnap.exists) {
+    throw new HttpsError('not-found', 'The selected user profile was not found.')
+  }
+
+  const profile = userSnap.data() || {}
+  if (profile.role === 'admin') {
+    throw new HttpsError('permission-denied', 'Admin accounts cannot be changed here.')
+  }
+  if (profile.deleted === true || profile.status === 'deleted') {
+    throw new HttpsError('failed-precondition', 'Deleted accounts cannot be approved from the pending queue.')
+  }
+  if (!['pending', 'rejected'].includes(profile.status)) {
+    throw new HttpsError('failed-precondition', 'Only pending or rejected account requests can be approved.')
+  }
+
+  const explicitExistingSchoolId = typeof profile.schoolId === 'string'
+    ? profile.schoolId.trim().toLowerCase()
+    : ''
+
+  if (explicitExistingSchoolId && explicitExistingSchoolId !== schoolId) {
+    throw new HttpsError(
+      'failed-precondition',
+      'School transfers are locked. Use a dedicated migration process instead of approval.'
+    )
+  }
+
+  const authUser = await authUserForManagedProfile(userId)
+  const profileEmail = normalizeManagedEmail(profile.email || authUser.email || '')
+  if (!authUser.email || authUser.email.toLowerCase() !== profileEmail) {
+    throw new HttpsError('failed-precondition', 'Firebase Auth email does not match the user profile.')
+  }
+
+  const now = new Date().toISOString()
+  const displayName = safeString(profile.name || authUser.displayName || '', 120).trim()
+  const previousAuthState = {
+    disabled: authUser.disabled === true,
+    displayName: authUser.displayName ?? null
+  }
+
+  await adminAuth.updateUser(userId, {
+    disabled: false,
+    ...(displayName ? { displayName } : {})
+  })
+
+  try {
+    await userRef.set({
+      role,
+      requestedRole: role,
+      status: 'approved',
+      deleted: false,
+      schoolId,
+      teacherIds: [],
+      targetBand: role === 'student' ? (profile.targetBand ?? null) : null,
+      approvedAt: now,
+      approvedBy: admin.uid,
+      updatedAt: now,
+      updatedBy: admin.uid
+    }, { merge: true })
+  } catch (error) {
+    await adminAuth.updateUser(userId, previousAuthState).catch(rollbackError => {
+      console.error('Stage 18 approveManagedUser Auth rollback failed', {
+        userId,
+        rollbackError
+      })
+    })
+    throw error
+  }
+
+  return { ok: true, userId, role, schoolId }
+})
+
+exports.rejectManagedUser = onCall(async request => {
+  const admin = await requireAdmin(request)
+  const data = request.data || {}
+  const userId = assertDocumentId(data.userId, 'User ID')
+  const userRef = db.doc(`users/${userId}`)
+  const userSnap = await userRef.get()
+
+  if (!userSnap.exists) {
+    throw new HttpsError('not-found', 'The selected user profile was not found.')
+  }
+
+  const profile = userSnap.data() || {}
+  if (profile.role === 'admin' || userId === admin.uid) {
+    throw new HttpsError('permission-denied', 'Admin accounts cannot be rejected here.')
+  }
+  if (profile.deleted === true || profile.status === 'deleted') {
+    throw new HttpsError('failed-precondition', 'This account is already deleted.')
+  }
+
+  if (!['pending', 'rejected'].includes(profile.status)) {
+    throw new HttpsError(
+      'failed-precondition',
+      'Only pending account requests can be rejected. Use account removal for approved users.'
+    )
+  }
+
+  const authUser = await authUserForManagedProfile(userId)
+
+  // Idempotent repair path: a previous rejection may have updated Firestore but
+  // failed before disabling Firebase Auth. Retrying must finish the disable.
+  if (profile.status === 'rejected') {
+    if (authUser.disabled !== true) {
+      await adminAuth.updateUser(userId, { disabled: true })
+    }
+    return { ok: true, userId, alreadyRejected: true }
+  }
+
+  const now = new Date().toISOString()
+
+  // Fail closed: Firestore authorization is removed first. If disabling Auth
+  // fails, a retry remains safe because rejected profiles are allowed through
+  // the idempotent repair path above and product authorization already denies
+  // the account.
+  await userRef.set({
+    role: null,
+    status: 'rejected',
+    rejectedAt: now,
+    rejectedBy: admin.uid,
+    updatedAt: now,
+    updatedBy: admin.uid
+  }, { merge: true })
+
+  await adminAuth.updateUser(userId, { disabled: true })
+
+  return { ok: true, userId, alreadyRejected: false }
+})
+
+exports.updateManagedUser = onCall(async request => {
+  const admin = await requireAdmin(request)
+  const data = request.data || {}
+  const userId = assertDocumentId(data.userId, 'User ID')
+  const name = normalizeManagedName(data.name)
+  const userRef = db.doc(`users/${userId}`)
+  const userSnap = await userRef.get()
+
+  if (!userSnap.exists) {
+    throw new HttpsError('not-found', 'The selected user profile was not found.')
+  }
+
+  const profile = userSnap.data() || {}
+  if (profile.role === 'admin') {
+    throw new HttpsError('permission-denied', 'Admin accounts cannot be edited here.')
+  }
+  if (!MANAGED_ACCOUNT_ROLES.has(profile.role) || profile.status !== 'approved' || profile.deleted === true) {
+    throw new HttpsError('failed-precondition', 'Only active student or teacher accounts can be edited here.')
+  }
+
+  const targetBand = normalizeManagedTargetBand(data.targetBand, profile.role)
+  const authUser = await authUserForManagedProfile(userId)
+  const now = new Date().toISOString()
+  const previousDisplayName = authUser.displayName ?? null
+
+  await adminAuth.updateUser(userId, { displayName: name })
+
+  try {
+    await userRef.set({
+      name,
+      targetBand,
+      updatedAt: now,
+      updatedBy: admin.uid
+    }, { merge: true })
+  } catch (error) {
+    await adminAuth.updateUser(userId, { displayName: previousDisplayName }).catch(rollbackError => {
+      console.error('Stage 18 updateManagedUser Auth rollback failed', {
+        userId,
+        rollbackError
+      })
+    })
+    throw error
+  }
+
+  return {
+    ok: true,
+    userId,
+    role: profile.role,
+    schoolId: schoolIdOf(profile),
+    name,
+    targetBand
+  }
+})
+
+exports.deleteManagedUser = onCall(async request => {
+  const admin = await requireAdmin(request)
+  const data = request.data || {}
+  const userId = assertDocumentId(data.userId, 'User ID')
+
+  if (userId === admin.uid) {
+    throw new HttpsError('permission-denied', 'You cannot delete your own admin account.')
+  }
+
+  const userRef = db.doc(`users/${userId}`)
+  const userSnap = await userRef.get()
+  if (!userSnap.exists) {
+    throw new HttpsError('not-found', 'The selected user profile was not found.')
+  }
+
+  const profile = userSnap.data() || {}
+  if (profile.role === 'admin') {
+    throw new HttpsError('permission-denied', 'Admin accounts cannot be deleted here.')
+  }
+
+  const authUser = await authUserForManagedProfile(userId)
+  const alreadyDeleted = profile.deleted === true || profile.status === 'deleted'
+
+  // A previous attempt may have soft-deleted Firestore successfully but failed
+  // before disabling Firebase Auth. Always repair that state on a retry instead
+  // of returning early just because the profile is already marked deleted.
+  if (alreadyDeleted) {
+    if (authUser.disabled !== true) {
+      await adminAuth.updateUser(userId, { disabled: true })
+    }
+    return { ok: true, userId, alreadyDeleted: true }
+  }
+
+  const now = new Date().toISOString()
+
+  // Fail closed: revoke Firestore product authorization first, then disable Auth.
+  // If the Auth call fails, the soft-deleted profile still blocks application
+  // access and a later retry will attempt the Auth disable again above.
+  await userRef.set({
+    deleted: true,
+    status: 'deleted',
+    deletedAt: now,
+    deletedBy: admin.uid,
+    updatedAt: now,
+    updatedBy: admin.uid
+  }, { merge: true })
+
+  await adminAuth.updateUser(userId, { disabled: true })
+
+  return { ok: true, userId, alreadyDeleted: false }
+})
+
+
+// Stage 18C: class membership may still be authored through the existing client
+// class workflow, but privileged student-profile teacherIds links are server-only.
+// This callable never changes a student's schoolId; it validates that the teacher
+// and every student already belong to the requested school before adding links.
+exports.syncManagedClassStudentLinks = onCall(async request => {
+  const admin = await requireAdmin(request)
+  const data = request.data || {}
+  const schoolId = normalizeSchoolId(data.schoolId)
+  const teacherId = assertDocumentId(data.teacherId, 'Teacher ID')
+  const studentIds = assertStudentUidList(data.studentIds || [])
+
+  const schoolSnap = await db.doc(`schools/${schoolId}`).get()
+  if (!schoolSnap.exists) {
+    throw new HttpsError('failed-precondition', 'The selected school does not exist.')
+  }
+
+  const teacherRef = db.doc(`users/${teacherId}`)
+  const teacherSnap = await teacherRef.get()
+  if (!teacherSnap.exists) {
+    throw new HttpsError('not-found', 'The selected teacher profile was not found.')
+  }
+
+  const teacherProfile = teacherSnap.data() || {}
+  if (
+    teacherProfile.role !== 'teacher' ||
+    teacherProfile.status !== 'approved' ||
+    teacherProfile.deleted === true
+  ) {
+    throw new HttpsError('failed-precondition', 'The selected teacher account is not active.')
+  }
+  if (schoolIdOf(teacherProfile) !== schoolId) {
+    throw new HttpsError('failed-precondition', 'The selected teacher belongs to a different school.')
+  }
+
+  if (studentIds.length === 0) {
+    return { ok: true, schoolId, teacherId, updatedStudents: 0 }
+  }
+
+  const studentRefs = studentIds.map(uid => db.doc(`users/${uid}`))
+  const studentSnaps = await db.getAll(...studentRefs)
+
+  studentSnaps.forEach((studentSnap, index) => {
+    if (!studentSnap.exists) {
+      throw new HttpsError('not-found', `Student profile ${studentIds[index]} was not found.`)
+    }
+
+    const studentProfile = studentSnap.data() || {}
+    if (
+      studentProfile.role !== 'student' ||
+      studentProfile.status !== 'approved' ||
+      studentProfile.deleted === true
+    ) {
+      throw new HttpsError('failed-precondition', 'Every selected student must be an active student account.')
+    }
+    if (schoolIdOf(studentProfile) !== schoolId) {
+      throw new HttpsError('failed-precondition', 'A selected student belongs to a different school.')
+    }
+  })
+
+  const batch = db.batch()
+  const now = new Date().toISOString()
+  studentRefs.forEach(studentRef => {
+    batch.set(studentRef, {
+      teacherIds: FieldValue.arrayUnion(teacherId),
+      updatedAt: now,
+      updatedBy: admin.uid
+    }, { merge: true })
+  })
+  await batch.commit()
+
+  return {
+    ok: true,
+    schoolId,
+    teacherId,
+    updatedStudents: studentRefs.length
   }
 })
 

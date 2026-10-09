@@ -65,7 +65,7 @@ export default function Login() {
 
       if (!snap.exists()) {
         await safelySignOut()
-        setError('User profile not found. Please contact admin.')
+        setError('User profile not found. Please contact your institution administrator.')
         return
       }
 
@@ -73,29 +73,25 @@ export default function Login() {
 
       if (userData.deleted === true || userData.status === 'deleted') {
         await safelySignOut()
-        setError(
-          'This account was removed by admin. Please contact admin before creating a new account.'
-        )
+        setError('This account was removed by admin. Please contact your institution administrator.')
         return
       }
 
       if (userData.status === 'pending') {
         await safelySignOut()
-        setError('Your account is waiting for admin approval. Please do not create another account.')
+        setError('Your account is waiting for admin approval. Please contact your institution administrator.')
         return
       }
 
       if (userData.status === 'rejected') {
         await safelySignOut()
-        setError(
-          'Your account request was rejected. Please contact admin if you think this is a mistake.'
-        )
+        setError('This account request is not active. Please contact your institution administrator.')
         return
       }
 
       if (userData.status !== 'approved') {
         await safelySignOut()
-        setError('Your account is not approved yet. Please contact admin.')
+        setError('Your account is not approved yet. Please contact your institution administrator.')
         return
       }
 
@@ -107,15 +103,17 @@ export default function Login() {
         navigate('/teacher')
       } else {
         await safelySignOut()
-        setError('Your account role is not assigned yet. Please contact admin.')
+        setError('Your account role is not assigned. Please contact your institution administrator.')
       }
     } catch (err) {
       if (err.code === 'auth/user-not-found') {
-        setError('No account found with this email. If you are new, please request access.')
+        setError('No account found with this email. Please contact your institution administrator.')
       } else if (err.code === 'auth/wrong-password') {
         setError('Wrong password.')
       } else if (err.code === 'auth/invalid-credential') {
         setError('Email or password is incorrect.')
+      } else if (err.code === 'auth/user-disabled') {
+        setError('This account is disabled. Please contact your institution administrator.')
       } else {
         setError('Login failed. Please try again.')
       }
@@ -134,11 +132,11 @@ export default function Login() {
         </h1>
 
         <p className="text-gray-400 text-sm mb-6">
-          Existing students and teachers should use this page.
+          Use the account provided by your institution.
         </p>
 
         <div className="bg-purple-50 border border-purple-100 text-purple-700 rounded-xl p-3 mb-5 text-xs leading-5">
-          If you already have an account, do not request a new one. Use your email and password below.
+          Do not create another account. If you need access or your account details are incorrect, contact your institution administrator.
         </div>
 
         {error && (
@@ -198,17 +196,9 @@ export default function Login() {
         </div>
 
         <div className="border-t border-gray-100 mt-6 pt-5 text-center">
-          <p className="text-sm text-gray-400 mb-3">
-            New student or teacher?
+          <p className="text-sm text-gray-400">
+            Need an account? Contact your institution administrator.
           </p>
-
-          <button
-            type="button"
-            onClick={() => navigate('/signup')}
-            className="text-sm font-medium text-purple-600 hover:text-purple-700"
-          >
-            Request access
-          </button>
         </div>
       </div>
     </div>
