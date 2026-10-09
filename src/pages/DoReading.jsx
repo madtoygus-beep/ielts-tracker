@@ -17,6 +17,10 @@ const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
 const submitReadingSecure = httpsCallable(functions, 'submitReadingSecure')
 const getCompletedObjectiveReview = httpsCallable(functions, 'getCompletedObjectiveReview')
+const getStudentSubmissionAttemptState = httpsCallable(
+  functions,
+  'getStudentSubmissionAttemptState'
+)
 
 function getBandFromPercentage(correct, total) {
   const percentage = total ? correct / total : 0
@@ -55,12 +59,25 @@ function getReadingBand(correct, total) {
   return getBandFromPercentage(correct, total)
 }
 
-function getHighlightStorageKey(userId, readingId) {
-  return `reading-highlights:${userId}:${readingId}`
+function getAttemptStorageSuffix(attemptNumber, mode = '') {
+  const number = Number(attemptNumber)
+  if (!Number.isInteger(number) || number < 2) return ''
+
+  const modeSuffix = mode === 'reopen_answers'
+    ? ':reopen'
+    : mode === 'start_fresh'
+      ? ':fresh'
+      : ''
+
+  return `:attempt-${number}${modeSuffix}`
 }
 
-function getReadingProgressStorageKey(userId, readingId) {
-  return `reading_progress_${readingId}_${userId}`
+function getHighlightStorageKey(userId, readingId, attemptNumber = 1, mode = '') {
+  return `reading-highlights:${userId}:${readingId}${getAttemptStorageSuffix(attemptNumber, mode)}`
+}
+
+function getReadingProgressStorageKey(userId, readingId, attemptNumber = 1, mode = '') {
+  return `reading_progress_${readingId}_${userId}${getAttemptStorageSuffix(attemptNumber, mode)}`
 }
 
 function getSavedReadingState(storageKey) {
@@ -102,6 +119,7 @@ export default function DoReading() {
   const [highlights, setHighlights] = useState([])
   const [pendingHighlight, setPendingHighlight] = useState(null)
   const [highlightMessage, setHighlightMessage] = useState('')
+  const [attemptState, setAttemptState] = useState(null)
 
   const timerRef = useRef(null)
   const submittingRef = useRef(false)
@@ -110,8 +128,30 @@ export default function DoReading() {
   const highlightMessageTimerRef = useRef(null)
   const navigate = useNavigate()
 
-  const storageKey = user?.uid && id
-    ? getReadingProgressStorageKey(user.uid, id)
+  const activeDraftAttemptNumber = attemptState?.open
+    ? Number(attemptState.nextAttemptNumber) || 2
+    : attemptState && Number(attemptState.currentAttemptNumber) === 0
+      ? 1
+      : null
+
+  const activeDraftMode = attemptState?.open ? attemptState.mode || '' : ''
+
+  const storageKey = user?.uid && id && activeDraftAttemptNumber
+    ? getReadingProgressStorageKey(
+        user.uid,
+        id,
+        activeDraftAttemptNumber,
+        activeDraftMode
+      )
+    : null
+
+  const highlightStorageKey = user?.uid && id && activeDraftAttemptNumber
+    ? getHighlightStorageKey(
+        user.uid,
+        id,
+        activeDraftAttemptNumber,
+        activeDraftMode
+      )
     : null
 
   useEffect(() => {
@@ -134,6 +174,7 @@ export default function DoReading() {
       setFlaggedQuestions([])
       setStudentNote('')
       setHighlights([])
+      setAttemptState(null)
 
       try {
       if (!currentUser) {
@@ -233,6 +274,71 @@ export default function DoReading() {
         ...snap.data()
       }
 
+      const attemptResponse = await getStudentSubmissionAttemptState({
+        contentType: 'reading',
+        contentId: id
+      })
+      if (!isCurrent()) return
+
+      const nextAttemptState = attemptResponse?.data || {
+        open: false,
+        currentAttemptNumber: 0,
+        resume: {}
+      }
+
+      setAttemptState(nextAttemptState)
+
+      if (nextAttemptState.open) {
+        const resume = nextAttemptState.resume || {}
+        const reopenAnswers = nextAttemptState.mode === 'reopen_answers'
+
+        setReading(data)
+        setTimeLeft((data.timeLimit || 60) * 60)
+        setAlreadyDone(false)
+        setSubmitted(false)
+        setResult(null)
+        setAnswers(reopenAnswers ? (resume.answers || {}) : {})
+        setFlaggedQuestions(
+          reopenAnswers && Array.isArray(resume.flaggedQuestions)
+            ? resume.flaggedQuestions
+            : []
+        )
+        setStudentNote(
+          reopenAnswers && typeof resume.studentNote === 'string'
+            ? resume.studentNote
+            : ''
+        )
+
+        let retakeHighlights =
+          reopenAnswers && Array.isArray(resume.highlights)
+            ? resume.highlights
+            : []
+
+        try {
+          const savedRetakeHighlights = localStorage.getItem(
+            getHighlightStorageKey(
+              currentUser.uid,
+              id,
+              Number(nextAttemptState.nextAttemptNumber) || 2,
+              nextAttemptState.mode || ''
+            )
+          )
+
+          if (savedRetakeHighlights) {
+            const parsedRetakeHighlights = JSON.parse(savedRetakeHighlights)
+            if (Array.isArray(parsedRetakeHighlights)) {
+              retakeHighlights = parsedRetakeHighlights
+            }
+          }
+        } catch (error) {
+          console.warn('Could not restore retake reading highlights:', error)
+        }
+
+        setHighlights(retakeHighlights)
+
+        return
+      }
+
       let locallySavedHighlights = []
 
       try {
@@ -309,7 +415,7 @@ export default function DoReading() {
         return
       }
 
-      // Start rendering/timing only after access and submission checks succeed.
+      // Start rendering/timing only after access and submission/attempt checks succeed.
       setReading(data)
       setTimeLeft((data.timeLimit || 60) * 60)
       } catch (error) {
@@ -430,17 +536,17 @@ export default function DoReading() {
   }, [timeLeft, submitted])
 
   useEffect(() => {
-    if (!user || !reading || submitted) return
+    if (!highlightStorageKey || !reading || submitted) return
 
     try {
       localStorage.setItem(
-        getHighlightStorageKey(user.uid, id),
+        highlightStorageKey,
         JSON.stringify(highlights)
       )
     } catch (error) {
       console.warn('Could not save reading highlights:', error)
     }
-  }, [highlights, id, reading, submitted, user])
+  }, [highlightStorageKey, highlights, reading, submitted])
 
   useEffect(() => {
     return () => {
@@ -1450,7 +1556,9 @@ export default function DoReading() {
         )
       }
 
-      warningLines.push('Submit your answers? You cannot retake this homework after submitting.')
+      warningLines.push(
+        'Submit this attempt? After submission, another attempt requires your teacher to reopen it.'
+      )
 
       const ok = window.confirm(warningLines.join('\n\n'))
       if (!ok) return
@@ -1526,6 +1634,15 @@ export default function DoReading() {
         id: reviewSource.id || id
       })
       setResult(secureResult)
+      setAttemptState(previous => ({
+        ...(previous || {}),
+        open: false,
+        currentAttemptNumber:
+          Number(secureData.attemptNumber) ||
+          Number(previous?.nextAttemptNumber) ||
+          Number(previous?.currentAttemptNumber) ||
+          1
+      }))
       setSubmitted(true)
       setSubmitting(false)
     } catch (error) {
@@ -1770,7 +1887,7 @@ export default function DoReading() {
 
             {alreadyDone ? (
               <p className="text-amber-600 text-sm bg-amber-50 rounded-xl py-2 px-4 inline-block">
-                You already completed this homework. You can review your answers, but you cannot retake it.
+                You already completed this homework. You can review your answers. Your teacher can reopen another attempt if needed.
               </p>
             ) : (
               <p className="text-green-600 text-sm bg-green-50 rounded-xl py-2 px-4 inline-block">
@@ -2461,6 +2578,24 @@ export default function DoReading() {
       </nav>
 
       <div className="max-w-[1500px] mx-auto px-4 md:px-6 py-6">
+        {attemptState?.open && (
+          <div className="mb-5 bg-purple-50 border border-purple-100 rounded-2xl px-5 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-purple-700">
+                Attempt {attemptState.nextAttemptNumber || 2} reopened
+              </p>
+              <p className="text-xs text-purple-600 mt-1">
+                {attemptState.mode === 'reopen_answers'
+                  ? 'Your previous answers, flags, notes and highlights were restored. You can edit them before submitting this attempt.'
+                  : 'This attempt starts fresh. Previous answers, flags, notes and highlights remain preserved in your earlier attempt history.'}
+              </p>
+            </div>
+            <span className="text-xs bg-white text-purple-600 border border-purple-100 px-3 py-1.5 rounded-full font-semibold">
+              {attemptState.mode === 'reopen_answers' ? 'Reopen Answers' : 'Start Fresh'}
+            </span>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)] gap-6 min-w-0">
           <div className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden flex flex-col min-h-0 h-[72vh] lg:sticky lg:top-24 lg:h-[calc(100vh-8rem)]">
             <div className="px-5 py-4 border-b border-gray-100 bg-white shrink-0 z-10">

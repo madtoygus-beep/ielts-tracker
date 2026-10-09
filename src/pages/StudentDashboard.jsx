@@ -519,6 +519,87 @@
 
 
 
+  function useReadingAttemptStates(user, readings, submissions) {
+    const [attemptStates, setAttemptStates] = useState({})
+    const [attemptStatesLoading, setAttemptStatesLoading] = useState(false)
+
+    useEffect(() => {
+      let active = true
+      let loadVersion = 0
+
+      if (!user?.uid) {
+        setAttemptStates({})
+        setAttemptStatesLoading(false)
+        return () => {
+          active = false
+        }
+      }
+
+      const submittedReadingIds = readings
+        .filter(reading =>
+          submissions.some(submission => submission.readingId === reading.id)
+        )
+        .map(reading => reading.id)
+        .filter(Boolean)
+
+      if (submittedReadingIds.length === 0) {
+        setAttemptStates({})
+        setAttemptStatesLoading(false)
+        return () => {
+          active = false
+        }
+      }
+
+      const loadAttemptStates = async () => {
+        const version = ++loadVersion
+        setAttemptStatesLoading(true)
+
+        const entries = await Promise.all(
+          submittedReadingIds.map(async contentId => {
+            try {
+              const response = await getStudentSubmissionAttemptStateCall({
+                contentType: 'reading',
+                contentId
+              })
+
+              return [contentId, response?.data || { open: false }]
+            } catch (error) {
+              console.warn(
+                `Could not load Reading attempt state for ${contentId}:`,
+                error
+              )
+
+              return [contentId, { open: false }]
+            }
+          })
+        )
+
+        if (!active || version !== loadVersion) return
+
+        setAttemptStates(Object.fromEntries(entries))
+        setAttemptStatesLoading(false)
+      }
+
+      loadAttemptStates()
+
+      const refreshOnFocus = () => {
+        loadAttemptStates()
+      }
+
+      window.addEventListener('focus', refreshOnFocus)
+
+      return () => {
+        active = false
+        loadVersion++
+        window.removeEventListener('focus', refreshOnFocus)
+      }
+    }, [user?.uid, readings, submissions])
+
+    return { attemptStates, attemptStatesLoading }
+  }
+
+
+
   function getStudentDisplayName(profile, user) {
     const rawName = profile?.name || profile?.fullName || user?.displayName || user?.email || 'Student'
     const cleanName = rawName.toString().trim()
@@ -1253,11 +1334,25 @@
       )
     }, [user])
 
+    const { attemptStates, attemptStatesLoading } = useReadingAttemptStates(
+      user,
+      readings,
+      submissions
+    )
+
+    const getSubmission = readingId =>
+      submissions.find(s => s.readingId === readingId)
+
+    const getAttemptState = readingId => attemptStates[readingId] || null
+
+    const hasOpenRetake = readingId =>
+      getAttemptState(readingId)?.open === true
+
     const isDone = readingId =>
-      submissions.some(s => s.readingId === readingId)
+      Boolean(getSubmission(readingId)) && !hasOpenRetake(readingId)
 
     const getResult = readingId =>
-      submissions.find(s => s.readingId === readingId)?.result
+      getSubmission(readingId)?.result
 
     const todoReadings = readings.filter(r => !isDone(r.id))
     const completedReadings = readings.filter(r => isDone(r.id))
@@ -1279,6 +1374,9 @@
             <div className="flex flex-col gap-3">
               {todoReadings.map((r, index) => {
                 const badge = dueLabel(r)
+                const submission = getSubmission(r.id)
+                const attemptState = getAttemptState(r.id)
+                const retakeOpen = attemptState?.open === true
 
                 return (
                   <div
@@ -1299,17 +1397,32 @@
                           {badge.text}
                         </span>
 
-                        <span className="text-xs bg-red-50 text-red-500 px-3 py-1 rounded-full">
-                          Not completed
-                        </span>
+                        {retakeOpen ? (
+                          <>
+                            <span className="text-xs bg-amber-50 text-amber-700 px-3 py-1 rounded-full">
+                              Attempt {attemptState.nextAttemptNumber || 2} reopened
+                            </span>
+
+                            <span className="text-xs bg-blue-50 text-blue-600 px-3 py-1 rounded-full">
+                              {attemptState.mode === 'reopen_answers'
+                                ? 'Previous answers restored'
+                                : 'Start fresh'}
+                            </span>
+                          </>
+                        ) : (
+                          <span className="text-xs bg-red-50 text-red-500 px-3 py-1 rounded-full">
+                            Not completed
+                          </span>
+                        )}
                       </div>
                     </div>
 
                     <button
                       onClick={() => navigate(`/do-reading/${r.id}`)}
-                      className="bg-purple-600 text-white px-4 py-2 rounded-xl text-xs font-medium hover:bg-purple-700"
+                      disabled={Boolean(submission) && attemptStatesLoading && !attemptState}
+                      className="bg-purple-600 text-white px-4 py-2 rounded-xl text-xs font-medium hover:bg-purple-700 disabled:opacity-60 disabled:cursor-not-allowed"
                     >
-                      Start →
+                      {retakeOpen ? 'Continue Retake →' : 'Start →'}
                     </button>
                   </div>
                 )
@@ -3021,6 +3134,12 @@
     const [vocabularySubmissions, setVocabularySubmissions] = useState([])
     const [mockSubmissions, setMockSubmissions] = useState([])
 
+    const { attemptStates: readingAttemptStates } = useReadingAttemptStates(
+      user,
+      readings,
+      readingSubmissions
+    )
+
     const { attemptStates: writingAttemptStates } = useWritingAttemptStates(
       user,
       writings,
@@ -3138,7 +3257,11 @@
       }
     }, [user])
 
+    const hasOpenReadingRetake = readingId =>
+      readingAttemptStates[readingId]?.open === true
+
     const hasReadingSubmission = readingId =>
+      !hasOpenReadingRetake(readingId) &&
       readingSubmissions.some(submission => submission.readingId === readingId)
 
     const hasListeningSubmission = listeningId =>
@@ -3174,7 +3297,9 @@
           type: 'Reading',
           icon: '📖',
           path: `/do-reading/${item.id}`,
-          color: 'blue'
+          color: 'blue',
+          isRetake: hasOpenReadingRetake(item.id),
+          retakeState: readingAttemptStates[item.id] || null
         })),
       ...listenings
         .filter(item => !hasListeningSubmission(item.id))

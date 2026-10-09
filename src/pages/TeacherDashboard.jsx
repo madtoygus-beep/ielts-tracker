@@ -2101,6 +2101,27 @@ export default function TeacherDashboard() {
     return clean || fallback
   }
 
+  const getAttemptContentLabel = contentType => {
+    if (contentType === 'reading') return 'Reading'
+    if (contentType === 'listening') return 'Listening'
+    if (contentType === 'vocabulary') return 'Vocabulary'
+    if (contentType === 'writing') return 'Writing'
+    if (contentType === 'mock') return 'Mock Test'
+    return 'Homework'
+  }
+
+  const getAttemptReopenDescription = contentType => {
+    if (contentType === 'writing') {
+      return "Start the new attempt with the student's previous Task 1 / Task 2 answers."
+    }
+
+    if (contentType === 'reading') {
+      return "Start the new attempt with the student's previous answers, flags, scratch note and highlights restored."
+    }
+
+    return "Start the new attempt with the student's previous answers restored."
+  }
+
   const loadManagedAttemptState = async ({ contentType, contentId, student }) => {
     const studentId = getStudentPrimaryAssignmentId(student)
 
@@ -7932,6 +7953,21 @@ Continue permanent delete?`
                                       </button>
 
                                       <button
+                                        type="button"
+                                        onClick={() =>
+                                          openSubmissionAttemptManager({
+                                            contentType: 'reading',
+                                            contentId: reading.id,
+                                            title: reading.title,
+                                            student
+                                          })
+                                        }
+                                        className="text-xs bg-blue-50 text-blue-700 px-3 py-2 rounded-xl hover:bg-blue-100"
+                                      >
+                                        Retake Options
+                                      </button>
+
+                                      <button
                                         onClick={() => removeHomeworkFromStudent(reading, 'reading', student)}
                                         className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
                                       >
@@ -8321,7 +8357,7 @@ Continue permanent delete?`
             <div className="flex items-start justify-between gap-4 mb-5">
               <div>
                 <p className="text-xs font-semibold text-blue-600 uppercase tracking-wide">
-                  Writing Retake
+                  {getAttemptContentLabel(attemptManager.contentType)} Retake
                 </p>
                 <h2 className="text-xl font-bold text-gray-900 mt-1">
                   {attemptManager.title}
@@ -8392,7 +8428,7 @@ Continue permanent delete?`
                       Reopen Answers
                     </span>
                     <span className="block text-xs text-purple-600/80 mt-1 leading-relaxed">
-                      Start the new attempt with the student's previous Task 1 / Task 2 answers.
+                      {getAttemptReopenDescription(attemptManager.contentType)}
                     </span>
                   </button>
 
