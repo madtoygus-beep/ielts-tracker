@@ -17,6 +17,93 @@
       : value.toString().trim().toLowerCase()
   }
 
+
+  function submissionTimeMillis(submission) {
+    const value = submission?.submittedAt || submission?.createdAt || submission?.date
+    if (!value) return 0
+    if (typeof value === 'string') {
+      const parsed = Date.parse(value)
+      return Number.isFinite(parsed) ? parsed : 0
+    }
+    if (value instanceof Date) return value.getTime()
+    if (typeof value?.toMillis === 'function') return value.toMillis()
+    if (typeof value?.toDate === 'function') return value.toDate().getTime()
+    return 0
+  }
+
+  function submissionAttemptNumber(submission) {
+    const value = Number(submission?.attemptNumber)
+    return Number.isInteger(value) && value >= 1 ? value : 1
+  }
+
+  function hasMeaningfulSubmissionValue(value) {
+    if (value === undefined || value === null) return false
+    if (typeof value === 'string') return value.trim().length > 0
+    if (typeof value === 'number' || typeof value === 'boolean') return true
+    if (Array.isArray(value)) return value.some(hasMeaningfulSubmissionValue)
+    if (typeof value === 'object') return Object.values(value).some(hasMeaningfulSubmissionValue)
+    return false
+  }
+
+  function submissionHasMeaningfulAnswers(submission) {
+    return hasMeaningfulSubmissionValue(submission?.answers) ||
+      hasMeaningfulSubmissionValue(submission?.task1Answer) ||
+      hasMeaningfulSubmissionValue(submission?.task2Answer) ||
+      hasMeaningfulSubmissionValue(submission?.listeningAnswers) ||
+      hasMeaningfulSubmissionValue(submission?.readingAnswers) ||
+      hasMeaningfulSubmissionValue(submission?.writingAnswers)
+  }
+
+  function chooseCurrentSubmission(records, preferredSubmissionId = '') {
+    const cleanRecords = (records || []).filter(Boolean)
+    if (cleanRecords.length === 0) return null
+
+    if (preferredSubmissionId) {
+      const preferred = cleanRecords.find(record => record.id === preferredSubmissionId)
+      if (preferred) return preferred
+    }
+
+    return [...cleanRecords].sort((a, b) => {
+      const attemptDifference = submissionAttemptNumber(b) - submissionAttemptNumber(a)
+      if (attemptDifference !== 0) return attemptDifference
+
+      const aMeaningful = submissionHasMeaningfulAnswers(a)
+      const bMeaningful = submissionHasMeaningfulAnswers(b)
+      if (aMeaningful !== bMeaningful) return aMeaningful ? -1 : 1
+
+      const timeDifference = submissionTimeMillis(b) - submissionTimeMillis(a)
+      if (timeDifference !== 0) return timeDifference
+
+      if ((a?.autoSubmitted === true) !== (b?.autoSubmitted === true)) {
+        return a?.autoSubmitted === true ? 1 : -1
+      }
+
+      return (a?.id || '').localeCompare(b?.id || '')
+    })[0]
+  }
+
+  function dedupeSubmissionHeads(submissions, getContentId, attemptStates = {}) {
+    const groups = new Map()
+
+    ;(submissions || []).forEach(submission => {
+      const rawContentId = getContentId(submission)
+      const contentId = rawContentId === undefined || rawContentId === null
+        ? ''
+        : rawContentId.toString()
+      if (!contentId) return
+
+      if (!groups.has(contentId)) groups.set(contentId, [])
+      groups.get(contentId).push(submission)
+    })
+
+    return Array.from(groups.entries())
+      .map(([contentId, records]) =>
+        chooseCurrentSubmission(records, attemptStates?.[contentId]?.currentSubmissionId || '')
+      )
+      .filter(Boolean)
+      .sort((a, b) => submissionTimeMillis(b) - submissionTimeMillis(a))
+  }
+
   const STUDENT_ACCESS_CONTENT_CONFIG = Object.freeze({
     studentReadings: {
       contentType: 'reading',
@@ -1332,9 +1419,33 @@
       )
     }, [user])
 
+    const { attemptStates: readingAttemptStates } = useReadingAttemptStates(
+      user,
+      readings,
+      readingSubmissions
+    )
+
+    const { attemptStates: listeningAttemptStates } = useListeningAttemptStates(
+      user,
+      listenings,
+      listeningSubmissions
+    )
+
+    const currentReadingSubmissions = dedupeSubmissionHeads(
+      readingSubmissions,
+      submission => submission.readingId,
+      readingAttemptStates
+    )
+
+    const currentListeningSubmissions = dedupeSubmissionHeads(
+      listeningSubmissions,
+      submission => submission.listeningId,
+      listeningAttemptStates
+    )
+
     const readingAnalytics = calculateSkillAnalytics(
       readings,
-      readingSubmissions,
+      currentReadingSubmissions,
       'readingId',
       ['matching', 'matchingInformation', 'sentenceEndings', 'summaryOptions', 'mcq', 'fitb', 'tfng', 'table', 'summary', 'note', 'noteCompletion', 'shortAnswer'],
       { mcq_multi: 'mcq' }
@@ -1342,7 +1453,7 @@
 
     const listeningAnalytics = calculateSkillAnalytics(
       listenings,
-      listeningSubmissions,
+      currentListeningSubmissions,
       'listeningId',
       ['mcq', 'fitb', 'tfng', 'table', 'note', 'listeningCompletion', 'listeningMatching', 'map', 'shortAnswer'],
       {
@@ -1354,21 +1465,21 @@
     // Count each active assignment once, even if it has duplicate submissions.
     const readingCompletion = {
       completed: readings.filter(reading =>
-        readingSubmissions.some(sub => sub.readingId === reading.id)
+        currentReadingSubmissions.some(sub => sub.readingId === reading.id)
       ).length,
       assigned: readings.length
     }
 
     const listeningCompletion = {
       completed: listenings.filter(listening =>
-        listeningSubmissions.some(sub => sub.listeningId === listening.id)
+        currentListeningSubmissions.some(sub => sub.listeningId === listening.id)
       ).length,
       assigned: listenings.length
     }
 
     const hasData =
-      readingSubmissions.length > 0 ||
-      listeningSubmissions.length > 0 ||
+      currentReadingSubmissions.length > 0 ||
+      currentListeningSubmissions.length > 0 ||
       readings.length > 0 ||
       listenings.length > 0
 
@@ -1590,10 +1701,13 @@
       submissions
     )
 
-    const getSubmission = readingId =>
-      submissions.find(s => s.readingId === readingId)
-
     const getAttemptState = readingId => attemptStates[readingId] || null
+
+    const getSubmission = readingId =>
+      chooseCurrentSubmission(
+        submissions.filter(s => s.readingId === readingId),
+        getAttemptState(readingId)?.currentSubmissionId || ''
+      )
 
     const hasOpenRetake = readingId =>
       getAttemptState(readingId)?.open === true
@@ -1763,10 +1877,13 @@
       submissions
     )
 
-    const getSubmission = listeningId =>
-      submissions.find(s => s.listeningId === listeningId)
-
     const getAttemptState = listeningId => attemptStates[listeningId] || null
+
+    const getSubmission = listeningId =>
+      chooseCurrentSubmission(
+        submissions.filter(s => s.listeningId === listeningId),
+        getAttemptState(listeningId)?.currentSubmissionId || ''
+      )
 
     const hasOpenRetake = listeningId =>
       getAttemptState(listeningId)?.open === true
@@ -2023,10 +2140,15 @@
       return 'Pending teacher review'
     }
 
-    const fullMockSubmissions = mockSubmissions.filter(
+    const currentMockSubmissions = dedupeSubmissionHeads(
+      mockSubmissions,
+      submission => submission.mockTestId
+    )
+
+    const fullMockSubmissions = currentMockSubmissions.filter(
       submission => getSubmissionMockType(submission) !== 'mini_mock'
     )
-    const miniMockSubmissions = mockSubmissions.filter(
+    const miniMockSubmissions = currentMockSubmissions.filter(
       submission => getSubmissionMockType(submission) === 'mini_mock'
     )
 
@@ -2047,7 +2169,7 @@
       ? getSubmissionMock(latest)?.title || latest.mockTitle || latest.title || 'Mock Test'
       : 'No Full Mock completed yet'
 
-    if (mockSubmissions.length === 0) {
+    if (currentMockSubmissions.length === 0) {
       return (
         <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
           <div className="flex items-center justify-between mb-2">
@@ -2213,7 +2335,7 @@
           </h3>
 
           <div className="flex flex-col gap-2">
-            {mockSubmissions.slice(0, 6).map(submission => {
+            {currentMockSubmissions.slice(0, 6).map(submission => {
               const result = submission.result || {}
               const overall = getMockOverall(submission)
               const title = getSubmissionMock(submission)?.title || submission.mockTitle || submission.title || 'Mock Test'
@@ -2306,13 +2428,16 @@
       submissions
     )
 
-    const getSubmission = vocabularyTestId =>
-      submissions.find(submission =>
-        isVocabularySubmissionForTest(submission, vocabularyTestId)
-      )
-
     const getAttemptState = vocabularyTestId =>
       attemptStates[vocabularyTestId] || null
+
+    const getSubmission = vocabularyTestId =>
+      chooseCurrentSubmission(
+        submissions.filter(submission =>
+          isVocabularySubmissionForTest(submission, vocabularyTestId)
+        ),
+        getAttemptState(vocabularyTestId)?.currentSubmissionId || ''
+      )
 
     const hasOpenRetake = vocabularyTestId =>
       getAttemptState(vocabularyTestId)?.open === true
@@ -2611,10 +2736,13 @@
       submissions
     )
 
-    const getSubmission = mockId =>
-      submissions.find(submission => submission.mockTestId === mockId)
-
     const getAttemptState = mockId => attemptStates[mockId] || null
+
+    const getSubmission = mockId =>
+      chooseCurrentSubmission(
+        submissions.filter(submission => submission.mockTestId === mockId),
+        getAttemptState(mockId)?.currentSubmissionId || ''
+      )
 
     const hasOpenRetake = mockId =>
       getAttemptState(mockId)?.open === true
@@ -2833,7 +2961,12 @@
       )
     }, [user, profile])
 
-    const reviewed = submissions
+    const currentWritingSubmissions = dedupeSubmissionHeads(
+      submissions,
+      submission => submission.writingId
+    )
+
+    const reviewed = currentWritingSubmissions
       .filter(sub => {
         const band = toNumber(sub.review?.overall)
         return sub.reviewed && band !== null && band > 0
@@ -3153,10 +3286,13 @@
       submissions
     )
 
-    const getSubmission = writingId =>
-      submissions.find(s => s.writingId === writingId)
-
     const getAttemptState = writingId => attemptStates[writingId] || null
+
+    const getSubmission = writingId =>
+      chooseCurrentSubmission(
+        submissions.filter(s => s.writingId === writingId),
+        getAttemptState(writingId)?.currentSubmissionId || ''
+      )
 
     const hasOpenRetake = writingId =>
       getAttemptState(writingId)?.open === true
@@ -4098,12 +4234,39 @@
     const [showPasswordModal, setShowPasswordModal] = useState(false)
     const [newPassword, setNewPassword] = useState('')
     const [passwordMsg, setPasswordMsg] = useState('')
-    const [activeTab, setActiveTab] = useState('overview')
+    const [activeTab, setActiveTab] = useState(() => {
+      try {
+        const storedTab = window.sessionStorage.getItem('maxima_student_dashboard_active_tab')
+        const allowedTabs = [
+          'overview',
+          'todo',
+          'reading',
+          'listening',
+          'writing',
+          'vocabulary',
+          'mock',
+          'inbox',
+          'analytics'
+        ]
+
+        return allowedTabs.includes(storedTab) ? storedTab : 'overview'
+      } catch {
+        return 'overview'
+      }
+    })
     const [profile, setProfile] = useState(null)
     const [dashboardLoadError, setDashboardLoadError] = useState('')
     const [dataSyncErrors, setDataSyncErrors] = useState({})
     const [authRetryKey, setAuthRetryKey] = useState(0)
     const navigate = useNavigate()
+
+    useEffect(() => {
+      try {
+        window.sessionStorage.setItem('maxima_student_dashboard_active_tab', activeTab)
+      } catch {
+        // Browser storage can be unavailable in restricted/private contexts.
+      }
+    }, [activeTab])
 
     const targetBand = profile?.targetBand !== undefined && profile?.targetBand !== null
       ? Number(profile.targetBand)
@@ -4245,7 +4408,10 @@
       )
     }
 
-    const mockScores = scores.filter(score => score.source === 'mock_test')
+    const mockScores = dedupeSubmissionHeads(
+      scores.filter(score => score.source === 'mock_test'),
+      score => score.mockTestId || score.mockId || score.id
+    )
     const latestMockScore = mockScores[0]
 
     const overviewCards = [

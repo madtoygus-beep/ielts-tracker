@@ -33,6 +33,10 @@ const getManagedSubmissionAttemptStateCall = httpsCallable(
   functions,
   'getManagedSubmissionAttemptState'
 )
+const getManagedSubmissionAttemptHistoryCall = httpsCallable(
+  functions,
+  'getManagedSubmissionAttemptHistory'
+)
 const setSubmissionAttemptControlCall = httpsCallable(
   functions,
   'setSubmissionAttemptControl'
@@ -279,6 +283,9 @@ export default function TeacherDashboard() {
   const [attemptManagerSaving, setAttemptManagerSaving] = useState(false)
   const [attemptManagerError, setAttemptManagerError] = useState('')
   const [attemptManagerNotice, setAttemptManagerNotice] = useState('')
+  const [attemptHistory, setAttemptHistory] = useState([])
+  const [attemptHistoryLoading, setAttemptHistoryLoading] = useState(false)
+  const [attemptHistoryError, setAttemptHistoryError] = useState('')
   const [writingReviewForm, setWritingReviewForm] = useState({
     task1Band: '',
     task2Band: '',
@@ -309,11 +316,39 @@ export default function TeacherDashboard() {
   const [showPasswordModal, setShowPasswordModal] = useState(false)
   const [newPassword, setNewPassword] = useState('')
   const [passwordMsg, setPasswordMsg] = useState('')
-  const [activeTab, setActiveTab] = useState('overview')
+  const [activeTab, setActiveTab] = useState(() => {
+    try {
+      const storedTab = window.sessionStorage.getItem('maxima_teacher_dashboard_active_tab')
+      const allowedTabs = [
+        'overview',
+        'students',
+        'reading',
+        'listening',
+        'vocabulary',
+        'writing',
+        'mock',
+        'analytics',
+        'communication',
+        'reviews'
+      ]
+
+      return allowedTabs.includes(storedTab) ? storedTab : 'overview'
+    } catch {
+      return 'overview'
+    }
+  })
   const [analyticsStudentId, setAnalyticsStudentId] = useState('all')
   const [dashboardDataError, setDashboardDataError] = useState('')
 
   const navigate = useNavigate()
+
+  useEffect(() => {
+    try {
+      window.sessionStorage.setItem('maxima_teacher_dashboard_active_tab', activeTab)
+    } catch {
+      // Browser storage can be unavailable in restricted/private contexts.
+    }
+  }, [activeTab])
 
   const openTeacherPreview = (type, contentId) => {
     navigate(`/preview/${type}/${contentId}`)
@@ -887,8 +922,120 @@ export default function TeacherDashboard() {
     if (!submission || !student) return false
 
     const studentValues = getStudentAssignmentValues(student).map(normalizeAssignmentId)
-    return studentValues.includes(normalizeAssignmentId(submission.uid))
+    const submissionValues = uniqueCleanValues([
+      submission.uid,
+      submission.studentId,
+      submission.studentEmail,
+      submission.email
+    ]).map(normalizeAssignmentId)
+
+    return submissionValues.some(value => studentValues.includes(value))
   }
+
+
+  const submissionTimeMillis = submission => {
+    const value = submission?.submittedAt || submission?.createdAt || submission?.date
+    if (!value) return 0
+    if (typeof value === 'string') {
+      const parsed = Date.parse(value)
+      return Number.isFinite(parsed) ? parsed : 0
+    }
+    if (value instanceof Date) return value.getTime()
+    if (typeof value?.toMillis === 'function') return value.toMillis()
+    if (typeof value?.toDate === 'function') return value.toDate().getTime()
+    return 0
+  }
+
+  const submissionAttemptNumber = submission => {
+    const value = Number(submission?.attemptNumber)
+    return Number.isInteger(value) && value >= 1 ? value : 1
+  }
+
+  const hasMeaningfulSubmissionValue = value => {
+    if (value === undefined || value === null) return false
+    if (typeof value === 'string') return value.trim().length > 0
+    if (typeof value === 'number' || typeof value === 'boolean') return true
+    if (Array.isArray(value)) return value.some(hasMeaningfulSubmissionValue)
+    if (typeof value === 'object') return Object.values(value).some(hasMeaningfulSubmissionValue)
+    return false
+  }
+
+  const submissionHasMeaningfulAnswers = submission =>
+    hasMeaningfulSubmissionValue(submission?.answers) ||
+    hasMeaningfulSubmissionValue(submission?.task1Answer) ||
+    hasMeaningfulSubmissionValue(submission?.task2Answer) ||
+    hasMeaningfulSubmissionValue(submission?.listeningAnswers) ||
+    hasMeaningfulSubmissionValue(submission?.readingAnswers) ||
+    hasMeaningfulSubmissionValue(submission?.writingAnswers)
+
+  const chooseCurrentSubmission = records => {
+    const cleanRecords = (records || []).filter(Boolean)
+    if (cleanRecords.length === 0) return null
+
+    return [...cleanRecords].sort((a, b) => {
+      const attemptDifference = submissionAttemptNumber(b) - submissionAttemptNumber(a)
+      if (attemptDifference !== 0) return attemptDifference
+
+      const aMeaningful = submissionHasMeaningfulAnswers(a)
+      const bMeaningful = submissionHasMeaningfulAnswers(b)
+      if (aMeaningful !== bMeaningful) return aMeaningful ? -1 : 1
+
+      const timeDifference = submissionTimeMillis(b) - submissionTimeMillis(a)
+      if (timeDifference !== 0) return timeDifference
+
+      if ((a?.autoSubmitted === true) !== (b?.autoSubmitted === true)) {
+        return a?.autoSubmitted === true ? 1 : -1
+      }
+
+      return (a?.id || '').localeCompare(b?.id || '')
+    })[0]
+  }
+
+  const dedupeSubmissionHeadsByStudent = (records, getContentId) => {
+    const groups = new Map()
+
+    ;(records || []).forEach(submission => {
+      const studentKey = normalizeAssignmentId(
+        submission?.uid || submission?.studentId || submission?.studentEmail
+      )
+      const rawContentId = getContentId(submission)
+      const contentId = rawContentId === undefined || rawContentId === null
+        ? ''
+        : rawContentId.toString()
+
+      if (!studentKey || !contentId) return
+
+      const key = `${studentKey}:${contentId}`
+      if (!groups.has(key)) groups.set(key, [])
+      groups.get(key).push(submission)
+    })
+
+    return Array.from(groups.values())
+      .map(chooseCurrentSubmission)
+      .filter(Boolean)
+  }
+
+  const currentReadingSubmissions = dedupeSubmissionHeadsByStudent(
+    submissions,
+    submission => submission.readingId
+  )
+  const currentWritingSubmissions = dedupeSubmissionHeadsByStudent(
+    writingSubmissions,
+    submission => submission.writingId
+  )
+  const currentListeningSubmissions = dedupeSubmissionHeadsByStudent(
+    listeningSubmissions,
+    submission => submission.listeningId
+  )
+  const currentVocabularySubmissions = dedupeSubmissionHeadsByStudent(
+    vocabularySubmissions,
+    submission =>
+      submission.vocabularyTestId || submission.vocabularyId || submission.testId || submission.homeworkId
+  )
+  const currentMockSubmissions = dedupeSubmissionHeadsByStudent(
+    mockSubmissions,
+    submission => submission.mockTestId
+  )
 
   const handleAddScore = async () => {
     if (
@@ -1041,34 +1188,55 @@ export default function TeacherDashboard() {
   const getSubmission = (studentId, readingId) => {
     const student = getStudentByAnyId(studentId)
 
-    return submissions.find(
-      sub => submissionBelongsToStudent(sub, student) && sub.readingId === readingId
+    return chooseCurrentSubmission(
+      currentReadingSubmissions.filter(
+        sub => submissionBelongsToStudent(sub, student) && sub.readingId === readingId
+      )
     )
   }
 
   const getWritingSubmission = (studentId, writingId) => {
     const student = getStudentByAnyId(studentId)
 
-    return writingSubmissions.find(
-      sub => submissionBelongsToStudent(sub, student) && sub.writingId === writingId
+    return chooseCurrentSubmission(
+      currentWritingSubmissions.filter(
+        sub => submissionBelongsToStudent(sub, student) && sub.writingId === writingId
+      )
     )
   }
 
   const getListeningSubmission = (studentId, listeningId) => {
     const student = getStudentByAnyId(studentId)
 
-    return listeningSubmissions.find(
-      sub => submissionBelongsToStudent(sub, student) && sub.listeningId === listeningId
+    return chooseCurrentSubmission(
+      currentListeningSubmissions.filter(
+        sub => submissionBelongsToStudent(sub, student) && sub.listeningId === listeningId
+      )
     )
   }
 
   const getVocabularySubmission = (studentId, vocabularyTestId) => {
     const student = getStudentByAnyId(studentId)
 
-    return vocabularySubmissions.find(
-      sub =>
-        submissionBelongsToStudent(sub, student) &&
-        isVocabularySubmissionForTest(sub, vocabularyTestId)
+    return chooseCurrentSubmission(
+      currentVocabularySubmissions.filter(
+        sub =>
+          submissionBelongsToStudent(sub, student) &&
+          isVocabularySubmissionForTest(sub, vocabularyTestId)
+      )
+    )
+  }
+
+
+  const getMockSubmission = (studentId, mockTestId) => {
+    const student = getStudentByAnyId(studentId)
+
+    return chooseCurrentSubmission(
+      currentMockSubmissions.filter(
+        submission =>
+          submissionBelongsToStudent(submission, student) &&
+          submission.mockTestId === mockTestId
+      )
     )
   }
 
@@ -1663,25 +1831,25 @@ export default function TeacherDashboard() {
   }
 
   const getCompletedCount = readingId => {
-    return submissions.filter(sub => sub.readingId === readingId).length
+    return currentReadingSubmissions.filter(sub => sub.readingId === readingId).length
   }
 
   const getWritingSubmittedCount = writingId => {
-    return writingSubmissions.filter(sub => sub.writingId === writingId).length
+    return currentWritingSubmissions.filter(sub => sub.writingId === writingId).length
   }
 
   const getWritingReviewedCount = writingId => {
-    return writingSubmissions.filter(
+    return currentWritingSubmissions.filter(
       sub => sub.writingId === writingId && sub.reviewed
     ).length
   }
 
   const getListeningCompletedCount = listeningId => {
-    return listeningSubmissions.filter(sub => sub.listeningId === listeningId).length
+    return currentListeningSubmissions.filter(sub => sub.listeningId === listeningId).length
   }
 
   const getVocabularyCompletedCount = vocabularyTestId => {
-    return vocabularySubmissions.filter(sub =>
+    return currentVocabularySubmissions.filter(sub =>
       isVocabularySubmissionForTest(sub, vocabularyTestId)
     ).length
   }
@@ -1693,7 +1861,7 @@ export default function TeacherDashboard() {
     return submitted > reviewed
   })
 
-  const pendingWritingReviews = writingSubmissions
+  const pendingWritingReviews = currentWritingSubmissions
     .filter(submission => !submission.reviewed)
     .map(submission => {
       const student = getStudentByAnyId(submission.uid)
@@ -1713,7 +1881,7 @@ export default function TeacherDashboard() {
       new Date(a.submission.submittedAt || 0)
     )
 
-  const reviewedWritingReviews = writingSubmissions
+  const reviewedWritingReviews = currentWritingSubmissions
     .filter(submission => submission.reviewed)
     .map(submission => {
       const student = getStudentByAnyId(submission.uid)
@@ -1790,7 +1958,7 @@ export default function TeacherDashboard() {
     return submission.result?.writing?.review || submission.writingReview || null
   }
 
-  const pendingMockWritingReviews = mockSubmissions
+  const pendingMockWritingReviews = currentMockSubmissions
     .filter(submission => {
       if (submission.archived) return false
       if (!getMockTask1Answer(submission) && !getMockTask2Answer(submission)) return false
@@ -1815,7 +1983,7 @@ export default function TeacherDashboard() {
       new Date(a.submission.submittedAt || 0)
     )
 
-  const reviewedMockWritingReviews = mockSubmissions
+  const reviewedMockWritingReviews = currentMockSubmissions
     .filter(submission => {
       if (submission.archived) return false
       if (!getMockTask1Answer(submission) && !getMockTask2Answer(submission)) return false
@@ -1840,11 +2008,11 @@ export default function TeacherDashboard() {
       new Date(a.submission.reviewedAt || a.submission.submittedAt || 0)
     )
 
-  const reviewedMockWritingCount = mockSubmissions.filter(
+  const reviewedMockWritingCount = currentMockSubmissions.filter(
     submission => getMockWritingStatus(submission) === 'reviewed'
   ).length
 
-  const submittedMockWritingCount = mockSubmissions.filter(
+  const submittedMockWritingCount = currentMockSubmissions.filter(
     submission => getMockTask1Answer(submission) || getMockTask2Answer(submission)
   ).length
 
@@ -1852,11 +2020,11 @@ export default function TeacherDashboard() {
     pendingWritingReviews.length + pendingMockWritingReviews.length
 
   const reviewedWritingCount =
-    writingSubmissions.filter(submission => submission.reviewed).length +
+    currentWritingSubmissions.filter(submission => submission.reviewed).length +
     reviewedMockWritingCount
 
   const submittedWritingCount =
-    writingSubmissions.length + submittedMockWritingCount
+    currentWritingSubmissions.length + submittedMockWritingCount
 
   const formatDateShort = value => {
     if (!value) return 'No date'
@@ -2169,6 +2337,56 @@ export default function TeacherDashboard() {
     return result.data || null
   }
 
+
+  const loadManagedAttemptHistory = async ({ contentType, contentId, student }) => {
+    const studentId = getStudentPrimaryAssignmentId(student)
+
+    if (!contentType || !contentId || !studentId) {
+      throw new Error('The selected student or homework is missing an ID.')
+    }
+
+    const result = await getManagedSubmissionAttemptHistoryCall({
+      contentType,
+      contentId,
+      studentId
+    })
+
+    return Array.isArray(result.data?.attempts) ? result.data.attempts : []
+  }
+
+  const getAttemptHistoryResultLabel = (contentType, attempt) => {
+    const result = attempt?.result || {}
+
+    if (contentType === 'writing') {
+      return attempt?.reviewed
+        ? `Reviewed · Band ${attempt.reviewOverall ?? '-'}`
+        : 'Submitted · Waiting for review'
+    }
+
+    if (contentType === 'vocabulary') {
+      const correct = result.correct ?? '-'
+      const total = result.total ?? '-'
+      const percentage = result.percentage ?? null
+      return `${correct}/${total} correct${percentage === null ? '' : ` · ${percentage}%`}`
+    }
+
+    if (contentType === 'mock') {
+      const overall = result.reviewedOverall ?? result.finalOverall ?? result.overall ?? result.overallEstimate
+      return `Overall ${overall ?? '-'} · L ${result.listening?.band ?? '-'} · R ${result.reading?.band ?? '-'}`
+    }
+
+    const band = result.band ?? result.estimatedBand ?? '-'
+    const correct = result.correct ?? '-'
+    const total = result.total ?? '-'
+    return `Band ${band} · ${correct}/${total} correct`
+  }
+
+  const formatAttemptHistoryDate = value => {
+    if (!value) return 'No submission date'
+    const date = new Date(value)
+    return Number.isNaN(date.getTime()) ? 'No submission date' : date.toLocaleString()
+  }
+
   const openSubmissionAttemptManager = async ({
     contentType,
     contentId,
@@ -2188,10 +2406,23 @@ export default function TeacherDashboard() {
     setAttemptManager(base)
     setAttemptManagerError('')
     setAttemptManagerNotice('')
+    setAttemptHistory([])
+    setAttemptHistoryError('')
     setAttemptManagerLoading(true)
+    setAttemptHistoryLoading(true)
 
     try {
-      const state = await loadManagedAttemptState(base)
+      const [state, history] = await Promise.all([
+        loadManagedAttemptState(base),
+        loadManagedAttemptHistory(base).catch(error => {
+          console.error('Could not load submission attempt history:', error)
+          setAttemptHistoryError(
+            getCallableErrorMessage(error, 'Could not load attempt history.')
+          )
+          return []
+        })
+      ])
+
       setAttemptManager(current =>
         current &&
         current.contentType === contentType &&
@@ -2200,6 +2431,7 @@ export default function TeacherDashboard() {
           ? { ...current, state }
           : current
       )
+      setAttemptHistory(history)
     } catch (error) {
       console.error('Could not load submission attempt state:', error)
       setAttemptManagerError(
@@ -2207,6 +2439,7 @@ export default function TeacherDashboard() {
       )
     } finally {
       setAttemptManagerLoading(false)
+      setAttemptHistoryLoading(false)
     }
   }
 
@@ -2217,6 +2450,9 @@ export default function TeacherDashboard() {
     setAttemptManagerError('')
     setAttemptManagerNotice('')
     setAttemptManagerLoading(false)
+    setAttemptHistory([])
+    setAttemptHistoryError('')
+    setAttemptHistoryLoading(false)
   }
 
   const setManagedAttemptMode = async mode => {
@@ -2259,13 +2495,23 @@ export default function TeacherDashboard() {
         mode
       })
 
-      const state = await loadManagedAttemptState(attemptManager)
+      const [state, history] = await Promise.all([
+        loadManagedAttemptState(attemptManager),
+        loadManagedAttemptHistory(attemptManager).catch(error => {
+          console.error('Could not refresh submission attempt history:', error)
+          setAttemptHistoryError(
+            getCallableErrorMessage(error, 'Could not refresh attempt history.')
+          )
+          return attemptHistory
+        })
+      ])
 
       setAttemptManager(current =>
         current
           ? { ...current, state }
           : current
       )
+      setAttemptHistory(history)
       setAttemptManagerNotice(
         mode === 'reopen_answers'
           ? `Attempt ${state?.nextAttemptNumber || nextAttempt} is open with previous answers restored.`
@@ -3067,7 +3313,7 @@ Continue permanent delete?`
 
   const getStudentAnalytics = studentId => {
     const student = getStudentByAnyId(studentId)
-    const studentSubs = submissions.filter(sub => submissionBelongsToStudent(sub, student))
+    const studentSubs = currentReadingSubmissions.filter(sub => submissionBelongsToStudent(sub, student))
 
     const stats = {
       matching: { correct: 0, total: 0 },
@@ -3644,7 +3890,7 @@ Continue permanent delete?`
   const getAtRiskReadingStudents = () => {
     return students
       .map(student => {
-        const studentSubs = submissions
+        const studentSubs = currentReadingSubmissions
           .filter(sub => submissionBelongsToStudent(sub, student))
           .sort(
             (a, b) =>
@@ -3811,7 +4057,7 @@ Continue permanent delete?`
   const getStudentReadingSubmissions = studentId => {
     const student = getStudentByAnyId(studentId)
 
-    return submissions
+    return currentReadingSubmissions
       .filter(submission => submissionBelongsToStudent(submission, student))
       .sort((a, b) => new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0))
   }
@@ -4110,7 +4356,7 @@ Continue permanent delete?`
   const getStudentListeningSubmissions = studentId => {
     const student = getStudentByAnyId(studentId)
 
-    return listeningSubmissions
+    return currentListeningSubmissions
       .filter(submission => submissionBelongsToStudent(submission, student))
       .sort((a, b) => new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0))
   }
@@ -4356,7 +4602,7 @@ Continue permanent delete?`
   const getStudentVocabularySubmissions = studentId => {
     const student = getStudentByAnyId(studentId)
 
-    return vocabularySubmissions
+    return currentVocabularySubmissions
       .filter(submission => submissionBelongsToStudent(submission, student))
       .sort((a, b) => new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0))
   }
@@ -4470,7 +4716,7 @@ Continue permanent delete?`
 
 
   const getAverageListeningBand = () => {
-    const bands = listeningSubmissions
+    const bands = currentListeningSubmissions
       .map(sub => Number(sub.result?.band))
       .filter(value => !Number.isNaN(value) && value > 0)
 
@@ -4488,7 +4734,7 @@ Continue permanent delete?`
 
     const activeListeningIds = activeListenings.map(listening => listening.id)
 
-    const completed = listeningSubmissions.filter(submission =>
+    const completed = currentListeningSubmissions.filter(submission =>
       activeListeningIds.includes(submission.listeningId)
     ).length
 
@@ -4504,7 +4750,7 @@ Continue permanent delete?`
   const getMostMissedListeningQuestions = () => {
     const stats = {}
 
-    listeningSubmissions.forEach(submission => {
+    currentListeningSubmissions.forEach(submission => {
       const listening = listenings.find(item => item.id === submission.listeningId)
       if (!listening) return
 
@@ -4610,7 +4856,7 @@ Continue permanent delete?`
   const getAtRiskListeningStudents = () => {
     return students
       .map(student => {
-        const studentSubs = listeningSubmissions
+        const studentSubs = currentListeningSubmissions
           .filter(sub => submissionBelongsToStudent(sub, student) && sub.result?.band)
           .sort(
             (a, b) =>
@@ -4645,7 +4891,7 @@ Continue permanent delete?`
       shortAnswer: { correct: 0, total: 0 }
     }
 
-    listeningSubmissions.forEach(submission => {
+    currentListeningSubmissions.forEach(submission => {
       if (mergeStoredGradingBreakdown(stats, submission, {
         matching: 'listeningMatching',
         mcq_multi: 'mcq'
@@ -4817,7 +5063,7 @@ Continue permanent delete?`
   const getStudentMockSubmissions = studentId => {
     const student = getStudentByAnyId(studentId)
 
-    return mockSubmissions
+    return currentMockSubmissions
       .filter(submission => submissionBelongsToStudent(submission, student) && submission.archived !== true)
       .sort((a, b) => new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0))
   }
@@ -5316,7 +5562,7 @@ Continue permanent delete?`
 
 
   const getMockSubmittedCount = mockTest => {
-    return mockSubmissions.filter(submission => submission.mockTestId === mockTest.id).length
+    return currentMockSubmissions.filter(submission => submission.mockTestId === mockTest.id).length
   }
 
   const getMockAssignedCount = mockTest => {
@@ -8477,7 +8723,7 @@ Continue permanent delete?`
 
       {attemptManager && (
         <div className="fixed inset-0 bg-black/40 z-[60] flex items-center justify-center px-4">
-          <div className="bg-white rounded-2xl w-full max-w-lg p-6 shadow-xl">
+          <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6 shadow-xl">
             <div className="flex items-start justify-between gap-4 mb-5">
               <div>
                 <p className="text-xs font-semibold text-blue-600 uppercase tracking-wide">
@@ -8574,6 +8820,68 @@ Continue permanent delete?`
                 <p className="text-xs text-gray-400 mt-4 leading-relaxed">
                   Reopening never deletes the current submitted attempt. The previous answers, submission time and review are preserved for attempt history when the student resubmits.
                 </p>
+
+                <div className="border border-gray-100 rounded-xl p-4 mt-4">
+                  <div className="flex items-center justify-between gap-3 mb-3">
+                    <div>
+                      <p className="text-sm font-semibold text-gray-800">Attempt History</p>
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        Latest valid attempt plus immutable prior attempts.
+                      </p>
+                    </div>
+                    <span className="text-xs bg-gray-100 text-gray-600 px-2.5 py-1 rounded-full">
+                      {attemptHistory.length} saved
+                    </span>
+                  </div>
+
+                  {attemptHistoryLoading ? (
+                    <p className="text-xs text-gray-400">Loading history...</p>
+                  ) : attemptHistoryError ? (
+                    <div className="bg-amber-50 border border-amber-100 rounded-lg p-3 text-xs text-amber-700">
+                      {attemptHistoryError}
+                    </div>
+                  ) : attemptHistory.length === 0 ? (
+                    <p className="text-xs text-gray-400">No submitted attempt history yet.</p>
+                  ) : (
+                    <div className="flex flex-col gap-2">
+                      {attemptHistory.map(attempt => (
+                        <div
+                          key={`${attempt.attemptNumber}-${attempt.submissionId || 'attempt'}`}
+                          className="bg-gray-50 border border-gray-100 rounded-lg p-3"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <p className="text-sm font-semibold text-gray-800">
+                                  Attempt {attempt.attemptNumber}
+                                </p>
+                                <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${
+                                  attempt.isCurrent
+                                    ? 'bg-green-50 text-green-700'
+                                    : 'bg-purple-50 text-purple-700'
+                                }`}>
+                                  {attempt.isCurrent ? 'Current' : 'Saved history'}
+                                </span>
+                              </div>
+                              <p className="text-xs text-gray-500 mt-1">
+                                {getAttemptHistoryResultLabel(attemptManager.contentType, attempt)}
+                              </p>
+                              <p className="text-[11px] text-gray-400 mt-1">
+                                {formatAttemptHistoryDate(attempt.submittedAt)}
+                              </p>
+                            </div>
+
+                            {attempt.autoSubmitted && (
+                              <span className="text-[10px] bg-amber-50 text-amber-700 px-2 py-1 rounded-full">
+                                Auto-submitted
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
 
                 {attemptManagerNotice && (
                   <div className="bg-green-50 border border-green-100 rounded-xl p-3 text-sm text-green-700 mt-4">
@@ -8730,11 +9038,7 @@ Continue permanent delete?`
                     : selectedHomeworkType === 'listening'
                       ? getListeningSubmission(student.id, selectedHomework.id)
                       : selectedHomeworkType === 'mock'
-                        ? mockSubmissions.find(
-                            submission =>
-                              submissionBelongsToStudent(submission, student) &&
-                              submission.mockTestId === selectedHomework.id
-                          )
+                        ? getMockSubmission(student.id, selectedHomework.id)
                         : selectedHomeworkType === 'vocabulary'
                           ? getVocabularySubmission(student.id, selectedHomework.id)
                           : getWritingSubmission(student.id, selectedHomework.id)

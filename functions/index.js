@@ -1289,6 +1289,30 @@ function attemptControlClientState(control, current) {
   }
 }
 
+function submissionAttemptSummary(config, data, extra = {}) {
+  const review = data?.review && typeof data.review === 'object' ? data.review : null
+  const result = data?.result && typeof data.result === 'object' ? data.result : null
+
+  return {
+    attemptNumber: attemptNumberOf(data),
+    submittedAt: data?.submittedAt || '',
+    autoSubmitted: data?.autoSubmitted === true,
+    finishedLate: data?.finishedLate === true,
+    reopenMode: typeof data?.reopenMode === 'string' ? data.reopenMode : '',
+    result: result ? toPlain(result) : null,
+    reviewed: data?.reviewed === true,
+    reviewOverall: review?.overall ?? null,
+    task1Band: review?.task1Band ?? null,
+    task2Band: review?.task2Band ?? null,
+    writingMode: data?.writingMode || data?.contentType || '',
+    task1WordCount: Number.isFinite(Number(data?.task1WordCount)) ? Number(data.task1WordCount) : 0,
+    task2WordCount: Number.isFinite(Number(data?.task2WordCount)) ? Number(data.task2WordCount) : 0,
+    status: typeof data?.status === 'string' ? data.status : '',
+    contentType: config.contentType,
+    ...extra
+  }
+}
+
 exports.getManagedSubmissionAttemptState = onCall(async request => {
   const manager = await requireAssignmentManager(request)
   const data = request.data || {}
@@ -1319,6 +1343,92 @@ exports.getManagedSubmissionAttemptState = onCall(async request => {
     hasSubmission: Boolean(current),
     currentSubmissionId: current?.id || '',
     ...attemptControlClientState(controlSnap.exists ? (controlSnap.data() || {}) : null, current)
+  }
+})
+
+
+// Stage 16L closure: staff-facing immutable attempt history summaries. Historical
+// answer snapshots remain server-side; this reader exposes only score/review/status
+// metadata so prior attempts can be audited without leaking answer keys.
+exports.getManagedSubmissionAttemptHistory = onCall(async request => {
+  const manager = await requireAssignmentManager(request)
+  const data = request.data || {}
+  const config = submissionContentConfigFor(data.contentType)
+  const contentId = assertDocumentId(data.contentId, 'Content ID')
+  const studentId = assertDocumentId(data.studentId, 'Student ID')
+  const source = await getSource(config.sourceCollection, contentId)
+
+  if (!managerCanManageSource(manager, source)) {
+    throw new HttpsError('permission-denied', 'You cannot view attempt history for this content.')
+  }
+
+  const studentSnap = await db.doc(`users/${studentId}`).get()
+  if (!studentSnap.exists || schoolIdOf(studentSnap.data() || {}) !== schoolIdOf(source)) {
+    throw new HttpsError('not-found', 'The selected student was not found in this school.')
+  }
+
+  const [current, historySnap] = await Promise.all([
+    findCurrentSubmissionRecord(config, studentId, contentId),
+    db.collection(ATTEMPT_HISTORY_COLLECTION)
+      .where('studentId', '==', studentId)
+      .get()
+  ])
+
+  const sourceSchoolId = schoolIdOf(source)
+  const byAttemptNumber = new Map()
+
+  for (const docSnap of historySnap.docs) {
+    const history = docSnap.data() || {}
+    if (
+      history.contentType !== config.contentType ||
+      history.contentId !== contentId ||
+      history.sourceCollection !== config.sourceCollection ||
+      history.submissionCollection !== config.submissionCollection ||
+      schoolIdOf(history) !== sourceSchoolId
+    ) {
+      continue
+    }
+
+    const snapshot = history.submissionSnapshot && typeof history.submissionSnapshot === 'object'
+      ? history.submissionSnapshot
+      : {}
+    const attemptNumber = Number(history.attemptNumber) || attemptNumberOf(snapshot)
+
+    byAttemptNumber.set(attemptNumber, submissionAttemptSummary(config, snapshot, {
+      attemptNumber,
+      submissionId: history.sourceSubmissionId || '',
+      isCurrent: false,
+      archivedAt: toPlain(history.archivedAt || null),
+      archivedReason: history.archivedReason || '',
+      archivedByRole: history.archivedByRole || ''
+    }))
+  }
+
+  if (current) {
+    const attemptNumber = attemptNumberOf(current.data)
+    const historicalCopy = byAttemptNumber.get(attemptNumber)
+
+    byAttemptNumber.set(attemptNumber, submissionAttemptSummary(config, current.data, {
+      attemptNumber,
+      submissionId: current.id,
+      isCurrent: true,
+      archivedAt: historicalCopy?.archivedAt || null,
+      archivedReason: historicalCopy?.archivedReason || '',
+      archivedByRole: historicalCopy?.archivedByRole || ''
+    }))
+  }
+
+  const attempts = Array.from(byAttemptNumber.values())
+    .sort((a, b) => Number(b.attemptNumber) - Number(a.attemptNumber))
+
+  return {
+    ok: true,
+    contentType: config.contentType,
+    contentId,
+    studentId,
+    currentSubmissionId: current?.id || '',
+    currentAttemptNumber: current ? attemptNumberOf(current.data) : 0,
+    attempts
   }
 })
 
@@ -1508,6 +1618,7 @@ exports.getStudentSubmissionAttemptState = onCall(async request => {
       ok: true,
       contentType: config.contentType,
       contentId,
+      currentSubmissionId: current?.id || '',
       ...state,
       resume: {}
     }
@@ -1530,6 +1641,7 @@ exports.getStudentSubmissionAttemptState = onCall(async request => {
     ok: true,
     contentType: config.contentType,
     contentId,
+    currentSubmissionId: current?.id || '',
     ...state,
     resume: control.mode === 'reopen_answers'
       ? attemptResumePayload(config, current)
