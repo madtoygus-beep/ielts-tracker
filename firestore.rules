@@ -531,6 +531,17 @@ service cloud.firestore {
     }
 
     // ============================================================
+    // STAGE 17A: SCHOOLS / INSTITUTIONS
+    // ============================================================
+    // School metadata is managed only through admin-authorized Cloud Functions.
+    // Client reads/writes are intentionally blocked in this foundation stage so
+    // later license and status enforcement can stay server-authoritative.
+
+    match /schools/{schoolId} {
+      allow read, create, update, delete: if false;
+    }
+
+    // ============================================================
     // USERS
     // ============================================================
 

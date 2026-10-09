@@ -21,6 +21,13 @@ const {
 initializeApp()
 const db = getFirestore()
 
+// Stage 17A: school / institution foundation. Existing Maxima data keeps using
+// the historical `maxima` fallback. The schools collection is additive only in
+// this stage; school status is not yet used to block existing product flows.
+const SCHOOL_SCHEMA_VERSION = 1
+const DEFAULT_SCHOOL_ID = 'maxima'
+const SCHOOL_STATUSES = new Set(['active', 'inactive'])
+
 const OBJECTIVE_CONFIG = {
   reading: {
     contentType: 'reading',
@@ -117,7 +124,7 @@ function uniqueStrings(values) {
 }
 
 function schoolIdOf(data) {
-  return data?.schoolId || 'maxima'
+  return data?.schoolId || DEFAULT_SCHOOL_ID
 }
 
 function teacherIdsOf(data) {
@@ -371,6 +378,106 @@ async function requireAdmin(request) {
   }
   return manager
 }
+
+function normalizeSchoolId(value) {
+  const schoolId = assertDocumentId(value, 'School ID').toLowerCase()
+  if (!/^[a-z0-9][a-z0-9-]{1,62}$/.test(schoolId)) {
+    throw new HttpsError(
+      'invalid-argument',
+      'School ID must be 2-63 characters and use only lowercase letters, numbers and hyphens.'
+    )
+  }
+  return schoolId
+}
+
+function normalizeSchoolName(value) {
+  const name = safeString(value, 120).trim()
+  if (name.length < 2) {
+    throw new HttpsError('invalid-argument', 'School name must be at least 2 characters.')
+  }
+  return name
+}
+
+function normalizeSchoolStatus(value) {
+  const status = typeof value === 'string' ? value.trim().toLowerCase() : 'active'
+  if (!SCHOOL_STATUSES.has(status)) {
+    throw new HttpsError('invalid-argument', 'School status must be active or inactive.')
+  }
+  return status
+}
+
+function managedSchoolClientState(id, data) {
+  return {
+    id,
+    schoolId: id,
+    name: typeof data?.name === 'string' ? data.name : '',
+    status: normalizeSchoolStatus(data?.status || 'active'),
+    schemaVersion: Number(data?.schemaVersion) || SCHOOL_SCHEMA_VERSION,
+    createdAt: toPlain(data?.createdAt || null),
+    updatedAt: toPlain(data?.updatedAt || null)
+  }
+}
+
+// Stage 17A: school records are server-managed. No existing users, assignments,
+// submissions or content are migrated here. This callable is the future Admin UI
+// reader and deliberately returns only school metadata.
+exports.getManagedSchools = onCall(async request => {
+  await requireAdmin(request)
+
+  const snap = await db.collection('schools').get()
+  const schools = snap.docs
+    .map(docSnap => managedSchoolClientState(docSnap.id, docSnap.data() || {}))
+    .sort((a, b) => a.name.localeCompare(b.name) || a.schoolId.localeCompare(b.schoolId))
+
+  return {
+    ok: true,
+    schools,
+    defaultSchoolId: DEFAULT_SCHOOL_ID
+  }
+})
+
+// Stage 17A: create/update school metadata through an admin-only server boundary.
+// License seats, account creation and school-status enforcement belong to later
+// stages and are intentionally not mixed into this foundation.
+exports.saveManagedSchool = onCall(async request => {
+  const admin = await requireAdmin(request)
+  const data = request.data || {}
+  const schoolId = normalizeSchoolId(data.schoolId)
+  const name = normalizeSchoolName(data.name)
+  const status = normalizeSchoolStatus(data.status)
+  const schoolRef = db.doc(`schools/${schoolId}`)
+
+  const result = await db.runTransaction(async transaction => {
+    const schoolSnap = await transaction.get(schoolRef)
+    const existing = schoolSnap.exists ? (schoolSnap.data() || {}) : null
+
+    const payload = {
+      schoolId,
+      name,
+      status,
+      schemaVersion: SCHOOL_SCHEMA_VERSION,
+      createdAt: existing?.createdAt || FieldValue.serverTimestamp(),
+      createdBy: existing?.createdBy || admin.uid,
+      updatedAt: FieldValue.serverTimestamp(),
+      updatedBy: admin.uid
+    }
+
+    transaction.set(schoolRef, payload, { merge: true })
+
+    return { created: !schoolSnap.exists }
+  })
+
+  return {
+    ok: true,
+    created: result.created,
+    school: {
+      schoolId,
+      name,
+      status,
+      schemaVersion: SCHOOL_SCHEMA_VERSION
+    }
+  }
+})
 
 function assertStudentUidList(value) {
   if (!Array.isArray(value)) {
