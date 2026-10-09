@@ -224,6 +224,7 @@ export default function TeacherDashboard() {
   const [vocabularySubmissions, setVocabularySubmissions] = useState([])
   const [assignmentStudentIdsByContent, setAssignmentStudentIdsByContent] = useState({})
   const assignmentSnapshotRequestRef = useRef(0)
+  const assignmentRemovalQueueRef = useRef(new Map())
 
   const [teacherMessages, setTeacherMessages] = useState([])
   const [teacherMaterials, setTeacherMaterials] = useState([])
@@ -371,6 +372,24 @@ export default function TeacherDashboard() {
         'Assignment data could not be refreshed. Existing assignment information is being kept on screen.'
       )
     }
+  }
+
+  const queueAssignmentRemoval = (assignmentKey, task) => {
+    const previous = assignmentRemovalQueueRef.current.get(assignmentKey) || Promise.resolve()
+    const next = previous.catch(() => {}).then(task)
+
+    assignmentRemovalQueueRef.current.set(assignmentKey, next)
+
+    void next
+      .finally(() => {
+        if (assignmentRemovalQueueRef.current.get(assignmentKey) !== next) return
+
+        assignmentRemovalQueueRef.current.delete(assignmentKey)
+        void refreshCanonicalAssignmentSnapshot()
+      })
+      .catch(() => {})
+
+    return next
   }
 
   useEffect(() => {
@@ -2282,30 +2301,58 @@ export default function TeacherDashboard() {
 
     if (!confirmed) return
 
-    try {
-      const assignmentResult = await getContentStudentAccessCall({
-        contentType: type,
-        contentId: homework.id
-      })
+    const assignmentKey = assignmentAccessKey(type, homework.id)
+    const targetUid = normalizeAssignmentId(getStudentPrimaryAssignmentId(student))
 
-      const currentStudentIds = Array.isArray(assignmentResult.data?.studentIds)
-        ? assignmentResult.data.studentIds.filter(Boolean)
+    if (!targetUid) {
+      alert('Could not identify this student. Please refresh and try again.')
+      return
+    }
+
+    // Optimistic UI: remove the assignment locally immediately. The server
+    // mutation stays authoritative and the final canonical snapshot reconciles
+    // the UI after all queued removals for this homework have finished.
+    setAssignmentStudentIdsByContent(previous => {
+      const currentStudentIds = Array.isArray(previous[assignmentKey])
+        ? previous[assignmentKey]
         : []
 
-      const targetUid = normalizeAssignmentId(getStudentPrimaryAssignmentId(student))
-      const remainingStudentIds = currentStudentIds.filter(
-        uid => normalizeAssignmentId(uid) !== targetUid
-      )
+      return {
+        ...previous,
+        [assignmentKey]: currentStudentIds.filter(
+          uid => normalizeAssignmentId(uid) !== targetUid
+        )
+      }
+    })
 
-      await setContentStudentAccessCall({
-        contentType: type,
-        contentId: homework.id,
-        studentIds: remainingStudentIds
+    try {
+      await queueAssignmentRemoval(assignmentKey, async () => {
+        const assignmentResult = await getContentStudentAccessCall({
+          contentType: type,
+          contentId: homework.id
+        })
+
+        const currentStudentIds = Array.isArray(assignmentResult.data?.studentIds)
+          ? assignmentResult.data.studentIds.filter(Boolean)
+          : []
+
+        const remainingStudentIds = currentStudentIds.filter(
+          uid => normalizeAssignmentId(uid) !== targetUid
+        )
+
+        if (remainingStudentIds.length === currentStudentIds.length) return
+
+        await setContentStudentAccessCall({
+          contentType: type,
+          contentId: homework.id,
+          studentIds: remainingStudentIds
+        })
       })
-      await refreshCanonicalAssignmentSnapshot()
     } catch (error) {
       console.error('Could not remove homework from student:', error)
-      alert('Could not remove homework from this student. Please check permissions and try again.')
+      alert(
+        'Could not remove homework from this student. The assignment list will refresh to the saved server state.'
+      )
     }
   }
 
@@ -8006,12 +8053,14 @@ Continue permanent delete?`
                                         Retake Options
                                       </button>
 
-                                      <button
-                                        onClick={() => removeHomeworkFromStudent(reading, 'reading', student)}
-                                        className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
-                                      >
-                                        Remove
-                                      </button>
+                                      {isHomeworkAssignedToStudent(reading, student, 'reading') && (
+                                        <button
+                                          onClick={() => removeHomeworkFromStudent(reading, 'reading', student)}
+                                          className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
+                                        >
+                                          Remove
+                                        </button>
+                                      )}
                                     </div>
                                   ) : (
                                     <div className="flex items-center gap-2">
@@ -8116,12 +8165,14 @@ Continue permanent delete?`
                                         Retake Options
                                       </button>
 
-                                      <button
-                                        onClick={() => removeHomeworkFromStudent(listening, 'listening', student)}
-                                        className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
-                                      >
-                                        Remove
-                                      </button>
+                                      {isHomeworkAssignedToStudent(listening, student, 'listening') && (
+                                        <button
+                                          onClick={() => removeHomeworkFromStudent(listening, 'listening', student)}
+                                          className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
+                                        >
+                                          Remove
+                                        </button>
+                                      )}
                                     </div>
                                   ) : (
                                     <div className="flex items-center gap-2">
@@ -8239,12 +8290,14 @@ Continue permanent delete?`
                                         Completed
                                       </span>
 
-                                      <button
-                                        onClick={() => removeHomeworkFromStudent(vocabularyTest, 'vocabulary', student)}
-                                        className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
-                                      >
-                                        Remove
-                                      </button>
+                                      {isHomeworkAssignedToStudent(vocabularyTest, student, 'vocabulary') && (
+                                        <button
+                                          onClick={() => removeHomeworkFromStudent(vocabularyTest, 'vocabulary', student)}
+                                          className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
+                                        >
+                                          Remove
+                                        </button>
+                                      )}
                                     </div>
                                   ) : (
                                     <div className="flex items-center gap-2">
@@ -8378,12 +8431,14 @@ Continue permanent delete?`
                                         Retake Options
                                       </button>
 
-                                      <button
-                                        onClick={() => removeHomeworkFromStudent(writing, 'writing', student)}
-                                        className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
-                                      >
-                                        Remove
-                                      </button>
+                                      {isHomeworkAssignedToStudent(writing, student, 'writing') && (
+                                        <button
+                                          onClick={() => removeHomeworkFromStudent(writing, 'writing', student)}
+                                          className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
+                                        >
+                                          Remove
+                                        </button>
+                                      )}
                                     </div>
                                   ) : (
                                     <div className="flex items-center gap-2">
