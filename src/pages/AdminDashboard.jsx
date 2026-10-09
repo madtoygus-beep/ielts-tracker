@@ -33,6 +33,7 @@ import { useNavigate } from 'react-router-dom'
 
 
 const DEFAULT_SCHOOL_ID = 'maxima'
+const ALL_SCHOOLS_ID = 'all'
 
 
 
@@ -60,6 +61,8 @@ const saveManagedSchoolCall = httpsCallable(
 
 )
 
+const getManagedSchoolDeletionPreviewCall = httpsCallable(functions, 'getManagedSchoolDeletionPreview')
+
 const deleteManagedSchoolCall = httpsCallable(functions, 'deleteManagedSchool')
 
 const createManagedUserCall = httpsCallable(functions, 'createManagedUser')
@@ -71,6 +74,12 @@ const rejectManagedUserCall = httpsCallable(functions, 'rejectManagedUser')
 const updateManagedUserCall = httpsCallable(functions, 'updateManagedUser')
 
 const deleteManagedUserCall = httpsCallable(functions, 'deleteManagedUser')
+
+const restoreManagedUserCall = httpsCallable(functions, 'restoreManagedUser')
+
+const getManagedUserDeletionPreviewCall = httpsCallable(functions, 'getManagedUserDeletionPreview')
+
+const permanentlyDeleteManagedUserCall = httpsCallable(functions, 'permanentlyDeleteManagedUser')
 
 
 
@@ -96,9 +105,17 @@ export default function AdminDashboard() {
 
   const [selectedStudent, setSelectedStudent] = useState(null)
 
+  const [permanentDeleteBusyId, setPermanentDeleteBusyId] = useState('')
+
+  const [restoreBusyId, setRestoreBusyId] = useState('')
+
+  const [accountListView, setAccountListView] = useState('active')
+
   const [authChecking, setAuthChecking] = useState(true)
 
   const [schools, setSchools] = useState([])
+
+  const [selectedSchoolId, setSelectedSchoolId] = useState(DEFAULT_SCHOOL_ID)
 
   const [schoolsLoading, setSchoolsLoading] = useState(true)
 
@@ -146,7 +163,7 @@ export default function AdminDashboard() {
 
 
 
-  const loadSchools = async () => {
+  const loadSchools = async (preferredSchoolId = null) => {
 
     setSchoolsLoading(true)
 
@@ -164,24 +181,37 @@ export default function AdminDashboard() {
 
       setSchools(managedSchools)
 
+      const requestedSchoolId = preferredSchoolId || selectedSchoolId
+      const requestedExists = requestedSchoolId === ALL_SCHOOLS_ID || managedSchools.some(
+        school => school.schoolId === requestedSchoolId
+      )
+      const fallbackSchoolId = managedSchools.some(school => school.schoolId === DEFAULT_SCHOOL_ID)
+        ? DEFAULT_SCHOOL_ID
+        : managedSchools[0]?.schoolId || ALL_SCHOOLS_ID
+      const nextSelectedSchoolId = requestedExists ? requestedSchoolId : fallbackSchoolId
+
+      if (nextSelectedSchoolId !== selectedSchoolId) {
+        setSelectedSchoolId(nextSelectedSchoolId)
+      }
+
       setAccountForm(previous => {
-
-        const selectedIsActive = managedSchools.some(
-
-          school => school.schoolId === previous.schoolId && school.status === 'active'
-
-        )
-
-        if (selectedIsActive) return previous
-
-        return {
-
-          ...previous,
-
-          schoolId: ''
-
+        if (nextSelectedSchoolId !== ALL_SCHOOLS_ID) {
+          return {
+            ...previous,
+            schoolId: nextSelectedSchoolId
+          }
         }
 
+        const selectedIsActive = managedSchools.some(
+          school => school.schoolId === previous.schoolId && school.status === 'active'
+        )
+
+        return selectedIsActive
+          ? previous
+          : {
+              ...previous,
+              schoolId: ''
+            }
       })
 
     } catch (error) {
@@ -197,7 +227,6 @@ export default function AdminDashboard() {
     }
 
   }
-
 
 
   useEffect(() => {
@@ -304,7 +333,6 @@ export default function AdminDashboard() {
 
             .map(d => ({ id: d.id, ...d.data() }))
 
-            .filter(u => !u.deleted && u.status !== 'deleted')
 
 
 
@@ -630,6 +658,24 @@ export default function AdminDashboard() {
 
 
 
+  const handleSchoolScopeChange = schoolId => {
+
+    setSelectedSchoolId(schoolId)
+    setSearch('')
+    setSelectedStudent(null)
+    setPendingSchoolSelections({})
+    setAccountError('')
+    setAccountNotice('')
+
+    setAccountForm(previous => ({
+      ...previous,
+      schoolId: schoolId === ALL_SCHOOLS_ID ? '' : schoolId
+    }))
+
+  }
+
+
+
   const handleDeleteSchool = async school => {
 
     if (school.schoolId === DEFAULT_SCHOOL_ID) {
@@ -648,47 +694,79 @@ export default function AdminDashboard() {
 
     }
 
-    const ok = window.confirm(
-
-      `Permanently delete ${school.name}?\n\nThis cannot be undone. The server will refuse deletion if any users, classes, content, submissions or history still reference this school.`
-
-    )
-
-    if (!ok) return
-
-
-
     setSchoolSaving(true)
-
     setSchoolsError('')
-
     setSchoolNotice('')
-
-
 
     try {
 
-      await deleteManagedSchoolCall({ schoolId: school.schoolId })
+      const previewResult = await getManagedSchoolDeletionPreviewCall({
+        schoolId: school.schoolId
+      })
+      const preview = previewResult.data || {}
+      const userSummary = preview.users || {}
+      const totalUsers = Number(userSummary.total) || 0
+      const studentCount = Number(userSummary.students) || 0
+      const teacherCount = Number(userSummary.teachers) || 0
+      const deletedUserCount = Number(userSummary.deleted) || 0
+      const totalFirestoreRecords = Number(preview.totalFirestoreRecords) || 0
+      const storageObjectsReferenced = Number(preview.storageObjectsReferenced) || 0
 
+      const ok = window.confirm(
+        `DELETE ${school.name} AND ALL OF ITS DATA?
 
+` +
+        `This will permanently delete:
+` +
+        `• ${totalUsers} user profile(s) (${studentCount} student(s), ${teacherCount} teacher(s), ${deletedUserCount} already removed account(s))
+` +
+        `• ${totalFirestoreRecords} Firestore record(s) tied to this school
+` +
+        `• ${storageObjectsReferenced} directly referenced Storage object(s), plus user-owned school files
+` +
+        `• Firebase Auth accounts for this school's managed users
 
-      if (editingSchoolId === school.schoolId) {
+` +
+        `This cannot be undone.`
+      )
 
-        resetSchoolForm()
+      if (!ok) return
 
+      const typedSchoolId = window.prompt(
+        `Final confirmation: type the school ID "${school.schoolId}" to permanently delete this institution and all of its data.`
+      )
+
+      if ((typedSchoolId || '').trim().toLowerCase() !== school.schoolId) {
+        setSchoolsError('Permanent deletion cancelled because the school ID confirmation did not match.')
+        return
       }
 
+      const result = await deleteManagedSchoolCall({
+        schoolId: school.schoolId,
+        confirmCascadeDelete: true,
+        confirmSchoolId: school.schoolId
+      })
 
+      if (editingSchoolId === school.schoolId) {
+        resetSchoolForm()
+      }
 
-      await loadSchools()
+      setPendingSchoolSelections({})
+      setSelectedStudent(null)
+      setSearch('')
+      setSelectedSchoolId(DEFAULT_SCHOOL_ID)
+      await loadSchools(DEFAULT_SCHOOL_ID)
 
-      setSchoolNotice(`${school.name} was permanently deleted.`)
+      const deletedUsers = Number(result.data?.deletedUsers) || totalUsers
+      setSchoolNotice(
+        `${school.name} and its institution data were permanently deleted. Removed ${deletedUsers} user profile(s).`
+      )
 
     } catch (error) {
 
       console.error(error)
 
-      setSchoolsError(error?.message || 'Could not permanently delete this school.')
+      setSchoolsError(error?.message || 'Could not permanently delete this school and its data.')
 
     } finally {
 
@@ -699,10 +777,13 @@ export default function AdminDashboard() {
   }
 
 
-
   const schoolMembers = schoolId =>
 
-    users.filter(user => (user.schoolId || DEFAULT_SCHOOL_ID) === schoolId)
+    users.filter(user =>
+      (user.schoolId || DEFAULT_SCHOOL_ID) === schoolId &&
+      user.deleted !== true &&
+      user.status !== 'deleted'
+    )
 
 
 
@@ -832,7 +913,7 @@ export default function AdminDashboard() {
 
         email: '',
 
-        schoolId: '',
+        schoolId: selectedSchoolId === ALL_SCHOOLS_ID ? '' : selectedSchoolId,
 
         targetBand: ''
 
@@ -856,7 +937,9 @@ export default function AdminDashboard() {
 
   const approveUser = async (userId, roleType) => {
 
-    const schoolId = pendingSchoolSelections[userId] || ''
+    const schoolId = pendingSchoolSelections[userId] || (
+      selectedSchoolId === ALL_SCHOOLS_ID ? '' : selectedSchoolId
+    )
 
 
 
@@ -922,7 +1005,7 @@ export default function AdminDashboard() {
 
   const handleDelete = async (id) => {
 
-    if (!window.confirm('Remove this account and disable Firebase Auth login? Existing history will be preserved.')) return
+    if (!window.confirm('Archive this account and disable Firebase Auth login? Existing history will be preserved.')) return
 
 
 
@@ -934,8 +1017,100 @@ export default function AdminDashboard() {
 
       console.error(error)
 
-      alert(error?.message || 'Could not remove this account.')
+      alert(error?.message || 'Could not archive this account.')
 
+    }
+
+  }
+
+
+
+  const handleRestoreManagedUser = async user => {
+    if (!user?.id || restoreBusyId) return
+
+    const role = (user.role || user.requestedRole || '').toLowerCase()
+    if (!['student', 'teacher'].includes(role)) {
+      alert('This archived account has no restorable student or teacher role. It can only be permanently deleted.')
+      return
+    }
+
+    if (!window.confirm(`Restore ${user.name || user.email || 'this account'} and re-enable Firebase Auth login?`)) return
+
+    setRestoreBusyId(user.id)
+    try {
+      await restoreManagedUserCall({ userId: user.id })
+      alert(`${user.name || user.email || 'Account'} was restored.`)
+    } catch (error) {
+      console.error(error)
+      alert(error?.message || 'Could not restore this account.')
+    } finally {
+      setRestoreBusyId('')
+    }
+  }
+
+
+  const handlePermanentDeleteUser = async user => {
+
+    if (!user?.id) return
+    if (permanentDeleteBusyId) return
+
+    setPermanentDeleteBusyId(user.id)
+
+    try {
+      const previewResult = await getManagedUserDeletionPreviewCall({ userId: user.id })
+      const preview = previewResult.data || {}
+      const previewRole = preview.user?.role || user.role || user.requestedRole || 'account'
+      const linkedFirestoreRecords = Number(preview.linkedFirestoreRecords) || 0
+      const legacyReferenceDocuments = Number(preview.legacyReferenceDocuments) || 0
+      const teacherReferenceDocuments = Number(preview.teacherReferenceDocuments) || 0
+      const storageObjects = Number(preview.storageObjects) || 0
+      const totalFirestoreDocuments = Number(preview.totalFirestoreDocumentsToDelete) || (linkedFirestoreRecords + 1)
+      const preservesHistory = preview.preservesHistoricalAcademicRecords === true
+      const preservesSharedContent = preview.preservesSharedSchoolContent === true
+
+      const preservedLines = [
+        preservesSharedContent ? '• Shared school content will be preserved.' : '',
+        preservesHistory ? '• Historical academic records will be preserved.' : ''
+      ].filter(Boolean).join('\n')
+
+      const ok = window.confirm(
+        `PERMANENTLY DELETE ${user.name || user.email || 'THIS ACCOUNT'}?\n\n` +
+        `Role: ${previewRole}\n\n` +
+        `This will permanently remove:\n` +
+        `• Firebase Auth account\n` +
+        `• ${totalFirestoreDocuments} Firestore document(s), including the user profile\n` +
+        `• ${legacyReferenceDocuments} student reference document(s)\n` +
+        `• ${teacherReferenceDocuments} teacher ownership/reference document(s)\n` +
+        `• ${storageObjects} user-owned Storage object(s)\n` +
+        (preservedLines ? `\n${preservedLines}\n` : '\n') +
+        `\nThis cannot be undone.`
+      )
+
+      if (!ok) return
+
+      const expectedEmail = (preview.user?.email || user.email || '').trim().toLowerCase()
+      const typedEmail = window.prompt(
+        `Final confirmation: type the account email "${expectedEmail}" to permanently delete this account.`
+      )
+
+      if ((typedEmail || '').trim().toLowerCase() !== expectedEmail) {
+        alert('Permanent deletion cancelled because the email confirmation did not match.')
+        return
+      }
+
+      await permanentlyDeleteManagedUserCall({
+        userId: user.id,
+        confirmPermanentDelete: true,
+        confirmEmail: expectedEmail
+      })
+
+      if (selectedStudent === user.id) setSelectedStudent(null)
+      alert(`${user.name || user.email || 'Account'} was permanently deleted.`)
+    } catch (error) {
+      console.error(error)
+      alert(error?.message || 'Could not permanently delete this account.')
+    } finally {
+      setPermanentDeleteBusyId('')
     }
 
   }
@@ -1702,11 +1877,37 @@ export default function AdminDashboard() {
 
 
 
-  const filtered = users.filter(u =>
+  const selectedSchool = selectedSchoolId === ALL_SCHOOLS_ID
+    ? null
+    : schools.find(school => school.schoolId === selectedSchoolId) || null
 
-    u.name?.toLowerCase().includes(search.toLowerCase()) ||
+  const schoolScopedUsers = selectedSchoolId === ALL_SCHOOLS_ID
+    ? users
+    : users.filter(user => (user.schoolId || DEFAULT_SCHOOL_ID) === selectedSchoolId)
 
-    u.email?.toLowerCase().includes(search.toLowerCase())
+  const activeSchoolScopedUsers = schoolScopedUsers.filter(
+    user => user.deleted !== true && user.status !== 'deleted'
+  )
+
+  const archivedSchoolScopedUsers = schoolScopedUsers.filter(
+    user => user.deleted === true || user.status === 'deleted'
+  )
+
+  const searchTerm = search.toLowerCase()
+
+  const filtered = activeSchoolScopedUsers.filter(u =>
+
+    u.name?.toLowerCase().includes(searchTerm) ||
+
+    u.email?.toLowerCase().includes(searchTerm)
+
+  )
+
+  const archivedUsers = archivedSchoolScopedUsers.filter(u =>
+
+    u.name?.toLowerCase().includes(searchTerm) ||
+
+    u.email?.toLowerCase().includes(searchTerm)
 
   )
 
@@ -1732,6 +1933,32 @@ export default function AdminDashboard() {
 
   )
 
+  const scopedPendingCount = activeSchoolScopedUsers.filter(u => u.status === 'pending').length
+  const scopedStudentCount = activeSchoolScopedUsers.filter(
+    u => u.role === 'student' && (u.status === 'approved' || !u.status)
+  ).length
+  const scopedTeacherCount = activeSchoolScopedUsers.filter(
+    u => u.role === 'teacher' && (u.status === 'approved' || !u.status)
+  ).length
+
+  const selectedSchoolIsActive = selectedSchoolId === ALL_SCHOOLS_ID
+    ? true
+    : selectedSchool?.status === 'active'
+
+  const selectedSchoolLabel = selectedSchoolId === ALL_SCHOOLS_ID
+    ? 'All Schools'
+    : selectedSchool?.name || selectedSchoolId
+
+  const approvalSchoolIdFor = userId => pendingSchoolSelections[userId] || (
+    selectedSchoolId === ALL_SCHOOLS_ID ? '' : selectedSchoolId
+  )
+
+  const approvalSchoolIsActive = userId => {
+    const schoolId = approvalSchoolIdFor(userId)
+    return Boolean(schoolId) && schools.some(
+      school => school.schoolId === schoolId && school.status === 'active'
+    )
+  }
 
 
   if (authChecking) {
@@ -1796,6 +2023,44 @@ export default function AdminDashboard() {
 
           </button>
 
+        </div>
+
+        <div className="bg-white border border-purple-100 rounded-2xl p-5 mb-8">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="font-semibold text-gray-800">School view</h2>
+                <span className="text-xs bg-purple-50 text-purple-600 px-2 py-1 rounded-full">Stage 18.1</span>
+              </div>
+              <p className="text-xs text-gray-400 mt-1">
+                Student, teacher, approval and summary lists below are limited to the selected school. Choose All Schools only when you intentionally want a platform-wide view.
+              </p>
+            </div>
+
+            <div className="w-full md:w-72">
+              <label className="text-xs text-gray-400 mb-1 block">Viewing</label>
+              <select
+                value={selectedSchoolId}
+                onChange={e => handleSchoolScopeChange(e.target.value)}
+                disabled={schoolsLoading}
+                className="w-full border border-purple-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 bg-white"
+              >
+                {schools.map(school => (
+                  <option key={school.schoolId} value={school.schoolId}>
+                    {school.name}{school.status !== 'active' ? ' (Inactive)' : ''}
+                  </option>
+                ))}
+                <option value={ALL_SCHOOLS_ID}>All Schools</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="mt-3 text-xs text-gray-500">
+            Current view: <span className="font-semibold text-purple-700">{selectedSchoolLabel}</span>
+            {selectedSchoolId !== ALL_SCHOOLS_ID && selectedSchool?.status !== 'active' && (
+              <span className="ml-2 text-amber-600">This school is inactive. Account creation and approvals are disabled.</span>
+            )}
+          </div>
         </div>
 
 
@@ -2058,6 +2323,18 @@ export default function AdminDashboard() {
 
                     <button
 
+                      onClick={() => handleSchoolScopeChange(school.schoolId)}
+
+                      className={`text-xs px-3 py-1.5 rounded-lg ${selectedSchoolId === school.schoolId ? 'bg-purple-600 text-white' : 'bg-purple-50 hover:bg-purple-100 text-purple-700'}`}
+
+                    >
+
+                      {selectedSchoolId === school.schoolId ? 'Viewing' : 'View'}
+
+                    </button>
+
+                    <button
+
                       onClick={() => handleEditSchool(school)}
 
                       className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-1.5 rounded-lg"
@@ -2094,7 +2371,7 @@ export default function AdminDashboard() {
 
                       >
 
-                        Delete
+                        Delete All Data
 
                       </button>
 
@@ -2196,7 +2473,9 @@ export default function AdminDashboard() {
 
               onChange={e => setAccountForm(previous => ({ ...previous, schoolId: e.target.value }))}
 
-              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 bg-white"
+              disabled={selectedSchoolId !== ALL_SCHOOLS_ID}
+
+              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 bg-white disabled:bg-gray-100 disabled:text-gray-500"
 
             >
 
@@ -2288,7 +2567,12 @@ export default function AdminDashboard() {
 
             onClick={handleCreateManagedUser}
 
-            disabled={accountCreating || schoolsLoading || !schools.some(school => school.status === 'active')}
+            disabled={
+              accountCreating ||
+              schoolsLoading ||
+              !accountForm.schoolId ||
+              !schools.some(school => school.schoolId === accountForm.schoolId && school.status === 'active')
+            }
 
             className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white px-5 py-2.5 rounded-xl text-sm font-medium"
 
@@ -2308,15 +2592,15 @@ export default function AdminDashboard() {
 
           <div className="bg-white border border-gray-100 rounded-2xl p-5 text-center">
 
-            <p className="text-3xl font-bold text-gray-900">{users.length}</p>
+            <p className="text-3xl font-bold text-gray-900">{activeSchoolScopedUsers.length}</p>
 
-            <p className="text-sm text-gray-400 mt-1">Total users</p>
+            <p className="text-sm text-gray-400 mt-1">Active users</p>
 
           </div>
 
           <div className="bg-white border border-gray-100 rounded-2xl p-5 text-center">
 
-            <p className="text-3xl font-bold text-orange-500">{pendingUsers.length}</p>
+            <p className="text-3xl font-bold text-orange-500">{scopedPendingCount}</p>
 
             <p className="text-sm text-gray-400 mt-1">Pending</p>
 
@@ -2324,7 +2608,7 @@ export default function AdminDashboard() {
 
           <div className="bg-white border border-gray-100 rounded-2xl p-5 text-center">
 
-            <p className="text-3xl font-bold text-purple-600">{students.length}</p>
+            <p className="text-3xl font-bold text-purple-600">{scopedStudentCount}</p>
 
             <p className="text-sm text-gray-400 mt-1">Students</p>
 
@@ -2332,7 +2616,7 @@ export default function AdminDashboard() {
 
           <div className="bg-white border border-gray-100 rounded-2xl p-5 text-center">
 
-            <p className="text-3xl font-bold text-green-600">{teachers.length}</p>
+            <p className="text-3xl font-bold text-green-600">{scopedTeacherCount}</p>
 
             <p className="text-sm text-gray-400 mt-1">Teachers</p>
 
@@ -2348,7 +2632,7 @@ export default function AdminDashboard() {
 
             type="text"
 
-            placeholder="Search by name or email..."
+            placeholder={`Search ${selectedSchoolLabel} by name or email...`}
 
             className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400"
 
@@ -2362,7 +2646,23 @@ export default function AdminDashboard() {
 
 
 
-        <div className="mb-8">
+        <div className="mb-6 flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => setAccountListView('active')}
+            className={`px-4 py-2 rounded-xl text-sm font-medium border ${accountListView === 'active' ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}
+          >
+            Active Accounts ({activeSchoolScopedUsers.length})
+          </button>
+          <button
+            onClick={() => { setAccountListView('archived'); setSelectedStudent(null) }}
+            className={`px-4 py-2 rounded-xl text-sm font-medium border ${accountListView === 'archived' ? 'bg-gray-800 text-white border-gray-800' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}
+          >
+            Archived Accounts ({archivedSchoolScopedUsers.length})
+          </button>
+          <p className="text-xs text-gray-400 ml-1">Archived accounts are hidden from the default view.</p>
+        </div>
+
+        <div className={accountListView === 'active' ? 'mb-8' : 'hidden'}>
 
           <h2 className="font-semibold text-orange-600 mb-3">Pending Approvals ({pendingUsers.length})</h2>
 
@@ -2402,11 +2702,13 @@ export default function AdminDashboard() {
 
                   <select
 
-                    value={pendingSchoolSelections[u.id] || ''}
+                    value={approvalSchoolIdFor(u.id)}
 
                     onChange={e => setPendingSchoolSelections(previous => ({ ...previous, [u.id]: e.target.value }))}
 
-                    className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white"
+                    disabled={selectedSchoolId !== ALL_SCHOOLS_ID}
+
+                    className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white disabled:bg-gray-100 disabled:text-gray-500"
 
                   >
 
@@ -2424,9 +2726,9 @@ export default function AdminDashboard() {
 
                   </select>
 
-                  <button onClick={() => approveUser(u.id, 'student')} className="text-xs bg-purple-100 hover:bg-purple-200 text-purple-700 px-3 py-1.5 rounded-lg">Approve Student</button>
+                  <button disabled={!approvalSchoolIsActive(u.id)} onClick={() => approveUser(u.id, 'student')} className="text-xs bg-purple-100 hover:bg-purple-200 disabled:bg-gray-100 disabled:text-gray-400 text-purple-700 px-3 py-1.5 rounded-lg">Approve Student</button>
 
-                  <button onClick={() => approveUser(u.id, 'teacher')} className="text-xs bg-green-100 hover:bg-green-200 text-green-700 px-3 py-1.5 rounded-lg">Approve Teacher</button>
+                  <button disabled={!approvalSchoolIsActive(u.id)} onClick={() => approveUser(u.id, 'teacher')} className="text-xs bg-green-100 hover:bg-green-200 disabled:bg-gray-100 disabled:text-gray-400 text-green-700 px-3 py-1.5 rounded-lg">Approve Teacher</button>
 
                   <button onClick={() => rejectUser(u.id)} className="text-xs bg-red-50 hover:bg-red-100 text-red-500 px-3 py-1.5 rounded-lg">Reject</button>
 
@@ -2442,7 +2744,7 @@ export default function AdminDashboard() {
 
 
 
-        {rejectedUsers.length > 0 && (
+        {accountListView === 'active' && rejectedUsers.length > 0 && (
 
           <div className="mb-8">
 
@@ -2478,11 +2780,13 @@ export default function AdminDashboard() {
 
                     <select
 
-                      value={pendingSchoolSelections[u.id] || ''}
+                      value={approvalSchoolIdFor(u.id)}
 
                       onChange={e => setPendingSchoolSelections(previous => ({ ...previous, [u.id]: e.target.value }))}
 
-                      className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white"
+                      disabled={selectedSchoolId !== ALL_SCHOOLS_ID}
+
+                      className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white disabled:bg-gray-100 disabled:text-gray-500"
 
                     >
 
@@ -2500,11 +2804,11 @@ export default function AdminDashboard() {
 
                     </select>
 
-                    <button onClick={() => approveUser(u.id, 'student')} className="text-xs bg-purple-100 hover:bg-purple-200 text-purple-700 px-3 py-1.5 rounded-lg">Approve Student</button>
+                    <button disabled={!approvalSchoolIsActive(u.id)} onClick={() => approveUser(u.id, 'student')} className="text-xs bg-purple-100 hover:bg-purple-200 disabled:bg-gray-100 disabled:text-gray-400 text-purple-700 px-3 py-1.5 rounded-lg">Approve Student</button>
 
-                    <button onClick={() => approveUser(u.id, 'teacher')} className="text-xs bg-green-100 hover:bg-green-200 text-green-700 px-3 py-1.5 rounded-lg">Approve Teacher</button>
+                    <button disabled={!approvalSchoolIsActive(u.id)} onClick={() => approveUser(u.id, 'teacher')} className="text-xs bg-green-100 hover:bg-green-200 disabled:bg-gray-100 disabled:text-gray-400 text-green-700 px-3 py-1.5 rounded-lg">Approve Teacher</button>
 
-                    <button onClick={() => handleDelete(u.id)} className="text-xs bg-red-50 hover:bg-red-100 text-red-500 px-3 py-1.5 rounded-lg">Delete</button>
+                    <button onClick={() => handleDelete(u.id)} className="text-xs bg-amber-50 hover:bg-amber-100 text-amber-700 px-3 py-1.5 rounded-lg">Archive</button>
 
                   </div>
 
@@ -2520,7 +2824,87 @@ export default function AdminDashboard() {
 
 
 
-        <div className="mb-8">
+        {accountListView === 'archived' && archivedUsers.length > 0 && (
+
+          <div className="mb-8">
+
+            <h2 className="font-semibold text-gray-600 mb-3">Archived Accounts ({archivedUsers.length})</h2>
+
+            <div className="bg-white border border-gray-100 rounded-2xl overflow-hidden">
+
+              {archivedUsers.map(u => (
+
+                <div key={u.id} className="flex items-center justify-between gap-4 px-5 py-4 border-b border-gray-50 last:border-0">
+
+                  <div className="min-w-0">
+
+                    <div className="flex items-center gap-2 flex-wrap">
+
+                      <p className="text-sm font-medium text-gray-700">{u.name || 'Unnamed account'}</p>
+
+                      <span className="text-[11px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">Archived</span>
+
+                      <span className="text-[11px] px-2 py-0.5 rounded-full bg-blue-50 text-blue-600">{u.role || u.requestedRole || 'account'}</span>
+
+                    </div>
+
+                    <p className="text-xs text-gray-400 truncate">{u.email}</p>
+
+                    <p className="text-[11px] text-gray-400 mt-0.5">School: {schoolLabel(u.schoolId)}</p>
+
+                  </div>
+
+                  <div className="flex items-center gap-2 flex-wrap justify-end">
+
+                    {['student', 'teacher'].includes((u.role || u.requestedRole || '').toLowerCase()) ? (
+                      <button
+                        disabled={restoreBusyId === u.id || permanentDeleteBusyId === u.id}
+                        onClick={() => handleRestoreManagedUser(u)}
+                        className="text-xs bg-green-100 hover:bg-green-200 disabled:bg-gray-100 disabled:text-gray-400 text-green-700 px-3 py-1.5 rounded-lg"
+                      >
+                        {restoreBusyId === u.id ? 'Restoring...' : 'Restore Account'}
+                      </button>
+                    ) : (
+                      <span className="text-xs text-gray-400">Restore unavailable: role unknown</span>
+                    )}
+
+                    {(u.role || u.requestedRole) === 'admin' ? (
+
+                      <span className="text-xs text-gray-400">Admin accounts cannot be permanently deleted here</span>
+
+                    ) : (
+
+                      <button
+                        disabled={permanentDeleteBusyId === u.id}
+                        onClick={() => handlePermanentDeleteUser(u)}
+                        className="text-xs bg-red-100 hover:bg-red-200 disabled:bg-gray-100 disabled:text-gray-400 text-red-700 px-3 py-1.5 rounded-lg"
+                      >
+                        {permanentDeleteBusyId === u.id ? 'Deleting...' : 'Delete Permanently'}
+                      </button>
+
+                    )}
+
+                  </div>
+
+                </div>
+
+              ))}
+
+            </div>
+
+          </div>
+
+        )}
+
+
+
+        {accountListView === 'archived' && archivedUsers.length === 0 && (
+          <div className="mb-8 bg-white border border-gray-100 rounded-2xl p-8 text-center text-gray-400 text-sm">
+            No archived accounts found.
+          </div>
+        )}
+
+        <div className={accountListView === 'active' ? 'mb-8' : 'hidden'}>
 
           <h2 className="font-semibold text-gray-700 mb-3">Teachers ({teachers.length})</h2>
 
@@ -2570,7 +2954,7 @@ export default function AdminDashboard() {
 
                   <button onClick={() => handleSendPasswordReset(u)} className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-600 px-3 py-1.5 rounded-lg">Reset Password</button>
 
-                  <button onClick={() => handleDelete(u.id)} className="text-xs bg-red-50 hover:bg-red-100 text-red-500 px-3 py-1.5 rounded-lg">Delete</button>
+                  <button onClick={() => handleDelete(u.id)} className="text-xs bg-amber-50 hover:bg-amber-100 text-amber-700 px-3 py-1.5 rounded-lg">Archive</button>
 
                 </div>
 
@@ -2584,7 +2968,7 @@ export default function AdminDashboard() {
 
 
 
-        <div>
+        <div className={accountListView === 'active' ? '' : 'hidden'}>
 
           <h2 className="font-semibold text-gray-700 mb-3">Students ({students.length})</h2>
 
@@ -2660,7 +3044,15 @@ export default function AdminDashboard() {
 
 
 
-                    <button onClick={e => { e.stopPropagation(); handleDelete(u.id) }} className="text-xs bg-red-100 hover:bg-red-200 text-red-700 px-3 py-1.5 rounded-lg">Delete User</button>
+                    <button onClick={e => { e.stopPropagation(); handleDelete(u.id) }} className="text-xs bg-amber-100 hover:bg-amber-200 text-amber-800 px-3 py-1.5 rounded-lg">Archive User</button>
+
+                    <button
+                      disabled={permanentDeleteBusyId === u.id}
+                      onClick={e => { e.stopPropagation(); handlePermanentDeleteUser(u) }}
+                      className="text-xs bg-red-100 hover:bg-red-200 disabled:bg-gray-100 disabled:text-gray-400 text-red-700 px-3 py-1.5 rounded-lg"
+                    >
+                      {permanentDeleteBusyId === u.id ? 'Deleting...' : 'Delete Permanently'}
+                    </button>
 
                     <div className="text-gray-300">{selectedStudent === u.id ? '▲' : '▼'}</div>
 

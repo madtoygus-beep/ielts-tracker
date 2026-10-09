@@ -6,6 +6,7 @@ const { onDocumentWritten } = require('firebase-functions/v2/firestore')
 const { initializeApp } = require('firebase-admin/app')
 const { getAuth } = require('firebase-admin/auth')
 const { getFirestore, FieldValue } = require('firebase-admin/firestore')
+const { getStorage } = require('firebase-admin/storage')
 
 const {
   sanitizeReading,
@@ -31,11 +32,12 @@ const SCHOOL_SCHEMA_VERSION = 1
 const DEFAULT_SCHOOL_ID = 'maxima'
 const SCHOOL_STATUSES = new Set(['active', 'inactive'])
 
-// A school may be permanently removed only after it is inactive and no
-// school-bound records remain. This keeps user/content/history references from
-// becoming orphaned when an institution is deleted from the platform.
-const SCHOOL_REFERENCE_COLLECTIONS = [
-  'users',
+// Stage 18.1: permanent school deletion is an explicit cascade. The school must
+// first be inactive. The platform default school is never eligible. Every known
+// school-bound Firestore collection is removed, managed Firebase Auth accounts
+// are deleted, user-scoped mock resource access is cleaned, and known Storage
+// objects are removed. Deactivate remains the non-destructive alternative.
+const SCHOOL_CASCADE_COLLECTIONS = [
   'classes',
   'readings',
   'listenings',
@@ -43,15 +45,42 @@ const SCHOOL_REFERENCE_COLLECTIONS = [
   'writingHomeworks',
   'mockTests',
   'studentAccess',
+  'studentReadings',
+  'studentListenings',
+  'studentVocabularyTests',
   'readingSubmissions',
   'listeningSubmissions',
   'vocabularySubmissions',
   'writingSubmissions',
   'mockSubmissions',
+  'vocabularyDrafts',
   'scores',
   'submissionAttemptControls',
-  'submissionAttemptHistory'
+  'submissionAttemptHistory',
+  'messages',
+  'materials'
 ]
+
+const SCHOOL_STORAGE_PATH_COLLECTIONS = [
+  'listenings',
+  'materials'
+]
+
+const USER_STORAGE_PREFIXES = [
+  'materials',
+  'listening-audios',
+  'listening-map-images'
+]
+
+const MOCK_RESOURCE_ACCESS_SUBCOLLECTIONS = [
+  'readings',
+  'listenings',
+  'vocabularyTests',
+  'writingHomeworks',
+  'mockTests'
+]
+
+const STORAGE_BUCKET_NAME = 'maxima-tracker.firebasestorage.app'
 
 const OBJECTIVE_CONFIG = {
   reading: {
@@ -463,6 +492,7 @@ function managedSchoolClientState(id, data) {
     name: typeof data?.name === 'string' ? data.name : '',
     status: normalizeSchoolStatus(data?.status || 'active'),
     schemaVersion: Number(data?.schemaVersion) || SCHOOL_SCHEMA_VERSION,
+    deleteInProgress: data?.deleteInProgress === true,
     createdAt: toPlain(data?.createdAt || null),
     updatedAt: toPlain(data?.updatedAt || null)
   }
@@ -500,6 +530,13 @@ exports.saveManagedSchool = onCall(async request => {
     const schoolSnap = await transaction.get(schoolRef)
     const existing = schoolSnap.exists ? (schoolSnap.data() || {}) : null
 
+    if (existing?.deleteInProgress === true) {
+      throw new HttpsError(
+        'failed-precondition',
+        'This school is being permanently deleted and can no longer be edited or reactivated.'
+      )
+    }
+
     const payload = {
       schoolId,
       name,
@@ -529,9 +566,9 @@ exports.saveManagedSchool = onCall(async request => {
 })
 
 
-async function getSchoolReferenceCounts(schoolId) {
+async function getSchoolCascadeCounts(schoolId) {
   const entries = await Promise.all(
-    SCHOOL_REFERENCE_COLLECTIONS.map(async collectionName => {
+    SCHOOL_CASCADE_COLLECTIONS.map(async collectionName => {
       const aggregate = await db.collection(collectionName)
         .where('schoolId', '==', schoolId)
         .count()
@@ -540,14 +577,229 @@ async function getSchoolReferenceCounts(schoolId) {
     })
   )
 
-  return Object.fromEntries(entries.filter(([, count]) => count > 0))
+  return Object.fromEntries(entries)
 }
 
-// Permanent school deletion is intentionally strict. The default Maxima school
-// can never be deleted here, the target school must first be inactive, and every
-// known school-bound collection must be empty. Soft-deleted users still count as
-// references so UID/history preservation cannot silently orphan school metadata.
-exports.deleteManagedSchool = onCall(async request => {
+async function getSchoolManagedUsers(schoolId) {
+  const snap = await db.collection('users')
+    .where('schoolId', '==', schoolId)
+    .get()
+
+  return snap.docs.map(docSnap => ({
+    id: docSnap.id,
+    ref: docSnap.ref,
+    data: docSnap.data() || {}
+  }))
+}
+
+function summarizeSchoolUsers(users) {
+  const summary = {
+    total: users.length,
+    students: 0,
+    teachers: 0,
+    admins: 0,
+    deleted: 0,
+    other: 0
+  }
+
+  for (const user of users) {
+    const profile = user.data || {}
+    if (profile.deleted === true || profile.status === 'deleted') summary.deleted++
+
+    if (profile.role === 'student') summary.students++
+    else if (profile.role === 'teacher') summary.teachers++
+    else if (profile.role === 'admin') summary.admins++
+    else summary.other++
+  }
+
+  return summary
+}
+
+function collectStoragePaths(value, paths = new Set()) {
+  if (Array.isArray(value)) {
+    value.forEach(item => collectStoragePaths(item, paths))
+    return paths
+  }
+
+  if (!value || typeof value !== 'object') return paths
+
+  for (const [key, item] of Object.entries(value)) {
+    if (
+      typeof item === 'string' &&
+      item.trim() &&
+      !item.includes('://') &&
+      (key === 'storagePath' || key.endsWith('StoragePath'))
+    ) {
+      paths.add(item.trim())
+      continue
+    }
+
+    collectStoragePaths(item, paths)
+  }
+
+  return paths
+}
+
+async function getSchoolStoragePaths(schoolId) {
+  const paths = new Set()
+
+  for (const collectionName of SCHOOL_STORAGE_PATH_COLLECTIONS) {
+    const snap = await db.collection(collectionName)
+      .where('schoolId', '==', schoolId)
+      .get()
+
+    snap.docs.forEach(docSnap => collectStoragePaths(docSnap.data() || {}, paths))
+  }
+
+  return Array.from(paths)
+}
+
+async function deleteStorageForSchool(userIds, storagePaths) {
+  const bucket = getStorage().bucket(STORAGE_BUCKET_NAME)
+  let deletedObjects = 0
+
+  for (const storagePath of storagePaths) {
+    try {
+      await bucket.file(storagePath).delete({ ignoreNotFound: true })
+      deletedObjects++
+    } catch (error) {
+      if (error?.code === 404) continue
+      throw error
+    }
+  }
+
+  for (const uid of userIds) {
+    for (const prefixRoot of USER_STORAGE_PREFIXES) {
+      const prefix = `${prefixRoot}/${uid}/`
+      const [files] = await bucket.getFiles({ prefix })
+
+      if (files.length === 0) continue
+
+      await Promise.all(
+        files.map(file => file.delete({ ignoreNotFound: true }))
+      )
+      deletedObjects += files.length
+    }
+  }
+
+  return deletedObjects
+}
+
+async function deleteManagedAuthUsers(userIds) {
+  let deleted = 0
+  let alreadyMissing = 0
+  const chunkSize = 20
+
+  for (let start = 0; start < userIds.length; start += chunkSize) {
+    const chunk = userIds.slice(start, start + chunkSize)
+    const results = await Promise.all(
+      chunk.map(async uid => {
+        try {
+          await adminAuth.deleteUser(uid)
+          return 'deleted'
+        } catch (error) {
+          if (isAuthUserNotFound(error)) return 'missing'
+          throw error
+        }
+      })
+    )
+
+    for (const result of results) {
+      if (result === 'deleted') deleted++
+      else alreadyMissing++
+    }
+  }
+
+  return { deleted, alreadyMissing }
+}
+
+async function deleteDocumentRefsInBatches(refs) {
+  const chunkSize = 400
+  let deleted = 0
+
+  for (let start = 0; start < refs.length; start += chunkSize) {
+    const batch = db.batch()
+    const chunk = refs.slice(start, start + chunkSize)
+    chunk.forEach(ref => batch.delete(ref))
+    await batch.commit()
+    deleted += chunk.length
+  }
+
+  return deleted
+}
+
+async function deleteSchoolCollectionRecords(collectionName, schoolId) {
+  const batchSize = 300
+  let deleted = 0
+
+  while (true) {
+    const snap = await db.collection(collectionName)
+      .where('schoolId', '==', schoolId)
+      .limit(batchSize)
+      .get()
+
+    if (snap.empty) break
+
+    const batch = db.batch()
+    snap.docs.forEach(docSnap => batch.delete(docSnap.ref))
+    await batch.commit()
+    deleted += snap.size
+  }
+
+  return deleted
+}
+
+async function deleteMockResourceAccessForUsers(userIds) {
+  let deleted = 0
+
+  for (const uid of userIds) {
+    for (const collectionName of MOCK_RESOURCE_ACCESS_SUBCOLLECTIONS) {
+      const snap = await db.collection(`mockResourceAccess/${uid}/${collectionName}`).get()
+      if (snap.empty) continue
+      deleted += await deleteDocumentRefsInBatches(snap.docs.map(docSnap => docSnap.ref))
+    }
+
+    // A parent marker is not required by the current schema, but remove one if a
+    // legacy version created it.
+    const rootRef = db.doc(`mockResourceAccess/${uid}`)
+    const rootSnap = await rootRef.get()
+    if (rootSnap.exists) {
+      await rootRef.delete()
+      deleted++
+    }
+  }
+
+  return deleted
+}
+
+async function getManagedSchoolDeletionState(schoolId) {
+  const [schoolSnap, users, counts, storagePaths] = await Promise.all([
+    db.doc(`schools/${schoolId}`).get(),
+    getSchoolManagedUsers(schoolId),
+    getSchoolCascadeCounts(schoolId),
+    getSchoolStoragePaths(schoolId)
+  ])
+
+  if (!schoolSnap.exists) {
+    throw new HttpsError('not-found', 'The selected school does not exist.')
+  }
+
+  const userSummary = summarizeSchoolUsers(users)
+  const totalFirestoreRecords = userSummary.total + Object.values(counts)
+    .reduce((sum, count) => sum + Number(count || 0), 0)
+
+  return {
+    schoolSnap,
+    school: schoolSnap.data() || {},
+    users,
+    userSummary,
+    counts,
+    storagePaths,
+    totalFirestoreRecords
+  }
+}
+
+exports.getManagedSchoolDeletionPreview = onCall(async request => {
   await requireAdmin(request)
 
   const data = request.data || {}
@@ -560,51 +812,159 @@ exports.deleteManagedSchool = onCall(async request => {
     )
   }
 
-  const schoolRef = db.doc(`schools/${schoolId}`)
-  const schoolSnap = await schoolRef.get()
-  if (!schoolSnap.exists) {
-    throw new HttpsError('not-found', 'The selected school does not exist.')
+  const state = await getManagedSchoolDeletionState(schoolId)
+
+  return {
+    ok: true,
+    school: {
+      schoolId,
+      name: typeof state.school.name === 'string' ? state.school.name : schoolId,
+      status: normalizeSchoolStatus(state.school.status || 'active')
+    },
+    users: state.userSummary,
+    collections: state.counts,
+    storageObjectsReferenced: state.storagePaths.length,
+    totalFirestoreRecords: state.totalFirestoreRecords
+  }
+})
+
+// Permanent school deletion is destructive and explicit. Deactivate remains the
+// reversible option. For a permanent delete, the institution must be inactive,
+// Maxima is protected, managed student/teacher Auth accounts are deleted, then
+// every known school-bound record and user-scoped access record is removed.
+exports.deleteManagedSchool = onCall(async request => {
+  const admin = await requireAdmin(request)
+
+  const data = request.data || {}
+  const schoolId = normalizeSchoolId(data.schoolId)
+
+  if (schoolId === DEFAULT_SCHOOL_ID) {
+    throw new HttpsError(
+      'failed-precondition',
+      'The default Maxima school cannot be permanently deleted.'
+    )
   }
 
-  const school = schoolSnap.data() || {}
-  if (school.status !== 'inactive') {
+  if (data.confirmCascadeDelete !== true || data.confirmSchoolId !== schoolId) {
+    throw new HttpsError(
+      'failed-precondition',
+      'Permanent school deletion requires an explicit cascade confirmation for this school.'
+    )
+  }
+
+  const state = await getManagedSchoolDeletionState(schoolId)
+  const schoolRef = state.schoolSnap.ref
+
+  if (normalizeSchoolStatus(state.school.status || 'active') !== 'inactive') {
     throw new HttpsError(
       'failed-precondition',
       'Deactivate this school before permanently deleting it.'
     )
   }
 
-  const blockers = await getSchoolReferenceCounts(schoolId)
-  const blockerEntries = Object.entries(blockers)
-
-  if (blockerEntries.length > 0) {
-    const summary = blockerEntries
-      .map(([collectionName, count]) => `${collectionName}: ${count}`)
-      .join(', ')
-
+  if (state.userSummary.admins > 0) {
     throw new HttpsError(
       'failed-precondition',
-      `School cannot be deleted while referenced records remain (${summary}).`,
-      { schoolId, blockers }
+      'This school contains an admin account. Move or remove the admin account before deleting the school.'
     )
   }
 
-  // Re-read immediately before deletion so a concurrent status change back to
-  // active cannot be ignored after the reference audit.
+  // Lock the school before the first destructive operation. If a later cleanup
+  // step fails, retries may continue the cascade, but the school cannot be
+  // reactivated after some of its Auth/data may already have been removed.
+  await db.runTransaction(async transaction => {
+    const latest = await transaction.get(schoolRef)
+    if (!latest.exists) {
+      throw new HttpsError('not-found', 'The selected school no longer exists.')
+    }
+
+    const latestData = latest.data() || {}
+    if (normalizeSchoolStatus(latestData.status || 'active') !== 'inactive') {
+      throw new HttpsError(
+        'failed-precondition',
+        'Deactivate this school before permanently deleting it.'
+      )
+    }
+
+    transaction.set(schoolRef, {
+      deleteInProgress: true,
+      deleteStartedAt: latestData.deleteStartedAt || FieldValue.serverTimestamp(),
+      deleteStartedBy: latestData.deleteStartedBy || admin.uid,
+      updatedAt: FieldValue.serverTimestamp(),
+      updatedBy: admin.uid
+    }, { merge: true })
+  })
+
+  const userIds = state.users.map(user => user.id)
+
+  // Remove uploaded institution assets while their Firestore metadata still
+  // exists, so a storage failure remains retryable and does not orphan files.
+  const deletedStorageObjects = await deleteStorageForSchool(
+    userIds,
+    state.storagePaths
+  )
+
+  // Delete Firebase Auth identities before Firestore profiles. If a later step
+  // fails, the inactive school and remaining profiles make a retry safe.
+  const authResult = await deleteManagedAuthUsers(userIds)
+
+  const deletedCollections = {}
+  for (const collectionName of SCHOOL_CASCADE_COLLECTIONS) {
+    deletedCollections[collectionName] = await deleteSchoolCollectionRecords(
+      collectionName,
+      schoolId
+    )
+  }
+
+  const deletedMockResourceAccess = await deleteMockResourceAccessForUsers(userIds)
+  const deletedUsers = await deleteDocumentRefsInBatches(
+    state.users.map(user => user.ref)
+  )
+
+  // Re-read immediately before deleting the institution record. The deletion
+  // lock must still be present; saveManagedSchool refuses reactivation/edits
+  // while this flag is set.
   const latestSchoolSnap = await schoolRef.get()
   if (!latestSchoolSnap.exists) {
-    return { ok: true, schoolId, alreadyDeleted: true }
+    return {
+      ok: true,
+      schoolId,
+      alreadyDeleted: true,
+      deletedBy: admin.uid,
+      deletedUsers,
+      deletedAuthUsers: authResult.deleted,
+      alreadyMissingAuthUsers: authResult.alreadyMissing,
+      deletedMockResourceAccess,
+      deletedStorageObjects,
+      deletedCollections
+    }
   }
-  if ((latestSchoolSnap.data() || {}).status !== 'inactive') {
+
+  const latestSchool = latestSchoolSnap.data() || {}
+  if (
+    normalizeSchoolStatus(latestSchool.status || 'active') !== 'inactive' ||
+    latestSchool.deleteInProgress !== true
+  ) {
     throw new HttpsError(
       'failed-precondition',
-      'School status changed during deletion. Deactivate it and try again.'
+      'School deletion lock changed unexpectedly. Retry the permanent delete.'
     )
   }
 
   await schoolRef.delete()
 
-  return { ok: true, schoolId, alreadyDeleted: false }
+  return {
+    ok: true,
+    schoolId,
+    alreadyDeleted: false,
+    deletedBy: admin.uid,
+    deletedUsers,
+    deletedAuthUsers: authResult.deleted,
+    alreadyMissingAuthUsers: authResult.alreadyMissing,
+    deletedMockResourceAccess,
+    deletedStorageObjects,
+    deletedCollections
+  }
 })
 
 
@@ -1021,6 +1381,569 @@ exports.deleteManagedUser = onCall(async request => {
   await adminAuth.updateUser(userId, { disabled: true })
 
   return { ok: true, userId, alreadyDeleted: false }
+})
+
+
+// Stage 18.2 final: Archived accounts can be restored by the platform admin.
+// Restore is intentionally limited to known managed student/teacher roles and
+// requires the original school to still exist and be active. Auth is enabled
+// first; if the Firestore restore fails, Auth is disabled again so authorization
+// remains fail-closed.
+exports.restoreManagedUser = onCall({ invoker: 'public' }, async request => {
+  const admin = await requireAdmin(request)
+  const data = request.data || {}
+  const userId = assertDocumentId(data.userId, 'User ID')
+
+  if (userId === admin.uid) {
+    throw new HttpsError('permission-denied', 'You cannot restore your own admin account here.')
+  }
+
+  const userRef = db.doc(`users/${userId}`)
+  const userSnap = await userRef.get()
+  if (!userSnap.exists) {
+    throw new HttpsError('not-found', 'The selected user profile was not found.')
+  }
+
+  const profile = userSnap.data() || {}
+  const role = permanentDeleteRoleOf(profile)
+
+  if (!MANAGED_ACCOUNT_ROLES.has(role)) {
+    throw new HttpsError(
+      'failed-precondition',
+      'This archived account does not have a restorable student or teacher role.'
+    )
+  }
+
+  const schoolId = schoolIdOf(profile)
+  const schoolSnap = await db.doc(`schools/${schoolId}`).get()
+  if (!schoolSnap.exists) {
+    throw new HttpsError(
+      'failed-precondition',
+      'This account cannot be restored because its school no longer exists.'
+    )
+  }
+
+  const school = schoolSnap.data() || {}
+  if (school.status !== 'active') {
+    throw new HttpsError(
+      'failed-precondition',
+      'Activate this school before restoring the account.'
+    )
+  }
+
+  const authUser = await authUserForManagedProfile(userId)
+  const isArchived = profile.deleted === true || profile.status === 'deleted'
+
+  // Idempotent repair path: if Firestore is already active but Auth stayed
+  // disabled after an interrupted restore, finish enabling Auth safely.
+  if (!isArchived) {
+    if (profile.status !== 'approved' || !MANAGED_ACCOUNT_ROLES.has(profile.role)) {
+      throw new HttpsError('failed-precondition', 'This account is not an archived managed account.')
+    }
+
+    if (authUser.disabled === true) {
+      await adminAuth.updateUser(userId, { disabled: false })
+    }
+
+    return {
+      ok: true,
+      userId,
+      role: profile.role,
+      schoolId,
+      alreadyRestored: true
+    }
+  }
+
+  const previousAuthDisabled = authUser.disabled === true
+  if (authUser.disabled === true) {
+    await adminAuth.updateUser(userId, { disabled: false })
+  }
+
+  try {
+    const now = new Date().toISOString()
+    await userRef.set({
+      role,
+      requestedRole: role,
+      status: 'approved',
+      deleted: false,
+      restoredAt: now,
+      restoredBy: admin.uid,
+      updatedAt: now,
+      updatedBy: admin.uid,
+      deletedAt: FieldValue.delete(),
+      deletedBy: FieldValue.delete(),
+      permanentDeleteInProgress: FieldValue.delete(),
+      permanentDeleteStartedAt: FieldValue.delete(),
+      permanentDeleteStartedBy: FieldValue.delete()
+    }, { merge: true })
+  } catch (error) {
+    if (previousAuthDisabled) {
+      await adminAuth.updateUser(userId, { disabled: true }).catch(rollbackError => {
+        console.error('Stage 18.2 restoreManagedUser Auth rollback failed', {
+          userId,
+          rollbackError
+        })
+      })
+    }
+    throw error
+  }
+
+  return {
+    ok: true,
+    userId,
+    role,
+    schoolId,
+    alreadyRestored: false
+  }
+})
+
+
+// Stage 18.2: account removal now has two distinct meanings. deleteManagedUser
+// remains the reversible Archive action (soft delete + disabled Auth). Permanent
+// deletion supports students plus already-archived teacher/legacy accounts. Student
+// deletion removes student-owned data; teacher/account deletion removes the Auth
+// identity/profile and active ownership links while preserving shared school content
+// and historical academic records.
+const STUDENT_PERMANENT_DELETE_COLLECTIONS = [
+  { name: 'studentAccess', fields: ['uid', 'studentId'] },
+  { name: 'readingSubmissions', fields: ['uid', 'studentId'] },
+  { name: 'listeningSubmissions', fields: ['uid', 'studentId'] },
+  { name: 'vocabularySubmissions', fields: ['uid', 'studentId'] },
+  { name: 'writingSubmissions', fields: ['uid', 'studentId'] },
+  { name: 'mockSubmissions', fields: ['uid', 'studentId'] },
+  { name: 'vocabularyDrafts', fields: ['uid', 'studentId'] },
+  { name: 'scores', fields: ['uid', 'studentId'] },
+  { name: 'submissionAttemptControls', fields: ['uid', 'studentId'] },
+  { name: 'submissionAttemptHistory', fields: ['uid', 'studentId'] }
+]
+
+// Canonical assignment membership lives in studentAccess, but old source/class
+// documents may still contain student arrays from earlier tracker versions. Hard
+// deletion removes those stale references without deleting shared content.
+const STUDENT_LEGACY_REFERENCE_COLLECTIONS = [
+  'classes',
+  'readings',
+  'listenings',
+  'vocabularyTests',
+  'writingHomeworks',
+  'mockTests'
+]
+
+const STUDENT_LEGACY_REFERENCE_FIELDS = [
+  'studentIds',
+  'assignedStudentIds',
+  'assignedStudents'
+]
+
+// Teacher permanent deletion intentionally preserves shared institution content.
+// Only active ownership/membership links are removed. createdBy / submission audit
+// fields remain historical metadata and do not grant access by themselves.
+const TEACHER_REFERENCE_CONFIG = [
+  { name: 'users', scalarFields: ['teacherId'], arrayFields: ['teacherIds'] },
+  { name: 'classes', scalarFields: ['teacherId'], arrayFields: ['teacherIds'] },
+  { name: 'readings', scalarFields: ['teacherId'], arrayFields: ['teacherIds'] },
+  { name: 'listenings', scalarFields: ['teacherId'], arrayFields: ['teacherIds'] },
+  { name: 'vocabularyTests', scalarFields: ['teacherId'], arrayFields: ['teacherIds'] },
+  { name: 'writingHomeworks', scalarFields: ['teacherId'], arrayFields: ['teacherIds'] },
+  { name: 'mockTests', scalarFields: ['teacherId'], arrayFields: ['teacherIds'] }
+]
+
+async function getStudentOwnedRecordRefs(userId) {
+  const byCollection = {}
+  const allRefs = new Map()
+
+  for (const config of STUDENT_PERMANENT_DELETE_COLLECTIONS) {
+    const refs = new Map()
+
+    for (const fieldName of config.fields) {
+      const snap = await db.collection(config.name)
+        .where(fieldName, '==', userId)
+        .get()
+
+      for (const docSnap of snap.docs) {
+        refs.set(docSnap.ref.path, docSnap.ref)
+        allRefs.set(docSnap.ref.path, docSnap.ref)
+      }
+    }
+
+    byCollection[config.name] = Array.from(refs.values())
+  }
+
+  return {
+    byCollection,
+    allRefs: Array.from(allRefs.values())
+  }
+}
+
+async function getStudentLegacyReferenceState(userId) {
+  const docs = new Map()
+  const counts = {}
+
+  for (const collectionName of STUDENT_LEGACY_REFERENCE_COLLECTIONS) {
+    const collectionDocs = new Map()
+
+    for (const fieldName of STUDENT_LEGACY_REFERENCE_FIELDS) {
+      const snap = await db.collection(collectionName)
+        .where(fieldName, 'array-contains', userId)
+        .get()
+
+      for (const docSnap of snap.docs) {
+        const key = docSnap.ref.path
+        const existing = collectionDocs.get(key) || {
+          ref: docSnap.ref,
+          fields: new Set()
+        }
+        existing.fields.add(fieldName)
+        collectionDocs.set(key, existing)
+      }
+    }
+
+    counts[collectionName] = collectionDocs.size
+    for (const [path, entry] of collectionDocs.entries()) {
+      docs.set(path, entry)
+    }
+  }
+
+  return {
+    docs: Array.from(docs.values()),
+    counts
+  }
+}
+
+async function getTeacherReferenceState(userId) {
+  const docs = new Map()
+  const counts = {}
+
+  for (const config of TEACHER_REFERENCE_CONFIG) {
+    const collectionDocs = new Map()
+
+    for (const fieldName of config.scalarFields || []) {
+      const snap = await db.collection(config.name)
+        .where(fieldName, '==', userId)
+        .get()
+
+      for (const docSnap of snap.docs) {
+        const key = docSnap.ref.path
+        const existing = collectionDocs.get(key) || {
+          ref: docSnap.ref,
+          scalarFields: new Set(),
+          arrayFields: new Set()
+        }
+        existing.scalarFields.add(fieldName)
+        collectionDocs.set(key, existing)
+      }
+    }
+
+    for (const fieldName of config.arrayFields || []) {
+      const snap = await db.collection(config.name)
+        .where(fieldName, 'array-contains', userId)
+        .get()
+
+      for (const docSnap of snap.docs) {
+        const key = docSnap.ref.path
+        const existing = collectionDocs.get(key) || {
+          ref: docSnap.ref,
+          scalarFields: new Set(),
+          arrayFields: new Set()
+        }
+        existing.arrayFields.add(fieldName)
+        collectionDocs.set(key, existing)
+      }
+    }
+
+    counts[config.name] = collectionDocs.size
+    for (const [path, entry] of collectionDocs.entries()) {
+      docs.set(path, entry)
+    }
+  }
+
+  return {
+    docs: Array.from(docs.values()),
+    counts
+  }
+}
+
+async function getUserStorageObjectCount(userId) {
+  const bucket = getStorage().bucket(STORAGE_BUCKET_NAME)
+  let count = 0
+
+  for (const prefixRoot of USER_STORAGE_PREFIXES) {
+    const [files] = await bucket.getFiles({ prefix: `${prefixRoot}/${userId}/` })
+    count += files.length
+  }
+
+  return count
+}
+
+async function unlinkStudentLegacyReferences(entries, userId, adminUid) {
+  const chunkSize = 300
+  let updatedDocuments = 0
+
+  for (let start = 0; start < entries.length; start += chunkSize) {
+    const batch = db.batch()
+    const chunk = entries.slice(start, start + chunkSize)
+
+    for (const entry of chunk) {
+      const update = {
+        updatedAt: FieldValue.serverTimestamp(),
+        updatedBy: adminUid
+      }
+
+      for (const fieldName of entry.fields) {
+        update[fieldName] = FieldValue.arrayRemove(userId)
+      }
+
+      batch.update(entry.ref, update)
+    }
+
+    await batch.commit()
+    updatedDocuments += chunk.length
+  }
+
+  return updatedDocuments
+}
+
+async function unlinkTeacherReferences(entries, userId, adminUid) {
+  const chunkSize = 300
+  let updatedDocuments = 0
+
+  for (let start = 0; start < entries.length; start += chunkSize) {
+    const batch = db.batch()
+    const chunk = entries.slice(start, start + chunkSize)
+
+    for (const entry of chunk) {
+      const update = {
+        updatedAt: FieldValue.serverTimestamp(),
+        updatedBy: adminUid
+      }
+
+      for (const fieldName of entry.scalarFields) {
+        update[fieldName] = ''
+      }
+      for (const fieldName of entry.arrayFields) {
+        update[fieldName] = FieldValue.arrayRemove(userId)
+      }
+
+      batch.update(entry.ref, update)
+    }
+
+    await batch.commit()
+    updatedDocuments += chunk.length
+  }
+
+  return updatedDocuments
+}
+
+function permanentDeleteRoleOf(profile) {
+  const role = safeString(profile?.role || profile?.requestedRole || '', 40).trim().toLowerCase()
+  return role || 'account'
+}
+
+async function getManagedUserPermanentDeletionState(userId) {
+  const userRef = db.doc(`users/${userId}`)
+  const userSnap = await userRef.get()
+
+  if (!userSnap.exists) {
+    throw new HttpsError('not-found', 'The selected user profile was not found.')
+  }
+
+  const profile = userSnap.data() || {}
+  const managedRole = permanentDeleteRoleOf(profile)
+  if (managedRole === 'admin') {
+    throw new HttpsError('permission-denied', 'Admin accounts cannot be permanently deleted here.')
+  }
+
+  const isArchived = profile.deleted === true || profile.status === 'deleted'
+  if (managedRole !== 'student' && !isArchived) {
+    throw new HttpsError(
+      'failed-precondition',
+      'Archive teacher or legacy accounts before permanently deleting them.'
+    )
+  }
+
+  const shouldDeleteStudentData = managedRole === 'student' || managedRole === 'account'
+  const shouldUnlinkTeacherRefs = managedRole === 'teacher' || managedRole === 'account'
+  const shouldDeleteUserStorage = managedRole === 'student'
+
+  const [records, legacyReferences, teacherReferences, storageObjectCount] = await Promise.all([
+    shouldDeleteStudentData
+      ? getStudentOwnedRecordRefs(userId)
+      : Promise.resolve({ byCollection: {}, allRefs: [] }),
+    shouldDeleteStudentData
+      ? getStudentLegacyReferenceState(userId)
+      : Promise.resolve({ docs: [], counts: {} }),
+    shouldUnlinkTeacherRefs
+      ? getTeacherReferenceState(userId)
+      : Promise.resolve({ docs: [], counts: {} }),
+    shouldDeleteUserStorage
+      ? getUserStorageObjectCount(userId)
+      : Promise.resolve(0)
+  ])
+
+  const recordCounts = Object.fromEntries(
+    Object.entries(records.byCollection).map(([collectionName, refs]) => [
+      collectionName,
+      refs.length
+    ])
+  )
+
+  const linkedRecordCount = Object.values(recordCounts)
+    .reduce((sum, count) => sum + Number(count || 0), 0)
+
+  const legacyReferenceCount = Object.values(legacyReferences.counts)
+    .reduce((sum, count) => sum + Number(count || 0), 0)
+
+  const teacherReferenceCount = Object.values(teacherReferences.counts)
+    .reduce((sum, count) => sum + Number(count || 0), 0)
+
+  return {
+    userRef,
+    userSnap,
+    profile,
+    managedRole,
+    isArchived,
+    records,
+    legacyReferences,
+    teacherReferences,
+    storageObjectCount,
+    recordCounts,
+    linkedRecordCount,
+    legacyReferenceCount,
+    teacherReferenceCount,
+    shouldDeleteUserStorage
+  }
+}
+
+exports.getManagedUserDeletionPreview = onCall({ invoker: 'public' }, async request => {
+  const admin = await requireAdmin(request)
+  const data = request.data || {}
+  const userId = assertDocumentId(data.userId, 'User ID')
+
+  if (userId === admin.uid) {
+    throw new HttpsError('permission-denied', 'You cannot permanently delete your own admin account.')
+  }
+
+  const state = await getManagedUserPermanentDeletionState(userId)
+  const profile = state.profile
+
+  return {
+    ok: true,
+    deletionMode: state.managedRole === 'student' ? 'student_full' : 'identity_preserve_history',
+    user: {
+      id: userId,
+      uid: userId,
+      name: safeString(profile.name || profile.fullName || '', 120).trim(),
+      email: safeString(profile.email || '', 320).trim().toLowerCase(),
+      role: state.managedRole,
+      status: profile.status || '',
+      deleted: profile.deleted === true,
+      schoolId: schoolIdOf(profile)
+    },
+    collections: state.recordCounts,
+    legacyReferences: state.legacyReferences.counts,
+    teacherReferences: state.teacherReferences.counts,
+    linkedFirestoreRecords: state.linkedRecordCount,
+    legacyReferenceDocuments: state.legacyReferenceCount,
+    teacherReferenceDocuments: state.teacherReferenceCount,
+    storageObjects: state.storageObjectCount,
+    firestoreProfileDocuments: 1,
+    totalFirestoreDocumentsToDelete: state.linkedRecordCount + 1,
+    preservesSharedSchoolContent: state.managedRole !== 'student',
+    preservesHistoricalAcademicRecords: state.managedRole !== 'student'
+  }
+})
+
+exports.permanentlyDeleteManagedUser = onCall({ invoker: 'public' }, async request => {
+  const admin = await requireAdmin(request)
+  const data = request.data || {}
+  const userId = assertDocumentId(data.userId, 'User ID')
+
+  if (userId === admin.uid) {
+    throw new HttpsError('permission-denied', 'You cannot permanently delete your own admin account.')
+  }
+
+  const state = await getManagedUserPermanentDeletionState(userId)
+  const profile = state.profile
+  const profileEmail = safeString(profile.email || '', 320).trim().toLowerCase()
+  const confirmedEmail = safeString(data.confirmEmail || '', 320).trim().toLowerCase()
+
+  if (
+    data.confirmPermanentDelete !== true ||
+    !profileEmail ||
+    confirmedEmail !== profileEmail
+  ) {
+    throw new HttpsError(
+      'failed-precondition',
+      'Permanent account deletion requires explicit confirmation with the account email address.'
+    )
+  }
+
+  // Fail closed before the first destructive operation. This also makes retries
+  // safe if Auth or Firestore cleanup is interrupted halfway through.
+  await state.userRef.set({
+    deleted: true,
+    status: 'deleted',
+    permanentDeleteInProgress: true,
+    permanentDeleteStartedAt: profile.permanentDeleteStartedAt || FieldValue.serverTimestamp(),
+    permanentDeleteStartedBy: profile.permanentDeleteStartedBy || admin.uid,
+    updatedAt: FieldValue.serverTimestamp(),
+    updatedBy: admin.uid
+  }, { merge: true })
+
+  let authDeleted = false
+  let authAlreadyMissing = false
+  try {
+    await adminAuth.deleteUser(userId)
+    authDeleted = true
+  } catch (error) {
+    if (isAuthUserNotFound(error)) {
+      authAlreadyMissing = true
+    } else {
+      throw error
+    }
+  }
+
+  const deletedStorageObjects = state.shouldDeleteUserStorage
+    ? await deleteStorageForSchool([userId], [])
+    : 0
+  const deletedMockResourceAccess = await deleteMockResourceAccessForUsers([userId])
+  const updatedLegacyReferenceDocuments = await unlinkStudentLegacyReferences(
+    state.legacyReferences.docs,
+    userId,
+    admin.uid
+  )
+  const updatedTeacherReferenceDocuments = await unlinkTeacherReferences(
+    state.teacherReferences.docs,
+    userId,
+    admin.uid
+  )
+
+  const deletedCollectionRecords = {}
+  for (const [collectionName, refs] of Object.entries(state.records.byCollection)) {
+    deletedCollectionRecords[collectionName] = await deleteDocumentRefsInBatches(refs)
+  }
+
+  // The profile is deleted last so an interrupted operation remains visible and
+  // retryable to the platform admin until linked cleanup has completed.
+  await state.userRef.delete()
+
+  return {
+    ok: true,
+    userId,
+    role: state.managedRole,
+    deletionMode: state.managedRole === 'student' ? 'student_full' : 'identity_preserve_history',
+    schoolId: schoolIdOf(profile),
+    deletedAuthUser: authDeleted,
+    authUserAlreadyMissing: authAlreadyMissing,
+    deletedStorageObjects,
+    deletedMockResourceAccess,
+    updatedLegacyReferenceDocuments,
+    updatedTeacherReferenceDocuments,
+    deletedCollectionRecords,
+    deletedUserProfile: true,
+    preservedSharedSchoolContent: state.managedRole !== 'student',
+    preservedHistoricalAcademicRecords: state.managedRole !== 'student'
+  }
 })
 
 
