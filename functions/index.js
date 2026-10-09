@@ -21,9 +21,10 @@ const {
 initializeApp()
 const db = getFirestore()
 
-// Stage 17A: school / institution foundation. Existing Maxima data keeps using
-// the historical `maxima` fallback. The schools collection is additive only in
-// this stage; school status is not yet used to block existing product flows.
+// Stage 17D: school / institution status enforcement. Existing data keeps the
+// historical `maxima` fallback, but student and teacher product flows now require
+// an existing ACTIVE school record. Platform admins remain able to manage and
+// reactivate schools even if a school is currently inactive.
 const SCHOOL_SCHEMA_VERSION = 1
 const DEFAULT_SCHOOL_ID = 'maxima'
 const SCHOOL_STATUSES = new Set(['active', 'inactive'])
@@ -125,6 +126,21 @@ function uniqueStrings(values) {
 
 function schoolIdOf(data) {
   return data?.schoolId || DEFAULT_SCHOOL_ID
+}
+
+async function requireActiveSchoolForProfile(profile) {
+  const schoolId = schoolIdOf(profile)
+  const schoolSnap = await db.doc(`schools/${schoolId}`).get()
+  const school = schoolSnap.exists ? (schoolSnap.data() || {}) : null
+
+  if (!school || school.status !== 'active') {
+    throw new HttpsError(
+      'permission-denied',
+      'Your school is not active. Please contact the platform administrator.'
+    )
+  }
+
+  return { schoolId, school }
 }
 
 function teacherIdsOf(data) {
@@ -300,10 +316,13 @@ async function requireStudent(request) {
     throw new HttpsError('permission-denied', 'This account cannot submit student work.')
   }
 
+  const activeSchool = await requireActiveSchoolForProfile(profile)
+
   return {
     uid,
     email: request.auth.token?.email || profile.email || '',
-    profile
+    profile,
+    schoolId: activeSchool.schoolId
   }
 }
 
@@ -368,6 +387,13 @@ async function requireAssignmentManager(request) {
     throw new HttpsError('permission-denied', 'This account cannot manage assignments.')
   }
 
+  // Teachers are bound to an institution and must stop product activity when
+  // that institution is inactive. Platform admins intentionally bypass this
+  // check so they can manage/reactivate inactive schools.
+  if (profile.role === 'teacher') {
+    await requireActiveSchoolForProfile(profile)
+  }
+
   return { uid, profile }
 }
 
@@ -418,9 +444,8 @@ function managedSchoolClientState(id, data) {
   }
 }
 
-// Stage 17A: school records are server-managed. No existing users, assignments,
-// submissions or content are migrated here. This callable is the future Admin UI
-// reader and deliberately returns only school metadata.
+// School records remain server-managed. This reader returns only school metadata;
+// institution status is enforced separately at student/teacher authorization gates.
 exports.getManagedSchools = onCall(async request => {
   await requireAdmin(request)
 
@@ -436,9 +461,9 @@ exports.getManagedSchools = onCall(async request => {
   }
 })
 
-// Stage 17A: create/update school metadata through an admin-only server boundary.
-// License seats, account creation and school-status enforcement belong to later
-// stages and are intentionally not mixed into this foundation.
+// Create/update school metadata through an admin-only server boundary. License
+// seats and account creation remain later stages; Stage 17D now makes this status
+// field authoritative for student/teacher product access.
 exports.saveManagedSchool = onCall(async request => {
   const admin = await requireAdmin(request)
   const data = request.data || {}

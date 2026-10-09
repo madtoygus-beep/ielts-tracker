@@ -20,21 +20,6 @@ service cloud.firestore {
         && userDoc(request.auth.uid).data.get('deleted', false) != true;
     }
 
-    function isAdmin() {
-      return isApprovedUser()
-        && userDoc(request.auth.uid).data.role == 'admin';
-    }
-
-    function isTeacher() {
-      return isApprovedUser()
-        && userDoc(request.auth.uid).data.role == 'teacher';
-    }
-
-    function isStudent() {
-      return isApprovedUser()
-        && userDoc(request.auth.uid).data.role == 'student';
-    }
-
     function isOwner(uid) {
       return isAuth() && request.auth.uid == uid;
     }
@@ -45,6 +30,36 @@ service cloud.firestore {
 
     function currentSchoolId() {
       return schoolIdOf(userDoc(request.auth.uid).data);
+    }
+
+    // Stage 17D: student/teacher product access requires a real, active school.
+    // Admin deliberately does not depend on school status so the platform admin
+    // can still manage and reactivate a school after it has been suspended.
+    function schoolIsActive(schoolId) {
+      let schoolPath = /databases/$(database)/documents/schools/$(schoolId);
+      return exists(schoolPath)
+        && get(schoolPath).data.get('status', 'inactive') == 'active';
+    }
+
+    function currentSchoolIsActive() {
+      return isApprovedUser() && schoolIsActive(currentSchoolId());
+    }
+
+    function isAdmin() {
+      return isApprovedUser()
+        && userDoc(request.auth.uid).data.role == 'admin';
+    }
+
+    function isTeacher() {
+      return isApprovedUser()
+        && userDoc(request.auth.uid).data.role == 'teacher'
+        && currentSchoolIsActive();
+    }
+
+    function isStudent() {
+      return isApprovedUser()
+        && userDoc(request.auth.uid).data.role == 'student'
+        && currentSchoolIsActive();
     }
 
     function sameSchool(data) {
@@ -531,11 +546,11 @@ service cloud.firestore {
     }
 
     // ============================================================
-    // STAGE 17A: SCHOOLS / INSTITUTIONS
+    // STAGE 17D: SCHOOLS / INSTITUTIONS
     // ============================================================
     // School metadata is managed only through admin-authorized Cloud Functions.
-    // Client reads/writes are intentionally blocked in this foundation stage so
-    // later license and status enforcement can stay server-authoritative.
+    // Client reads/writes remain blocked; rules may internally read school status
+    // to enforce active/inactive access for students and teachers.
 
     match /schools/{schoolId} {
       allow read, create, update, delete: if false;
