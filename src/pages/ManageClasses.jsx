@@ -1,26 +1,24 @@
-import { useState, useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { auth, db, functions } from '../firebase'
 import {
   collection,
-  addDoc,
   query,
   where,
   onSnapshot,
   doc,
-  updateDoc,
-  getDoc,
-  deleteDoc
+  getDoc
 } from 'firebase/firestore'
 import { onAuthStateChanged } from 'firebase/auth'
 import { httpsCallable } from 'firebase/functions'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 
 const DEFAULT_SCHOOL_ID = 'maxima'
+const ALL_SCHOOLS_ID = 'all'
 
-const syncManagedClassStudentLinksCall = httpsCallable(
-  functions,
-  'syncManagedClassStudentLinks'
-)
+const getManagedSchoolsCall = httpsCallable(functions, 'getManagedSchools')
+const saveManagedClassCall = httpsCallable(functions, 'saveManagedClass')
+const setManagedClassArchivedCall = httpsCallable(functions, 'setManagedClassArchived')
+const deleteManagedClassCall = httpsCallable(functions, 'deleteManagedClass')
 
 const COLOR_OPTIONS = [
   { id: 'purple', label: 'Purple', bg: 'bg-purple-50', text: 'text-purple-700', border: 'border-purple-200', dot: 'bg-purple-500' },
@@ -37,19 +35,35 @@ function getColorStyle(colorId) {
   return COLOR_OPTIONS.find(c => c.id === colorId) || COLOR_OPTIONS[0]
 }
 
+function schoolIdOf(data) {
+  return data?.schoolId || DEFAULT_SCHOOL_ID
+}
+
+function errorMessage(error, fallback) {
+  return error?.message || fallback
+}
+
 export default function ManageClasses() {
   const [user, setUser] = useState(null)
   const [userRole, setUserRole] = useState('')
   const [userProfile, setUserProfile] = useState(null)
   const [authChecking, setAuthChecking] = useState(true)
+
+  const [schools, setSchools] = useState([])
+  const [schoolsLoading, setSchoolsLoading] = useState(true)
+  const [schoolsError, setSchoolsError] = useState('')
+  const [selectedSchoolId, setSelectedSchoolId] = useState(DEFAULT_SCHOOL_ID)
+
   const [classes, setClasses] = useState([])
   const [students, setStudents] = useState([])
   const [teachers, setTeachers] = useState([])
   const [loading, setLoading] = useState(true)
+  const [classesError, setClassesError] = useState('')
 
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [editingClass, setEditingClass] = useState(null)
 
+  const [formSchoolId, setFormSchoolId] = useState('')
   const [formName, setFormName] = useState('')
   const [formDescription, setFormDescription] = useState('')
   const [formColor, setFormColor] = useState('purple')
@@ -59,6 +73,8 @@ export default function ManageClasses() {
   const [saving, setSaving] = useState(false)
 
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const routeSchoolId = searchParams.get('school') || ''
 
   // ============================================================
   // Auth check (admin or teacher only)
@@ -96,6 +112,12 @@ export default function ManageClasses() {
         setUser(currentUser)
         setUserRole(userData.role)
         setUserProfile(userData)
+
+        if (userData.role === 'teacher') {
+          setSelectedSchoolId(schoolIdOf(userData))
+          setSchoolsLoading(false)
+        }
+
         setAuthChecking(false)
       } catch (error) {
         console.error(error)
@@ -108,31 +130,124 @@ export default function ManageClasses() {
   }, [navigate])
 
   // ============================================================
+  // Admin school list
+  // School metadata is server-only, so Manage Classes loads it via callable.
+  // ============================================================
+  useEffect(() => {
+    if (authChecking || !user || userRole !== 'admin') return
+
+    let cancelled = false
+
+    const loadSchools = async () => {
+      setSchoolsLoading(true)
+      setSchoolsError('')
+
+      try {
+        const result = await getManagedSchoolsCall({})
+        const managedSchools = Array.isArray(result.data?.schools)
+          ? result.data.schools
+          : []
+
+        if (!cancelled) {
+          setSchools(managedSchools)
+        }
+      } catch (error) {
+        console.error('Could not load schools:', error)
+        if (!cancelled) {
+          setSchools([])
+          setSchoolsError(errorMessage(error, 'Could not load schools.'))
+        }
+      } finally {
+        if (!cancelled) setSchoolsLoading(false)
+      }
+    }
+
+    loadSchools()
+
+    return () => {
+      cancelled = true
+    }
+  }, [authChecking, user, userRole])
+
+  // ============================================================
+  // Keep admin school scope valid and synchronized with the URL.
+  // AdminDashboard passes ?school=<id> so the same school view carries over.
+  // ============================================================
+  useEffect(() => {
+    if (authChecking || userRole !== 'admin' || schoolsLoading) return
+
+    const requestedSchoolId = routeSchoolId || selectedSchoolId || DEFAULT_SCHOOL_ID
+    const requestedExists = requestedSchoolId === ALL_SCHOOLS_ID || schools.some(
+      school => school.schoolId === requestedSchoolId
+    )
+    const fallbackSchoolId = schools.some(school => school.schoolId === DEFAULT_SCHOOL_ID)
+      ? DEFAULT_SCHOOL_ID
+      : schools[0]?.schoolId || ALL_SCHOOLS_ID
+    const nextSchoolId = requestedExists ? requestedSchoolId : fallbackSchoolId
+
+    if (selectedSchoolId !== nextSchoolId) {
+      setSelectedSchoolId(nextSchoolId)
+    }
+
+    if (routeSchoolId !== nextSchoolId) {
+      setSearchParams({ school: nextSchoolId }, { replace: true })
+    }
+  }, [
+    authChecking,
+    userRole,
+    schoolsLoading,
+    schools,
+    routeSchoolId,
+    selectedSchoolId,
+    setSearchParams
+  ])
+
+  // ============================================================
   // Subscribe to classes (live)
+  // Admin: selected school only, or all schools in explicit All Schools view.
+  // Teacher: own school + own teacherId. This query shape matches P1B rules.
   // ============================================================
   useEffect(() => {
     if (authChecking || !user) return
+    if (userRole === 'admin' && schoolsLoading) return
 
-    const q = userRole === 'admin'
-      ? query(collection(db, 'classes'))
-      : query(
-          collection(db, 'classes'),
-          where('teacherId', '==', user.uid)
-        )
-    const schoolId = userProfile?.schoolId || DEFAULT_SCHOOL_ID
+    setLoading(true)
+    setClassesError('')
+
+    let q
+
+    if (userRole === 'admin') {
+      q = selectedSchoolId === ALL_SCHOOLS_ID
+        ? query(collection(db, 'classes'))
+        : query(
+            collection(db, 'classes'),
+            where('schoolId', '==', selectedSchoolId)
+          )
+    } else {
+      const teacherSchoolId = schoolIdOf(userProfile)
+      q = query(
+        collection(db, 'classes'),
+        where('schoolId', '==', teacherSchoolId),
+        where('teacherId', '==', user.uid)
+      )
+    }
 
     const unsub = onSnapshot(
       q,
       snap => {
         const list = snap.docs
           .map(d => ({ id: d.id, ...d.data() }))
-          .filter(c => {
-            if (c.archived) return false
-            if (userRole === 'admin') return true
+          .filter(classItem => {
+            if (classItem.archived) return false
+
+            if (userRole === 'admin') {
+              return selectedSchoolId === ALL_SCHOOLS_ID ||
+                schoolIdOf(classItem) === selectedSchoolId
+            }
 
             return (
-              (c.schoolId || DEFAULT_SCHOOL_ID) === schoolId &&
-              (c.teacherId === user.uid || c.createdBy === user.uid)
+              schoolIdOf(classItem) === schoolIdOf(userProfile) &&
+              (classItem.teacherId === user.uid || classItem.createdBy === user.uid)
             )
           })
           .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
@@ -142,18 +257,30 @@ export default function ManageClasses() {
       },
       error => {
         console.error('Classes snapshot error:', error)
+        setClasses([])
+        setClassesError(errorMessage(error, 'Could not load classes.'))
         setLoading(false)
       }
     )
 
     return unsub
-  }, [authChecking, user, userRole, userProfile])
+  }, [
+    authChecking,
+    user,
+    userRole,
+    userProfile,
+    selectedSchoolId,
+    schoolsLoading
+  ])
 
   // ============================================================
   // Subscribe to students
+  // Admin reads the existing student query, then applies the selected school.
+  // Teacher keeps the existing teacherIds compatibility query and own-school filter.
   // ============================================================
   useEffect(() => {
     if (authChecking || !user) return
+    if (userRole === 'admin' && schoolsLoading) return
 
     const q = userRole === 'admin'
       ? query(collection(db, 'users'), where('role', '==', 'student'))
@@ -163,50 +290,107 @@ export default function ManageClasses() {
           where('teacherIds', 'array-contains', user.uid)
         )
 
-    return onSnapshot(q, snap => {
-      const schoolId = userProfile?.schoolId || DEFAULT_SCHOOL_ID
+    return onSnapshot(
+      q,
+      snap => {
+        const teacherSchoolId = schoolIdOf(userProfile)
 
-      const list = snap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
-        .filter(s => {
-          if (s.status !== 'approved' || s.deleted === true) return false
-          if (userRole === 'admin') return true
+        const list = snap.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .filter(student => {
+            if (student.status !== 'approved' || student.deleted === true) return false
 
-          return (s.schoolId || DEFAULT_SCHOOL_ID) === schoolId
-        })
-        .sort((a, b) => (a.name || a.email || '').localeCompare(b.name || b.email || ''))
+            if (userRole === 'admin') {
+              return selectedSchoolId === ALL_SCHOOLS_ID ||
+                schoolIdOf(student) === selectedSchoolId
+            }
 
-      setStudents(list)
-    })
-  }, [authChecking, user, userRole, userProfile])
+            return schoolIdOf(student) === teacherSchoolId
+          })
+          .sort((a, b) => (a.name || a.email || '').localeCompare(b.name || b.email || ''))
+
+        setStudents(list)
+      },
+      error => {
+        console.error('Students snapshot error:', error)
+        setStudents([])
+      }
+    )
+  }, [
+    authChecking,
+    user,
+    userRole,
+    userProfile,
+    selectedSchoolId,
+    schoolsLoading
+  ])
 
   // ============================================================
-  // Subscribe to teachers (admin only)
+  // Subscribe to teachers (admin only), scoped to the selected school.
+  // All Schools remains a cross-school view only.
   // ============================================================
   useEffect(() => {
     if (authChecking || !user || userRole !== 'admin') {
       setTeachers([])
       return
     }
+    if (schoolsLoading) return
 
     const q = query(collection(db, 'users'), where('role', '==', 'teacher'))
 
-    return onSnapshot(q, snap => {
-      const list = snap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
-        .filter(t => t.status === 'approved' && t.deleted !== true)
-        .sort((a, b) => (a.name || a.email || '').localeCompare(b.name || b.email || ''))
+    return onSnapshot(
+      q,
+      snap => {
+        const list = snap.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .filter(teacher => {
+            if (teacher.status !== 'approved' || teacher.deleted === true) return false
+            return selectedSchoolId === ALL_SCHOOLS_ID ||
+              schoolIdOf(teacher) === selectedSchoolId
+          })
+          .sort((a, b) => (a.name || a.email || '').localeCompare(b.name || b.email || ''))
 
-      setTeachers(list)
-    })
-  }, [authChecking, user, userRole])
+        setTeachers(list)
+      },
+      error => {
+        console.error('Teachers snapshot error:', error)
+        setTeachers([])
+      }
+    )
+  }, [
+    authChecking,
+    user,
+    userRole,
+    selectedSchoolId,
+    schoolsLoading
+  ])
+
+  // ============================================================
+  // Derived school state
+  // ============================================================
+  const selectedSchool = userRole === 'admin'
+    ? schools.find(school => school.schoolId === selectedSchoolId) || null
+    : null
+
+  const selectedSchoolLabel = userRole === 'admin'
+    ? selectedSchoolId === ALL_SCHOOLS_ID
+      ? 'All Schools'
+      : selectedSchool?.name || selectedSchoolId
+    : schoolIdOf(userProfile)
+
+  const selectedSchoolCanCreate = userRole !== 'admin' || (
+    selectedSchoolId !== ALL_SCHOOLS_ID &&
+    selectedSchool?.status === 'active'
+  )
+
+  const schoolNameOf = schoolId => {
+    const school = schools.find(item => item.schoolId === schoolId)
+    return school?.name || schoolId
+  }
 
   // ============================================================
   // Student/class helpers
   // ============================================================
-  const schoolIdOf = data => data?.schoolId || DEFAULT_SCHOOL_ID
-
-
   const getValidStudentIdsForClass = classItem => {
     const classSchoolId = schoolIdOf(classItem)
 
@@ -230,8 +414,36 @@ export default function ManageClasses() {
   // ============================================================
   // Form helpers
   // ============================================================
-  const openCreateModal = () => {
+  const resetForm = () => {
     setEditingClass(null)
+    setFormSchoolId('')
+    setFormName('')
+    setFormDescription('')
+    setFormColor('purple')
+    setFormStudentIds([])
+    setFormTeacherId('')
+    setFormSearch('')
+  }
+
+  const openCreateModal = () => {
+    if (userRole === 'admin') {
+      if (selectedSchoolId === ALL_SCHOOLS_ID) {
+        alert('Choose one school before creating a class. All Schools is a view-only scope for class creation.')
+        return
+      }
+
+      if (!selectedSchool || selectedSchool.status !== 'active') {
+        alert('Choose an active school before creating a class.')
+        return
+      }
+    }
+
+    setEditingClass(null)
+    setFormSchoolId(
+      userRole === 'admin'
+        ? selectedSchoolId
+        : schoolIdOf(userProfile)
+    )
     setFormName('')
     setFormDescription('')
     setFormColor('purple')
@@ -243,6 +455,7 @@ export default function ManageClasses() {
 
   const openEditModal = classItem => {
     setEditingClass(classItem)
+    setFormSchoolId(schoolIdOf(classItem))
     setFormName(classItem.name || '')
     setFormDescription(classItem.description || '')
     setFormColor(classItem.color || 'purple')
@@ -254,13 +467,18 @@ export default function ManageClasses() {
 
   const closeModal = () => {
     setShowCreateModal(false)
-    setEditingClass(null)
-    setFormName('')
-    setFormDescription('')
-    setFormColor('purple')
-    setFormStudentIds([])
-    setFormTeacherId('')
-    setFormSearch('')
+    resetForm()
+  }
+
+  const handleSchoolScopeChange = nextSchoolId => {
+    if (saving) return
+
+    if (showCreateModal) {
+      closeModal()
+    }
+
+    setSelectedSchoolId(nextSchoolId)
+    setSearchParams({ school: nextSchoolId }, { replace: true })
   }
 
   const toggleStudent = studentId => {
@@ -271,6 +489,36 @@ export default function ManageClasses() {
     )
   }
 
+  // ============================================================
+  // Modal school/teacher/student scope
+  // ============================================================
+  const formSchool = userRole === 'admin'
+    ? schools.find(school => school.schoolId === formSchoolId) || null
+    : null
+
+  const availableTeachers = userRole === 'admin'
+    ? teachers.filter(teacher => schoolIdOf(teacher) === formSchoolId)
+    : []
+
+  const schoolEligibleStudents = formSchoolId
+    ? students.filter(student => schoolIdOf(student) === formSchoolId)
+    : []
+
+  const filteredStudents = schoolEligibleStudents.filter(student => {
+    if (!formSearch.trim()) return true
+    const searchQuery = formSearch.toLowerCase()
+    return (
+      (student.name || '').toLowerCase().includes(searchQuery) ||
+      (student.email || '').toLowerCase().includes(searchQuery)
+    )
+  })
+
+  const formSchoolIsActive = userRole !== 'admin' || formSchool?.status === 'active'
+
+  // ============================================================
+  // Server-authoritative create/edit
+  // P1B: browser no longer writes class documents directly.
+  // ============================================================
   const handleSave = async () => {
     if (saving) return
 
@@ -279,105 +527,76 @@ export default function ManageClasses() {
       return
     }
 
-    setSaving(true)
+    const schoolId = editingClass
+      ? schoolIdOf(editingClass)
+      : formSchoolId || (userRole === 'teacher' ? schoolIdOf(userProfile) : '')
 
-    try {
-      const now = new Date().toISOString()
-      let teacherId = user.uid
-      let schoolId = schoolIdOf(userProfile)
+    if (!schoolId) {
+      alert('Please select a school for this class.')
+      return
+    }
 
-      if (userRole === 'admin') {
-        teacherId = editingClass?.teacherId || formTeacherId || ''
+    if (userRole === 'admin' && !formSchoolIsActive) {
+      alert('Classes can only be created or edited while the school is active.')
+      return
+    }
 
-        if (!teacherId) {
-          alert('Please select a teacher for this class.')
-          return
-        }
+    let teacherId = user?.uid || ''
 
-        if (editingClass?.teacherId && formTeacherId !== editingClass.teacherId) {
-          alert('The teacher is locked after class creation. Create a new class for a different teacher.')
-          return
-        }
+    if (userRole === 'admin') {
+      teacherId = editingClass?.teacherId || formTeacherId || ''
 
-        const selectedTeacher = teachers.find(teacher => teacher.id === teacherId)
-        if (!selectedTeacher) {
-          alert('The selected teacher is not available.')
-          return
-        }
-
-        const teacherSchoolId = schoolIdOf(selectedTeacher)
-        schoolId = editingClass ? schoolIdOf(editingClass) : teacherSchoolId
-
-        if (teacherSchoolId !== schoolId) {
-          alert('The selected teacher belongs to a different school than this class.')
-          return
-        }
-      }
-
-      const eligibleStudentIds = new Set(
-        students
-          .filter(student => schoolIdOf(student) === schoolId)
-          .map(student => student.id)
-      )
-
-      const hasCrossSchoolSelection = formStudentIds.some(
-        studentId => !eligibleStudentIds.has(studentId)
-      )
-
-      if (hasCrossSchoolSelection) {
-        alert('Every selected student must belong to the same school as the class teacher.')
+      if (!teacherId) {
+        alert('Please select a teacher for this class.')
         return
       }
 
-      const cleanedStudentIds = Array.from(new Set(formStudentIds))
-
-      if (editingClass) {
-        await updateDoc(doc(db, 'classes', editingClass.id), {
-          name: formName.trim(),
-          description: formDescription.trim(),
-          color: formColor,
-          studentIds: cleanedStudentIds,
-          teacherId,
-          teacherIds: teacherId ? [teacherId] : [],
-          schoolId,
-          updatedBy: user.uid,
-          updatedAt: now
-        })
-      } else {
-        await addDoc(collection(db, 'classes'), {
-          name: formName.trim(),
-          description: formDescription.trim(),
-          color: formColor,
-          studentIds: cleanedStudentIds,
-          teacherId,
-          teacherIds: teacherId ? [teacherId] : [],
-          schoolId,
-          createdBy: user.uid,
-          updatedBy: user.uid,
-          createdAt: now,
-          updatedAt: now,
-          archived: false
-        })
+      if (editingClass?.teacherId && formTeacherId !== editingClass.teacherId) {
+        alert('The teacher is locked after class creation. Create a new class for a different teacher.')
+        return
       }
 
-      // Stage 18: privileged student-profile teacherIds links are server-only.
-      // The callable verifies that the teacher and every selected student already
-      // belong to this same school. It never changes a student's schoolId.
-      if (userRole === 'admin' && cleanedStudentIds.length > 0) {
-        await syncManagedClassStudentLinksCall({
-          schoolId,
-          teacherId,
-          studentIds: cleanedStudentIds
-        })
+      const selectedTeacher = teachers.find(teacher => teacher.id === teacherId)
+      if (!selectedTeacher || schoolIdOf(selectedTeacher) !== schoolId) {
+        alert('The selected teacher is not an active teacher in this school.')
+        return
       }
+    }
 
-      // Removing a student from a class should only remove them from that class.
-      // It must not remove teacherIds from the student profile, because the same
-      // student may still belong to another class or still be assigned to this teacher.
+    const eligibleStudentIds = new Set(
+      students
+        .filter(student => schoolIdOf(student) === schoolId)
+        .map(student => student.id)
+    )
+
+    const hasCrossSchoolSelection = formStudentIds.some(
+      studentId => !eligibleStudentIds.has(studentId)
+    )
+
+    if (hasCrossSchoolSelection) {
+      alert('Every selected student must belong to the same school as the class.')
+      return
+    }
+
+    const cleanedStudentIds = Array.from(new Set(formStudentIds))
+
+    setSaving(true)
+
+    try {
+      await saveManagedClassCall({
+        ...(editingClass?.id ? { classId: editingClass.id } : {}),
+        schoolId,
+        name: formName.trim(),
+        description: formDescription.trim(),
+        color: formColor,
+        teacherId,
+        studentIds: cleanedStudentIds
+      })
+
       closeModal()
     } catch (error) {
-      console.error(error)
-      alert(`Could not save class. ${error?.message || 'Please try again.'}`)
+      console.error('Could not save class:', error)
+      alert(`Could not save class. ${errorMessage(error, 'Please try again.')}`)
     } finally {
       setSaving(false)
     }
@@ -396,14 +615,13 @@ export default function ManageClasses() {
     if (!confirmed) return
 
     try {
-      await updateDoc(doc(db, 'classes', classItem.id), {
-        archived: true,
-        updatedBy: user.uid,
-        updatedAt: new Date().toISOString()
+      await setManagedClassArchivedCall({
+        classId: classItem.id,
+        archived: true
       })
     } catch (error) {
       console.error('Could not archive class:', error)
-      alert(`Could not archive class. ${error?.message || 'Please try again.'}`)
+      alert(`Could not archive class. ${errorMessage(error, 'Please try again.')}`)
     }
   }
 
@@ -420,44 +638,12 @@ export default function ManageClasses() {
     if (!confirmed) return
 
     try {
-      await deleteDoc(doc(db, 'classes', classItem.id))
+      await deleteManagedClassCall({ classId: classItem.id })
     } catch (error) {
       console.error('Could not delete class:', error)
-      alert(`Could not delete class. ${error?.message || 'Please check Firestore rules and try again.'}`)
+      alert(`Could not delete class. ${errorMessage(error, 'Please try again.')}`)
     }
   }
-
-  // ============================================================
-  // Search filter for students inside modal
-  // ============================================================
-  const selectedTeacherForForm = userRole === 'admin'
-    ? teachers.find(teacher => teacher.id === formTeacherId)
-    : null
-
-  const formSchoolId = userRole === 'admin'
-    ? (editingClass
-        ? schoolIdOf(editingClass)
-        : selectedTeacherForForm
-          ? schoolIdOf(selectedTeacherForForm)
-          : '')
-    : schoolIdOf(userProfile)
-
-  const availableTeachers = userRole === 'admin' && editingClass
-    ? teachers.filter(teacher => schoolIdOf(teacher) === schoolIdOf(editingClass))
-    : teachers
-
-  const schoolEligibleStudents = formSchoolId
-    ? students.filter(student => schoolIdOf(student) === formSchoolId)
-    : []
-
-  const filteredStudents = schoolEligibleStudents.filter(student => {
-    if (!formSearch.trim()) return true
-    const searchQuery = formSearch.toLowerCase()
-    return (
-      (student.name || '').toLowerCase().includes(searchQuery) ||
-      (student.email || '').toLowerCase().includes(searchQuery)
-    )
-  })
 
   // ============================================================
   // Loading state
@@ -486,7 +672,7 @@ export default function ManageClasses() {
       </nav>
 
       <div className="max-w-6xl mx-auto px-6 py-10">
-        <div className="flex items-center justify-between mb-8 flex-wrap gap-4">
+        <div className="flex items-center justify-between mb-6 flex-wrap gap-4">
           <div>
             <h1 className="text-2xl font-bold text-gray-900 mb-1">
               Manage Classes
@@ -498,11 +684,70 @@ export default function ManageClasses() {
 
           <button
             onClick={openCreateModal}
-            className="bg-purple-600 text-white rounded-xl px-6 py-3 text-sm font-medium hover:bg-purple-700"
+            disabled={!selectedSchoolCanCreate || (userRole === 'admin' && schoolsLoading)}
+            className="bg-purple-600 text-white rounded-xl px-6 py-3 text-sm font-medium hover:bg-purple-700 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             + Create Class
           </button>
         </div>
+
+        {userRole === 'admin' ? (
+          <div className="bg-white border border-purple-100 rounded-2xl p-5 mb-8">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h2 className="font-semibold text-gray-800">School class view</h2>
+                  <span className="text-xs bg-purple-50 text-purple-600 px-2 py-1 rounded-full">P1B</span>
+                </div>
+                <p className="text-xs text-gray-400 mt-1">
+                  Classes, teachers and students are scoped to one school. All Schools is available for viewing, but class creation requires one active school.
+                </p>
+              </div>
+
+              <div className="w-full md:w-80">
+                <label className="text-xs text-gray-400 mb-1 block">Viewing school</label>
+                <select
+                  value={selectedSchoolId}
+                  onChange={e => handleSchoolScopeChange(e.target.value)}
+                  disabled={schoolsLoading}
+                  className="w-full border border-purple-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 bg-white"
+                >
+                  {schools.map(school => (
+                    <option key={school.schoolId} value={school.schoolId}>
+                      {school.name}{school.status !== 'active' ? ' (Inactive)' : ''}
+                    </option>
+                  ))}
+                  <option value={ALL_SCHOOLS_ID}>All Schools</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="mt-3 text-xs text-gray-500 flex flex-wrap gap-x-3 gap-y-1">
+              <span>
+                Current view: <span className="font-semibold text-purple-700">{selectedSchoolLabel}</span>
+              </span>
+              {selectedSchoolId === ALL_SCHOOLS_ID && (
+                <span className="text-amber-600">Choose one school before creating a class.</span>
+              )}
+              {selectedSchoolId !== ALL_SCHOOLS_ID && selectedSchool?.status !== 'active' && !schoolsLoading && (
+                <span className="text-amber-600">This school is inactive. Existing classes are view-only for editing; archive/delete remain server-controlled.</span>
+              )}
+              {schoolsError && (
+                <span className="text-red-500">{schoolsError}</span>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="bg-white border border-gray-100 rounded-2xl px-5 py-4 mb-8 text-sm text-gray-500">
+            School: <span className="font-semibold text-gray-700">{selectedSchoolLabel}</span>
+          </div>
+        )}
+
+        {classesError && (
+          <div className="bg-red-50 border border-red-100 text-red-600 rounded-xl px-4 py-3 text-sm mb-6">
+            {classesError}
+          </div>
+        )}
 
         {loading ? (
           <p className="text-gray-400 text-sm text-center py-12">
@@ -512,17 +757,21 @@ export default function ManageClasses() {
           <div className="bg-white border border-gray-100 rounded-2xl p-12 text-center">
             <div className="text-5xl mb-4">📚</div>
             <h2 className="text-lg font-semibold text-gray-800 mb-2">
-              No classes yet
+              No classes in this view
             </h2>
             <p className="text-sm text-gray-500 mb-6">
-              Create your first class to start grouping students.
+              {userRole === 'admin' && selectedSchoolId === ALL_SCHOOLS_ID
+                ? 'No active class groups were found across the current schools.'
+                : 'Create the first class for this school to start grouping students.'}
             </p>
-            <button
-              onClick={openCreateModal}
-              className="bg-purple-600 text-white rounded-xl px-6 py-3 text-sm font-medium hover:bg-purple-700"
-            >
-              + Create First Class
-            </button>
+            {selectedSchoolCanCreate && (
+              <button
+                onClick={openCreateModal}
+                className="bg-purple-600 text-white rounded-xl px-6 py-3 text-sm font-medium hover:bg-purple-700"
+              >
+                + Create First Class
+              </button>
+            )}
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -531,6 +780,9 @@ export default function ManageClasses() {
               const validStudentIds = getValidStudentIdsForClass(classItem)
               const staleStudentCount = (classItem.studentIds || []).length - validStudentIds.length
               const studentCount = validStudentIds.length
+              const classSchoolId = schoolIdOf(classItem)
+              const classSchool = schools.find(item => item.schoolId === classSchoolId)
+              const classSchoolActive = userRole !== 'admin' || classSchool?.status === 'active'
 
               return (
                 <div
@@ -551,6 +803,12 @@ export default function ManageClasses() {
                       {studentCount} {studentCount === 1 ? 'student' : 'students'}
                     </span>
                   </div>
+
+                  {userRole === 'admin' && selectedSchoolId === ALL_SCHOOLS_ID && (
+                    <p className="text-[11px] font-medium text-purple-600 mb-2">
+                      School: {schoolNameOf(classSchoolId)}
+                    </p>
+                  )}
 
                   {classItem.description && (
                     <p className="text-xs text-gray-500 mb-4 line-clamp-2">
@@ -598,7 +856,8 @@ export default function ManageClasses() {
                   <div className="flex gap-2">
                     <button
                       onClick={() => openEditModal(classItem)}
-                      className="flex-1 bg-gray-100 text-gray-700 rounded-xl py-2 text-xs font-medium hover:bg-gray-200"
+                      disabled={!classSchoolActive}
+                      className="flex-1 bg-gray-100 text-gray-700 rounded-xl py-2 text-xs font-medium hover:bg-gray-200 disabled:opacity-40 disabled:cursor-not-allowed"
                     >
                       Edit
                     </button>
@@ -645,49 +904,28 @@ export default function ManageClasses() {
             </div>
 
             <div className="flex-1 overflow-y-auto px-6 py-5">
-              {userRole === 'admin' && (
-                <div className="mb-4">
-                  <label className="text-xs text-gray-400 mb-1 block">
-                    Teacher *
-                  </label>
+              {/* 1. School */}
+              <div className="mb-4">
+                <label className="text-xs text-gray-400 mb-1 block">
+                  School *
+                </label>
+                <input
+                  value={
+                    userRole === 'admin'
+                      ? schoolNameOf(formSchoolId)
+                      : formSchoolId
+                  }
+                  readOnly
+                  className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm bg-gray-100 text-gray-600 outline-none"
+                />
+                <p className="text-[11px] text-gray-400 mt-1">
+                  {editingClass
+                    ? 'School is locked after class creation.'
+                    : 'The school comes from the current Manage Classes school view.'}
+                </p>
+              </div>
 
-                  <select
-                    value={formTeacherId}
-                    disabled={Boolean(editingClass?.teacherId)}
-                    onChange={e => {
-                      const nextTeacherId = e.target.value
-                      setFormTeacherId(nextTeacherId)
-
-                      const nextTeacher = teachers.find(teacher => teacher.id === nextTeacherId)
-                      const nextSchoolId = nextTeacher ? schoolIdOf(nextTeacher) : ''
-
-                      setFormStudentIds(previous =>
-                        previous.filter(studentId => {
-                          const student = students.find(item => item.id === studentId)
-                          return Boolean(student) && schoolIdOf(student) === nextSchoolId
-                        })
-                      )
-                    }}
-                    className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white disabled:bg-gray-100 disabled:text-gray-500"
-                  >
-                    <option value="">Select teacher</option>
-
-                    {availableTeachers.map(teacher => (
-                      <option key={teacher.id} value={teacher.id}>
-                        {teacher.name || teacher.email} · {schoolIdOf(teacher)}
-                      </option>
-                    ))}
-                  </select>
-
-                  <p className="text-[11px] text-gray-400 mt-1">
-                    {editingClass?.teacherId
-                      ? 'Teacher and school are locked after class creation.'
-                      : 'Selecting a teacher also fixes the class school. Only students from that school can be added.'}
-                  </p>
-                </div>
-              )}
-
-              {/* Name */}
+              {/* 2. Class name */}
               <div className="mb-4">
                 <label className="text-xs text-gray-400 mb-1 block">
                   Class name *
@@ -700,6 +938,47 @@ export default function ManageClasses() {
                   autoFocus
                 />
               </div>
+
+              {/* 3. Teacher */}
+              {userRole === 'admin' ? (
+                <div className="mb-4">
+                  <label className="text-xs text-gray-400 mb-1 block">
+                    Teacher *
+                  </label>
+
+                  <select
+                    value={formTeacherId}
+                    disabled={Boolean(editingClass?.teacherId)}
+                    onChange={e => {
+                      setFormTeacherId(e.target.value)
+                      setFormStudentIds([])
+                    }}
+                    className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white disabled:bg-gray-100 disabled:text-gray-500"
+                  >
+                    <option value="">Select teacher</option>
+                    {availableTeachers.map(teacher => (
+                      <option key={teacher.id} value={teacher.id}>
+                        {teacher.name || teacher.email}
+                      </option>
+                    ))}
+                  </select>
+
+                  <p className="text-[11px] text-gray-400 mt-1">
+                    {editingClass?.teacherId
+                      ? 'Teacher is locked after class creation.'
+                      : 'Only active teachers from this school are available.'}
+                  </p>
+                </div>
+              ) : (
+                <div className="mb-4">
+                  <label className="text-xs text-gray-400 mb-1 block">Teacher</label>
+                  <input
+                    value={userProfile?.name || userProfile?.email || 'Current teacher'}
+                    readOnly
+                    className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm bg-gray-100 text-gray-600 outline-none"
+                  />
+                </div>
+              )}
 
               {/* Description */}
               <div className="mb-4">
@@ -737,7 +1016,7 @@ export default function ManageClasses() {
                 </div>
               </div>
 
-              {/* Students */}
+              {/* 4. Students */}
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <label className="text-xs text-gray-400">
@@ -761,12 +1040,12 @@ export default function ManageClasses() {
                 />
 
                 <p className="text-[11px] text-gray-400 mb-3">
-                  To move a student, remove them from this class, save, then add them to the other class. This will not delete the student or their homework history.
+                  Only active students from this class school are shown. Removing a student from a class does not delete the student or their homework history.
                 </p>
 
-                {userRole === 'admin' && !formSchoolId ? (
+                {userRole === 'admin' && !formTeacherId ? (
                   <p className="text-sm text-gray-400 text-center py-6 bg-gray-50 rounded-xl">
-                    Select a teacher first to load students from the correct school.
+                    Select a teacher first, then choose students from this school.
                   </p>
                 ) : schoolEligibleStudents.length === 0 ? (
                   <p className="text-sm text-gray-400 text-center py-6 bg-gray-50 rounded-xl">
@@ -820,8 +1099,8 @@ export default function ManageClasses() {
               </button>
               <button
                 onClick={handleSave}
-                disabled={saving}
-                className="flex-1 bg-purple-600 text-white rounded-xl py-3 text-sm font-medium hover:bg-purple-700 disabled:opacity-60"
+                disabled={saving || !formSchoolIsActive}
+                className="flex-1 bg-purple-600 text-white rounded-xl py-3 text-sm font-medium hover:bg-purple-700 disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 {saving
                   ? 'Saving...'

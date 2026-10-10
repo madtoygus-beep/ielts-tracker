@@ -127,6 +127,7 @@ service cloud.firestore {
 
     function teacherCanReadClass() {
       return isTeacher()
+        && sameSchool(resource.data)
         && (
           resource.data.get('teacherId', '') == request.auth.uid
           || resource.data.get('createdBy', '') == request.auth.uid
@@ -567,28 +568,20 @@ service cloud.firestore {
     // CLASSES
     // ============================================================
 
+    // P1B: class reads are school-scoped. All class writes are server-only
+    // through saveManagedClass / setManagedClassArchived / deleteManagedClass.
+    // Admin SDK Cloud Functions bypass client rules and enforce the authoritative
+    // school, teacher and student relationship before writing.
     match /classes/{classId} {
       allow read: if isAdmin()
         || teacherCanReadClass()
-        || (isStudent() && resource.data.get('studentIds', []).hasAny([request.auth.uid]));
-
-      allow create: if isAdmin()
         || (
-          isTeacher()
-          && schoolIdOf(request.resource.data) == currentSchoolId()
-          && request.resource.data.get('createdBy', request.auth.uid) == request.auth.uid
-          && request.resource.data.get('teacherId', request.auth.uid) == request.auth.uid
+          isStudent()
+          && sameSchool(resource.data)
+          && resource.data.get('studentIds', []).hasAny([request.auth.uid])
         );
 
-      allow update: if isAdmin()
-        || (
-          teacherCanReadClass()
-          && schoolIdOf(request.resource.data) == schoolIdOf(resource.data)
-          && request.resource.data.get('teacherId', '') == resource.data.get('teacherId', '')
-          && request.resource.data.get('createdBy', '') == resource.data.get('createdBy', '')
-        );
-
-      allow delete: if isAdmin() || teacherCanReadClass();
+      allow create, update, delete: if false;
     }
 
     // ============================================================

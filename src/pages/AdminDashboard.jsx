@@ -2148,7 +2148,7 @@ export default function AdminDashboard() {
 
           <button
 
-            onClick={() => navigate('/admin/classes')}
+            onClick={() => navigate(`/admin/classes?school=${encodeURIComponent(selectedSchoolId)}`)}
 
             className="bg-white border border-purple-200 text-purple-600 px-4 py-2 rounded-xl text-sm font-medium hover:bg-purple-50"
 
