@@ -35,6 +35,17 @@ const SCHOOL_STATUSES = new Set(['active', 'inactive'])
 const SCHOOL_SEAT_LOCK_TTL_MS = 60000
 const SCHOOL_SEAT_LOCK_RETRY_MS = 150
 const SCHOOL_SEAT_LOCK_MAX_ATTEMPTS = 60
+const MANAGED_CLASS_SCHEMA_VERSION = 1
+const MANAGED_CLASS_COLORS = new Set([
+  'purple',
+  'blue',
+  'green',
+  'amber',
+  'rose',
+  'cyan',
+  'indigo',
+  'fuchsia'
+])
 
 // Stage 18.1: permanent school deletion is an explicit cascade. The school must
 // first be inactive. The platform default school is never eligible. Every known
@@ -2262,6 +2273,470 @@ function assertStudentUidList(value) {
 
   return uniqueStrings(value).map(uid => assertDocumentId(uid, 'Student ID'))
 }
+
+// P1A: school-scoped class foundation. This layer is intentionally additive in
+// P1A: existing class documents are not migrated and current client class writes
+// remain untouched until P1B. The callables below establish the server-authoritative
+// create/update/archive/delete boundary and a read-only audit used to plan the
+// legacy schoolId backfill safely.
+function normalizeManagedClassName(value) {
+  const name = safeString(value, 120).trim()
+  if (name.length < 1) {
+    throw new HttpsError('invalid-argument', 'Class name is required.')
+  }
+  return name
+}
+
+function normalizeManagedClassDescription(value) {
+  return safeString(value, 1000).trim()
+}
+
+function normalizeManagedClassColor(value) {
+  const color = safeString(value, 30).trim().toLowerCase()
+  return MANAGED_CLASS_COLORS.has(color) ? color : 'purple'
+}
+
+function storedSchoolIdOf(data) {
+  return typeof data?.schoolId === 'string' && data.schoolId.trim()
+    ? data.schoolId.trim().toLowerCase()
+    : ''
+}
+
+function managedClassTeacherId(data) {
+  const direct = safeString(data?.teacherId, 1500).trim()
+  if (direct) return direct
+  const teacherIds = uniqueStrings(data?.teacherIds)
+  return teacherIds[0] || ''
+}
+
+function isManagedSystemClass(data) {
+  const normalizedName = safeString(data?.name, 120).trim().toLowerCase()
+  return normalizedName === 'all' || data?.system === true || data?.isSystem === true
+}
+
+function managerCanManageClass(manager, classData) {
+  if (manager.profile.role === 'admin') return true
+  if (manager.profile.role !== 'teacher') return false
+
+  const classTeacherId = managedClassTeacherId(classData)
+  return schoolIdOf(classData) === schoolIdOf(manager.profile) && (
+    classTeacherId === manager.uid ||
+    safeString(classData?.createdBy, 1500).trim() === manager.uid ||
+    uniqueStrings(classData?.teacherIds).includes(manager.uid)
+  )
+}
+
+async function requireManagedClassSchoolActive(value) {
+  const schoolId = normalizeSchoolId(value)
+  const schoolSnap = await db.doc(`schools/${schoolId}`).get()
+  if (!schoolSnap.exists) {
+    throw new HttpsError('failed-precondition', 'The selected class school does not exist.')
+  }
+
+  const school = schoolSnap.data() || {}
+  if (school.status !== 'active') {
+    throw new HttpsError('failed-precondition', 'The selected class school is inactive.')
+  }
+
+  return { schoolId, school }
+}
+
+async function requireManagedClassTeacher(teacherId, schoolId) {
+  const uid = assertDocumentId(teacherId, 'Teacher ID')
+  const snap = await db.doc(`users/${uid}`).get()
+  if (!snap.exists) {
+    throw new HttpsError('not-found', 'The selected teacher profile was not found.')
+  }
+
+  const profile = snap.data() || {}
+  if (
+    profile.role !== 'teacher' ||
+    profile.status !== 'approved' ||
+    profile.deleted === true
+  ) {
+    throw new HttpsError('failed-precondition', 'The selected teacher account is not active.')
+  }
+
+  if (schoolIdOf(profile) !== schoolId) {
+    throw new HttpsError('failed-precondition', 'The selected teacher belongs to a different school.')
+  }
+
+  return { uid, profile }
+}
+
+async function requireManagedClassStudents(studentIds, schoolId) {
+  if (studentIds.length === 0) return []
+
+  const refs = studentIds.map(uid => db.doc(`users/${uid}`))
+  const snaps = await db.getAll(...refs)
+  const students = []
+
+  for (let index = 0; index < snaps.length; index++) {
+    const snap = snaps[index]
+    const uid = studentIds[index]
+
+    if (!snap.exists) {
+      throw new HttpsError('not-found', `Student profile ${uid} was not found.`)
+    }
+
+    const profile = snap.data() || {}
+    if (
+      profile.role !== 'student' ||
+      profile.status !== 'approved' ||
+      profile.deleted === true
+    ) {
+      throw new HttpsError('failed-precondition', 'Every selected student must be an active student account.')
+    }
+
+    if (schoolIdOf(profile) !== schoolId) {
+      throw new HttpsError('failed-precondition', 'A selected student belongs to a different school.')
+    }
+
+    students.push({ uid, ref: snap.ref, profile })
+  }
+
+  return students
+}
+
+function managedClassAuditItem(docSnap, userMap, schoolIds) {
+  const data = docSnap.data() || {}
+  const storedSchoolId = storedSchoolIdOf(data)
+  const effectiveSchoolId = storedSchoolId || DEFAULT_SCHOOL_ID
+  const teacherId = managedClassTeacherId(data)
+  const teacherProfile = teacherId ? userMap.get(teacherId) || null : null
+  const teacherSchoolId = teacherProfile ? schoolIdOf(teacherProfile) : ''
+  const studentIds = uniqueStrings(data.studentIds)
+
+  let missingStudentRefs = 0
+  let inactiveStudentRefs = 0
+  let crossSchoolStudentRefs = 0
+  const observedStudentSchools = new Set()
+
+  for (const studentId of studentIds) {
+    const profile = userMap.get(studentId)
+    if (!profile) {
+      missingStudentRefs++
+      continue
+    }
+
+    const studentSchoolId = schoolIdOf(profile)
+    observedStudentSchools.add(studentSchoolId)
+
+    if (
+      profile.role !== 'student' ||
+      profile.status !== 'approved' ||
+      profile.deleted === true
+    ) {
+      inactiveStudentRefs++
+    }
+
+    if (studentSchoolId !== effectiveSchoolId) {
+      crossSchoolStudentRefs++
+    }
+  }
+
+  const teacherMissing = Boolean(teacherId) && !teacherProfile
+  const teacherInactive = Boolean(teacherProfile) && (
+    teacherProfile.role !== 'teacher' ||
+    teacherProfile.status !== 'approved' ||
+    teacherProfile.deleted === true
+  )
+  const teacherSchoolMismatch = Boolean(teacherProfile) && teacherSchoolId !== effectiveSchoolId
+  const schoolRecordMissing = !schoolIds.has(effectiveSchoolId)
+
+  let inferredSchoolId = storedSchoolId
+  let inferenceSource = storedSchoolId ? 'stored' : ''
+
+  if (!storedSchoolId && teacherProfile && teacherSchoolId) {
+    inferredSchoolId = teacherSchoolId
+    inferenceSource = 'teacher'
+  } else if (!storedSchoolId && observedStudentSchools.size === 1) {
+    inferredSchoolId = Array.from(observedStudentSchools)[0]
+    inferenceSource = 'students'
+  } else if (!storedSchoolId && observedStudentSchools.size === 0) {
+    inferredSchoolId = DEFAULT_SCHOOL_ID
+    inferenceSource = 'legacy-default'
+  }
+
+  const inferredSchoolExists = Boolean(inferredSchoolId) && schoolIds.has(inferredSchoolId)
+  const teacherCompatibleWithInference = !teacherProfile || !inferredSchoolId || teacherSchoolId === inferredSchoolId
+  const studentsCompatibleWithInference = !inferredSchoolId || Array.from(observedStudentSchools).every(
+    schoolId => schoolId === inferredSchoolId
+  )
+
+  const safeAutoBackfill = !storedSchoolId && Boolean(inferredSchoolId) && inferredSchoolExists &&
+    teacherCompatibleWithInference && studentsCompatibleWithInference
+
+  const needsManualReview =
+    schoolRecordMissing ||
+    teacherMissing ||
+    teacherInactive ||
+    teacherSchoolMismatch ||
+    missingStudentRefs > 0 ||
+    inactiveStudentRefs > 0 ||
+    crossSchoolStudentRefs > 0 ||
+    (!storedSchoolId && !safeAutoBackfill)
+
+  return {
+    classId: docSnap.id,
+    name: safeString(data.name, 120),
+    archived: data.archived === true,
+    system: isManagedSystemClass(data),
+    storedSchoolId: storedSchoolId || null,
+    effectiveSchoolId,
+    missingSchoolId: !storedSchoolId,
+    schoolRecordMissing,
+    teacherId: teacherId || null,
+    teacherMissing,
+    teacherInactive,
+    teacherSchoolId: teacherSchoolId || null,
+    teacherSchoolMismatch,
+    studentCount: studentIds.length,
+    missingStudentRefs,
+    inactiveStudentRefs,
+    crossSchoolStudentRefs,
+    observedStudentSchools: Array.from(observedStudentSchools).sort(),
+    inferredSchoolId: inferredSchoolId || null,
+    inferenceSource: inferenceSource || null,
+    safeAutoBackfill,
+    needsManualReview
+  }
+}
+
+exports.getManagedClassAudit = onCall({ invoker: 'public' }, async request => {
+  await requireAdmin(request)
+
+  const [classSnap, userSnap, schoolSnap] = await Promise.all([
+    db.collection('classes').get(),
+    db.collection('users').get(),
+    db.collection('schools').get()
+  ])
+
+  const userMap = new Map(
+    userSnap.docs.map(docSnap => [docSnap.id, docSnap.data() || {}])
+  )
+  const schoolIds = new Set(schoolSnap.docs.map(docSnap => docSnap.id))
+  const classes = classSnap.docs
+    .map(docSnap => managedClassAuditItem(docSnap, userMap, schoolIds))
+    .sort((a, b) => a.name.localeCompare(b.name) || a.classId.localeCompare(b.classId))
+
+  const summary = classes.reduce((acc, item) => {
+    acc.total++
+    if (item.archived) acc.archived++
+    if (item.system) acc.system++
+    if (item.missingSchoolId) acc.missingSchoolId++
+    if (item.schoolRecordMissing) acc.schoolRecordMissing++
+    if (item.teacherMissing) acc.teacherMissing++
+    if (item.teacherInactive) acc.teacherInactive++
+    if (item.teacherSchoolMismatch) acc.teacherSchoolMismatch++
+    acc.missingStudentRefs += item.missingStudentRefs
+    acc.inactiveStudentRefs += item.inactiveStudentRefs
+    acc.crossSchoolStudentRefs += item.crossSchoolStudentRefs
+    if (item.safeAutoBackfill) acc.safeAutoBackfill++
+    if (item.needsManualReview) acc.needsManualReview++
+    return acc
+  }, {
+    total: 0,
+    archived: 0,
+    system: 0,
+    missingSchoolId: 0,
+    schoolRecordMissing: 0,
+    teacherMissing: 0,
+    teacherInactive: 0,
+    teacherSchoolMismatch: 0,
+    missingStudentRefs: 0,
+    inactiveStudentRefs: 0,
+    crossSchoolStudentRefs: 0,
+    safeAutoBackfill: 0,
+    needsManualReview: 0
+  })
+
+  return {
+    ok: true,
+    schemaVersion: MANAGED_CLASS_SCHEMA_VERSION,
+    defaultSchoolId: DEFAULT_SCHOOL_ID,
+    summary,
+    classes
+  }
+})
+
+exports.saveManagedClass = onCall({ invoker: 'public' }, async request => {
+  const manager = await requireAssignmentManager(request)
+  const data = request.data || {}
+  const classId = data.classId ? assertDocumentId(data.classId, 'Class ID') : ''
+  const name = normalizeManagedClassName(data.name)
+  const description = normalizeManagedClassDescription(data.description)
+  const color = normalizeManagedClassColor(data.color)
+  const studentIds = assertStudentUidList(data.studentIds || [])
+
+  const classRef = classId
+    ? db.doc(`classes/${classId}`)
+    : db.collection('classes').doc()
+  const existingSnap = classId ? await classRef.get() : null
+
+  if (classId && !existingSnap.exists) {
+    throw new HttpsError('not-found', 'The selected class no longer exists.')
+  }
+
+  const existing = existingSnap?.exists ? (existingSnap.data() || {}) : null
+  if (existing && !managerCanManageClass(manager, existing)) {
+    throw new HttpsError('permission-denied', 'You cannot manage this class.')
+  }
+
+  let schoolId = ''
+  if (existing) {
+    schoolId = schoolIdOf(existing)
+    if (data.schoolId !== undefined && normalizeSchoolId(data.schoolId) !== schoolId) {
+      throw new HttpsError('failed-precondition', 'A class cannot be moved to another school. Create a new class instead.')
+    }
+  } else if (manager.profile.role === 'admin') {
+    schoolId = normalizeSchoolId(data.schoolId)
+  } else {
+    schoolId = schoolIdOf(manager.profile)
+    if (data.schoolId !== undefined && normalizeSchoolId(data.schoolId) !== schoolId) {
+      throw new HttpsError('permission-denied', 'Teachers can only create classes in their own school.')
+    }
+  }
+
+  await requireManagedClassSchoolActive(schoolId)
+
+  let teacherId = ''
+  if (existing) {
+    const existingTeacherId = managedClassTeacherId(existing)
+    if (existingTeacherId) {
+      teacherId = existingTeacherId
+      if (data.teacherId !== undefined && assertDocumentId(data.teacherId, 'Teacher ID') !== teacherId) {
+        throw new HttpsError('failed-precondition', 'The class teacher is locked after creation. Create a new class for a different teacher.')
+      }
+    } else if (manager.profile.role === 'teacher') {
+      teacherId = manager.uid
+    } else if (data.teacherId) {
+      teacherId = assertDocumentId(data.teacherId, 'Teacher ID')
+    }
+  } else if (manager.profile.role === 'teacher') {
+    teacherId = manager.uid
+  } else {
+    teacherId = assertDocumentId(data.teacherId, 'Teacher ID')
+  }
+
+  if (!teacherId && !(existing && isManagedSystemClass(existing))) {
+    throw new HttpsError('invalid-argument', 'A teacher is required for this class.')
+  }
+
+  if (manager.profile.role === 'teacher' && teacherId !== manager.uid) {
+    throw new HttpsError('permission-denied', 'Teachers can only manage their own class assignment.')
+  }
+
+  if (teacherId) {
+    await requireManagedClassTeacher(teacherId, schoolId)
+  }
+  const students = await requireManagedClassStudents(studentIds, schoolId)
+
+  const now = new Date().toISOString()
+  const payload = {
+    name,
+    description,
+    color,
+    studentIds,
+    teacherId,
+    teacherIds: teacherId ? [teacherId] : [],
+    schoolId,
+    classSchemaVersion: MANAGED_CLASS_SCHEMA_VERSION,
+    createdBy: existing?.createdBy || manager.uid,
+    createdAt: existing?.createdAt || now,
+    updatedBy: manager.uid,
+    updatedAt: now,
+    archived: existing?.archived === true
+  }
+
+  const batch = db.batch()
+  if (existing) batch.set(classRef, payload, { merge: true })
+  else batch.set(classRef, payload)
+
+  // Keep the existing additive teacherIds compatibility link. Removing a student
+  // from one class does not remove a teacherId from the profile because the same
+  // teacher may still own another class or assignment for that student.
+  if (teacherId) {
+    for (const student of students) {
+      batch.set(student.ref, {
+        teacherIds: FieldValue.arrayUnion(teacherId),
+        updatedAt: now,
+        updatedBy: manager.uid
+      }, { merge: true })
+    }
+  }
+
+  await batch.commit()
+
+  return {
+    ok: true,
+    created: !existing,
+    class: {
+      classId: classRef.id,
+      ...payload
+    }
+  }
+})
+
+exports.setManagedClassArchived = onCall({ invoker: 'public' }, async request => {
+  const manager = await requireAssignmentManager(request)
+  const data = request.data || {}
+  const classId = assertDocumentId(data.classId, 'Class ID')
+  const archived = data.archived === true
+  const classRef = db.doc(`classes/${classId}`)
+  const classSnap = await classRef.get()
+
+  if (!classSnap.exists) {
+    throw new HttpsError('not-found', 'The selected class no longer exists.')
+  }
+
+  const classData = classSnap.data() || {}
+  if (!managerCanManageClass(manager, classData)) {
+    throw new HttpsError('permission-denied', 'You cannot manage this class.')
+  }
+  if (isManagedSystemClass(classData)) {
+    throw new HttpsError('failed-precondition', 'The ALL/system class cannot be archived.')
+  }
+
+  await classRef.set({
+    archived,
+    updatedBy: manager.uid,
+    updatedAt: new Date().toISOString()
+  }, { merge: true })
+
+  return { ok: true, classId, archived }
+})
+
+exports.deleteManagedClass = onCall({ invoker: 'public' }, async request => {
+  const manager = await requireAssignmentManager(request)
+  const data = request.data || {}
+  const classId = assertDocumentId(data.classId, 'Class ID')
+  const classRef = db.doc(`classes/${classId}`)
+  const classSnap = await classRef.get()
+
+  if (!classSnap.exists) {
+    return { ok: true, classId, alreadyDeleted: true }
+  }
+
+  const classData = classSnap.data() || {}
+  if (!managerCanManageClass(manager, classData)) {
+    throw new HttpsError('permission-denied', 'You cannot manage this class.')
+  }
+  if (isManagedSystemClass(classData)) {
+    throw new HttpsError('failed-precondition', 'The ALL/system class cannot be permanently deleted.')
+  }
+
+  await classRef.delete()
+
+  return {
+    ok: true,
+    classId,
+    alreadyDeleted: false,
+    preservedStudents: true,
+    preservedAssignments: true,
+    preservedSubmissions: true
+  }
+})
 
 function normalizeManagedAssignmentSnapshotItems(value) {
   if (!Array.isArray(value)) {
