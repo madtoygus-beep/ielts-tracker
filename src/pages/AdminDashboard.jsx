@@ -133,7 +133,11 @@ export default function AdminDashboard() {
 
     name: 'Maxima Eğitim',
 
-    status: 'active'
+    status: 'active',
+
+    studentSeatLimit: '',
+
+    teacherSeatLimit: ''
 
   })
 
@@ -444,6 +448,50 @@ export default function AdminDashboard() {
 
 
 
+  const normalizeSeatLimitInput = value => {
+
+    const raw = String(value ?? '').trim()
+
+    if (!raw) return ''
+
+    const digits = raw.replace(/[^0-9]/g, '')
+
+    if (!digits) return ''
+
+    return String(Math.min(100000, Number(digits)))
+
+  }
+
+
+
+  const parseSeatLimit = (value, label) => {
+
+    const raw = String(value ?? '').trim()
+
+    if (!raw) return { ok: true, value: null }
+
+
+
+    const limit = Number(raw)
+
+    if (!Number.isInteger(limit) || limit < 0 || limit > 100000) {
+
+      return { ok: false, message: `${label} must be a whole number from 0 to 100000, or left blank for Unlimited.` }
+
+    }
+
+
+
+    return { ok: true, value: limit }
+
+  }
+
+
+
+  const seatLimitLabel = limit => (limit === null || limit === undefined ? 'Unlimited' : String(limit))
+
+
+
   const resetSchoolForm = () => {
 
     setEditingSchoolId(null)
@@ -454,7 +502,11 @@ export default function AdminDashboard() {
 
       name: '',
 
-      status: 'active'
+      status: 'active',
+
+      studentSeatLimit: '',
+
+      teacherSeatLimit: ''
 
     })
 
@@ -476,7 +528,11 @@ export default function AdminDashboard() {
 
       name: 'Maxima Eğitim',
 
-      status: 'active'
+      status: 'active',
+
+      studentSeatLimit: '',
+
+      teacherSeatLimit: ''
 
     })
 
@@ -498,7 +554,19 @@ export default function AdminDashboard() {
 
       name: school.name || '',
 
-      status: school.status === 'inactive' ? 'inactive' : 'active'
+      status: school.status === 'inactive' ? 'inactive' : 'active',
+
+      studentSeatLimit: school.studentSeatLimit === null || school.studentSeatLimit === undefined
+
+        ? ''
+
+        : String(school.studentSeatLimit),
+
+      teacherSeatLimit: school.teacherSeatLimit === null || school.teacherSeatLimit === undefined
+
+        ? ''
+
+        : String(school.teacherSeatLimit)
 
     })
 
@@ -515,6 +583,10 @@ export default function AdminDashboard() {
     const schoolId = normalizeSchoolIdInput(schoolForm.schoolId)
 
     const name = schoolForm.name.trim()
+
+    const studentSeat = parseSeatLimit(schoolForm.studentSeatLimit, 'Student seat limit')
+
+    const teacherSeat = parseSeatLimit(schoolForm.teacherSeatLimit, 'Teacher seat limit')
 
 
 
@@ -538,6 +610,26 @@ export default function AdminDashboard() {
 
 
 
+    if (!studentSeat.ok) {
+
+      setSchoolsError(studentSeat.message)
+
+      return
+
+    }
+
+
+
+    if (!teacherSeat.ok) {
+
+      setSchoolsError(teacherSeat.message)
+
+      return
+
+    }
+
+
+
     setSchoolSaving(true)
 
     setSchoolsError('')
@@ -554,7 +646,11 @@ export default function AdminDashboard() {
 
         name,
 
-        status: schoolForm.status
+        status: schoolForm.status,
+
+        studentSeatLimit: studentSeat.value,
+
+        teacherSeatLimit: teacherSeat.value
 
       })
 
@@ -578,13 +674,27 @@ export default function AdminDashboard() {
 
       setEditingSchoolId(schoolId)
 
+      const savedSchool = result.data?.school || {}
+
       setSchoolForm({
 
         schoolId,
 
         name,
 
-        status: schoolForm.status
+        status: schoolForm.status,
+
+        studentSeatLimit: savedSchool.studentSeatLimit === null || savedSchool.studentSeatLimit === undefined
+
+          ? ''
+
+          : String(savedSchool.studentSeatLimit),
+
+        teacherSeatLimit: savedSchool.teacherSeatLimit === null || savedSchool.teacherSeatLimit === undefined
+
+          ? ''
+
+          : String(savedSchool.teacherSeatLimit)
 
       })
 
@@ -877,6 +987,10 @@ export default function AdminDashboard() {
 
 
 
+      await loadSchools()
+
+
+
       let resetSent = false
 
       try {
@@ -957,6 +1071,8 @@ export default function AdminDashboard() {
 
       await approveManagedUserCall({ userId, role: roleType, schoolId })
 
+      await loadSchools()
+
 
 
       setPendingSchoolSelections(previous => {
@@ -1013,6 +1129,8 @@ export default function AdminDashboard() {
 
       await deleteManagedUserCall({ userId: id })
 
+      await loadSchools()
+
     } catch (error) {
 
       console.error(error)
@@ -1039,6 +1157,7 @@ export default function AdminDashboard() {
     setRestoreBusyId(user.id)
     try {
       await restoreManagedUserCall({ userId: user.id })
+      await loadSchools()
       alert(`${user.name || user.email || 'Account'} was restored.`)
     } catch (error) {
       console.error(error)
@@ -1103,6 +1222,8 @@ export default function AdminDashboard() {
         confirmPermanentDelete: true,
         confirmEmail: expectedEmail
       })
+
+      await loadSchools()
 
       if (selectedStudent === user.id) setSelectedStudent(null)
       alert(`${user.name || user.email || 'Account'} was permanently deleted.`)
@@ -1949,6 +2070,20 @@ export default function AdminDashboard() {
     ? 'All Schools'
     : selectedSchool?.name || selectedSchoolId
 
+  const accountSchool = schools.find(school => school.schoolId === accountForm.schoolId) || null
+  const accountSeatLimit = accountForm.role === 'student'
+    ? accountSchool?.studentSeatLimit
+    : accountSchool?.teacherSeatLimit
+  const accountSeatsUsed = accountForm.role === 'student'
+    ? Number(accountSchool?.studentSeatsUsed) || 0
+    : Number(accountSchool?.teacherSeatsUsed) || 0
+  const accountSeatFull = Boolean(
+    accountSchool &&
+    accountSeatLimit !== null &&
+    accountSeatLimit !== undefined &&
+    accountSeatsUsed >= Number(accountSeatLimit)
+  )
+
   const approvalSchoolIdFor = userId => pendingSchoolSelections[userId] || (
     selectedSchoolId === ALL_SCHOOLS_ID ? '' : selectedSchoolId
   )
@@ -2030,7 +2165,7 @@ export default function AdminDashboard() {
             <div>
               <div className="flex items-center gap-2 flex-wrap">
                 <h2 className="font-semibold text-gray-800">School view</h2>
-                <span className="text-xs bg-purple-50 text-purple-600 px-2 py-1 rounded-full">Stage 18.1</span>
+                <span className="text-xs bg-purple-50 text-purple-600 px-2 py-1 rounded-full">Stage 19B</span>
               </div>
               <p className="text-xs text-gray-400 mt-1">
                 Student, teacher, approval and summary lists below are limited to the selected school. Choose All Schools only when you intentionally want a platform-wide view.
@@ -2055,10 +2190,16 @@ export default function AdminDashboard() {
             </div>
           </div>
 
-          <div className="mt-3 text-xs text-gray-500">
-            Current view: <span className="font-semibold text-purple-700">{selectedSchoolLabel}</span>
+          <div className="mt-3 text-xs text-gray-500 flex flex-wrap gap-x-3 gap-y-1">
+            <span>Current view: <span className="font-semibold text-purple-700">{selectedSchoolLabel}</span></span>
+            {selectedSchool && (
+              <>
+                <span>Students: <span className="font-semibold">{selectedSchool.studentSeatsUsed || 0} / {seatLimitLabel(selectedSchool.studentSeatLimit)}</span></span>
+                <span>Teachers: <span className="font-semibold">{selectedSchool.teacherSeatsUsed || 0} / {seatLimitLabel(selectedSchool.teacherSeatLimit)}</span></span>
+              </>
+            )}
             {selectedSchoolId !== ALL_SCHOOLS_ID && selectedSchool?.status !== 'active' && (
-              <span className="ml-2 text-amber-600">This school is inactive. Account creation and approvals are disabled.</span>
+              <span className="text-amber-600">This school is inactive. Account creation and approvals are disabled.</span>
             )}
           </div>
         </div>
@@ -2075,13 +2216,13 @@ export default function AdminDashboard() {
 
               <h2 className="font-semibold text-gray-800">Schools</h2>
 
-              <span className="text-xs bg-purple-50 text-purple-600 px-2 py-1 rounded-full">Stage 17B</span>
+              <span className="text-xs bg-purple-50 text-purple-600 px-2 py-1 rounded-full">Stage 19B</span>
 
             </div>
 
             <p className="text-xs text-gray-400 mt-1">
 
-              School records are saved through admin-only server functions. License seats are not enabled yet.
+              School records and Student/Teacher seat limits are enforced by admin-only server functions. Leave a seat limit blank for Unlimited.
 
             </p>
 
@@ -2231,6 +2372,67 @@ export default function AdminDashboard() {
 
           </div>
 
+
+          <div className="md:col-span-3">
+
+            <label className="text-xs text-gray-400 mb-1 block">Student seat limit</label>
+
+            <input
+
+              inputMode="numeric"
+
+              value={schoolForm.studentSeatLimit}
+
+              onChange={e => setSchoolForm(previous => ({
+
+                ...previous,
+
+                studentSeatLimit: normalizeSeatLimitInput(e.target.value)
+
+              }))}
+
+              placeholder="Unlimited"
+
+              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400"
+
+            />
+
+          </div>
+
+
+
+          <div className="md:col-span-3">
+
+            <label className="text-xs text-gray-400 mb-1 block">Teacher seat limit</label>
+
+            <input
+
+              inputMode="numeric"
+
+              value={schoolForm.teacherSeatLimit}
+
+              onChange={e => setSchoolForm(previous => ({
+
+                ...previous,
+
+                teacherSeatLimit: normalizeSeatLimitInput(e.target.value)
+
+              }))}
+
+              placeholder="Unlimited"
+
+              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400"
+
+            />
+
+          </div>
+
+
+
+          <div className="md:col-span-6 text-xs text-gray-400 pb-2">
+            Blank = Unlimited. Active approved accounts consume seats; Archived, Pending and Rejected accounts do not.
+          </div>
+
         </div>
 
 
@@ -2283,11 +2485,17 @@ export default function AdminDashboard() {
 
             {schools.map(school => {
 
-              const members = schoolMembers(school.schoolId)
+              const studentCount = Number(school.studentSeatsUsed) || 0
 
-              const studentCount = members.filter(member => member.role === 'student').length
+              const teacherCount = Number(school.teacherSeatsUsed) || 0
 
-              const teacherCount = members.filter(member => member.role === 'teacher').length
+              const studentLimit = school.studentSeatLimit
+
+              const teacherLimit = school.teacherSeatLimit
+
+              const studentFull = studentLimit !== null && studentLimit !== undefined && studentCount >= Number(studentLimit)
+
+              const teacherFull = teacherLimit !== null && teacherLimit !== undefined && teacherCount >= Number(teacherLimit)
 
 
 
@@ -2311,9 +2519,18 @@ export default function AdminDashboard() {
 
                     <p className="text-xs text-gray-400 mt-1">
 
-                      ID: <span className="font-mono">{school.schoolId}</span> · {studentCount} student{studentCount === 1 ? '' : 's'} · {teacherCount} teacher{teacherCount === 1 ? '' : 's'}
+                      ID: <span className="font-mono">{school.schoolId}</span>
 
                     </p>
+
+                    <div className="flex flex-wrap gap-2 mt-2">
+                      <span className={`text-[11px] px-2 py-1 rounded-full ${studentFull ? 'bg-amber-50 text-amber-700' : 'bg-blue-50 text-blue-700'}`}>
+                        Students {studentCount} / {seatLimitLabel(studentLimit)}
+                      </span>
+                      <span className={`text-[11px] px-2 py-1 rounded-full ${teacherFull ? 'bg-amber-50 text-amber-700' : 'bg-green-50 text-green-700'}`}>
+                        Teachers {teacherCount} / {seatLimitLabel(teacherLimit)}
+                      </span>
+                    </div>
 
                   </div>
 
@@ -2403,13 +2620,13 @@ export default function AdminDashboard() {
 
               <h2 className="font-semibold text-gray-800">Create account</h2>
 
-              <span className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded-full">Stage 18B</span>
+              <span className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded-full">Stage 19B</span>
 
             </div>
 
             <p className="text-xs text-gray-400 mt-1">
 
-              Create an approved Student or Teacher directly in an active school. The user receives a Firebase password setup email.
+              Create an approved Student or Teacher directly in an active school. Seat quota is enforced server-side before the account is created.
 
             </p>
 
@@ -2557,9 +2774,16 @@ export default function AdminDashboard() {
 
           <div className="min-h-5">
 
-            {accountError && <p className="text-xs text-red-600">{accountError}</p>}
+            {accountSchool && (
+              <p className={`text-xs ${accountSeatFull ? 'text-amber-700' : 'text-gray-500'}`}>
+                {accountForm.role === 'student' ? 'Student' : 'Teacher'} seats: {accountSeatsUsed} / {seatLimitLabel(accountSeatLimit)}
+                {accountSeatFull ? ' — quota full' : ''}
+              </p>
+            )}
 
-            {accountNotice && <p className="text-xs text-green-700">{accountNotice}</p>}
+            {accountError && <p className="text-xs text-red-600 mt-1">{accountError}</p>}
+
+            {accountNotice && <p className="text-xs text-green-700 mt-1">{accountNotice}</p>}
 
           </div>
 
@@ -2571,6 +2795,7 @@ export default function AdminDashboard() {
               accountCreating ||
               schoolsLoading ||
               !accountForm.schoolId ||
+              accountSeatFull ||
               !schools.some(school => school.schoolId === accountForm.schoolId && school.status === 'active')
             }
 

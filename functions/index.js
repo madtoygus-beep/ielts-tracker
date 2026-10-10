@@ -29,8 +29,12 @@ const adminAuth = getAuth()
 // an existing ACTIVE school record. Platform admins remain able to manage and
 // reactivate schools even if a school is currently inactive.
 const SCHOOL_SCHEMA_VERSION = 1
+const SCHOOL_SEAT_SCHEMA_VERSION = 1
 const DEFAULT_SCHOOL_ID = 'maxima'
 const SCHOOL_STATUSES = new Set(['active', 'inactive'])
+const SCHOOL_SEAT_LOCK_TTL_MS = 60000
+const SCHOOL_SEAT_LOCK_RETRY_MS = 150
+const SCHOOL_SEAT_LOCK_MAX_ATTEMPTS = 60
 
 // Stage 18.1: permanent school deletion is an explicit cascade. The school must
 // first be inactive. The platform default school is never eligible. Every known
@@ -58,7 +62,8 @@ const SCHOOL_CASCADE_COLLECTIONS = [
   'submissionAttemptControls',
   'submissionAttemptHistory',
   'messages',
-  'materials'
+  'materials',
+  'schoolSeatLocks'
 ]
 
 const SCHOOL_STORAGE_PATH_COLLECTIONS = [
@@ -485,27 +490,55 @@ function normalizeSchoolStatus(value) {
   return status
 }
 
-function managedSchoolClientState(id, data) {
+function managedSchoolClientState(id, data, usage = { student: 0, teacher: 0 }) {
+  const studentSeatLimit = managedSeatLimitFromStored(data?.studentSeatLimit)
+  const teacherSeatLimit = managedSeatLimitFromStored(data?.teacherSeatLimit)
+  const studentSeatsUsed = Number(usage?.student) || 0
+  const teacherSeatsUsed = Number(usage?.teacher) || 0
+
   return {
     id,
     schoolId: id,
     name: typeof data?.name === 'string' ? data.name : '',
     status: normalizeSchoolStatus(data?.status || 'active'),
     schemaVersion: Number(data?.schemaVersion) || SCHOOL_SCHEMA_VERSION,
+    seatSchemaVersion: Number(data?.seatSchemaVersion) || SCHOOL_SEAT_SCHEMA_VERSION,
+    studentSeatLimit,
+    teacherSeatLimit,
+    studentSeatsUsed,
+    teacherSeatsUsed,
+    studentSeatsRemaining: studentSeatLimit === null
+      ? null
+      : Math.max(0, studentSeatLimit - studentSeatsUsed),
+    teacherSeatsRemaining: teacherSeatLimit === null
+      ? null
+      : Math.max(0, teacherSeatLimit - teacherSeatsUsed),
+    studentSeatLimitExceeded: studentSeatLimit !== null && studentSeatsUsed > studentSeatLimit,
+    teacherSeatLimitExceeded: teacherSeatLimit !== null && teacherSeatsUsed > teacherSeatLimit,
     deleteInProgress: data?.deleteInProgress === true,
     createdAt: toPlain(data?.createdAt || null),
     updatedAt: toPlain(data?.updatedAt || null)
   }
 }
 
-// School records remain server-managed. This reader returns only school metadata;
-// institution status is enforced separately at student/teacher authorization gates.
-exports.getManagedSchools = onCall(async request => {
+// Stage 19A: school metadata now includes live seat usage and license limits.
+// Usage is derived from approved, non-archived managed accounts so archived,
+// rejected and pending profiles never consume a seat.
+exports.getManagedSchools = onCall({ invoker: 'public' }, async request => {
   await requireAdmin(request)
 
-  const snap = await db.collection('schools').get()
-  const schools = snap.docs
-    .map(docSnap => managedSchoolClientState(docSnap.id, docSnap.data() || {}))
+  const [schoolSnap, userSnap] = await Promise.all([
+    db.collection('schools').get(),
+    db.collection('users').get()
+  ])
+  const usageBySchool = managedSeatUsageMapFromUserDocs(userSnap.docs)
+
+  const schools = schoolSnap.docs
+    .map(docSnap => managedSchoolClientState(
+      docSnap.id,
+      docSnap.data() || {},
+      usageBySchool.get(docSnap.id) || { student: 0, teacher: 0 }
+    ))
     .sort((a, b) => a.name.localeCompare(b.name) || a.schoolId.localeCompare(b.schoolId))
 
   return {
@@ -515,54 +548,83 @@ exports.getManagedSchools = onCall(async request => {
   }
 })
 
-// Create/update school metadata through an admin-only server boundary. License
-// seats and account creation remain later stages; Stage 17D now makes this status
-// field authoritative for student/teacher product access.
-exports.saveManagedSchool = onCall(async request => {
+// Stage 19A: seat limits are platform-admin metadata. Missing/null limits mean
+// Unlimited for backward compatibility. A finite limit can never be saved below
+// current live usage. Seat-changing operations and limit changes share the same
+// short-lived server lock so concurrent admins cannot overbook a school.
+exports.saveManagedSchool = onCall({ invoker: 'public' }, async request => {
   const admin = await requireAdmin(request)
   const data = request.data || {}
   const schoolId = normalizeSchoolId(data.schoolId)
   const name = normalizeSchoolName(data.name)
   const status = normalizeSchoolStatus(data.status)
+  const studentSeatInput = normalizeManagedSeatLimitInput(data.studentSeatLimit, 'Student seat limit')
+  const teacherSeatInput = normalizeManagedSeatLimitInput(data.teacherSeatLimit, 'Teacher seat limit')
   const schoolRef = db.doc(`schools/${schoolId}`)
 
-  const result = await db.runTransaction(async transaction => {
-    const schoolSnap = await transaction.get(schoolRef)
-    const existing = schoolSnap.exists ? (schoolSnap.data() || {}) : null
+  return withManagedSchoolSeatLock(schoolId, async () => {
+    const currentSnap = await schoolRef.get()
+    const current = currentSnap.exists ? (currentSnap.data() || {}) : null
 
-    if (existing?.deleteInProgress === true) {
+    if (current?.deleteInProgress === true) {
       throw new HttpsError(
         'failed-precondition',
         'This school is being permanently deleted and can no longer be edited or reactivated.'
       )
     }
 
-    const payload = {
-      schoolId,
-      name,
-      status,
-      schemaVersion: SCHOOL_SCHEMA_VERSION,
-      createdAt: existing?.createdAt || FieldValue.serverTimestamp(),
-      createdBy: existing?.createdBy || admin.uid,
-      updatedAt: FieldValue.serverTimestamp(),
-      updatedBy: admin.uid
+    const studentSeatLimit = studentSeatInput.provided
+      ? studentSeatInput.value
+      : managedSeatLimitFromStored(current?.studentSeatLimit)
+    const teacherSeatLimit = teacherSeatInput.provided
+      ? teacherSeatInput.value
+      : managedSeatLimitFromStored(current?.teacherSeatLimit)
+    const usage = currentSnap.exists
+      ? await getManagedSchoolSeatUsage(schoolId)
+      : { student: 0, teacher: 0 }
+
+    assertManagedSeatLimitCanCoverUsage('student', studentSeatLimit, usage.student)
+    assertManagedSeatLimitCanCoverUsage('teacher', teacherSeatLimit, usage.teacher)
+
+    const result = await db.runTransaction(async transaction => {
+      const schoolSnap = await transaction.get(schoolRef)
+      const existing = schoolSnap.exists ? (schoolSnap.data() || {}) : null
+
+      if (existing?.deleteInProgress === true) {
+        throw new HttpsError(
+          'failed-precondition',
+          'This school is being permanently deleted and can no longer be edited or reactivated.'
+        )
+      }
+
+      const payload = {
+        schoolId,
+        name,
+        status,
+        schemaVersion: SCHOOL_SCHEMA_VERSION,
+        seatSchemaVersion: SCHOOL_SEAT_SCHEMA_VERSION,
+        studentSeatLimit,
+        teacherSeatLimit,
+        createdAt: existing?.createdAt || FieldValue.serverTimestamp(),
+        createdBy: existing?.createdBy || admin.uid,
+        updatedAt: FieldValue.serverTimestamp(),
+        updatedBy: admin.uid
+      }
+
+      transaction.set(schoolRef, payload, { merge: true })
+      return { created: !schoolSnap.exists }
+    })
+
+    return {
+      ok: true,
+      created: result.created,
+      school: managedSchoolClientState(
+        schoolId,
+        { name, status, studentSeatLimit, teacherSeatLimit, seatSchemaVersion: SCHOOL_SEAT_SCHEMA_VERSION },
+        usage
+      )
     }
-
-    transaction.set(schoolRef, payload, { merge: true })
-
-    return { created: !schoolSnap.exists }
   })
-
-  return {
-    ok: true,
-    created: result.created,
-    school: {
-      schoolId,
-      name,
-      status,
-      schemaVersion: SCHOOL_SCHEMA_VERSION
-    }
-  }
 })
 
 
@@ -998,6 +1060,155 @@ function normalizeManagedEmail(value) {
   return email
 }
 
+// Stage 19A: null means Unlimited. Zero is a valid limit and blocks all seats.
+function managedSeatLimitFromStored(value) {
+  if (value === null || value === undefined || value === '') return null
+  const limit = Number(value)
+  return Number.isInteger(limit) && limit >= 0 ? limit : null
+}
+
+function normalizeManagedSeatLimitInput(value, label) {
+  if (value === undefined) return { provided: false, value: null }
+  if (value === null || value === '' || value === 'unlimited') {
+    return { provided: true, value: null }
+  }
+
+  const limit = Number(value)
+  if (!Number.isInteger(limit) || limit < 0 || limit > 100000) {
+    throw new HttpsError('invalid-argument', `${label} must be a whole number from 0 to 100000, or Unlimited.`)
+  }
+  return { provided: true, value: limit }
+}
+
+function managedProfileConsumesSeat(profile) {
+  return profile?.status === 'approved' && profile?.deleted !== true && MANAGED_ACCOUNT_ROLES.has(profile?.role)
+}
+
+function managedSeatUsageMapFromUserDocs(docs) {
+  const usageBySchool = new Map()
+  for (const docSnap of docs || []) {
+    const profile = docSnap.data() || {}
+    if (!managedProfileConsumesSeat(profile)) continue
+
+    const schoolId = schoolIdOf(profile)
+    const current = usageBySchool.get(schoolId) || { student: 0, teacher: 0 }
+    current[profile.role] += 1
+    usageBySchool.set(schoolId, current)
+  }
+  return usageBySchool
+}
+
+async function getManagedSchoolSeatUsage(schoolId) {
+  const snap = await db.collection('users')
+    .where('schoolId', '==', schoolId)
+    .get()
+
+  const usage = { student: 0, teacher: 0 }
+  for (const docSnap of snap.docs) {
+    const profile = docSnap.data() || {}
+    if (!managedProfileConsumesSeat(profile)) continue
+    usage[profile.role] += 1
+  }
+  return usage
+}
+
+function managedSeatLimitForRole(school, role) {
+  return role === 'student'
+    ? managedSeatLimitFromStored(school?.studentSeatLimit)
+    : managedSeatLimitFromStored(school?.teacherSeatLimit)
+}
+
+function managedSeatLabel(role) {
+  return role === 'student' ? 'Student' : 'Teacher'
+}
+
+function assertManagedSeatLimitCanCoverUsage(role, limit, used) {
+  if (limit !== null && used > limit) {
+    throw new HttpsError(
+      'failed-precondition',
+      `${managedSeatLabel(role)} seat limit cannot be lower than current usage (${used}).`
+    )
+  }
+}
+
+async function assertManagedSeatAvailable(schoolId, school, role) {
+  const limit = managedSeatLimitForRole(school, role)
+  if (limit === null) return { used: null, limit: null }
+
+  const usage = await getManagedSchoolSeatUsage(schoolId)
+  const used = Number(usage[role]) || 0
+  if (used >= limit) {
+    throw new HttpsError(
+      'resource-exhausted',
+      `${managedSeatLabel(role)} seat limit reached for this school (${used}/${limit}).`
+    )
+  }
+  return { used, limit }
+}
+
+function managedSeatLockId() {
+  return randomBytes(18).toString('hex')
+}
+
+function waitForManagedSeatLock(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+async function acquireManagedSchoolSeatLock(schoolId, lockId) {
+  const lockRef = db.doc(`schoolSeatLocks/${schoolId}`)
+
+  for (let attempt = 0; attempt < SCHOOL_SEAT_LOCK_MAX_ATTEMPTS; attempt++) {
+    const now = Date.now()
+    const acquired = await db.runTransaction(async transaction => {
+      const snap = await transaction.get(lockRef)
+      const current = snap.exists ? (snap.data() || {}) : {}
+      const expiresAtMillis = Number(current.expiresAtMillis) || 0
+
+      if (snap.exists && current.lockId !== lockId && expiresAtMillis > now) {
+        return false
+      }
+
+      transaction.set(lockRef, {
+        schoolId,
+        lockId,
+        expiresAtMillis: now + SCHOOL_SEAT_LOCK_TTL_MS,
+        updatedAt: FieldValue.serverTimestamp()
+      })
+      return true
+    })
+
+    if (acquired) return lockRef
+    await waitForManagedSeatLock(SCHOOL_SEAT_LOCK_RETRY_MS)
+  }
+
+  throw new HttpsError(
+    'aborted',
+    'Seat allocation is busy for this school. Please try again in a few seconds.'
+  )
+}
+
+async function releaseManagedSchoolSeatLock(lockRef, lockId) {
+  if (!lockRef) return
+  await db.runTransaction(async transaction => {
+    const snap = await transaction.get(lockRef)
+    if (snap.exists && (snap.data() || {}).lockId === lockId) {
+      transaction.delete(lockRef)
+    }
+  }).catch(error => {
+    console.error('Stage 19A seat lock release failed', { lockId, error })
+  })
+}
+
+async function withManagedSchoolSeatLock(schoolId, callback) {
+  const lockId = managedSeatLockId()
+  const lockRef = await acquireManagedSchoolSeatLock(schoolId, lockId)
+  try {
+    return await callback()
+  } finally {
+    await releaseManagedSchoolSeatLock(lockRef, lockId)
+  }
+}
+
 function normalizeManagedTargetBand(value, role) {
   if (role !== 'student' || value === '' || value === null || value === undefined) {
     return null
@@ -1067,7 +1278,7 @@ async function assertNoManagedEmailConflict(email) {
   }
 }
 
-exports.createManagedUser = onCall(async request => {
+exports.createManagedUser = onCall({ invoker: 'public' }, async request => {
   const admin = await requireAdmin(request)
   const data = request.data || {}
   const name = normalizeManagedName(data.name)
@@ -1078,146 +1289,157 @@ exports.createManagedUser = onCall(async request => {
 
   await assertNoManagedEmailConflict(email)
 
-  const temporaryPassword = `${randomBytes(32).toString('base64url')}Aa1!`
-  let authUser = null
+  return withManagedSchoolSeatLock(schoolId, async () => {
+    const activeSchool = await requireManagedAccountSchool(schoolId)
+    await assertManagedSeatAvailable(schoolId, activeSchool.school, role)
 
-  try {
-    authUser = await adminAuth.createUser({
-      email,
-      password: temporaryPassword,
-      displayName: name,
-      emailVerified: false,
-      disabled: false
-    })
+    const temporaryPassword = `${randomBytes(32).toString('base64url')}Aa1!`
+    let authUser = null
 
-    const now = new Date().toISOString()
-    await db.doc(`users/${authUser.uid}`).set({
-      name,
-      email,
-      role,
-      requestedRole: role,
-      status: 'approved',
-      deleted: false,
-      schoolId,
-      teacherIds: [],
-      targetBand,
-      accountSource: 'admin_created',
-      createdBy: admin.uid,
-      approvedBy: admin.uid,
-      createdAt: now,
-      approvedAt: now,
-      updatedAt: now,
-      updatedBy: admin.uid
-    })
-  } catch (error) {
-    if (authUser?.uid) {
-      await adminAuth.deleteUser(authUser.uid).catch(() => {})
+    try {
+      authUser = await adminAuth.createUser({
+        email,
+        password: temporaryPassword,
+        displayName: name,
+        emailVerified: false,
+        disabled: false
+      })
+
+      const now = new Date().toISOString()
+      await db.doc(`users/${authUser.uid}`).set({
+        name,
+        email,
+        role,
+        requestedRole: role,
+        status: 'approved',
+        deleted: false,
+        schoolId,
+        teacherIds: [],
+        targetBand,
+        accountSource: 'admin_created',
+        createdBy: admin.uid,
+        approvedBy: admin.uid,
+        createdAt: now,
+        approvedAt: now,
+        updatedAt: now,
+        updatedBy: admin.uid
+      })
+    } catch (error) {
+      if (authUser?.uid) {
+        await adminAuth.deleteUser(authUser.uid).catch(() => {})
+      }
+
+      if (error?.code === 'auth/email-already-exists') {
+        throw new HttpsError('already-exists', 'A Firebase Auth account already exists with this email address.')
+      }
+      if (error?.code === 'auth/invalid-email') {
+        throw new HttpsError('invalid-argument', 'A valid email address is required.')
+      }
+      throw error
     }
 
-    if (error?.code === 'auth/email-already-exists') {
-      throw new HttpsError('already-exists', 'A Firebase Auth account already exists with this email address.')
+    return {
+      ok: true,
+      user: {
+        id: authUser.uid,
+        uid: authUser.uid,
+        name,
+        email,
+        role,
+        status: 'approved',
+        deleted: false,
+        schoolId,
+        targetBand
+      },
+      passwordSetupRequired: true
     }
-    if (error?.code === 'auth/invalid-email') {
-      throw new HttpsError('invalid-argument', 'A valid email address is required.')
-    }
-    throw error
-  }
-
-  return {
-    ok: true,
-    user: {
-      id: authUser.uid,
-      uid: authUser.uid,
-      name,
-      email,
-      role,
-      status: 'approved',
-      deleted: false,
-      schoolId,
-      targetBand
-    },
-    passwordSetupRequired: true
-  }
+  })
 })
 
-exports.approveManagedUser = onCall(async request => {
+exports.approveManagedUser = onCall({ invoker: 'public' }, async request => {
   const admin = await requireAdmin(request)
   const data = request.data || {}
   const userId = assertDocumentId(data.userId, 'User ID')
   const role = normalizeManagedAccountRole(data.role)
   const { schoolId } = await requireManagedAccountSchool(data.schoolId)
-  const userRef = db.doc(`users/${userId}`)
-  const userSnap = await userRef.get()
 
-  if (!userSnap.exists) {
-    throw new HttpsError('not-found', 'The selected user profile was not found.')
-  }
+  return withManagedSchoolSeatLock(schoolId, async () => {
+    const activeSchool = await requireManagedAccountSchool(schoolId)
+    const userRef = db.doc(`users/${userId}`)
+    const userSnap = await userRef.get()
 
-  const profile = userSnap.data() || {}
-  if (profile.role === 'admin') {
-    throw new HttpsError('permission-denied', 'Admin accounts cannot be changed here.')
-  }
-  if (profile.deleted === true || profile.status === 'deleted') {
-    throw new HttpsError('failed-precondition', 'Deleted accounts cannot be approved from the pending queue.')
-  }
-  if (!['pending', 'rejected'].includes(profile.status)) {
-    throw new HttpsError('failed-precondition', 'Only pending or rejected account requests can be approved.')
-  }
+    if (!userSnap.exists) {
+      throw new HttpsError('not-found', 'The selected user profile was not found.')
+    }
 
-  const explicitExistingSchoolId = typeof profile.schoolId === 'string'
-    ? profile.schoolId.trim().toLowerCase()
-    : ''
+    const profile = userSnap.data() || {}
+    if (profile.role === 'admin') {
+      throw new HttpsError('permission-denied', 'Admin accounts cannot be changed here.')
+    }
+    if (profile.deleted === true || profile.status === 'deleted') {
+      throw new HttpsError('failed-precondition', 'Deleted accounts cannot be approved from the pending queue.')
+    }
+    if (!['pending', 'rejected'].includes(profile.status)) {
+      throw new HttpsError('failed-precondition', 'Only pending or rejected account requests can be approved.')
+    }
 
-  if (explicitExistingSchoolId && explicitExistingSchoolId !== schoolId) {
-    throw new HttpsError(
-      'failed-precondition',
-      'School transfers are locked. Use a dedicated migration process instead of approval.'
-    )
-  }
+    const explicitExistingSchoolId = typeof profile.schoolId === 'string'
+      ? profile.schoolId.trim().toLowerCase()
+      : ''
 
-  const authUser = await authUserForManagedProfile(userId)
-  const profileEmail = normalizeManagedEmail(profile.email || authUser.email || '')
-  if (!authUser.email || authUser.email.toLowerCase() !== profileEmail) {
-    throw new HttpsError('failed-precondition', 'Firebase Auth email does not match the user profile.')
-  }
+    if (explicitExistingSchoolId && explicitExistingSchoolId !== schoolId) {
+      throw new HttpsError(
+        'failed-precondition',
+        'School transfers are locked. Use a dedicated migration process instead of approval.'
+      )
+    }
 
-  const now = new Date().toISOString()
-  const displayName = safeString(profile.name || authUser.displayName || '', 120).trim()
-  const previousAuthState = {
-    disabled: authUser.disabled === true,
-    displayName: authUser.displayName ?? null
-  }
+    await assertManagedSeatAvailable(schoolId, activeSchool.school, role)
 
-  await adminAuth.updateUser(userId, {
-    disabled: false,
-    ...(displayName ? { displayName } : {})
-  })
+    const authUser = await authUserForManagedProfile(userId)
+    const profileEmail = normalizeManagedEmail(profile.email || authUser.email || '')
+    if (!authUser.email || authUser.email.toLowerCase() !== profileEmail) {
+      throw new HttpsError('failed-precondition', 'Firebase Auth email does not match the user profile.')
+    }
 
-  try {
-    await userRef.set({
-      role,
-      requestedRole: role,
-      status: 'approved',
-      deleted: false,
-      schoolId,
-      teacherIds: [],
-      targetBand: role === 'student' ? (profile.targetBand ?? null) : null,
-      approvedAt: now,
-      approvedBy: admin.uid,
-      updatedAt: now,
-      updatedBy: admin.uid
-    }, { merge: true })
-  } catch (error) {
-    await adminAuth.updateUser(userId, previousAuthState).catch(rollbackError => {
-      console.error('Stage 18 approveManagedUser Auth rollback failed', {
-        userId,
-        rollbackError
-      })
+    const now = new Date().toISOString()
+    const displayName = safeString(profile.name || authUser.displayName || '', 120).trim()
+    const previousAuthState = {
+      disabled: authUser.disabled === true,
+      displayName: authUser.displayName ?? null
+    }
+
+    await adminAuth.updateUser(userId, {
+      disabled: false,
+      ...(displayName ? { displayName } : {})
     })
-    throw error
-  }
 
-  return { ok: true, userId, role, schoolId }
+    try {
+      await userRef.set({
+        role,
+        requestedRole: role,
+        status: 'approved',
+        deleted: false,
+        schoolId,
+        teacherIds: [],
+        targetBand: role === 'student' ? (profile.targetBand ?? null) : null,
+        approvedAt: now,
+        approvedBy: admin.uid,
+        updatedAt: now,
+        updatedBy: admin.uid
+      }, { merge: true })
+    } catch (error) {
+      await adminAuth.updateUser(userId, previousAuthState).catch(rollbackError => {
+        console.error('Stage 19A approveManagedUser Auth rollback failed', {
+          userId,
+          rollbackError
+        })
+      })
+      throw error
+    }
+
+    return { ok: true, userId, role, schoolId }
+  })
 })
 
 exports.rejectManagedUser = onCall(async request => {
@@ -1398,103 +1620,108 @@ exports.restoreManagedUser = onCall({ invoker: 'public' }, async request => {
     throw new HttpsError('permission-denied', 'You cannot restore your own admin account here.')
   }
 
-  const userRef = db.doc(`users/${userId}`)
-  const userSnap = await userRef.get()
-  if (!userSnap.exists) {
+  const initialSnap = await db.doc(`users/${userId}`).get()
+  if (!initialSnap.exists) {
     throw new HttpsError('not-found', 'The selected user profile was not found.')
   }
 
-  const profile = userSnap.data() || {}
-  const role = permanentDeleteRoleOf(profile)
-
-  if (!MANAGED_ACCOUNT_ROLES.has(role)) {
+  const initialProfile = initialSnap.data() || {}
+  const initialRole = permanentDeleteRoleOf(initialProfile)
+  if (!MANAGED_ACCOUNT_ROLES.has(initialRole)) {
     throw new HttpsError(
       'failed-precondition',
       'This archived account does not have a restorable student or teacher role.'
     )
   }
+  const schoolId = schoolIdOf(initialProfile)
 
-  const schoolId = schoolIdOf(profile)
-  const schoolSnap = await db.doc(`schools/${schoolId}`).get()
-  if (!schoolSnap.exists) {
-    throw new HttpsError(
-      'failed-precondition',
-      'This account cannot be restored because its school no longer exists.'
-    )
-  }
-
-  const school = schoolSnap.data() || {}
-  if (school.status !== 'active') {
-    throw new HttpsError(
-      'failed-precondition',
-      'Activate this school before restoring the account.'
-    )
-  }
-
-  const authUser = await authUserForManagedProfile(userId)
-  const isArchived = profile.deleted === true || profile.status === 'deleted'
-
-  // Idempotent repair path: if Firestore is already active but Auth stayed
-  // disabled after an interrupted restore, finish enabling Auth safely.
-  if (!isArchived) {
-    if (profile.status !== 'approved' || !MANAGED_ACCOUNT_ROLES.has(profile.role)) {
-      throw new HttpsError('failed-precondition', 'This account is not an archived managed account.')
+  return withManagedSchoolSeatLock(schoolId, async () => {
+    const userRef = db.doc(`users/${userId}`)
+    const userSnap = await userRef.get()
+    if (!userSnap.exists) {
+      throw new HttpsError('not-found', 'The selected user profile was not found.')
     }
 
+    const profile = userSnap.data() || {}
+    const role = permanentDeleteRoleOf(profile)
+    if (!MANAGED_ACCOUNT_ROLES.has(role)) {
+      throw new HttpsError(
+        'failed-precondition',
+        'This archived account does not have a restorable student or teacher role.'
+      )
+    }
+    if (schoolIdOf(profile) !== schoolId) {
+      throw new HttpsError('aborted', 'This account changed schools during restore. Refresh and try again.')
+    }
+
+    const activeSchool = await requireManagedAccountSchool(schoolId)
+    const authUser = await authUserForManagedProfile(userId)
+    const isArchived = profile.deleted === true || profile.status === 'deleted'
+
+    // Idempotent repair path: an already-active profile already consumes its seat,
+    // so only repair Firebase Auth here and do not reserve another seat.
+    if (!isArchived) {
+      if (profile.status !== 'approved' || !MANAGED_ACCOUNT_ROLES.has(profile.role)) {
+        throw new HttpsError('failed-precondition', 'This account is not an archived managed account.')
+      }
+
+      if (authUser.disabled === true) {
+        await adminAuth.updateUser(userId, { disabled: false })
+      }
+
+      return {
+        ok: true,
+        userId,
+        role: profile.role,
+        schoolId,
+        alreadyRestored: true
+      }
+    }
+
+    await assertManagedSeatAvailable(schoolId, activeSchool.school, role)
+
+    const previousAuthDisabled = authUser.disabled === true
     if (authUser.disabled === true) {
       await adminAuth.updateUser(userId, { disabled: false })
+    }
+
+    try {
+      const now = new Date().toISOString()
+      await userRef.set({
+        role,
+        requestedRole: role,
+        status: 'approved',
+        deleted: false,
+        restoredAt: now,
+        restoredBy: admin.uid,
+        updatedAt: now,
+        updatedBy: admin.uid,
+        deletedAt: FieldValue.delete(),
+        deletedBy: FieldValue.delete(),
+        permanentDeleteInProgress: FieldValue.delete(),
+        permanentDeleteStartedAt: FieldValue.delete(),
+        permanentDeleteStartedBy: FieldValue.delete()
+      }, { merge: true })
+    } catch (error) {
+      if (previousAuthDisabled) {
+        await adminAuth.updateUser(userId, { disabled: true }).catch(rollbackError => {
+          console.error('Stage 19A restoreManagedUser Auth rollback failed', {
+            userId,
+            rollbackError
+          })
+        })
+      }
+      throw error
     }
 
     return {
       ok: true,
       userId,
-      role: profile.role,
-      schoolId,
-      alreadyRestored: true
-    }
-  }
-
-  const previousAuthDisabled = authUser.disabled === true
-  if (authUser.disabled === true) {
-    await adminAuth.updateUser(userId, { disabled: false })
-  }
-
-  try {
-    const now = new Date().toISOString()
-    await userRef.set({
       role,
-      requestedRole: role,
-      status: 'approved',
-      deleted: false,
-      restoredAt: now,
-      restoredBy: admin.uid,
-      updatedAt: now,
-      updatedBy: admin.uid,
-      deletedAt: FieldValue.delete(),
-      deletedBy: FieldValue.delete(),
-      permanentDeleteInProgress: FieldValue.delete(),
-      permanentDeleteStartedAt: FieldValue.delete(),
-      permanentDeleteStartedBy: FieldValue.delete()
-    }, { merge: true })
-  } catch (error) {
-    if (previousAuthDisabled) {
-      await adminAuth.updateUser(userId, { disabled: true }).catch(rollbackError => {
-        console.error('Stage 18.2 restoreManagedUser Auth rollback failed', {
-          userId,
-          rollbackError
-        })
-      })
+      schoolId,
+      alreadyRestored: false
     }
-    throw error
-  }
-
-  return {
-    ok: true,
-    userId,
-    role,
-    schoolId,
-    alreadyRestored: false
-  }
+  })
 })
 
 
