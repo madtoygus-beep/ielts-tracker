@@ -564,6 +564,12 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // P2B: school username -> UID resolution is server-only. The browser never
+    // reads this mapping, so username login does not expose the account email.
+    match /managedUsernames/{usernameId} {
+      allow read, create, update, delete: if false;
+    }
+
     // ============================================================
     // CLASSES
     // ============================================================

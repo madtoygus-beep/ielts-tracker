@@ -75,6 +75,8 @@ const rejectManagedUserCall = httpsCallable(functions, 'rejectManagedUser')
 
 const updateManagedUserCall = httpsCallable(functions, 'updateManagedUser')
 
+const setManagedUserPasswordCall = httpsCallable(functions, 'setManagedUserPassword')
+
 const deleteManagedUserCall = httpsCallable(functions, 'deleteManagedUser')
 
 const restoreManagedUserCall = httpsCallable(functions, 'restoreManagedUser')
@@ -97,9 +99,19 @@ export default function AdminDashboard() {
 
   const [editName, setEditName] = useState('')
 
+  const [editEmail, setEditEmail] = useState('')
+
+  const [editUsername, setEditUsername] = useState('')
+
   const [editRole, setEditRole] = useState('')
 
   const [editTargetBand, setEditTargetBand] = useState('')
+
+  const [editNewPassword, setEditNewPassword] = useState('')
+
+  const [editSaving, setEditSaving] = useState(false)
+
+  const [passwordSaving, setPasswordSaving] = useState(false)
 
   const [editScore, setEditScore] = useState(null)
 
@@ -154,6 +166,8 @@ export default function AdminDashboard() {
     name: '',
 
     email: '',
+
+    username: '',
 
     role: 'student',
 
@@ -917,6 +931,8 @@ export default function AdminDashboard() {
 
     const email = accountForm.email.trim().toLowerCase()
 
+    const username = accountForm.username.trim().toLowerCase()
+
     const schoolId = accountForm.schoolId
 
     const targetBand = accountForm.targetBand === '' ? null : Number(accountForm.targetBand)
@@ -932,6 +948,14 @@ export default function AdminDashboard() {
     if (name.length < 2 || !email || !schoolId) {
 
       setAccountError('Full name, email and school are required.')
+
+      return
+
+    }
+
+    if (username && !/^[a-z0-9][a-z0-9._-]{2,39}$/.test(username)) {
+
+      setAccountError('Username must be 3-40 characters and use lowercase letters, numbers, dot, underscore or hyphen.')
 
       return
 
@@ -979,6 +1003,8 @@ export default function AdminDashboard() {
 
         email,
 
+        username: username || null,
+
         role: accountForm.role,
 
         schoolId,
@@ -1009,13 +1035,15 @@ export default function AdminDashboard() {
 
 
 
+      const usernameNotice = username ? ` Username: ${username}.` : ''
+
       setAccountNotice(
 
         resetSent
 
-          ? `${name} was created in ${schoolLabel(schoolId)}. Account setup email sent to ${email}.`
+          ? `${name} was created in ${schoolLabel(schoolId)}.${usernameNotice} Account setup email sent to ${email}.`
 
-          : `${name} was created in ${schoolLabel(schoolId)}, but the account setup email could not be sent. Use Reset Password from the user list.`
+          : `${name} was created in ${schoolLabel(schoolId)}.${usernameNotice} The account setup email could not be sent. Use Edit to set a password if this email is not reachable.`
 
       )
 
@@ -1028,6 +1056,8 @@ export default function AdminDashboard() {
         name: '',
 
         email: '',
+
+        username: '',
 
         schoolId: selectedSchoolId === ALL_SCHOOLS_ID ? '' : selectedSchoolId,
 
@@ -1784,6 +1814,10 @@ export default function AdminDashboard() {
 
     setEditName(u.name || '')
 
+    setEditEmail(u.email || '')
+
+    setEditUsername(u.username || '')
+
     setEditRole(u.role || 'student')
 
     setEditTargetBand(
@@ -1796,17 +1830,41 @@ export default function AdminDashboard() {
 
     )
 
+    setEditNewPassword('')
+
   }
 
 
 
   const handleSaveEdit = async () => {
 
+    const cleanEmail = editEmail.trim().toLowerCase()
+
+    const cleanUsername = editUsername.trim().toLowerCase()
+
     const cleanTargetBand = editTargetBand === ''
 
       ? null
 
       : Number(editTargetBand)
+
+
+
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+
+      alert('Please enter a valid email address.')
+
+      return
+
+    }
+
+    if (cleanUsername && !/^[a-z0-9][a-z0-9._-]{2,39}$/.test(cleanUsername)) {
+
+      alert('Username must be 3-40 characters and use lowercase letters, numbers, dot, underscore or hyphen.')
+
+      return
+
+    }
 
 
 
@@ -1838,6 +1896,8 @@ export default function AdminDashboard() {
 
 
 
+    setEditSaving(true)
+
     try {
 
       await updateManagedUserCall({
@@ -1846,19 +1906,81 @@ export default function AdminDashboard() {
 
         name: editName,
 
+        email: cleanEmail,
+
+        username: cleanUsername || null,
+
         targetBand: editRole === 'student' ? cleanTargetBand : null
 
       })
 
       setEditUser(null)
 
+      setEditEmail('')
+
+      setEditUsername('')
+
       setEditTargetBand('')
+
+      setEditNewPassword('')
 
     } catch (error) {
 
       console.error(error)
 
       alert(error?.message || 'Could not update this account.')
+
+    } finally {
+
+      setEditSaving(false)
+
+    }
+
+  }
+
+
+
+  const handleSetManagedPassword = async () => {
+
+    if (!editUser) return
+
+    if (editNewPassword.length < 8 || editNewPassword.length > 128) {
+
+      alert('New password must be 8-128 characters.')
+
+      return
+
+    }
+
+    const ok = window.confirm(`Set a new password for ${editUser.name || editUser.email}? The current password cannot be viewed or recovered.`)
+
+    if (!ok) return
+
+    setPasswordSaving(true)
+
+    try {
+
+      await setManagedUserPasswordCall({
+
+        userId: editUser.id,
+
+        password: editNewPassword
+
+      })
+
+      setEditNewPassword('')
+
+      alert('New password set successfully. It was stored only in Firebase Auth.')
+
+    } catch (error) {
+
+      console.error(error)
+
+      alert(error?.message || 'Could not set the new password.')
+
+    } finally {
+
+      setPasswordSaving(false)
 
     }
 
@@ -2022,7 +2144,9 @@ export default function AdminDashboard() {
 
     u.name?.toLowerCase().includes(searchTerm) ||
 
-    u.email?.toLowerCase().includes(searchTerm)
+    u.email?.toLowerCase().includes(searchTerm) ||
+
+    u.username?.toLowerCase().includes(searchTerm)
 
   )
 
@@ -2030,7 +2154,9 @@ export default function AdminDashboard() {
 
     u.name?.toLowerCase().includes(searchTerm) ||
 
-    u.email?.toLowerCase().includes(searchTerm)
+    u.email?.toLowerCase().includes(searchTerm) ||
+
+    u.username?.toLowerCase().includes(searchTerm)
 
   )
 
@@ -2622,13 +2748,13 @@ export default function AdminDashboard() {
 
               <h2 className="font-semibold text-gray-800">Create account</h2>
 
-              <span className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded-full">Stage 19B</span>
+              <span className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded-full">P2B</span>
 
             </div>
 
             <p className="text-xs text-gray-400 mt-1">
 
-              Create an approved Student or Teacher directly in an active school. Seat quota is enforced server-side before the account is created.
+              Create an approved Student or Teacher directly in an active school. Username is optional and unique inside that school; seat quota is still enforced server-side.
 
             </p>
 
@@ -2675,6 +2801,30 @@ export default function AdminDashboard() {
               className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400"
 
               placeholder="name@example.com"
+
+            />
+
+          </div>
+
+
+
+          <div className="md:col-span-2">
+
+            <label className="text-xs text-gray-400 mb-1 block">Username (optional)</label>
+
+            <input
+
+              value={accountForm.username}
+
+              onChange={e => setAccountForm(previous => ({ ...previous, username: e.target.value.toLowerCase() }))}
+
+              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400"
+
+              placeholder="student01"
+
+              autoCapitalize="none"
+
+              autoCorrect="off"
 
             />
 
@@ -2859,7 +3009,7 @@ export default function AdminDashboard() {
 
             type="text"
 
-            placeholder={`Search ${selectedSchoolLabel} by name or email...`}
+            placeholder={`Search ${selectedSchoolLabel} by name, email or username...`}
 
             className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400"
 
@@ -2908,6 +3058,7 @@ export default function AdminDashboard() {
                   <p className="text-sm font-medium text-gray-800">{u.name}</p>
 
                   <p className="text-xs text-gray-400">{u.email}</p>
+                  {u.username && <p className="text-[11px] text-purple-500 mt-0.5">Username: {u.username}</p>}
 
                   {u.role === 'student' && (
 
@@ -2988,6 +3139,7 @@ export default function AdminDashboard() {
                     <p className="text-sm font-medium text-gray-800">{u.name}</p>
 
                     <p className="text-xs text-gray-400">{u.email}</p>
+                  {u.username && <p className="text-[11px] text-purple-500 mt-0.5">Username: {u.username}</p>}
 
                   {u.role === 'student' && (
 
@@ -3077,6 +3229,8 @@ export default function AdminDashboard() {
 
                     <p className="text-xs text-gray-400 truncate">{u.email}</p>
 
+                    {u.username && <p className="text-[11px] text-purple-500 mt-0.5">Username: {u.username}</p>}
+
                     <p className="text-[11px] text-gray-400 mt-0.5">School: {schoolLabel(u.schoolId)}</p>
 
                   </div>
@@ -3158,6 +3312,7 @@ export default function AdminDashboard() {
                     <p className="text-sm font-medium text-gray-800">{u.name}</p>
 
                     <p className="text-xs text-gray-400">{u.email}</p>
+                  {u.username && <p className="text-[11px] text-purple-500 mt-0.5">Username: {u.username}</p>}
 
                   <p className="text-[11px] text-gray-400 mt-0.5">School: {schoolLabel(u.schoolId)}</p>
 
@@ -3179,7 +3334,7 @@ export default function AdminDashboard() {
 
                   <button onClick={() => handleEdit(u)} className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-1.5 rounded-lg">Edit</button>
 
-                  <button onClick={() => handleSendPasswordReset(u)} className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-600 px-3 py-1.5 rounded-lg">Reset Password</button>
+                  <button onClick={() => handleSendPasswordReset(u)} className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-600 px-3 py-1.5 rounded-lg">Email Reset</button>
 
                   <button onClick={() => handleDelete(u.id)} className="text-xs bg-amber-50 hover:bg-amber-100 text-amber-700 px-3 py-1.5 rounded-lg">Archive</button>
 
@@ -3230,6 +3385,7 @@ export default function AdminDashboard() {
                       <p className="text-sm font-medium text-gray-800">{u.name}</p>
 
                       <p className="text-xs text-gray-400">{u.email}</p>
+                  {u.username && <p className="text-[11px] text-purple-500 mt-0.5">Username: {u.username}</p>}
 
                     <p className="text-[11px] text-gray-400 mt-0.5">School: {schoolLabel(u.schoolId)}</p>
 
@@ -3251,7 +3407,7 @@ export default function AdminDashboard() {
 
                     <button onClick={e => { e.stopPropagation(); handleEdit(u) }} className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-1.5 rounded-lg">Edit</button>
 
-                    <button onClick={e => { e.stopPropagation(); handleSendPasswordReset(u) }} className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-600 px-3 py-1.5 rounded-lg">Reset Password</button>
+                    <button onClick={e => { e.stopPropagation(); handleSendPasswordReset(u) }} className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-600 px-3 py-1.5 rounded-lg">Email Reset</button>
 
 
 
@@ -3381,11 +3537,13 @@ export default function AdminDashboard() {
 
       {editUser && (
 
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 px-4">
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 px-4 py-6 overflow-y-auto">
 
-          <div className="bg-white rounded-2xl p-6 w-full max-w-sm">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-lg my-auto">
 
-            <h2 className="font-semibold text-gray-800 mb-4">Edit account</h2>
+            <h2 className="font-semibold text-gray-800 mb-1">Edit account</h2>
+
+            <p className="text-xs text-gray-400 mb-4">Email, school username and password controls are managed server-side.</p>
 
             <div className="flex flex-col gap-3 mb-4">
 
@@ -3394,6 +3552,52 @@ export default function AdminDashboard() {
                 <label className="text-xs text-gray-400 mb-1 block">Full name</label>
 
                 <input className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-purple-400" value={editName} onChange={e => setEditName(e.target.value)} />
+
+              </div>
+
+              <div>
+
+                <label className="text-xs text-gray-400 mb-1 block">Email</label>
+
+                <input
+
+                  type="email"
+
+                  className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-purple-400"
+
+                  value={editEmail}
+
+                  onChange={e => setEditEmail(e.target.value)}
+
+                  placeholder="name@example.com"
+
+                />
+
+                <p className="text-[11px] text-gray-400 mt-1">Changing this updates both Firebase Auth and the user profile. The current password is preserved.</p>
+
+              </div>
+
+              <div>
+
+                <label className="text-xs text-gray-400 mb-1 block">School username (optional)</label>
+
+                <input
+
+                  className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-purple-400"
+
+                  value={editUsername}
+
+                  onChange={e => setEditUsername(e.target.value.toLowerCase())}
+
+                  placeholder="student01"
+
+                  autoCapitalize="none"
+
+                  autoCorrect="off"
+
+                />
+
+                <p className="text-[11px] text-gray-400 mt-1">Unique inside {schoolLabel(editUser.schoolId)}. Leave empty to remove username login.</p>
 
               </div>
 
@@ -3467,13 +3671,57 @@ export default function AdminDashboard() {
 
               </div>
 
+              <div className="border-t border-gray-100 pt-4 mt-1">
+
+                <label className="text-xs text-gray-500 mb-1 block">Admin set new password</label>
+
+                <div className="flex flex-col sm:flex-row gap-2">
+
+                  <input
+
+                    type="password"
+
+                    value={editNewPassword}
+
+                    onChange={e => setEditNewPassword(e.target.value)}
+
+                    placeholder="8-128 characters"
+
+                    autoComplete="new-password"
+
+                    className="flex-1 border border-gray-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-purple-400"
+
+                  />
+
+                  <button
+
+                    type="button"
+
+                    onClick={handleSetManagedPassword}
+
+                    disabled={passwordSaving || editSaving || editNewPassword.length < 8}
+
+                    className="px-4 py-2.5 rounded-xl bg-amber-100 hover:bg-amber-200 disabled:bg-gray-100 disabled:text-gray-400 text-amber-800 text-sm font-medium"
+
+                  >
+
+                    {passwordSaving ? 'Setting...' : 'Set password'}
+
+                  </button>
+
+                </div>
+
+                <p className="text-[11px] text-gray-400 mt-1">The current password is never visible to Admin and the new password is never stored in Firestore.</p>
+
+              </div>
+
             </div>
 
             <div className="flex gap-2">
 
-              <button onClick={() => setEditUser(null)} className="flex-1 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-500">Cancel</button>
+              <button disabled={editSaving || passwordSaving} onClick={() => setEditUser(null)} className="flex-1 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-500 disabled:opacity-50">Cancel</button>
 
-              <button onClick={handleSaveEdit} className="flex-1 py-2.5 rounded-xl bg-purple-600 text-white text-sm font-medium">Save</button>
+              <button disabled={editSaving || passwordSaving} onClick={handleSaveEdit} className="flex-1 py-2.5 rounded-xl bg-purple-600 disabled:bg-purple-300 text-white text-sm font-medium">{editSaving ? 'Saving...' : 'Save account'}</button>
 
             </div>
 

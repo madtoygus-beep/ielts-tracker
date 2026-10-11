@@ -74,7 +74,8 @@ const SCHOOL_CASCADE_COLLECTIONS = [
   'submissionAttemptHistory',
   'messages',
   'materials',
-  'schoolSeatLocks'
+  'schoolSeatLocks',
+  'managedUsernames'
 ]
 
 const SCHOOL_STORAGE_PATH_COLLECTIONS = [
@@ -1046,6 +1047,11 @@ exports.deleteManagedSchool = onCall(async request => {
 // writing directly to users/{uid}, and Firebase Auth + Firestore profile creation
 // are kept together with rollback if profile creation fails.
 const MANAGED_ACCOUNT_ROLES = new Set(['student', 'teacher'])
+const MANAGED_USERNAME_SCHEMA_VERSION = 1
+// The Firebase Web API key is a public project identifier already shipped in
+// src/firebase.js. It is used here only to ask Firebase Auth to verify the
+// password after a server-side school + username lookup.
+const FIREBASE_WEB_API_KEY = 'AIzaSyBuy-DyA5cHqoDx4TSgGIqUJSShuvOKN4k'
 
 function normalizeManagedAccountRole(value) {
   const role = typeof value === 'string' ? value.trim().toLowerCase() : ''
@@ -1069,6 +1075,104 @@ function normalizeManagedEmail(value) {
     throw new HttpsError('invalid-argument', 'A valid email address is required.')
   }
   return email
+}
+
+function normalizeManagedUsername(value, { optional = true } = {}) {
+  const username = safeString(value, 40).trim().toLowerCase()
+  if (!username && optional) return ''
+  if (!/^[a-z0-9][a-z0-9._-]{2,39}$/.test(username)) {
+    throw new HttpsError(
+      'invalid-argument',
+      'Username must be 3-40 characters and use lowercase letters, numbers, dot, underscore or hyphen.'
+    )
+  }
+  return username
+}
+
+function normalizeManagedPassword(value) {
+  const password = typeof value === 'string' ? value : ''
+  if (password.length < 8 || password.length > 128) {
+    throw new HttpsError('invalid-argument', 'Password must be 8-128 characters.')
+  }
+  return password
+}
+
+function managedUsernameId(schoolId, username) {
+  return createHash('sha256')
+    .update(`${schoolId}\u001f${username}`, 'utf8')
+    .digest('hex')
+}
+
+function managedUsernameRef(schoolId, username) {
+  return db.doc(`managedUsernames/${managedUsernameId(schoolId, username)}`)
+}
+
+function managedUsernamePayload({ schoolId, username, uid, role, adminUid, createdAt = null }) {
+  return {
+    schoolId,
+    username,
+    uid,
+    role,
+    status: 'active',
+    schemaVersion: MANAGED_USERNAME_SCHEMA_VERSION,
+    createdAt: createdAt || FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+    updatedBy: adminUid
+  }
+}
+
+async function assertNoManagedEmailConflictForUser(email, userId) {
+  const profileSnap = await db.collection('users')
+    .where('email', '==', email)
+    .limit(2)
+    .get()
+
+  for (const docSnap of profileSnap.docs) {
+    if (docSnap.id !== userId) {
+      throw new HttpsError('already-exists', 'A user profile already exists with this email address.')
+    }
+  }
+
+  try {
+    const authUser = await adminAuth.getUserByEmail(email)
+    if (authUser && authUser.uid !== userId) {
+      throw new HttpsError(
+        'already-exists',
+        'A Firebase Auth account already exists with this email address.'
+      )
+    }
+  } catch (error) {
+    if (error instanceof HttpsError) throw error
+    if (!isAuthUserNotFound(error)) throw error
+  }
+}
+
+async function verifyManagedPassword(email, password) {
+  const response = await fetch(
+    `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${encodeURIComponent(FIREBASE_WEB_API_KEY)}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password, returnSecureToken: true })
+    }
+  )
+
+  let payload = {}
+  try {
+    payload = await response.json()
+  } catch (_) {
+    payload = {}
+  }
+
+  if (!response.ok) {
+    const authCode = safeString(payload?.error?.message || '', 120)
+    if (authCode.includes('TOO_MANY_ATTEMPTS')) {
+      throw new HttpsError('resource-exhausted', 'Too many login attempts. Please try again later.')
+    }
+    throw new HttpsError('unauthenticated', 'School code, username or password is incorrect.')
+  }
+
+  return payload
 }
 
 // Stage 19A: null means Unlimited. Zero is a valid limit and blocks all seats.
@@ -1294,6 +1398,7 @@ exports.createManagedUser = onCall({ invoker: 'public' }, async request => {
   const data = request.data || {}
   const name = normalizeManagedName(data.name)
   const email = normalizeManagedEmail(data.email)
+  const username = normalizeManagedUsername(data.username)
   const role = normalizeManagedAccountRole(data.role)
   const { schoolId } = await requireManagedAccountSchool(data.schoolId)
   const targetBand = normalizeManagedTargetBand(data.targetBand, role)
@@ -1317,9 +1422,11 @@ exports.createManagedUser = onCall({ invoker: 'public' }, async request => {
       })
 
       const now = new Date().toISOString()
-      await db.doc(`users/${authUser.uid}`).set({
+      const userRef = db.doc(`users/${authUser.uid}`)
+      const profilePayload = {
         name,
         email,
+        username: username || null,
         role,
         requestedRole: role,
         status: 'approved',
@@ -1334,12 +1441,34 @@ exports.createManagedUser = onCall({ invoker: 'public' }, async request => {
         approvedAt: now,
         updatedAt: now,
         updatedBy: admin.uid
-      })
+      }
+
+      if (username) {
+        const usernameRef = managedUsernameRef(schoolId, username)
+        await db.runTransaction(async transaction => {
+          const usernameSnap = await transaction.get(usernameRef)
+          if (usernameSnap.exists) {
+            throw new HttpsError('already-exists', 'This username is already in use in the selected school.')
+          }
+
+          transaction.set(userRef, profilePayload)
+          transaction.set(usernameRef, managedUsernamePayload({
+            schoolId,
+            username,
+            uid: authUser.uid,
+            role,
+            adminUid: admin.uid
+          }))
+        })
+      } else {
+        await userRef.set(profilePayload)
+      }
     } catch (error) {
       if (authUser?.uid) {
         await adminAuth.deleteUser(authUser.uid).catch(() => {})
       }
 
+      if (error instanceof HttpsError) throw error
       if (error?.code === 'auth/email-already-exists') {
         throw new HttpsError('already-exists', 'A Firebase Auth account already exists with this email address.')
       }
@@ -1356,6 +1485,7 @@ exports.createManagedUser = onCall({ invoker: 'public' }, async request => {
         uid: authUser.uid,
         name,
         email,
+        username: username || null,
         role,
         status: 'approved',
         deleted: false,
@@ -1365,6 +1495,108 @@ exports.createManagedUser = onCall({ invoker: 'public' }, async request => {
       passwordSetupRequired: true
     }
   })
+})
+
+// P2B: institution users may sign in with school code + username + password.
+// The username lookup remains server-only. The real Auth email is never returned
+// to the browser; after password verification the browser receives only a short-
+// lived Firebase custom token for the resolved UID.
+exports.loginManagedUsername = onCall({ invoker: 'public' }, async request => {
+  const data = request.data || {}
+  const schoolId = normalizeSchoolId(data.schoolId)
+  const username = normalizeManagedUsername(data.username, { optional: false })
+  const password = typeof data.password === 'string' ? data.password : ''
+
+  if (!password || password.length > 512) {
+    throw new HttpsError('unauthenticated', 'School code, username or password is incorrect.')
+  }
+
+  const schoolSnap = await db.doc(`schools/${schoolId}`).get()
+  if (!schoolSnap.exists || (schoolSnap.data() || {}).status !== 'active') {
+    throw new HttpsError('unauthenticated', 'School code, username or password is incorrect.')
+  }
+
+  const usernameSnap = await managedUsernameRef(schoolId, username).get()
+  if (!usernameSnap.exists) {
+    throw new HttpsError('unauthenticated', 'School code, username or password is incorrect.')
+  }
+
+  const usernameData = usernameSnap.data() || {}
+  const userId = safeString(usernameData.uid || '', 128).trim()
+  if (
+    !userId ||
+    usernameData.schoolId !== schoolId ||
+    usernameData.username !== username
+  ) {
+    throw new HttpsError('unauthenticated', 'School code, username or password is incorrect.')
+  }
+
+  const userSnap = await db.doc(`users/${userId}`).get()
+  if (!userSnap.exists) {
+    throw new HttpsError('unauthenticated', 'School code, username or password is incorrect.')
+  }
+
+  const profile = userSnap.data() || {}
+  const storedUsername = safeString(profile.username || '', 40).trim().toLowerCase()
+  if (
+    !MANAGED_ACCOUNT_ROLES.has(profile.role) ||
+    profile.status !== 'approved' ||
+    profile.deleted === true ||
+    schoolIdOf(profile) !== schoolId ||
+    storedUsername !== username
+  ) {
+    throw new HttpsError('unauthenticated', 'School code, username or password is incorrect.')
+  }
+
+  const authUser = await authUserForManagedProfile(userId)
+  if (authUser.disabled === true || !authUser.email) {
+    throw new HttpsError('unauthenticated', 'School code, username or password is incorrect.')
+  }
+
+  const verified = await verifyManagedPassword(authUser.email, password)
+  if (safeString(verified.localId || '', 128) !== userId) {
+    throw new HttpsError('unauthenticated', 'School code, username or password is incorrect.')
+  }
+
+  const customToken = await adminAuth.createCustomToken(userId, {
+    loginMethod: 'school_username',
+    schoolId
+  })
+
+  return { ok: true, customToken }
+})
+
+// P2B: the platform admin may set a new password without ever reading the old
+// password. Passwords remain only in Firebase Auth and are never stored in
+// Firestore or returned to the client.
+exports.setManagedUserPassword = onCall({ invoker: 'public' }, async request => {
+  await requireAdmin(request)
+  const data = request.data || {}
+  const userId = assertDocumentId(data.userId, 'User ID')
+  const password = normalizeManagedPassword(data.password)
+  const userSnap = await db.doc(`users/${userId}`).get()
+
+  if (!userSnap.exists) {
+    throw new HttpsError('not-found', 'The selected user profile was not found.')
+  }
+
+  const profile = userSnap.data() || {}
+  if (!MANAGED_ACCOUNT_ROLES.has(profile.role) || profile.status !== 'approved' || profile.deleted === true) {
+    throw new HttpsError('failed-precondition', 'Only active student or teacher accounts can receive a new password.')
+  }
+
+  await authUserForManagedProfile(userId)
+
+  try {
+    await adminAuth.updateUser(userId, { password })
+  } catch (error) {
+    if (error?.code === 'auth/invalid-password') {
+      throw new HttpsError('invalid-argument', 'Password does not meet Firebase Auth requirements.')
+    }
+    throw error
+  }
+
+  return { ok: true, userId }
 })
 
 exports.approveManagedUser = onCall({ invoker: 'public' }, async request => {
@@ -1510,11 +1742,13 @@ exports.rejectManagedUser = onCall(async request => {
   return { ok: true, userId, alreadyRejected: false }
 })
 
-exports.updateManagedUser = onCall(async request => {
+exports.updateManagedUser = onCall({ invoker: 'public' }, async request => {
   const admin = await requireAdmin(request)
   const data = request.data || {}
   const userId = assertDocumentId(data.userId, 'User ID')
   const name = normalizeManagedName(data.name)
+  const email = normalizeManagedEmail(data.email)
+  const username = normalizeManagedUsername(data.username)
   const userRef = db.doc(`users/${userId}`)
   const userSnap = await userRef.get()
 
@@ -1530,23 +1764,113 @@ exports.updateManagedUser = onCall(async request => {
     throw new HttpsError('failed-precondition', 'Only active student or teacher accounts can be edited here.')
   }
 
+  const schoolId = schoolIdOf(profile)
   const targetBand = normalizeManagedTargetBand(data.targetBand, profile.role)
+  const previousUsername = normalizeManagedUsername(profile.username)
   const authUser = await authUserForManagedProfile(userId)
-  const now = new Date().toISOString()
-  const previousDisplayName = authUser.displayName ?? null
+  const previousEmail = normalizeManagedEmail(authUser.email || profile.email || '')
+  const storedProfileEmail = normalizeManagedEmail(profile.email || previousEmail)
 
-  await adminAuth.updateUser(userId, { displayName: name })
+  if (previousEmail !== storedProfileEmail) {
+    throw new HttpsError(
+      'failed-precondition',
+      'Firebase Auth email does not match the user profile. Repair the account before editing it.'
+    )
+  }
+
+  await assertNoManagedEmailConflictForUser(email, userId)
+
+  const now = new Date().toISOString()
+  const previousAuthState = {
+    displayName: authUser.displayName ?? null,
+    email: previousEmail,
+    emailVerified: authUser.emailVerified === true
+  }
+  const emailChanged = email !== previousEmail
+
+  await adminAuth.updateUser(userId, {
+    displayName: name,
+    ...(emailChanged ? { email, emailVerified: false } : {})
+  })
 
   try {
-    await userRef.set({
-      name,
-      targetBand,
-      updatedAt: now,
-      updatedBy: admin.uid
-    }, { merge: true })
+    const oldUsernameRef = previousUsername ? managedUsernameRef(schoolId, previousUsername) : null
+    const newUsernameRef = username ? managedUsernameRef(schoolId, username) : null
+
+    await db.runTransaction(async transaction => {
+      const latestUserSnap = await transaction.get(userRef)
+      if (!latestUserSnap.exists) {
+        throw new HttpsError('not-found', 'The selected user profile was not found.')
+      }
+
+      const latestProfile = latestUserSnap.data() || {}
+      if (
+        latestProfile.role !== profile.role ||
+        latestProfile.status !== 'approved' ||
+        latestProfile.deleted === true ||
+        schoolIdOf(latestProfile) !== schoolId
+      ) {
+        throw new HttpsError('aborted', 'This account changed while it was being edited. Refresh and try again.')
+      }
+
+      let oldUsernameSnap = null
+      let newUsernameSnap = null
+      if (oldUsernameRef) oldUsernameSnap = await transaction.get(oldUsernameRef)
+      if (newUsernameRef && (!oldUsernameRef || newUsernameRef.path !== oldUsernameRef.path)) {
+        newUsernameSnap = await transaction.get(newUsernameRef)
+      } else if (newUsernameRef) {
+        newUsernameSnap = oldUsernameSnap
+      }
+
+      if (newUsernameSnap?.exists && (newUsernameSnap.data() || {}).uid !== userId) {
+        throw new HttpsError('already-exists', 'This username is already in use in this school.')
+      }
+
+      if (oldUsernameSnap?.exists && (oldUsernameSnap.data() || {}).uid !== userId) {
+        throw new HttpsError(
+          'failed-precondition',
+          'The existing username mapping is inconsistent. Refresh and contact support before changing it.'
+        )
+      }
+
+      transaction.set(userRef, {
+        name,
+        email,
+        username: username || null,
+        targetBand,
+        updatedAt: now,
+        updatedBy: admin.uid
+      }, { merge: true })
+
+      if (oldUsernameRef && (!newUsernameRef || oldUsernameRef.path !== newUsernameRef.path)) {
+        if (oldUsernameSnap?.exists) transaction.delete(oldUsernameRef)
+      }
+
+      if (newUsernameRef) {
+        const existingCreatedAt = newUsernameSnap?.exists
+          ? (newUsernameSnap.data() || {}).createdAt || null
+          : null
+        transaction.set(newUsernameRef, managedUsernamePayload({
+          schoolId,
+          username,
+          uid: userId,
+          role: profile.role,
+          adminUid: admin.uid,
+          createdAt: existingCreatedAt
+        }))
+      }
+    })
   } catch (error) {
-    await adminAuth.updateUser(userId, { displayName: previousDisplayName }).catch(rollbackError => {
-      console.error('Stage 18 updateManagedUser Auth rollback failed', {
+    await adminAuth.updateUser(userId, {
+      displayName: previousAuthState.displayName,
+      ...(emailChanged
+        ? {
+            email: previousAuthState.email,
+            emailVerified: previousAuthState.emailVerified
+          }
+        : {})
+    }).catch(rollbackError => {
+      console.error('P2B updateManagedUser Auth rollback failed', {
         userId,
         rollbackError
       })
@@ -1558,8 +1882,10 @@ exports.updateManagedUser = onCall(async request => {
     ok: true,
     userId,
     role: profile.role,
-    schoolId: schoolIdOf(profile),
+    schoolId,
     name,
+    email,
+    username: username || null,
     targetBand
   }
 })
@@ -1992,6 +2318,18 @@ async function getManagedUserPermanentDeletionState(userId) {
   }
 
   const isArchived = profile.deleted === true || profile.status === 'deleted'
+  const profileUsername = normalizeManagedUsername(profile.username)
+  const usernameMappingRef = profileUsername
+    ? managedUsernameRef(schoolIdOf(profile), profileUsername)
+    : null
+  const usernameMappingSnap = usernameMappingRef
+    ? await usernameMappingRef.get()
+    : null
+  const usernameMappingDocuments = usernameMappingSnap?.exists &&
+    (usernameMappingSnap.data() || {}).uid === userId
+    ? 1
+    : 0
+
   if (managedRole !== 'student' && !isArchived) {
     throw new HttpsError(
       'failed-precondition',
@@ -2048,7 +2386,9 @@ async function getManagedUserPermanentDeletionState(userId) {
     linkedRecordCount,
     legacyReferenceCount,
     teacherReferenceCount,
-    shouldDeleteUserStorage
+    shouldDeleteUserStorage,
+    usernameMappingRef,
+    usernameMappingDocuments
   }
 }
 
@@ -2084,8 +2424,9 @@ exports.getManagedUserDeletionPreview = onCall({ invoker: 'public' }, async requ
     legacyReferenceDocuments: state.legacyReferenceCount,
     teacherReferenceDocuments: state.teacherReferenceCount,
     storageObjects: state.storageObjectCount,
+    usernameMappingDocuments: state.usernameMappingDocuments,
     firestoreProfileDocuments: 1,
-    totalFirestoreDocumentsToDelete: state.linkedRecordCount + 1,
+    totalFirestoreDocumentsToDelete: state.linkedRecordCount + state.usernameMappingDocuments + 1,
     preservesSharedSchoolContent: state.managedRole !== 'student',
     preservesHistoricalAcademicRecords: state.managedRole !== 'student'
   }
@@ -2159,6 +2500,10 @@ exports.permanentlyDeleteManagedUser = onCall({ invoker: 'public' }, async reque
   const deletedCollectionRecords = {}
   for (const [collectionName, refs] of Object.entries(state.records.byCollection)) {
     deletedCollectionRecords[collectionName] = await deleteDocumentRefsInBatches(refs)
+  }
+
+  if (state.usernameMappingDocuments > 0 && state.usernameMappingRef) {
+    await state.usernameMappingRef.delete()
   }
 
   // The profile is deleted last so an interrupted operation remains visible and
