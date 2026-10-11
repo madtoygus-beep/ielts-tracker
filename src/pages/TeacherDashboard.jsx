@@ -514,6 +514,7 @@ export default function TeacherDashboard() {
                 .map(d => ({ id: d.id, ...d.data() }))
                 .filter(u => {
                   if (u.deleted || u.status !== 'approved') return false
+                  if (u.accountType === 'individual' || u.schoolId === '__individual__') return false
                   if (isAdminUser) return true
 
                   return getSchoolId(u) === teacherSchoolId

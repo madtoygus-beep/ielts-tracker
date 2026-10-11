@@ -32,14 +32,26 @@ const initialSchoolCode = () => {
   return normalizeSchoolCode(fromQuery) || DEFAULT_SCHOOL_ID
 }
 
+const emptyBranding = schoolId => ({
+  schoolId,
+  name: '',
+  logoPath: null,
+  logoUrl: '',
+  primaryColor: DEFAULT_PRIMARY_COLOR,
+  accentColor: DEFAULT_ACCENT_COLOR,
+  loginPreference: 'both',
+  resolved: false
+})
+
 const defaultBranding = schoolId => ({
   schoolId,
-  name: schoolId === DEFAULT_SCHOOL_ID ? 'Maxima Eğitim' : 'Institution Login',
+  name: schoolId === DEFAULT_SCHOOL_ID ? 'Maxima Eğitim' : '',
   logoPath: null,
   logoUrl: schoolId === DEFAULT_SCHOOL_ID ? '/1.png' : '',
   primaryColor: DEFAULT_PRIMARY_COLOR,
   accentColor: DEFAULT_ACCENT_COLOR,
-  loginPreference: 'both'
+  loginPreference: 'both',
+  resolved: schoolId === DEFAULT_SCHOOL_ID
 })
 
 export default function Login() {
@@ -64,9 +76,14 @@ export default function Login() {
   useEffect(() => {
     const code = cleanSchoolId
     if (code.length < 2) {
-      setBranding(defaultBranding(DEFAULT_SCHOOL_ID))
+      setBranding(emptyBranding(code))
       return undefined
     }
+
+    setBranding(current => {
+      if (current.schoolId === code && current.resolved) return current
+      return emptyBranding(code)
+    })
 
     let active = true
     const timer = window.setTimeout(async () => {
@@ -77,7 +94,7 @@ export default function Login() {
         if (!active) return
 
         if (!response.data?.found || !response.data?.branding) {
-          setBranding(defaultBranding(code))
+          setBranding(emptyBranding(code))
           return
         }
 
@@ -107,7 +124,8 @@ export default function Login() {
             : DEFAULT_ACCENT_COLOR,
           loginPreference: ['email', 'username', 'both'].includes(next.loginPreference)
             ? next.loginPreference
-            : 'both'
+            : 'both',
+          resolved: true
         }
 
         setBranding(nextBranding)
@@ -117,7 +135,7 @@ export default function Login() {
         }
       } catch (brandingError) {
         console.warn('Institution branding lookup failed:', brandingError)
-        if (active) setBranding(defaultBranding(code))
+        if (active) setBranding(emptyBranding(code))
       } finally {
         if (active) setBrandingLoading(false)
       }
@@ -142,40 +160,42 @@ export default function Login() {
 
     if (!snap.exists()) {
       await safelySignOut()
-      setError('User profile not found. Please contact your institution administrator.')
+      setError('User profile not found. Please contact support or your institution administrator.')
       return false
     }
 
     const userData = snap.data()
+    const individualAccount = userData.accountType === 'individual' || userData.schoolId === '__individual__'
+    const accountHelp = individualAccount ? 'Please contact support.' : 'Please contact your institution administrator.'
 
     if (userData.deleted === true || userData.status === 'deleted') {
       await safelySignOut()
-      setError('This account was removed by admin. Please contact your institution administrator.')
+      setError(`This account was removed by admin. ${accountHelp}`)
       return false
     }
 
     if (userData.status === 'pending') {
       await safelySignOut()
-      setError('Your account is waiting for admin approval. Please contact your institution administrator.')
+      setError(`Your account is waiting for admin approval. ${accountHelp}`)
       return false
     }
 
     if (userData.status === 'rejected') {
       await safelySignOut()
-      setError('This account request is not active. Please contact your institution administrator.')
+      setError(`This account request is not active. ${accountHelp}`)
       return false
     }
 
     if (userData.status !== 'approved') {
       await safelySignOut()
-      setError('Your account is not approved yet. Please contact your institution administrator.')
+      setError(`Your account is not approved yet. ${accountHelp}`)
       return false
     }
 
     if (userData.role === 'admin') {
       navigate('/admin')
     } else if (userData.role === 'student') {
-      navigate('/student')
+      navigate(individualAccount ? '/self-study' : '/student')
     } else if (userData.role === 'teacher') {
       navigate('/teacher')
     } else {
@@ -303,19 +323,21 @@ export default function Login() {
         <div className="p-8">
           <div className="min-h-20 flex items-center mb-2">
             {branding.logoUrl ? (
-              <img src={branding.logoUrl} alt={branding.name} className="h-20 max-w-[240px] object-contain" />
-            ) : (
+              <img src={branding.logoUrl} alt={branding.name || 'Institution logo'} className="h-20 max-w-[240px] object-contain" />
+            ) : branding.resolved && branding.name ? (
               <div
                 className="h-16 w-16 rounded-2xl flex items-center justify-center text-white text-xl font-bold"
                 style={{ backgroundColor: primaryColor }}
               >
-                {(branding.name || 'I').trim().charAt(0).toUpperCase()}
+                {branding.name.trim().charAt(0).toUpperCase()}
               </div>
+            ) : (
+              <div className="h-16 w-16" aria-hidden="true" />
             )}
           </div>
 
           <p className="text-xs font-semibold tracking-wide uppercase mb-1" style={{ color: accentColor }}>
-            {brandingLoading ? 'Loading institution...' : branding.name}
+            {brandingLoading ? 'Loading institution...' : (branding.name || 'Institution login')}
           </p>
 
           <h1 className="text-2xl font-bold text-gray-900 mb-1">
@@ -323,7 +345,7 @@ export default function Login() {
           </h1>
 
           <p className="text-gray-400 text-sm mb-5">
-            Use the account provided by your institution.
+            Institution users can sign in by email or school username. Individual learners use email.
           </p>
 
           <div className="grid grid-cols-2 gap-2 bg-gray-50 rounded-xl p-1 mb-5">
@@ -372,7 +394,7 @@ export default function Login() {
             style={{ backgroundColor: primarySoft, borderColor: primaryBorder, color: primaryColor }}
           >
             {loginMode === 'email'
-              ? 'New account? Use the account setup email sent by your institution to choose your password. Existing accounts can continue signing in normally.'
+              ? 'Institution and individual accounts can sign in with email. New independent learner? Create a self-study account below.'
               : 'Use your institution code and username if your school assigned one. Your real account email is not shown during username login.'}
           </div>
 
@@ -455,7 +477,10 @@ export default function Login() {
 
           <div className="border-t border-gray-100 mt-6 pt-5 text-center">
             <p className="text-sm text-gray-400">
-              Need an account? Contact your institution administrator.
+              Institution account? Contact your administrator. Studying independently?{' '}
+              <button type="button" onClick={() => navigate('/signup')} className="font-medium hover:underline" style={{ color: primaryColor }}>
+                Create a self-study account
+              </button>
             </p>
           </div>
         </div>

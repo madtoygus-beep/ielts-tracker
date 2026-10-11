@@ -38,9 +38,15 @@ import { useNavigate } from 'react-router-dom'
 
 const DEFAULT_SCHOOL_ID = 'maxima'
 const ALL_SCHOOLS_ID = 'all'
+const INDIVIDUAL_SCHOOL_ID = '__individual__'
 const DEFAULT_SCHOOL_PRIMARY_COLOR = '#7c3aed'
 const DEFAULT_SCHOOL_ACCENT_COLOR = '#f97316'
 const SCHOOL_LOGO_MAX_BYTES = 2 * 1024 * 1024
+
+function isIndividualAccount(user) {
+  return user?.accountType === 'individual' || user?.schoolId === INDIVIDUAL_SCHOOL_ID
+}
+
 const SCHOOL_LOGO_EXTENSIONS = {
   'image/png': 'png',
   'image/jpeg': 'jpg',
@@ -134,6 +140,8 @@ export default function AdminDashboard() {
   const [restoreBusyId, setRestoreBusyId] = useState('')
 
   const [accountListView, setAccountListView] = useState('active')
+
+  const [accountAudienceView, setAccountAudienceView] = useState('institution')
 
   const [authChecking, setAuthChecking] = useState(true)
 
@@ -1108,6 +1116,7 @@ export default function AdminDashboard() {
     setSelectedSchoolId(schoolId)
     setSearch('')
     setSelectedStudent(null)
+    setAccountAudienceView('institution')
     setPendingSchoolSelections({})
     setAccountError('')
     setAccountNotice('')
@@ -1235,6 +1244,8 @@ export default function AdminDashboard() {
   const schoolLabel = schoolId => {
 
     const id = schoolId || DEFAULT_SCHOOL_ID
+
+    if (id === INDIVIDUAL_SCHOOL_ID) return 'Self-Study / Individual'
 
     const school = schools.find(item => item.schoolId === id)
 
@@ -2135,7 +2146,7 @@ export default function AdminDashboard() {
 
     setEditEmail(u.email || '')
 
-    setEditUsername(u.username || '')
+    setEditUsername(isIndividualAccount(u) ? '' : (u.username || ''))
 
     setEditRole(u.role || 'student')
 
@@ -2159,7 +2170,7 @@ export default function AdminDashboard() {
 
     const cleanEmail = editEmail.trim().toLowerCase()
 
-    const cleanUsername = editUsername.trim().toLowerCase()
+    const cleanUsername = isIndividualAccount(editUser) ? '' : editUsername.trim().toLowerCase()
 
     const cleanTargetBand = editTargetBand === ''
 
@@ -2449,11 +2460,23 @@ export default function AdminDashboard() {
     ? users
     : users.filter(user => (user.schoolId || DEFAULT_SCHOOL_ID) === selectedSchoolId)
 
-  const activeSchoolScopedUsers = schoolScopedUsers.filter(
+  const institutionAccountCount = schoolScopedUsers.filter(user => !isIndividualAccount(user)).length
+  const individualAccountCount = schoolScopedUsers.filter(user => isIndividualAccount(user)).length
+  const showingIndividualAccounts = selectedSchoolId === ALL_SCHOOLS_ID && accountAudienceView === 'individual'
+
+  const accountAudienceScopedUsers = selectedSchoolId !== ALL_SCHOOLS_ID
+    ? schoolScopedUsers
+    : schoolScopedUsers.filter(user => (
+      accountAudienceView === 'individual'
+        ? isIndividualAccount(user)
+        : !isIndividualAccount(user)
+    ))
+
+  const activeSchoolScopedUsers = accountAudienceScopedUsers.filter(
     user => user.deleted !== true && user.status !== 'deleted'
   )
 
-  const archivedSchoolScopedUsers = schoolScopedUsers.filter(
+  const archivedSchoolScopedUsers = accountAudienceScopedUsers.filter(
     user => user.deleted === true || user.status === 'deleted'
   )
 
@@ -2514,7 +2537,7 @@ export default function AdminDashboard() {
     : selectedSchool?.status === 'active'
 
   const selectedSchoolLabel = selectedSchoolId === ALL_SCHOOLS_ID
-    ? 'All Schools'
+    ? (accountAudienceView === 'individual' ? 'Self-Study accounts' : 'All institutions')
     : selectedSchool?.name || selectedSchoolId
 
   const accountSchool = schools.find(school => school.schoolId === accountForm.schoolId) || null
@@ -2587,7 +2610,7 @@ export default function AdminDashboard() {
 
             <h1 className="text-2xl font-bold text-gray-900 mb-1">Admin Panel</h1>
 
-            <p className="text-gray-400 text-sm">Manage schools, institution accounts, mock history and classes</p>
+            <p className="text-gray-400 text-sm">Manage schools, institution accounts, individual self-study accounts, mock history and classes</p>
 
           </div>
 
@@ -2615,7 +2638,7 @@ export default function AdminDashboard() {
                 <span className="text-xs bg-purple-50 text-purple-600 px-2 py-1 rounded-full">P3 Branding</span>
               </div>
               <p className="text-xs text-gray-400 mt-1">
-                Student, teacher, approval and summary lists below are limited to the selected school. Choose All Schools only when you intentionally want a platform-wide view.
+                Student, teacher, approval and summary lists below are limited to the selected school. Choose All Schools for a platform-wide view, then switch between Institution Accounts and Self-Study Accounts below.
               </p>
             </div>
 
@@ -3398,6 +3421,26 @@ export default function AdminDashboard() {
 
 
 
+        {selectedSchoolId === ALL_SCHOOLS_ID && (
+          <div className="mb-5 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => { setAccountAudienceView('institution'); setSearch(''); setSelectedStudent(null) }}
+              className={`px-4 py-2 rounded-xl text-sm font-medium border ${accountAudienceView === 'institution' ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}
+            >
+              Institution Accounts ({institutionAccountCount})
+            </button>
+            <button
+              type="button"
+              onClick={() => { setAccountAudienceView('individual'); setSearch(''); setSelectedStudent(null) }}
+              className={`px-4 py-2 rounded-xl text-sm font-medium border ${accountAudienceView === 'individual' ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}
+            >
+              Self-Study Accounts ({individualAccountCount})
+            </button>
+            <p className="text-xs text-gray-400 ml-1">Institution and individual accounts are kept in separate views.</p>
+          </div>
+        )}
+
         <div className="mb-6">
 
           <input
@@ -3434,6 +3477,7 @@ export default function AdminDashboard() {
           <p className="text-xs text-gray-400 ml-1">Archived accounts are hidden from the default view.</p>
         </div>
 
+        {!showingIndividualAccounts && (
         <div className={accountListView === 'active' ? 'mb-8' : 'hidden'}>
 
           <h2 className="font-semibold text-orange-600 mb-3">Pending Approvals ({pendingUsers.length})</h2>
@@ -3514,10 +3558,11 @@ export default function AdminDashboard() {
           </div>
 
         </div>
+        )}
 
 
 
-        {accountListView === 'active' && rejectedUsers.length > 0 && (
+        {!showingIndividualAccounts && accountListView === 'active' && rejectedUsers.length > 0 && (
 
           <div className="mb-8">
 
@@ -3626,7 +3671,7 @@ export default function AdminDashboard() {
 
                     {u.username && <p className="text-[11px] text-purple-500 mt-0.5">Username: {u.username}</p>}
 
-                    <p className="text-[11px] text-gray-400 mt-0.5">School: {schoolLabel(u.schoolId)}</p>
+                    <p className="text-[11px] text-gray-400 mt-0.5">{isIndividualAccount(u) ? 'Account: Self-Study / Individual' : `School: ${schoolLabel(u.schoolId)}`}</p>
 
                   </div>
 
@@ -3680,6 +3725,7 @@ export default function AdminDashboard() {
           </div>
         )}
 
+        {!showingIndividualAccounts && (
         <div className={accountListView === 'active' ? 'mb-8' : 'hidden'}>
 
           <h2 className="font-semibold text-gray-700 mb-3">Teachers ({teachers.length})</h2>
@@ -3709,7 +3755,7 @@ export default function AdminDashboard() {
                     <p className="text-xs text-gray-400">{u.email}</p>
                   {u.username && <p className="text-[11px] text-purple-500 mt-0.5">Username: {u.username}</p>}
 
-                  <p className="text-[11px] text-gray-400 mt-0.5">School: {schoolLabel(u.schoolId)}</p>
+                  <p className="text-[11px] text-gray-400 mt-0.5">{isIndividualAccount(u) ? 'Account: Self-Study / Individual' : `School: ${schoolLabel(u.schoolId)}`}</p>
 
                   {u.role === 'student' && (
 
@@ -3742,18 +3788,19 @@ export default function AdminDashboard() {
           </div>
 
         </div>
+        )}
 
 
 
         <div className={accountListView === 'active' ? '' : 'hidden'}>
 
-          <h2 className="font-semibold text-gray-700 mb-3">Students ({students.length})</h2>
+          <h2 className="font-semibold text-gray-700 mb-3">{showingIndividualAccounts ? 'Self-Study Learners' : 'Students'} ({students.length})</h2>
 
           <div className="flex flex-col gap-3">
 
             {students.length === 0 ? (
 
-              <div className="bg-white border border-gray-100 rounded-2xl p-8 text-center text-gray-400 text-sm">No students found.</div>
+              <div className="bg-white border border-gray-100 rounded-2xl p-8 text-center text-gray-400 text-sm">{showingIndividualAccounts ? 'No self-study accounts found.' : 'No students found.'}</div>
 
             ) : students.map(u => (
 
@@ -3782,7 +3829,7 @@ export default function AdminDashboard() {
                       <p className="text-xs text-gray-400">{u.email}</p>
                   {u.username && <p className="text-[11px] text-purple-500 mt-0.5">Username: {u.username}</p>}
 
-                    <p className="text-[11px] text-gray-400 mt-0.5">School: {schoolLabel(u.schoolId)}</p>
+                    <p className="text-[11px] text-gray-400 mt-0.5">{isIndividualAccount(u) ? 'Account: Self-Study / Individual' : `School: ${schoolLabel(u.schoolId)}`}</p>
 
                   {u.role === 'student' && (
 
@@ -3806,19 +3853,16 @@ export default function AdminDashboard() {
 
 
 
-                    <button onClick={e => { e.stopPropagation(); hideStudentRecords(u, 'mock') }} className="text-xs bg-purple-50 hover:bg-purple-100 text-purple-600 px-3 py-1.5 rounded-lg">Hide Mock</button>
-
-                    <button onClick={e => { e.stopPropagation(); restoreStudentRecords(u, 'mock') }} className="text-xs bg-green-50 hover:bg-green-100 text-green-600 px-3 py-1.5 rounded-lg">Restore Mock</button>
-
-                    <button onClick={e => { e.stopPropagation(); hardDeleteStudentRecords(u, 'mock') }} className="text-xs bg-red-50 hover:bg-red-100 text-red-600 px-3 py-1.5 rounded-lg">Delete Mock</button>
-
-
-
-                    <button onClick={e => { e.stopPropagation(); hideStudentRecords(u, 'homework') }} className="text-xs bg-amber-50 hover:bg-amber-100 text-amber-600 px-3 py-1.5 rounded-lg">Hide Homework</button>
-
-                    <button onClick={e => { e.stopPropagation(); restoreStudentRecords(u, 'homework') }} className="text-xs bg-emerald-50 hover:bg-emerald-100 text-emerald-600 px-3 py-1.5 rounded-lg">Restore Homework</button>
-
-                    <button onClick={e => { e.stopPropagation(); hardDeleteStudentRecords(u, 'homework') }} className="text-xs bg-rose-50 hover:bg-rose-100 text-rose-600 px-3 py-1.5 rounded-lg">Delete Homework</button>
+                    {!isIndividualAccount(u) && (
+                      <>
+                        <button onClick={e => { e.stopPropagation(); hideStudentRecords(u, 'mock') }} className="text-xs bg-purple-50 hover:bg-purple-100 text-purple-600 px-3 py-1.5 rounded-lg">Hide Mock</button>
+                        <button onClick={e => { e.stopPropagation(); restoreStudentRecords(u, 'mock') }} className="text-xs bg-green-50 hover:bg-green-100 text-green-600 px-3 py-1.5 rounded-lg">Restore Mock</button>
+                        <button onClick={e => { e.stopPropagation(); hardDeleteStudentRecords(u, 'mock') }} className="text-xs bg-red-50 hover:bg-red-100 text-red-600 px-3 py-1.5 rounded-lg">Delete Mock</button>
+                        <button onClick={e => { e.stopPropagation(); hideStudentRecords(u, 'homework') }} className="text-xs bg-amber-50 hover:bg-amber-100 text-amber-600 px-3 py-1.5 rounded-lg">Hide Homework</button>
+                        <button onClick={e => { e.stopPropagation(); restoreStudentRecords(u, 'homework') }} className="text-xs bg-emerald-50 hover:bg-emerald-100 text-emerald-600 px-3 py-1.5 rounded-lg">Restore Homework</button>
+                        <button onClick={e => { e.stopPropagation(); hardDeleteStudentRecords(u, 'homework') }} className="text-xs bg-rose-50 hover:bg-rose-100 text-rose-600 px-3 py-1.5 rounded-lg">Delete Homework</button>
+                      </>
+                    )}
 
 
 
@@ -3972,29 +4016,24 @@ export default function AdminDashboard() {
 
               </div>
 
-              <div>
-
-                <label className="text-xs text-gray-400 mb-1 block">School username (optional)</label>
-
-                <input
-
-                  className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-purple-400"
-
-                  value={editUsername}
-
-                  onChange={e => setEditUsername(e.target.value.toLowerCase())}
-
-                  placeholder="student01"
-
-                  autoCapitalize="none"
-
-                  autoCorrect="off"
-
-                />
-
-                <p className="text-[11px] text-gray-400 mt-1">Unique inside {schoolLabel(editUser.schoolId)}. Leave empty to remove username login.</p>
-
-              </div>
+              {!isIndividualAccount(editUser) ? (
+                <div>
+                  <label className="text-xs text-gray-400 mb-1 block">School username (optional)</label>
+                  <input
+                    className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-purple-400"
+                    value={editUsername}
+                    onChange={e => setEditUsername(e.target.value.toLowerCase())}
+                    placeholder="student01"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                  />
+                  <p className="text-[11px] text-gray-400 mt-1">Unique inside {schoolLabel(editUser.schoolId)}. Leave empty to remove username login.</p>
+                </div>
+              ) : (
+                <div className="bg-purple-50 border border-purple-100 text-purple-700 rounded-xl px-4 py-3 text-xs leading-5">
+                  Self-study accounts use email login only. School username is not available.
+                </div>
+              )}
 
               <div className="grid grid-cols-2 gap-3">
 
@@ -4012,11 +4051,11 @@ export default function AdminDashboard() {
 
                 <div>
 
-                  <label className="text-xs text-gray-400 mb-1 block">School</label>
+                  <label className="text-xs text-gray-400 mb-1 block">{isIndividualAccount(editUser) ? 'Account type' : 'School'}</label>
 
                   <div className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm bg-gray-50 text-gray-500 truncate">
 
-                    {schoolLabel(editUser.schoolId)}
+                    {isIndividualAccount(editUser) ? 'Individual / Self-Study' : schoolLabel(editUser.schoolId)}
 
                   </div>
 
@@ -4026,7 +4065,7 @@ export default function AdminDashboard() {
 
               <p className="text-[11px] text-amber-600">
 
-                Role and school are locked after account creation to protect assignment and submission history.
+                Role and account boundary are locked after account creation to protect assignment and submission history.
 
               </p>
 

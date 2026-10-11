@@ -60,9 +60,13 @@ function isAssignedToTeacher(entity, teacherId) {
 }
 
 function filterStudentsByProfile(students, profile, teacherId) {
-  if (isAdminProfile(profile)) return students
+  const institutionStudents = students.filter(student =>
+    student?.accountType !== 'individual' && student?.schoolId !== '__individual__'
+  )
 
-  return students.filter(student =>
+  if (isAdminProfile(profile)) return institutionStudents
+
+  return institutionStudents.filter(student =>
     isSameSchool(student, profile) &&
     isAssignedToTeacher(student, teacherId)
   )

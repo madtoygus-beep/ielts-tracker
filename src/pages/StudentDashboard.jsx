@@ -4338,6 +4338,11 @@
             return
           }
 
+          if (profile.accountType === 'individual' || profile.schoolId === '__individual__') {
+            navigate('/self-study', { replace: true })
+            return
+          }
+
           setUser(currentUser)
           setProfile(profile)
 

@@ -299,6 +299,7 @@ export default function ManageClasses() {
           .map(d => ({ id: d.id, ...d.data() }))
           .filter(student => {
             if (student.status !== 'approved' || student.deleted === true) return false
+            if (student.accountType === 'individual' || student.schoolId === '__individual__') return false
 
             if (userRole === 'admin') {
               return selectedSchoolId === ALL_SCHOOLS_ID ||

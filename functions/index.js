@@ -32,6 +32,7 @@ const SCHOOL_SCHEMA_VERSION = 1
 const SCHOOL_SEAT_SCHEMA_VERSION = 1
 const SCHOOL_BRANDING_SCHEMA_VERSION = 1
 const DEFAULT_SCHOOL_ID = 'maxima'
+const INDIVIDUAL_SCHOOL_ID = '__individual__'
 const SCHOOL_STATUSES = new Set(['active', 'inactive'])
 const SCHOOL_LOGIN_PREFERENCES = new Set(['both', 'email', 'username'])
 const DEFAULT_SCHOOL_PRIMARY_COLOR = '#7c3aed'
@@ -200,6 +201,22 @@ function uniqueStrings(values) {
 
 function schoolIdOf(data) {
   return data?.schoolId || DEFAULT_SCHOOL_ID
+}
+
+function accountTypeOf(data) {
+  const explicit = typeof data?.accountType === 'string'
+    ? data.accountType.trim().toLowerCase()
+    : ''
+
+  if (explicit === 'individual' || data?.schoolId === INDIVIDUAL_SCHOOL_ID) {
+    return 'individual'
+  }
+
+  return 'institution'
+}
+
+function isIndividualAccount(data) {
+  return accountTypeOf(data) === 'individual'
 }
 
 async function requireActiveSchoolForProfile(profile) {
@@ -388,6 +405,13 @@ async function requireStudent(request) {
   const profile = userSnap.data() || {}
   if (profile.role !== 'student' || profile.status !== 'approved' || profile.deleted === true) {
     throw new HttpsError('permission-denied', 'This account cannot submit student work.')
+  }
+
+  if (isIndividualAccount(profile)) {
+    throw new HttpsError(
+      'permission-denied',
+      'Self-study accounts cannot submit institution assignments.'
+    )
   }
 
   const activeSchool = await requireActiveSchoolForProfile(profile)
@@ -832,6 +856,27 @@ async function getSchoolStoragePaths(schoolId) {
   return Array.from(paths)
 }
 
+async function deleteStorageForUsers(userIds) {
+  const bucket = getStorage().bucket(STORAGE_BUCKET_NAME)
+  let deletedObjects = 0
+
+  for (const uid of userIds) {
+    for (const prefixRoot of USER_STORAGE_PREFIXES) {
+      const prefix = `${prefixRoot}/${uid}/`
+      const [files] = await bucket.getFiles({ prefix })
+
+      if (files.length === 0) continue
+
+      await Promise.all(
+        files.map(file => file.delete({ ignoreNotFound: true }))
+      )
+      deletedObjects += files.length
+    }
+  }
+
+  return deletedObjects
+}
+
 async function deleteStorageForSchool(schoolId, userIds, storagePaths) {
   const bucket = getStorage().bucket(STORAGE_BUCKET_NAME)
   let deletedObjects = 0
@@ -854,20 +899,7 @@ async function deleteStorageForSchool(schoolId, userIds, storagePaths) {
     deletedObjects += brandingFiles.length
   }
 
-  for (const uid of userIds) {
-    for (const prefixRoot of USER_STORAGE_PREFIXES) {
-      const prefix = `${prefixRoot}/${uid}/`
-      const [files] = await bucket.getFiles({ prefix })
-
-      if (files.length === 0) continue
-
-      await Promise.all(
-        files.map(file => file.delete({ ignoreNotFound: true }))
-      )
-      deletedObjects += files.length
-    }
-  }
-
+  deletedObjects += await deleteStorageForUsers(userIds)
   return deletedObjects
 }
 
@@ -1315,7 +1347,10 @@ function normalizeManagedSeatLimitInput(value, label) {
 }
 
 function managedProfileConsumesSeat(profile) {
-  return profile?.status === 'approved' && profile?.deleted !== true && MANAGED_ACCOUNT_ROLES.has(profile?.role)
+  return accountTypeOf(profile) === 'institution' &&
+    profile?.status === 'approved' &&
+    profile?.deleted !== true &&
+    MANAGED_ACCOUNT_ROLES.has(profile?.role)
 }
 
 function managedSeatUsageMapFromUserDocs(docs) {
@@ -1548,6 +1583,7 @@ exports.createManagedUser = onCall({ invoker: 'public' }, async request => {
         username: username || null,
         role,
         requestedRole: role,
+        accountType: 'institution',
         status: 'approved',
         deleted: false,
         schoolId,
@@ -1606,6 +1642,7 @@ exports.createManagedUser = onCall({ invoker: 'public' }, async request => {
         email,
         username: username || null,
         role,
+        accountType: 'institution',
         status: 'approved',
         deleted: false,
         schoolId,
@@ -1614,6 +1651,119 @@ exports.createManagedUser = onCall({ invoker: 'public' }, async request => {
       passwordSetupRequired: true
     }
   })
+})
+
+// P4A: self-service B2C onboarding. Firebase Auth creates the identity on the
+// client first; this callable creates the privileged Firestore profile from the
+// authenticated UID/email so role, account type and school boundary are never
+// trusted from browser input. Existing institution accounts cannot be converted.
+exports.createIndividualProfile = onCall({ invoker: 'public' }, async request => {
+  if (!request.auth?.uid) {
+    throw new HttpsError('unauthenticated', 'Please sign in again before creating your self-study profile.')
+  }
+
+  const uid = request.auth.uid
+  const data = request.data || {}
+  const name = normalizeManagedName(data.name)
+  const targetBand = normalizeManagedTargetBand(data.targetBand, 'student')
+  const authUser = await adminAuth.getUser(uid)
+
+  if (authUser.disabled === true || !authUser.email) {
+    throw new HttpsError('failed-precondition', 'This Firebase Auth account is not available for self-study signup.')
+  }
+
+  const email = normalizeManagedEmail(authUser.email)
+  const tokenEmail = request.auth.token?.email
+    ? normalizeManagedEmail(request.auth.token.email)
+    : email
+
+  if (tokenEmail !== email) {
+    throw new HttpsError('failed-precondition', 'Authenticated email does not match Firebase Auth.')
+  }
+
+  const conflictingProfiles = await db.collection('users')
+    .where('email', '==', email)
+    .limit(2)
+    .get()
+
+  for (const docSnap of conflictingProfiles.docs) {
+    if (docSnap.id !== uid) {
+      throw new HttpsError('already-exists', 'An account profile already exists with this email address.')
+    }
+  }
+
+  const userRef = db.doc(`users/${uid}`)
+  const existingSnap = await userRef.get()
+
+  if (existingSnap.exists) {
+    const existing = existingSnap.data() || {}
+    if (
+      accountTypeOf(existing) === 'individual' &&
+      existing.role === 'student' &&
+      existing.status === 'approved' &&
+      existing.deleted !== true
+    ) {
+      return {
+        ok: true,
+        alreadyExists: true,
+        user: {
+          id: uid,
+          uid,
+          name: existing.name || name,
+          email,
+          role: 'student',
+          accountType: 'individual',
+          schoolId: INDIVIDUAL_SCHOOL_ID,
+          targetBand: existing.targetBand ?? null
+        }
+      }
+    }
+
+    throw new HttpsError(
+      'failed-precondition',
+      'This Firebase Auth identity already belongs to a different account type.'
+    )
+  }
+
+  const now = new Date().toISOString()
+  const profilePayload = {
+    name,
+    email,
+    username: null,
+    role: 'student',
+    requestedRole: 'student',
+    accountType: 'individual',
+    status: 'approved',
+    deleted: false,
+    schoolId: INDIVIDUAL_SCHOOL_ID,
+    teacherIds: [],
+    targetBand,
+    accountSource: 'self_signup',
+    createdBy: uid,
+    approvedBy: 'self_signup',
+    createdAt: now,
+    approvedAt: now,
+    updatedAt: now,
+    updatedBy: uid
+  }
+
+  await adminAuth.updateUser(uid, { displayName: name })
+  await userRef.create(profilePayload)
+
+  return {
+    ok: true,
+    alreadyExists: false,
+    user: {
+      id: uid,
+      uid,
+      name,
+      email,
+      role: 'student',
+      accountType: 'individual',
+      schoolId: INDIVIDUAL_SCHOOL_ID,
+      targetBand
+    }
+  }
 })
 
 // P2B: institution users may sign in with school code + username + password.
@@ -1661,6 +1811,7 @@ exports.loginManagedUsername = onCall({ invoker: 'public' }, async request => {
     !MANAGED_ACCOUNT_ROLES.has(profile.role) ||
     profile.status !== 'approved' ||
     profile.deleted === true ||
+    accountTypeOf(profile) !== 'institution' ||
     schoolIdOf(profile) !== schoolId ||
     storedUsername !== username
   ) {
@@ -1741,6 +1892,9 @@ exports.approveManagedUser = onCall({ invoker: 'public' }, async request => {
     if (profile.deleted === true || profile.status === 'deleted') {
       throw new HttpsError('failed-precondition', 'Deleted accounts cannot be approved from the pending queue.')
     }
+    if (accountTypeOf(profile) === 'individual') {
+      throw new HttpsError('failed-precondition', 'Self-study accounts cannot be converted into institution accounts here.')
+    }
     if (!['pending', 'rejected'].includes(profile.status)) {
       throw new HttpsError('failed-precondition', 'Only pending or rejected account requests can be approved.')
     }
@@ -1780,6 +1934,7 @@ exports.approveManagedUser = onCall({ invoker: 'public' }, async request => {
       await userRef.set({
         role,
         requestedRole: role,
+        accountType: 'institution',
         status: 'approved',
         deleted: false,
         schoolId,
@@ -1884,6 +2039,10 @@ exports.updateManagedUser = onCall({ invoker: 'public' }, async request => {
   }
 
   const schoolId = schoolIdOf(profile)
+  const accountType = accountTypeOf(profile)
+  if (accountType === 'individual' && username) {
+    throw new HttpsError('failed-precondition', 'Self-study accounts use email login only and cannot have a school username.')
+  }
   const targetBand = normalizeManagedTargetBand(data.targetBand, profile.role)
   const previousUsername = normalizeManagedUsername(profile.username)
   const authUser = await authUserForManagedProfile(userId)
@@ -1927,6 +2086,7 @@ exports.updateManagedUser = onCall({ invoker: 'public' }, async request => {
         latestProfile.role !== profile.role ||
         latestProfile.status !== 'approved' ||
         latestProfile.deleted === true ||
+        accountTypeOf(latestProfile) !== accountType ||
         schoolIdOf(latestProfile) !== schoolId
       ) {
         throw new HttpsError('aborted', 'This account changed while it was being edited. Refresh and try again.')
@@ -2002,6 +2162,7 @@ exports.updateManagedUser = onCall({ invoker: 'public' }, async request => {
     userId,
     role: profile.role,
     schoolId,
+    accountType,
     name,
     email,
     username: username || null,
@@ -2090,6 +2251,88 @@ exports.restoreManagedUser = onCall({ invoker: 'public' }, async request => {
     )
   }
   const schoolId = schoolIdOf(initialProfile)
+  const initialAccountType = accountTypeOf(initialProfile)
+
+  if (initialAccountType === 'individual') {
+    if (initialRole !== 'student' || schoolId !== INDIVIDUAL_SCHOOL_ID) {
+      throw new HttpsError('failed-precondition', 'This self-study account has inconsistent identity metadata.')
+    }
+
+    const userRef = db.doc(`users/${userId}`)
+    const userSnap = await userRef.get()
+    if (!userSnap.exists) {
+      throw new HttpsError('not-found', 'The selected user profile was not found.')
+    }
+
+    const profile = userSnap.data() || {}
+    if (accountTypeOf(profile) !== 'individual' || permanentDeleteRoleOf(profile) !== 'student') {
+      throw new HttpsError('aborted', 'This account changed while it was being restored. Refresh and try again.')
+    }
+
+    const authUser = await authUserForManagedProfile(userId)
+    const isArchived = profile.deleted === true || profile.status === 'deleted'
+
+    if (!isArchived) {
+      if (profile.status !== 'approved' || profile.role !== 'student') {
+        throw new HttpsError('failed-precondition', 'This account is not an archived self-study account.')
+      }
+      if (authUser.disabled === true) {
+        await adminAuth.updateUser(userId, { disabled: false })
+      }
+      return {
+        ok: true,
+        userId,
+        role: 'student',
+        accountType: 'individual',
+        schoolId: INDIVIDUAL_SCHOOL_ID,
+        alreadyRestored: true
+      }
+    }
+
+    const previousAuthDisabled = authUser.disabled === true
+    if (previousAuthDisabled) {
+      await adminAuth.updateUser(userId, { disabled: false })
+    }
+
+    try {
+      const now = new Date().toISOString()
+      await userRef.set({
+        role: 'student',
+        requestedRole: 'student',
+        accountType: 'individual',
+        status: 'approved',
+        deleted: false,
+        schoolId: INDIVIDUAL_SCHOOL_ID,
+        username: null,
+        teacherIds: [],
+        restoredAt: now,
+        restoredBy: admin.uid,
+        updatedAt: now,
+        updatedBy: admin.uid,
+        deletedAt: FieldValue.delete(),
+        deletedBy: FieldValue.delete(),
+        permanentDeleteInProgress: FieldValue.delete(),
+        permanentDeleteStartedAt: FieldValue.delete(),
+        permanentDeleteStartedBy: FieldValue.delete()
+      }, { merge: true })
+    } catch (error) {
+      if (previousAuthDisabled) {
+        await adminAuth.updateUser(userId, { disabled: true }).catch(rollbackError => {
+          console.error('P4A restoreManagedUser individual Auth rollback failed', { userId, rollbackError })
+        })
+      }
+      throw error
+    }
+
+    return {
+      ok: true,
+      userId,
+      role: 'student',
+      accountType: 'individual',
+      schoolId: INDIVIDUAL_SCHOOL_ID,
+      alreadyRestored: false
+    }
+  }
 
   return withManagedSchoolSeatLock(schoolId, async () => {
     const userRef = db.doc(`users/${userId}`)
@@ -2602,7 +2845,7 @@ exports.permanentlyDeleteManagedUser = onCall({ invoker: 'public' }, async reque
   }
 
   const deletedStorageObjects = state.shouldDeleteUserStorage
-    ? await deleteStorageForSchool([userId], [])
+    ? await deleteStorageForUsers([userId])
     : 0
   const deletedMockResourceAccess = await deleteMockResourceAccessForUsers([userId])
   const updatedLegacyReferenceDocuments = await unlinkStudentLegacyReferences(
@@ -2847,7 +3090,8 @@ async function requireManagedClassStudents(studentIds, schoolId) {
     if (
       profile.role !== 'student' ||
       profile.status !== 'approved' ||
-      profile.deleted === true
+      profile.deleted === true ||
+      accountTypeOf(profile) !== 'institution'
     ) {
       throw new HttpsError('failed-precondition', 'Every selected student must be an active student account.')
     }
@@ -3260,6 +3504,7 @@ async function loadAssignableStudents(studentIds, schoolId) {
       profile.role !== 'student' ||
       profile.status !== 'approved' ||
       profile.deleted === true ||
+      accountTypeOf(profile) !== 'institution' ||
       schoolIdOf(profile) !== schoolId
     ) {
       throw new HttpsError(

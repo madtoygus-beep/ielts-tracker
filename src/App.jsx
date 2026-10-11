@@ -6,6 +6,7 @@ const Login = lazy(() => import('./pages/Login'))
 const Signup = lazy(() => import('./pages/Signup'))
 
 const StudentDashboard = lazy(() => import('./pages/StudentDashboard'))
+const SelfStudyDashboard = lazy(() => import('./pages/SelfStudyDashboard'))
 const TeacherDashboard = lazy(() => import('./pages/TeacherDashboard'))
 const AdminDashboard = lazy(() => import('./pages/AdminDashboard'))
 
@@ -56,6 +57,7 @@ function App() {
           <Route path="/signup" element={<Signup />} />
 
           <Route path="/student" element={<StudentDashboard />} />
+          <Route path="/self-study" element={<SelfStudyDashboard />} />
           <Route path="/teacher" element={<TeacherDashboard />} />
           <Route path="/admin" element={<AdminDashboard />} />
 
