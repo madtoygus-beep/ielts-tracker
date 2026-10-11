@@ -1,11 +1,11 @@
 import { useState } from 'react'
 import {
   signInWithEmailAndPassword,
-  sendPasswordResetEmail,
   signOut
 } from 'firebase/auth'
 import { doc, getDoc } from 'firebase/firestore'
 import { auth, db } from '../firebase'
+import { sendPasswordResetEmail } from '../services/authEmailService'
 import { useNavigate } from 'react-router-dom'
 
 export default function Login() {
@@ -14,6 +14,7 @@ export default function Login() {
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
   const [loading, setLoading] = useState(false)
+  const [resetLoading, setResetLoading] = useState(false)
   const navigate = useNavigate()
 
   const cleanEmail = email.trim().toLowerCase()
@@ -35,11 +36,16 @@ export default function Login() {
       return
     }
 
+    setResetLoading(true)
+
     try {
-      await sendPasswordResetEmail(auth, cleanEmail)
-      setMessage('Password reset email sent. Please check your inbox.')
+      await sendPasswordResetEmail(cleanEmail)
+      setMessage('Account setup / password reset email sent. Please check your inbox.')
     } catch (err) {
-      setError('Could not send password reset email.')
+      console.error('Password reset email failed:', err)
+      setError('Could not send the account setup / password reset email. Please try again or contact your institution administrator.')
+    } finally {
+      setResetLoading(false)
     }
   }
 
@@ -136,24 +142,12 @@ export default function Login() {
         </p>
 
         <div className="bg-purple-50 border border-purple-100 text-purple-700 rounded-xl p-3 mb-5 text-xs leading-5">
-          Do not create another account. If you need access or your account details are incorrect, contact your institution administrator.
+          New account? Use the account setup email sent by your institution to choose your password. Existing accounts can continue signing in normally.
         </div>
 
         {error && (
           <div className="bg-red-50 text-red-600 text-sm rounded-xl p-3 mb-4 leading-6">
             {error}
-
-            {(error.toLowerCase().includes('password') ||
-              error.toLowerCase().includes('incorrect') ||
-              error.toLowerCase().includes('account')) && (
-              <button
-                type="button"
-                onClick={handleResetPassword}
-                className="block mt-2 text-xs font-medium text-red-700 underline"
-              >
-                Send password reset email
-              </button>
-            )}
           </div>
         )}
 
@@ -188,10 +182,19 @@ export default function Login() {
 
           <button
             onClick={handleLogin}
-            disabled={loading}
+            disabled={loading || resetLoading}
             className="bg-purple-600 text-white rounded-xl py-3 text-sm font-medium hover:bg-purple-700 mt-1 disabled:opacity-60 disabled:cursor-not-allowed"
           >
             {loading ? 'Logging in...' : 'Login'}
+          </button>
+
+          <button
+            type="button"
+            onClick={handleResetPassword}
+            disabled={loading || resetLoading}
+            className="text-sm text-purple-600 hover:text-purple-700 font-medium py-1 disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            {resetLoading ? 'Sending email...' : 'Send account setup / password reset email'}
           </button>
         </div>
 

@@ -24,7 +24,9 @@ import {
 
 } from 'firebase/firestore'
 
-import { signOut, onAuthStateChanged, sendPasswordResetEmail } from 'firebase/auth'
+import { signOut, onAuthStateChanged } from 'firebase/auth'
+
+import { sendActivationEmail, sendPasswordResetEmail } from '../services/authEmailService'
 
 import { httpsCallable } from 'firebase/functions'
 
@@ -995,13 +997,13 @@ export default function AdminDashboard() {
 
       try {
 
-        await sendPasswordResetEmail(auth, email)
+        await sendActivationEmail(email)
 
         resetSent = true
 
       } catch (resetError) {
 
-        console.error('Account created but password setup email failed:', resetError)
+        console.error('Account created but account setup email failed:', resetError)
 
       }
 
@@ -1011,9 +1013,9 @@ export default function AdminDashboard() {
 
         resetSent
 
-          ? `${name} was created in ${schoolLabel(schoolId)}. Password setup email sent to ${email}.`
+          ? `${name} was created in ${schoolLabel(schoolId)}. Account setup email sent to ${email}.`
 
-          : `${name} was created in ${schoolLabel(schoolId)}, but the password setup email could not be sent. Use Reset Password from the user list.`
+          : `${name} was created in ${schoolLabel(schoolId)}, but the account setup email could not be sent. Use Reset Password from the user list.`
 
       )
 
@@ -1760,7 +1762,7 @@ export default function AdminDashboard() {
 
     try {
 
-      await sendPasswordResetEmail(auth, user.email)
+      await sendPasswordResetEmail(user.email)
 
       alert(`Password reset email sent to ${user.email}.`)
 
