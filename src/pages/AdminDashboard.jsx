@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 
-import { auth, db, functions } from '../firebase'
+import { auth, db, functions, storage } from '../firebase'
 
 import {
 
@@ -30,12 +30,22 @@ import { sendActivationEmail, sendPasswordResetEmail } from '../services/authEma
 
 import { httpsCallable } from 'firebase/functions'
 
+import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage'
+
 import { useNavigate } from 'react-router-dom'
 
 
 
 const DEFAULT_SCHOOL_ID = 'maxima'
 const ALL_SCHOOLS_ID = 'all'
+const DEFAULT_SCHOOL_PRIMARY_COLOR = '#7c3aed'
+const DEFAULT_SCHOOL_ACCENT_COLOR = '#f97316'
+const SCHOOL_LOGO_MAX_BYTES = 2 * 1024 * 1024
+const SCHOOL_LOGO_EXTENSIONS = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/webp': 'webp'
+}
 
 
 
@@ -151,9 +161,23 @@ export default function AdminDashboard() {
 
     studentSeatLimit: '',
 
-    teacherSeatLimit: ''
+    teacherSeatLimit: '',
+
+    logoPath: null,
+
+    primaryColor: DEFAULT_SCHOOL_PRIMARY_COLOR,
+
+    accentColor: DEFAULT_SCHOOL_ACCENT_COLOR,
+
+    loginPreference: 'both'
 
   })
+
+  const [schoolLogoFile, setSchoolLogoFile] = useState(null)
+
+  const [schoolLogoUrl, setSchoolLogoUrl] = useState('')
+
+  const [schoolLogoRemove, setSchoolLogoRemove] = useState(false)
 
   const [accountCreating, setAccountCreating] = useState(false)
 
@@ -506,6 +530,68 @@ export default function AdminDashboard() {
 
   const seatLimitLabel = limit => (limit === null || limit === undefined ? 'Unlimited' : String(limit))
 
+  const validBrandColor = value => /^#[0-9a-fA-F]{6}$/.test(String(value || '').trim())
+
+  const loadSchoolLogoPreview = async logoPath => {
+    if (!logoPath) {
+      setSchoolLogoUrl('')
+      return
+    }
+
+    try {
+      const url = await getDownloadURL(storageRef(storage, logoPath))
+      setSchoolLogoUrl(url)
+    } catch (error) {
+      console.warn('Could not load school logo preview:', error)
+      setSchoolLogoUrl('')
+    }
+  }
+
+  const clearSchoolLogoDraft = () => {
+    setSchoolLogoFile(null)
+    setSchoolLogoUrl('')
+    setSchoolLogoRemove(false)
+  }
+
+  const handleSchoolLogoFileChange = event => {
+    const file = event.target.files?.[0] || null
+    event.target.value = ''
+    setSchoolsError('')
+
+    if (!file) return
+
+    if (!SCHOOL_LOGO_EXTENSIONS[file.type]) {
+      setSchoolsError('School logo must be a PNG, JPG/JPEG or WebP image.')
+      return
+    }
+
+    if (file.size <= 0 || file.size > SCHOOL_LOGO_MAX_BYTES) {
+      setSchoolsError('School logo must be larger than 0 bytes and no more than 2 MB.')
+      return
+    }
+
+    setSchoolLogoFile(file)
+    setSchoolLogoRemove(false)
+
+    const reader = new FileReader()
+    reader.onload = () => setSchoolLogoUrl(typeof reader.result === 'string' ? reader.result : '')
+    reader.onerror = () => setSchoolLogoUrl('')
+    reader.readAsDataURL(file)
+  }
+
+  const removeStoredSchoolLogo = () => {
+    setSchoolLogoFile(null)
+    setSchoolLogoUrl('')
+    setSchoolLogoRemove(true)
+    setSchoolsError('')
+  }
+
+  const restoreStoredSchoolLogo = () => {
+    setSchoolLogoFile(null)
+    setSchoolLogoRemove(false)
+    loadSchoolLogoPreview(schoolForm.logoPath)
+  }
+
 
 
   const resetSchoolForm = () => {
@@ -522,9 +608,19 @@ export default function AdminDashboard() {
 
       studentSeatLimit: '',
 
-      teacherSeatLimit: ''
+      teacherSeatLimit: '',
+
+      logoPath: null,
+
+      primaryColor: DEFAULT_SCHOOL_PRIMARY_COLOR,
+
+      accentColor: DEFAULT_SCHOOL_ACCENT_COLOR,
+
+      loginPreference: 'both'
 
     })
+
+    clearSchoolLogoDraft()
 
     setSchoolNotice('')
 
@@ -548,9 +644,19 @@ export default function AdminDashboard() {
 
       studentSeatLimit: '',
 
-      teacherSeatLimit: ''
+      teacherSeatLimit: '',
+
+      logoPath: null,
+
+      primaryColor: DEFAULT_SCHOOL_PRIMARY_COLOR,
+
+      accentColor: DEFAULT_SCHOOL_ACCENT_COLOR,
+
+      loginPreference: 'both'
 
     })
+
+    clearSchoolLogoDraft()
 
     setSchoolNotice('')
 
@@ -582,9 +688,27 @@ export default function AdminDashboard() {
 
         ? ''
 
-        : String(school.teacherSeatLimit)
+        : String(school.teacherSeatLimit),
+
+      logoPath: school.logoPath || null,
+
+      primaryColor: school.primaryColor || DEFAULT_SCHOOL_PRIMARY_COLOR,
+
+      accentColor: school.accentColor || DEFAULT_SCHOOL_ACCENT_COLOR,
+
+      loginPreference: ['email', 'username', 'both'].includes(school.loginPreference)
+
+        ? school.loginPreference
+
+        : 'both'
 
     })
+
+    setSchoolLogoFile(null)
+
+    setSchoolLogoRemove(false)
+
+    loadSchoolLogoPreview(school.logoPath || null)
 
     setSchoolNotice('')
 
@@ -603,6 +727,16 @@ export default function AdminDashboard() {
     const studentSeat = parseSeatLimit(schoolForm.studentSeatLimit, 'Student seat limit')
 
     const teacherSeat = parseSeatLimit(schoolForm.teacherSeatLimit, 'Teacher seat limit')
+
+    const primaryColor = String(schoolForm.primaryColor || '').trim().toLowerCase()
+
+    const accentColor = String(schoolForm.accentColor || '').trim().toLowerCase()
+
+    const loginPreference = ['email', 'username', 'both'].includes(schoolForm.loginPreference)
+
+      ? schoolForm.loginPreference
+
+      : 'both'
 
 
 
@@ -646,6 +780,26 @@ export default function AdminDashboard() {
 
 
 
+    if (!validBrandColor(primaryColor) || !validBrandColor(accentColor)) {
+
+      setSchoolsError('Brand colors must be valid 6-digit hex colors.')
+
+      return
+
+    }
+
+
+
+    if (schoolLogoFile && (!SCHOOL_LOGO_EXTENSIONS[schoolLogoFile.type] || schoolLogoFile.size > SCHOOL_LOGO_MAX_BYTES)) {
+
+      setSchoolsError('School logo must be a PNG, JPG/JPEG or WebP image no larger than 2 MB.')
+
+      return
+
+    }
+
+
+
     setSchoolSaving(true)
 
     setSchoolsError('')
@@ -654,43 +808,173 @@ export default function AdminDashboard() {
 
 
 
+    const oldLogoPath = schoolForm.logoPath || null
+
+    const basePayload = {
+
+      schoolId,
+
+      name,
+
+      status: schoolForm.status,
+
+      studentSeatLimit: studentSeat.value,
+
+      teacherSeatLimit: teacherSeat.value,
+
+      primaryColor,
+
+      accentColor,
+
+      loginPreference
+
+    }
+
+    let metadataSaved = false
+
+    let cleanupWarning = false
+
+
+
     try {
 
-      const result = await saveManagedSchoolCall({
+      const initialLogoPath = schoolLogoRemove ? null : oldLogoPath
 
-        schoolId,
+      const initialResult = await saveManagedSchoolCall({
 
-        name,
+        ...basePayload,
 
-        status: schoolForm.status,
-
-        studentSeatLimit: studentSeat.value,
-
-        teacherSeatLimit: teacherSeat.value
+        logoPath: initialLogoPath
 
       })
 
+      metadataSaved = true
+
+      const wasCreated = initialResult.data?.created === true
+
+      let finalResult = initialResult
+
+      let finalLogoPath = initialLogoPath
 
 
-      await loadSchools()
+
+      if (schoolLogoFile) {
+
+        const extension = SCHOOL_LOGO_EXTENSIONS[schoolLogoFile.type]
+
+        const newLogoPath = `school-branding/${schoolId}/logo.${extension}`
+
+        const newLogoRef = storageRef(storage, newLogoPath)
 
 
 
-      setSchoolNotice(
+        await uploadBytes(newLogoRef, schoolLogoFile, {
 
-        result.data?.created
+          contentType: schoolLogoFile.type,
 
-          ? `${name} was created.`
+          cacheControl: 'public,max-age=3600'
 
-          : `${name} was updated.`
-
-      )
+        })
 
 
+
+        if (newLogoPath !== oldLogoPath) {
+
+          try {
+
+            finalResult = await saveManagedSchoolCall({
+
+              ...basePayload,
+
+              logoPath: newLogoPath
+
+            })
+
+          } catch (error) {
+
+            await deleteObject(newLogoRef).catch(() => {})
+
+            throw error
+
+          }
+
+        }
+
+
+
+        finalLogoPath = newLogoPath
+
+        if (oldLogoPath && oldLogoPath !== newLogoPath) {
+
+          try {
+
+            await deleteObject(storageRef(storage, oldLogoPath))
+
+          } catch (error) {
+
+            if (error?.code !== 'storage/object-not-found') {
+
+              console.warn('Old school logo cleanup failed:', error)
+
+              cleanupWarning = true
+
+            }
+
+          }
+
+        }
+
+
+
+        try {
+
+          setSchoolLogoUrl(await getDownloadURL(newLogoRef))
+
+        } catch (error) {
+
+          console.warn('Could not load uploaded school logo preview:', error)
+
+          setSchoolLogoUrl('')
+
+        }
+
+      } else if (schoolLogoRemove && oldLogoPath) {
+
+        try {
+
+          await deleteObject(storageRef(storage, oldLogoPath))
+
+        } catch (error) {
+
+          if (error?.code !== 'storage/object-not-found') {
+
+            console.warn('School logo cleanup failed:', error)
+
+            cleanupWarning = true
+
+          }
+
+        }
+
+        finalLogoPath = null
+
+        setSchoolLogoUrl('')
+
+      } else if (finalLogoPath) {
+
+        await loadSchoolLogoPreview(finalLogoPath)
+
+      }
+
+
+
+      await loadSchools(schoolId)
+
+
+
+      const savedSchool = finalResult.data?.school || {}
 
       setEditingSchoolId(schoolId)
-
-      const savedSchool = result.data?.school || {}
 
       setSchoolForm({
 
@@ -710,15 +994,51 @@ export default function AdminDashboard() {
 
           ? ''
 
-          : String(savedSchool.teacherSeatLimit)
+          : String(savedSchool.teacherSeatLimit),
+
+        logoPath: finalLogoPath,
+
+        primaryColor: savedSchool.primaryColor || primaryColor,
+
+        accentColor: savedSchool.accentColor || accentColor,
+
+        loginPreference: savedSchool.loginPreference || loginPreference
 
       })
+
+      setSchoolLogoFile(null)
+
+      setSchoolLogoRemove(false)
+
+
+
+      const actionText = wasCreated ? `${name} was created.` : `${name} was updated.`
+
+      setSchoolNotice(
+
+        cleanupWarning
+
+          ? `${actionText} Branding saved, but an old logo file could not be cleaned up.`
+
+          : `${actionText} Institution branding is ready.`
+
+      )
 
     } catch (error) {
 
       console.error(error)
 
-      setSchoolsError(error?.message || 'Could not save school.')
+      if (metadataSaved && schoolLogoFile) {
+
+        setSchoolsError('School settings were saved, but the logo update failed. The previous logo remains active; retry the logo upload.')
+
+        await loadSchools(schoolId).catch(() => {})
+
+      } else {
+
+        setSchoolsError(error?.message || 'Could not save school.')
+
+      }
 
     } finally {
 
@@ -727,7 +1047,6 @@ export default function AdminDashboard() {
     }
 
   }
-
 
 
   const handleToggleSchoolStatus = async school => {
@@ -2293,7 +2612,7 @@ export default function AdminDashboard() {
             <div>
               <div className="flex items-center gap-2 flex-wrap">
                 <h2 className="font-semibold text-gray-800">School view</h2>
-                <span className="text-xs bg-purple-50 text-purple-600 px-2 py-1 rounded-full">Stage 19B</span>
+                <span className="text-xs bg-purple-50 text-purple-600 px-2 py-1 rounded-full">P3 Branding</span>
               </div>
               <p className="text-xs text-gray-400 mt-1">
                 Student, teacher, approval and summary lists below are limited to the selected school. Choose All Schools only when you intentionally want a platform-wide view.
@@ -2344,13 +2663,13 @@ export default function AdminDashboard() {
 
               <h2 className="font-semibold text-gray-800">Schools</h2>
 
-              <span className="text-xs bg-purple-50 text-purple-600 px-2 py-1 rounded-full">Stage 19B</span>
+              <span className="text-xs bg-purple-50 text-purple-600 px-2 py-1 rounded-full">P3 Branding</span>
 
             </div>
 
             <p className="text-xs text-gray-400 mt-1">
 
-              School records and Student/Teacher seat limits are enforced by admin-only server functions. Leave a seat limit blank for Unlimited.
+              School identity, branding and Student/Teacher seat limits are enforced by admin-only server functions. Leave a seat limit blank for Unlimited.
 
             </p>
 
@@ -2561,6 +2880,71 @@ export default function AdminDashboard() {
             Blank = Unlimited. Active approved accounts consume seats; Archived, Pending and Rejected accounts do not.
           </div>
 
+          <div className="md:col-span-4">
+            <label className="text-xs text-gray-400 mb-1 block">Institution logo</label>
+            <input
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              onChange={handleSchoolLogoFileChange}
+              className="w-full text-xs border border-gray-200 rounded-xl px-3 py-2 bg-white file:mr-3 file:border-0 file:bg-purple-50 file:text-purple-700 file:px-3 file:py-1.5 file:rounded-lg"
+            />
+            <p className="text-[11px] text-gray-400 mt-1">PNG, JPG/JPEG or WebP. Maximum 2 MB.</p>
+            {(schoolLogoUrl || schoolLogoRemove || schoolForm.logoPath) && (
+              <div className="mt-2 flex items-center gap-3 flex-wrap">
+                {schoolLogoUrl && !schoolLogoRemove && (
+                  <div className="h-14 w-28 border border-gray-100 rounded-lg bg-white p-2 flex items-center justify-center">
+                    <img src={schoolLogoUrl} alt="Institution logo preview" className="max-h-full max-w-full object-contain" />
+                  </div>
+                )}
+                {schoolLogoRemove ? (
+                  <button type="button" onClick={restoreStoredSchoolLogo} className="text-xs text-purple-600 hover:text-purple-700">Undo logo removal</button>
+                ) : schoolForm.logoPath ? (
+                  <button type="button" onClick={removeStoredSchoolLogo} className="text-xs text-red-500 hover:text-red-600">Remove current logo</button>
+                ) : null}
+              </div>
+            )}
+          </div>
+
+          <div className="md:col-span-2">
+            <label className="text-xs text-gray-400 mb-1 block">Primary color</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="color"
+                value={schoolForm.primaryColor}
+                onChange={e => setSchoolForm(previous => ({ ...previous, primaryColor: e.target.value }))}
+                className="h-10 w-12 border border-gray-200 rounded-lg bg-white p-1"
+              />
+              <span className="text-xs font-mono text-gray-500">{schoolForm.primaryColor}</span>
+            </div>
+          </div>
+
+          <div className="md:col-span-2">
+            <label className="text-xs text-gray-400 mb-1 block">Accent color</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="color"
+                value={schoolForm.accentColor}
+                onChange={e => setSchoolForm(previous => ({ ...previous, accentColor: e.target.value }))}
+                className="h-10 w-12 border border-gray-200 rounded-lg bg-white p-1"
+              />
+              <span className="text-xs font-mono text-gray-500">{schoolForm.accentColor}</span>
+            </div>
+          </div>
+
+          <div className="md:col-span-4">
+            <label className="text-xs text-gray-400 mb-1 block">Login preference</label>
+            <select
+              value={schoolForm.loginPreference}
+              onChange={e => setSchoolForm(previous => ({ ...previous, loginPreference: e.target.value }))}
+              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 bg-white"
+            >
+              <option value="both">Both methods · Email first</option>
+              <option value="email">Prefer email</option>
+              <option value="username">Prefer school username</option>
+            </select>
+            <p className="text-[11px] text-gray-400 mt-1">Preference controls the branded login experience; it does not disable the other Firebase sign-in method.</p>
+          </div>
+
         </div>
 
 
@@ -2657,6 +3041,17 @@ export default function AdminDashboard() {
                       </span>
                       <span className={`text-[11px] px-2 py-1 rounded-full ${teacherFull ? 'bg-amber-50 text-amber-700' : 'bg-green-50 text-green-700'}`}>
                         Teachers {teacherCount} / {seatLimitLabel(teacherLimit)}
+                      </span>
+                      <span className="text-[11px] px-2 py-1 rounded-full bg-gray-50 text-gray-600">
+                        Login: {school.loginPreference || 'both'}
+                      </span>
+                      {school.logoPath && (
+                        <span className="text-[11px] px-2 py-1 rounded-full bg-purple-50 text-purple-700">Logo</span>
+                      )}
+                      <span className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-full bg-gray-50 text-gray-600">
+                        <span className="inline-block h-2.5 w-2.5 rounded-full border border-black/10" style={{ backgroundColor: school.primaryColor || DEFAULT_SCHOOL_PRIMARY_COLOR }} />
+                        <span className="inline-block h-2.5 w-2.5 rounded-full border border-black/10" style={{ backgroundColor: school.accentColor || DEFAULT_SCHOOL_ACCENT_COLOR }} />
+                        Brand
                       </span>
                     </div>
 

@@ -30,8 +30,12 @@ const adminAuth = getAuth()
 // reactivate schools even if a school is currently inactive.
 const SCHOOL_SCHEMA_VERSION = 1
 const SCHOOL_SEAT_SCHEMA_VERSION = 1
+const SCHOOL_BRANDING_SCHEMA_VERSION = 1
 const DEFAULT_SCHOOL_ID = 'maxima'
 const SCHOOL_STATUSES = new Set(['active', 'inactive'])
+const SCHOOL_LOGIN_PREFERENCES = new Set(['both', 'email', 'username'])
+const DEFAULT_SCHOOL_PRIMARY_COLOR = '#7c3aed'
+const DEFAULT_SCHOOL_ACCENT_COLOR = '#f97316'
 const SCHOOL_SEAT_LOCK_TTL_MS = 60000
 const SCHOOL_SEAT_LOCK_RETRY_MS = 150
 const SCHOOL_SEAT_LOCK_MAX_ATTEMPTS = 60
@@ -502,6 +506,41 @@ function normalizeSchoolStatus(value) {
   return status
 }
 
+function normalizeSchoolBrandColor(value, fallback, label) {
+  const color = typeof value === 'string' ? value.trim().toLowerCase() : ''
+  if (!color) return fallback
+  if (!/^#[0-9a-f]{6}$/.test(color)) {
+    throw new HttpsError('invalid-argument', `${label} must be a 6-digit hex color such as #7c3aed.`)
+  }
+  return color
+}
+
+function storedSchoolBrandColor(value, fallback) {
+  const color = typeof value === 'string' ? value.trim().toLowerCase() : ''
+  return /^#[0-9a-f]{6}$/.test(color) ? color : fallback
+}
+
+function normalizeSchoolLoginPreference(value, fallback = 'both') {
+  const preference = typeof value === 'string' ? value.trim().toLowerCase() : fallback
+  if (!SCHOOL_LOGIN_PREFERENCES.has(preference)) {
+    throw new HttpsError('invalid-argument', 'Login preference must be both, email or username.')
+  }
+  return preference
+}
+
+function normalizeSchoolLogoPathInput(value, schoolId) {
+  if (value === undefined) return { provided: false, value: null }
+  if (value === null || value === '') return { provided: true, value: null }
+
+  const logoPath = safeString(value, 300).trim()
+  const prefix = `school-branding/${schoolId}/`
+  if (!logoPath.startsWith(prefix) || !/^school-branding\/[a-z0-9-]+\/logo\.(png|jpg|jpeg|webp)$/.test(logoPath)) {
+    throw new HttpsError('invalid-argument', 'School logo path is invalid.')
+  }
+
+  return { provided: true, value: logoPath }
+}
+
 function managedSchoolClientState(id, data, usage = { student: 0, teacher: 0 }) {
   const studentSeatLimit = managedSeatLimitFromStored(data?.studentSeatLimit)
   const teacherSeatLimit = managedSeatLimitFromStored(data?.teacherSeatLimit)
@@ -515,6 +554,11 @@ function managedSchoolClientState(id, data, usage = { student: 0, teacher: 0 }) 
     status: normalizeSchoolStatus(data?.status || 'active'),
     schemaVersion: Number(data?.schemaVersion) || SCHOOL_SCHEMA_VERSION,
     seatSchemaVersion: Number(data?.seatSchemaVersion) || SCHOOL_SEAT_SCHEMA_VERSION,
+    brandingSchemaVersion: Number(data?.brandingSchemaVersion) || SCHOOL_BRANDING_SCHEMA_VERSION,
+    logoPath: typeof data?.logoPath === 'string' && data.logoPath.trim() ? data.logoPath.trim() : null,
+    primaryColor: storedSchoolBrandColor(data?.primaryColor, DEFAULT_SCHOOL_PRIMARY_COLOR),
+    accentColor: storedSchoolBrandColor(data?.accentColor, DEFAULT_SCHOOL_ACCENT_COLOR),
+    loginPreference: SCHOOL_LOGIN_PREFERENCES.has(data?.loginPreference) ? data.loginPreference : 'both',
     studentSeatLimit,
     teacherSeatLimit,
     studentSeatsUsed,
@@ -560,6 +604,37 @@ exports.getManagedSchools = onCall({ invoker: 'public' }, async request => {
   }
 })
 
+// P3: login branding is intentionally public but strictly limited to non-sensitive
+// institution identity fields. Seat usage, license limits and user data stay behind
+// admin-only callables. Inactive/deleting schools are not exposed as usable brands.
+exports.getPublicSchoolBranding = onCall({ invoker: 'public' }, async request => {
+  const data = request.data || {}
+  const schoolId = normalizeSchoolId(data.schoolId || DEFAULT_SCHOOL_ID)
+  const schoolSnap = await db.doc(`schools/${schoolId}`).get()
+
+  if (!schoolSnap.exists) {
+    return { ok: true, found: false, schoolId }
+  }
+
+  const school = schoolSnap.data() || {}
+  if (normalizeSchoolStatus(school.status || 'active') !== 'active' || school.deleteInProgress === true) {
+    return { ok: true, found: false, schoolId }
+  }
+
+  return {
+    ok: true,
+    found: true,
+    branding: {
+      schoolId,
+      name: typeof school.name === 'string' && school.name.trim() ? school.name.trim() : schoolId,
+      logoPath: typeof school.logoPath === 'string' && school.logoPath.trim() ? school.logoPath.trim() : null,
+      primaryColor: storedSchoolBrandColor(school.primaryColor, DEFAULT_SCHOOL_PRIMARY_COLOR),
+      accentColor: storedSchoolBrandColor(school.accentColor, DEFAULT_SCHOOL_ACCENT_COLOR),
+      loginPreference: SCHOOL_LOGIN_PREFERENCES.has(school.loginPreference) ? school.loginPreference : 'both'
+    }
+  }
+})
+
 // Stage 19A: seat limits are platform-admin metadata. Missing/null limits mean
 // Unlimited for backward compatibility. A finite limit can never be saved below
 // current live usage. Seat-changing operations and limit changes share the same
@@ -572,6 +647,7 @@ exports.saveManagedSchool = onCall({ invoker: 'public' }, async request => {
   const status = normalizeSchoolStatus(data.status)
   const studentSeatInput = normalizeManagedSeatLimitInput(data.studentSeatLimit, 'Student seat limit')
   const teacherSeatInput = normalizeManagedSeatLimitInput(data.teacherSeatLimit, 'Teacher seat limit')
+  const logoPathInput = normalizeSchoolLogoPathInput(data.logoPath, schoolId)
   const schoolRef = db.doc(`schools/${schoolId}`)
 
   return withManagedSchoolSeatLock(schoolId, async () => {
@@ -591,6 +667,18 @@ exports.saveManagedSchool = onCall({ invoker: 'public' }, async request => {
     const teacherSeatLimit = teacherSeatInput.provided
       ? teacherSeatInput.value
       : managedSeatLimitFromStored(current?.teacherSeatLimit)
+    const logoPath = logoPathInput.provided
+      ? logoPathInput.value
+      : (typeof current?.logoPath === 'string' && current.logoPath.trim() ? current.logoPath.trim() : null)
+    const primaryColor = data.primaryColor !== undefined
+      ? normalizeSchoolBrandColor(data.primaryColor, DEFAULT_SCHOOL_PRIMARY_COLOR, 'Primary color')
+      : storedSchoolBrandColor(current?.primaryColor, DEFAULT_SCHOOL_PRIMARY_COLOR)
+    const accentColor = data.accentColor !== undefined
+      ? normalizeSchoolBrandColor(data.accentColor, DEFAULT_SCHOOL_ACCENT_COLOR, 'Accent color')
+      : storedSchoolBrandColor(current?.accentColor, DEFAULT_SCHOOL_ACCENT_COLOR)
+    const loginPreference = data.loginPreference !== undefined
+      ? normalizeSchoolLoginPreference(data.loginPreference)
+      : normalizeSchoolLoginPreference(current?.loginPreference || 'both')
     const usage = currentSnap.exists
       ? await getManagedSchoolSeatUsage(schoolId)
       : { student: 0, teacher: 0 }
@@ -615,6 +703,11 @@ exports.saveManagedSchool = onCall({ invoker: 'public' }, async request => {
         status,
         schemaVersion: SCHOOL_SCHEMA_VERSION,
         seatSchemaVersion: SCHOOL_SEAT_SCHEMA_VERSION,
+        brandingSchemaVersion: SCHOOL_BRANDING_SCHEMA_VERSION,
+        logoPath,
+        primaryColor,
+        accentColor,
+        loginPreference,
         studentSeatLimit,
         teacherSeatLimit,
         createdAt: existing?.createdAt || FieldValue.serverTimestamp(),
@@ -632,7 +725,18 @@ exports.saveManagedSchool = onCall({ invoker: 'public' }, async request => {
       created: result.created,
       school: managedSchoolClientState(
         schoolId,
-        { name, status, studentSeatLimit, teacherSeatLimit, seatSchemaVersion: SCHOOL_SEAT_SCHEMA_VERSION },
+        {
+          name,
+          status,
+          studentSeatLimit,
+          teacherSeatLimit,
+          seatSchemaVersion: SCHOOL_SEAT_SCHEMA_VERSION,
+          brandingSchemaVersion: SCHOOL_BRANDING_SCHEMA_VERSION,
+          logoPath,
+          primaryColor,
+          accentColor,
+          loginPreference
+        },
         usage
       )
     }
@@ -728,7 +832,7 @@ async function getSchoolStoragePaths(schoolId) {
   return Array.from(paths)
 }
 
-async function deleteStorageForSchool(userIds, storagePaths) {
+async function deleteStorageForSchool(schoolId, userIds, storagePaths) {
   const bucket = getStorage().bucket(STORAGE_BUCKET_NAME)
   let deletedObjects = 0
 
@@ -740,6 +844,14 @@ async function deleteStorageForSchool(userIds, storagePaths) {
       if (error?.code === 404) continue
       throw error
     }
+  }
+
+  // Branding uses a school-scoped public-read prefix. Remove every object in
+  // that prefix, including stale logo variants left by a previous replacement.
+  const [brandingFiles] = await bucket.getFiles({ prefix: `school-branding/${schoolId}/` })
+  if (brandingFiles.length > 0) {
+    await Promise.all(brandingFiles.map(file => file.delete({ ignoreNotFound: true })))
+    deletedObjects += brandingFiles.length
   }
 
   for (const uid of userIds) {
@@ -858,17 +970,23 @@ async function getManagedSchoolDeletionState(schoolId) {
     throw new HttpsError('not-found', 'The selected school does not exist.')
   }
 
+  const school = schoolSnap.data() || {}
+  const allStoragePaths = new Set(storagePaths)
+  if (typeof school.logoPath === 'string' && school.logoPath.trim()) {
+    allStoragePaths.add(school.logoPath.trim())
+  }
+
   const userSummary = summarizeSchoolUsers(users)
   const totalFirestoreRecords = userSummary.total + Object.values(counts)
     .reduce((sum, count) => sum + Number(count || 0), 0)
 
   return {
     schoolSnap,
-    school: schoolSnap.data() || {},
+    school,
     users,
     userSummary,
     counts,
-    storagePaths,
+    storagePaths: Array.from(allStoragePaths),
     totalFirestoreRecords
   }
 }
@@ -974,6 +1092,7 @@ exports.deleteManagedSchool = onCall(async request => {
   // Remove uploaded institution assets while their Firestore metadata still
   // exists, so a storage failure remains retryable and does not orphan files.
   const deletedStorageObjects = await deleteStorageForSchool(
+    schoolId,
     userIds,
     state.storagePaths
   )

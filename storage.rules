@@ -64,6 +64,12 @@ service firebase.storage {
         && request.resource.contentType in ['image/jpeg', 'image/png', 'image/webp'];
     }
 
+    function isSchoolBrandImageFile(fileName) {
+      return request.resource != null
+        && request.resource.contentType in ['image/jpeg', 'image/png', 'image/webp']
+        && fileName.lower().matches('logo[.](png|jpg|jpeg|webp)');
+    }
+
     function materialDoc(materialId) {
       return firestore.get(/databases/(default)/documents/materials/$(materialId));
     }
@@ -125,6 +131,20 @@ service firebase.storage {
           || (isTeacher() && request.auth.uid == ownerId)
         )
       );
+    }
+
+    // P3: institution logos must render before sign-in, so reads are public.
+    // Only approved platform admins may create, replace or remove these small
+    // image assets; all other Storage paths keep their existing policies.
+    match /school-branding/{schoolId}/{fileName} {
+      allow read: if fileName.lower().matches('logo[.](png|jpg|jpeg|webp)');
+
+      allow create, update: if isAdmin()
+        && isSchoolBrandImageFile(fileName)
+        && request.resource.size > 0
+        && request.resource.size <= 2 * 1024 * 1024;
+
+      allow delete: if isAdmin();
     }
 
     match /{allPaths=**} {
