@@ -147,6 +147,12 @@ service firebase.storage {
       allow delete: if isAdmin();
     }
 
+    // P4C: Media copied into independent Master Library has no client
+    // read or write access. P4D will issue time-limited authorized links.
+    match /self-study-master/{masterId}/assets/{fileName} {
+      allow read, write: if false;
+    }
+
     match /{allPaths=**} {
       allow read, write: if false;
     }

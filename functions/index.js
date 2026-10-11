@@ -5862,3 +5862,6 @@ exports.getCompletedMockReview = onCall(async request => {
     reviewSources: mockReviewSources(sources)
   }
 })
+
+// P4C: Isolated, manager-only independent Master Library callables.
+Object.assign(exports, require('./lib/masterContent'))

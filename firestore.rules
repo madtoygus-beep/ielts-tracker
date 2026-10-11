@@ -571,6 +571,17 @@ service cloud.firestore {
     }
 
     // ============================================================
+    // P4C: Independent Master Content Library (server-only).
+    // Answer keys and independent assessment copies are NEVER available
+    // through client Firestore access, including platform managers/admins.
+    // Dedicated Cloud Functions enforce exact role/scope checks.
+    // ============================================================
+
+    match /masterContent/{masterId} {
+      allow read, write: if false;
+    }
+
+    // ============================================================
     // CLASSES
     // ============================================================
 

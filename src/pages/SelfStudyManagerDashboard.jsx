@@ -3,6 +3,7 @@ import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { doc, onSnapshot } from 'firebase/firestore'
 import { useNavigate } from 'react-router-dom'
 import { auth, db } from '../firebase'
+import SelfStudyMasterLibrary from './SelfStudyMasterLibrary'
 
 // P4B: Platform Self-Study Managers are not institution Teachers or Students.
 // Their workspace uses only their own users/{uid} profile at this stage.
@@ -13,11 +14,6 @@ const SELF_STUDY_MANAGER_ROLE = 'selfStudyManager'
 const SELF_STUDY_SCOPE = 'selfStudy'
 
 const UPCOMING_SECTIONS = [
-  {
-    title: 'Master Content Library',
-    phase: 'P4C',
-    description: 'Independent IELTS content and controlled copies published from institution libraries.'
-  },
   {
     title: 'Packages',
     phase: 'P4D',
@@ -258,7 +254,7 @@ export default function SelfStudyManagerDashboard() {
         <section className="bg-gradient-to-br from-purple-700 to-indigo-800 text-white rounded-3xl p-7 sm:p-9 mb-7 shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-4 mb-5">
             <p className="text-xs font-semibold tracking-wide uppercase text-purple-100">MAXIMA IELTS TRACKER</p>
-            <span className="text-xs font-medium px-3 py-1 rounded-full bg-white/15 border border-white/20">P4B · Manager access active</span>
+            <span className="text-xs font-medium px-3 py-1 rounded-full bg-white/15 border border-white/20">P4C · Master Library active</span>
           </div>
           <h2 className="text-2xl sm:text-3xl font-bold mb-3">Welcome, {displayName}.</h2>
           <p className="text-sm sm:text-base leading-7 text-purple-100 max-w-3xl">
@@ -289,10 +285,10 @@ export default function SelfStudyManagerDashboard() {
             <div>
               <h2 id="modules-heading" className="text-lg font-bold text-gray-900">Self-Study management modules</h2>
               <p className="text-sm text-gray-500 mt-1">
-                Your manager access is active. The modules below will be enabled in later packages.
+                Master Content Library is now available below. Remaining modules will be activated in later packages.
               </p>
             </div>
-            <span className="text-xs text-gray-500">Module actions not active yet</span>
+            <span className="text-xs text-gray-500">Remaining modules in development</span>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -313,6 +309,8 @@ export default function SelfStudyManagerDashboard() {
             ))}
           </div>
         </section>
+
+        <SelfStudyMasterLibrary />
 
         <section className="mt-8 bg-white border border-gray-100 rounded-2xl p-6">
           <h2 className="font-semibold text-gray-900">Signed-in manager</h2>
