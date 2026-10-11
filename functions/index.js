@@ -33,6 +33,9 @@ const SCHOOL_SEAT_SCHEMA_VERSION = 1
 const SCHOOL_BRANDING_SCHEMA_VERSION = 1
 const DEFAULT_SCHOOL_ID = 'maxima'
 const INDIVIDUAL_SCHOOL_ID = '__individual__'
+const PLATFORM_SCHOOL_ID = '__platform__'
+const SELF_STUDY_MANAGER_ROLE = 'selfStudyManager'
+const SELF_STUDY_SCOPE = 'selfStudy'
 const SCHOOL_STATUSES = new Set(['active', 'inactive'])
 const SCHOOL_LOGIN_PREFERENCES = new Set(['both', 'email', 'username'])
 const DEFAULT_SCHOOL_PRIMARY_COLOR = '#7c3aed'
@@ -208,6 +211,14 @@ function accountTypeOf(data) {
     ? data.accountType.trim().toLowerCase()
     : ''
 
+  if (
+    explicit === 'platform' ||
+    data?.role === SELF_STUDY_MANAGER_ROLE ||
+    data?.schoolId === PLATFORM_SCHOOL_ID
+  ) {
+    return 'platform'
+  }
+
   if (explicit === 'individual' || data?.schoolId === INDIVIDUAL_SCHOOL_ID) {
     return 'individual'
   }
@@ -217,6 +228,13 @@ function accountTypeOf(data) {
 
 function isIndividualAccount(data) {
   return accountTypeOf(data) === 'individual'
+}
+
+function isSelfStudyManagerProfile(data) {
+  return accountTypeOf(data) === 'platform' &&
+    data?.role === SELF_STUDY_MANAGER_ROLE &&
+    data?.scope === SELF_STUDY_SCOPE &&
+    schoolIdOf(data) === PLATFORM_SCHOOL_ID
 }
 
 async function requireActiveSchoolForProfile(profile) {
@@ -1547,6 +1565,85 @@ async function assertNoManagedEmailConflict(email) {
   }
 }
 
+// P4B: Self-Study management is a platform account, not a school Teacher.
+// It uses email login only, consumes no institution seat, and is isolated from
+// school classes/assignments. Daily B2C content/package work will use this role.
+exports.createSelfStudyManager = onCall({ invoker: 'public' }, async request => {
+  const admin = await requireAdmin(request)
+  const data = request.data || {}
+  const name = normalizeManagedName(data.name)
+  const email = normalizeManagedEmail(data.email)
+
+  await assertNoManagedEmailConflict(email)
+
+  const temporaryPassword = `${randomBytes(32).toString('base64url')}Aa1!`
+  let authUser = null
+
+  try {
+    authUser = await adminAuth.createUser({
+      email,
+      password: temporaryPassword,
+      displayName: name,
+      emailVerified: false,
+      disabled: false
+    })
+
+    const now = new Date().toISOString()
+    await db.doc(`users/${authUser.uid}`).set({
+      name,
+      email,
+      username: null,
+      role: SELF_STUDY_MANAGER_ROLE,
+      requestedRole: SELF_STUDY_MANAGER_ROLE,
+      accountType: 'platform',
+      scope: SELF_STUDY_SCOPE,
+      status: 'approved',
+      deleted: false,
+      schoolId: PLATFORM_SCHOOL_ID,
+      teacherIds: [],
+      targetBand: null,
+      accountSource: 'admin_created',
+      createdBy: admin.uid,
+      approvedBy: admin.uid,
+      createdAt: now,
+      approvedAt: now,
+      updatedAt: now,
+      updatedBy: admin.uid
+    })
+  } catch (error) {
+    if (authUser?.uid) {
+      await adminAuth.deleteUser(authUser.uid).catch(() => {})
+    }
+
+    if (error instanceof HttpsError) throw error
+    if (error?.code === 'auth/email-already-exists') {
+      throw new HttpsError('already-exists', 'A Firebase Auth account already exists with this email address.')
+    }
+    if (error?.code === 'auth/invalid-email') {
+      throw new HttpsError('invalid-argument', 'A valid email address is required.')
+    }
+    throw error
+  }
+
+  return {
+    ok: true,
+    user: {
+      id: authUser.uid,
+      uid: authUser.uid,
+      name,
+      email,
+      username: null,
+      role: SELF_STUDY_MANAGER_ROLE,
+      accountType: 'platform',
+      scope: SELF_STUDY_SCOPE,
+      status: 'approved',
+      deleted: false,
+      schoolId: PLATFORM_SCHOOL_ID
+    },
+    passwordSetupRequired: true
+  }
+})
+
 exports.createManagedUser = onCall({ invoker: 'public' }, async request => {
   const admin = await requireAdmin(request)
   const data = request.data || {}
@@ -1851,8 +1948,12 @@ exports.setManagedUserPassword = onCall({ invoker: 'public' }, async request => 
   }
 
   const profile = userSnap.data() || {}
-  if (!MANAGED_ACCOUNT_ROLES.has(profile.role) || profile.status !== 'approved' || profile.deleted === true) {
-    throw new HttpsError('failed-precondition', 'Only active student or teacher accounts can receive a new password.')
+  const passwordEligible = MANAGED_ACCOUNT_ROLES.has(profile.role) || isSelfStudyManagerProfile(profile)
+  if (!passwordEligible || profile.status !== 'approved' || profile.deleted === true) {
+    throw new HttpsError(
+      'failed-precondition',
+      'Only active Student, Teacher or Self-Study Manager accounts can receive a new password.'
+    )
   }
 
   await authUserForManagedProfile(userId)
@@ -2034,15 +2135,96 @@ exports.updateManagedUser = onCall({ invoker: 'public' }, async request => {
   if (profile.role === 'admin') {
     throw new HttpsError('permission-denied', 'Admin accounts cannot be edited here.')
   }
-  if (!MANAGED_ACCOUNT_ROLES.has(profile.role) || profile.status !== 'approved' || profile.deleted === true) {
-    throw new HttpsError('failed-precondition', 'Only active student or teacher accounts can be edited here.')
+
+  const selfStudyManager = isSelfStudyManagerProfile(profile)
+  if (
+    (!MANAGED_ACCOUNT_ROLES.has(profile.role) && !selfStudyManager) ||
+    profile.status !== 'approved' ||
+    profile.deleted === true
+  ) {
+    throw new HttpsError(
+      'failed-precondition',
+      'Only active Student, Teacher, Individual or Self-Study Manager accounts can be edited here.'
+    )
   }
 
   const schoolId = schoolIdOf(profile)
   const accountType = accountTypeOf(profile)
-  if (accountType === 'individual' && username) {
-    throw new HttpsError('failed-precondition', 'Self-study accounts use email login only and cannot have a school username.')
+  if ((accountType === 'individual' || selfStudyManager) && username) {
+    throw new HttpsError('failed-precondition', 'This account uses email login only and cannot have a school username.')
   }
+
+  if (selfStudyManager) {
+    const authUser = await authUserForManagedProfile(userId)
+    const previousEmail = normalizeManagedEmail(authUser.email || profile.email || '')
+    const storedProfileEmail = normalizeManagedEmail(profile.email || previousEmail)
+
+    if (previousEmail !== storedProfileEmail) {
+      throw new HttpsError(
+        'failed-precondition',
+        'Firebase Auth email does not match the user profile. Repair the account before editing it.'
+      )
+    }
+
+    await assertNoManagedEmailConflictForUser(email, userId)
+
+    const now = new Date().toISOString()
+    const previousAuthState = {
+      displayName: authUser.displayName ?? null,
+      email: previousEmail,
+      emailVerified: authUser.emailVerified === true
+    }
+    const emailChanged = email !== previousEmail
+
+    await adminAuth.updateUser(userId, {
+      displayName: name,
+      ...(emailChanged ? { email, emailVerified: false } : {})
+    })
+
+    try {
+      await userRef.set({
+        name,
+        email,
+        username: null,
+        targetBand: null,
+        accountType: 'platform',
+        scope: SELF_STUDY_SCOPE,
+        schoolId: PLATFORM_SCHOOL_ID,
+        updatedAt: now,
+        updatedBy: admin.uid
+      }, { merge: true })
+    } catch (error) {
+      await adminAuth.updateUser(userId, {
+        displayName: previousAuthState.displayName,
+        ...(emailChanged
+          ? {
+              email: previousAuthState.email,
+              emailVerified: previousAuthState.emailVerified
+            }
+          : {})
+      }).catch(rollbackError => {
+        console.error('P4B updateManagedUser manager Auth rollback failed', {
+          userId,
+          rollbackError
+        })
+      })
+      throw error
+    }
+
+    return {
+      ok: true,
+      userId,
+      role: SELF_STUDY_MANAGER_ROLE,
+      schoolId: PLATFORM_SCHOOL_ID,
+      accountType: 'platform',
+      scope: SELF_STUDY_SCOPE,
+      name,
+      email,
+      username: null,
+      targetBand: null
+    }
+  }
+
   const targetBand = normalizeManagedTargetBand(data.targetBand, profile.role)
   const previousUsername = normalizeManagedUsername(profile.username)
   const authUser = await authUserForManagedProfile(userId)
@@ -2223,11 +2405,11 @@ exports.deleteManagedUser = onCall(async request => {
 })
 
 
-// Stage 18.2 final: Archived accounts can be restored by the platform admin.
-// Restore is intentionally limited to known managed student/teacher roles and
-// requires the original school to still exist and be active. Auth is enabled
-// first; if the Firestore restore fails, Auth is disabled again so authorization
-// remains fail-closed.
+// Stage 18.2 + P4B: Archived accounts can be restored by the platform admin.
+// Institution student/teacher restores still require the original active school
+// and seat capacity. Individual learners and platform Self-Study Managers restore
+// inside their own non-school boundaries and consume no institution seat. Auth is
+// enabled first; if the Firestore restore fails, Auth is disabled again.
 exports.restoreManagedUser = onCall({ invoker: 'public' }, async request => {
   const admin = await requireAdmin(request)
   const data = request.data || {}
@@ -2244,14 +2426,100 @@ exports.restoreManagedUser = onCall({ invoker: 'public' }, async request => {
 
   const initialProfile = initialSnap.data() || {}
   const initialRole = permanentDeleteRoleOf(initialProfile)
+  const schoolId = schoolIdOf(initialProfile)
+  const initialAccountType = accountTypeOf(initialProfile)
+
+  if (initialAccountType === 'platform') {
+    if (!isSelfStudyManagerProfile(initialProfile)) {
+      throw new HttpsError('failed-precondition', 'This platform account has inconsistent Self-Study Manager metadata.')
+    }
+
+    const userRef = db.doc(`users/${userId}`)
+    const userSnap = await userRef.get()
+    if (!userSnap.exists) {
+      throw new HttpsError('not-found', 'The selected user profile was not found.')
+    }
+
+    const profile = userSnap.data() || {}
+    if (!isSelfStudyManagerProfile(profile)) {
+      throw new HttpsError('aborted', 'This manager account changed while it was being restored. Refresh and try again.')
+    }
+
+    const authUser = await authUserForManagedProfile(userId)
+    const isArchived = profile.deleted === true || profile.status === 'deleted'
+
+    if (!isArchived) {
+      if (profile.status !== 'approved') {
+        throw new HttpsError('failed-precondition', 'This account is not an archived Self-Study Manager account.')
+      }
+      if (authUser.disabled === true) {
+        await adminAuth.updateUser(userId, { disabled: false })
+      }
+      return {
+        ok: true,
+        userId,
+        role: SELF_STUDY_MANAGER_ROLE,
+        accountType: 'platform',
+        scope: SELF_STUDY_SCOPE,
+        schoolId: PLATFORM_SCHOOL_ID,
+        alreadyRestored: true
+      }
+    }
+
+    const previousAuthDisabled = authUser.disabled === true
+    if (previousAuthDisabled) {
+      await adminAuth.updateUser(userId, { disabled: false })
+    }
+
+    try {
+      const now = new Date().toISOString()
+      await userRef.set({
+        role: SELF_STUDY_MANAGER_ROLE,
+        requestedRole: SELF_STUDY_MANAGER_ROLE,
+        accountType: 'platform',
+        scope: SELF_STUDY_SCOPE,
+        status: 'approved',
+        deleted: false,
+        schoolId: PLATFORM_SCHOOL_ID,
+        username: null,
+        teacherIds: [],
+        targetBand: null,
+        restoredAt: now,
+        restoredBy: admin.uid,
+        updatedAt: now,
+        updatedBy: admin.uid,
+        deletedAt: FieldValue.delete(),
+        deletedBy: FieldValue.delete(),
+        permanentDeleteInProgress: FieldValue.delete(),
+        permanentDeleteStartedAt: FieldValue.delete(),
+        permanentDeleteStartedBy: FieldValue.delete()
+      }, { merge: true })
+    } catch (error) {
+      if (previousAuthDisabled) {
+        await adminAuth.updateUser(userId, { disabled: true }).catch(rollbackError => {
+          console.error('P4B restoreManagedUser manager Auth rollback failed', { userId, rollbackError })
+        })
+      }
+      throw error
+    }
+
+    return {
+      ok: true,
+      userId,
+      role: SELF_STUDY_MANAGER_ROLE,
+      accountType: 'platform',
+      scope: SELF_STUDY_SCOPE,
+      schoolId: PLATFORM_SCHOOL_ID,
+      alreadyRestored: false
+    }
+  }
+
   if (!MANAGED_ACCOUNT_ROLES.has(initialRole)) {
     throw new HttpsError(
       'failed-precondition',
-      'This archived account does not have a restorable student or teacher role.'
+      'This archived account does not have a restorable managed role.'
     )
   }
-  const schoolId = schoolIdOf(initialProfile)
-  const initialAccountType = accountTypeOf(initialProfile)
 
   if (initialAccountType === 'individual') {
     if (initialRole !== 'student' || schoolId !== INDIVIDUAL_SCHOOL_ID) {

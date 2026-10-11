@@ -39,12 +39,34 @@ import { useNavigate } from 'react-router-dom'
 const DEFAULT_SCHOOL_ID = 'maxima'
 const ALL_SCHOOLS_ID = 'all'
 const INDIVIDUAL_SCHOOL_ID = '__individual__'
+const PLATFORM_SCHOOL_ID = '__platform__'
+const SELF_STUDY_MANAGER_ROLE = 'selfStudyManager'
+const SELF_STUDY_SCOPE = 'selfStudy'
 const DEFAULT_SCHOOL_PRIMARY_COLOR = '#7c3aed'
 const DEFAULT_SCHOOL_ACCENT_COLOR = '#f97316'
 const SCHOOL_LOGO_MAX_BYTES = 2 * 1024 * 1024
 
 function isIndividualAccount(user) {
   return user?.accountType === 'individual' || user?.schoolId === INDIVIDUAL_SCHOOL_ID
+}
+
+function isSelfStudyManagerAccount(user) {
+  return user?.role === SELF_STUDY_MANAGER_ROLE &&
+    user?.accountType === 'platform' &&
+    user?.scope === SELF_STUDY_SCOPE &&
+    user?.schoolId === PLATFORM_SCHOOL_ID
+}
+
+function usesEmailOnlyAccount(user) {
+  return isIndividualAccount(user) || isSelfStudyManagerAccount(user)
+}
+
+function roleLabel(role) {
+  if (role === SELF_STUDY_MANAGER_ROLE) return 'Self-Study Manager'
+  if (role === 'student') return 'Student'
+  if (role === 'teacher') return 'Teacher'
+  if (role === 'admin') return 'Admin'
+  return role || 'Account'
 }
 
 const SCHOOL_LOGO_EXTENSIONS = {
@@ -84,6 +106,8 @@ const getManagedSchoolDeletionPreviewCall = httpsCallable(functions, 'getManaged
 const deleteManagedSchoolCall = httpsCallable(functions, 'deleteManagedSchool')
 
 const createManagedUserCall = httpsCallable(functions, 'createManagedUser')
+
+const createSelfStudyManagerCall = httpsCallable(functions, 'createSelfStudyManager')
 
 const approveManagedUserCall = httpsCallable(functions, 'approveManagedUser')
 
@@ -206,6 +230,20 @@ export default function AdminDashboard() {
     schoolId: '',
 
     targetBand: ''
+
+  })
+
+  const [managerCreating, setManagerCreating] = useState(false)
+
+  const [managerError, setManagerError] = useState('')
+
+  const [managerNotice, setManagerNotice] = useState('')
+
+  const [managerForm, setManagerForm] = useState({
+
+    name: '',
+
+    email: ''
 
   })
 
@@ -1246,6 +1284,7 @@ export default function AdminDashboard() {
     const id = schoolId || DEFAULT_SCHOOL_ID
 
     if (id === INDIVIDUAL_SCHOOL_ID) return 'Self-Study / Individual'
+    if (id === PLATFORM_SCHOOL_ID) return 'Self-Study Platform'
 
     const school = schools.find(item => item.schoolId === id)
 
@@ -1411,6 +1450,48 @@ export default function AdminDashboard() {
 
 
 
+  const handleCreateSelfStudyManager = async () => {
+
+    const name = managerForm.name.trim()
+    const email = managerForm.email.trim().toLowerCase()
+
+    setManagerError('')
+    setManagerNotice('')
+
+    if (name.length < 2 || !email || !email.includes('@')) {
+      setManagerError('Full name and a valid email are required.')
+      return
+    }
+
+    setManagerCreating(true)
+
+    try {
+      await createSelfStudyManagerCall({ name, email })
+
+      let resetSent = false
+      try {
+        await sendActivationEmail(email)
+        resetSent = true
+      } catch (resetError) {
+        console.error('Self-Study Manager created but account setup email failed:', resetError)
+      }
+
+      setManagerNotice(
+        resetSent
+          ? `${name} was created as a Self-Study Manager. Account setup email sent to ${email}.`
+          : `${name} was created as a Self-Study Manager. The setup email could not be sent; use Edit to set a password.`
+      )
+      setManagerForm({ name: '', email: '' })
+    } catch (error) {
+      console.error(error)
+      setManagerError(error?.message || 'Could not create Self-Study Manager account.')
+    } finally {
+      setManagerCreating(false)
+    }
+
+  }
+
+
   const approveUser = async (userId, roleType) => {
 
     const schoolId = pendingSchoolSelections[userId] || (
@@ -1509,8 +1590,8 @@ export default function AdminDashboard() {
     if (!user?.id || restoreBusyId) return
 
     const role = (user.role || user.requestedRole || '').toLowerCase()
-    if (!['student', 'teacher'].includes(role)) {
-      alert('This archived account has no restorable student or teacher role. It can only be permanently deleted.')
+    if (!['student', 'teacher', 'selfstudymanager'].includes(role)) {
+      alert('This archived account has no restorable managed role. It can only be permanently deleted.')
       return
     }
 
@@ -2146,7 +2227,7 @@ export default function AdminDashboard() {
 
     setEditEmail(u.email || '')
 
-    setEditUsername(isIndividualAccount(u) ? '' : (u.username || ''))
+    setEditUsername(usesEmailOnlyAccount(u) ? '' : (u.username || ''))
 
     setEditRole(u.role || 'student')
 
@@ -2170,7 +2251,7 @@ export default function AdminDashboard() {
 
     const cleanEmail = editEmail.trim().toLowerCase()
 
-    const cleanUsername = isIndividualAccount(editUser) ? '' : editUsername.trim().toLowerCase()
+    const cleanUsername = usesEmailOnlyAccount(editUser) ? '' : editUsername.trim().toLowerCase()
 
     const cleanTargetBand = editTargetBand === ''
 
@@ -2456,9 +2537,18 @@ export default function AdminDashboard() {
     ? null
     : schools.find(school => school.schoolId === selectedSchoolId) || null
 
+  const selfStudyManagers = users.filter(user => isSelfStudyManagerAccount(user))
+  const activeSelfStudyManagers = selfStudyManagers.filter(
+    user => user.deleted !== true && user.status !== 'deleted'
+  )
+  const archivedSelfStudyManagers = selfStudyManagers.filter(
+    user => user.deleted === true || user.status === 'deleted'
+  )
+
+  const nonPlatformUsers = users.filter(user => !isSelfStudyManagerAccount(user))
   const schoolScopedUsers = selectedSchoolId === ALL_SCHOOLS_ID
-    ? users
-    : users.filter(user => (user.schoolId || DEFAULT_SCHOOL_ID) === selectedSchoolId)
+    ? nonPlatformUsers
+    : nonPlatformUsers.filter(user => (user.schoolId || DEFAULT_SCHOOL_ID) === selectedSchoolId)
 
   const institutionAccountCount = schoolScopedUsers.filter(user => !isIndividualAccount(user)).length
   const individualAccountCount = schoolScopedUsers.filter(user => isIndividualAccount(user)).length
@@ -2610,7 +2700,7 @@ export default function AdminDashboard() {
 
             <h1 className="text-2xl font-bold text-gray-900 mb-1">Admin Panel</h1>
 
-            <p className="text-gray-400 text-sm">Manage schools, institution accounts, individual self-study accounts, mock history and classes</p>
+            <p className="text-gray-400 text-sm">Manage schools, institution accounts, individual learners, Self-Study Managers, mock history and classes</p>
 
           </div>
 
@@ -3383,6 +3473,122 @@ export default function AdminDashboard() {
 
 
 
+      <div className="bg-white border border-purple-100 rounded-2xl p-5 mb-8">
+
+        <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3 mb-4">
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <h2 className="font-semibold text-gray-800">Self-Study Managers</h2>
+              <span className="text-xs bg-purple-50 text-purple-600 px-2 py-1 rounded-full">P4B</span>
+              <span className="text-xs bg-green-50 text-green-700 px-2 py-1 rounded-full">Platform account</span>
+            </div>
+            <p className="text-xs text-gray-400 mt-1 max-w-2xl">
+              Separate B2C management accounts. They are not Teachers, do not belong to a school, use email login only and consume no institution seat.
+            </p>
+          </div>
+          <div className="text-xs text-gray-500">
+            Active: <span className="font-semibold text-gray-800">{activeSelfStudyManagers.length}</span>
+            <span className="mx-2">·</span>
+            Archived: <span className="font-semibold text-gray-800">{archivedSelfStudyManagers.length}</span>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end bg-[#faf9f6] border border-gray-100 rounded-xl p-4 mb-4">
+          <div className="md:col-span-5">
+            <label className="text-xs text-gray-400 mb-1 block">Full name</label>
+            <input
+              value={managerForm.name}
+              onChange={e => setManagerForm(previous => ({ ...previous, name: e.target.value }))}
+              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400"
+              placeholder="Self-Study Manager name"
+            />
+          </div>
+          <div className="md:col-span-5">
+            <label className="text-xs text-gray-400 mb-1 block">Email</label>
+            <input
+              type="email"
+              value={managerForm.email}
+              onChange={e => setManagerForm(previous => ({ ...previous, email: e.target.value }))}
+              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400"
+              placeholder="manager@example.com"
+            />
+          </div>
+          <div className="md:col-span-2">
+            <button
+              onClick={handleCreateSelfStudyManager}
+              disabled={managerCreating}
+              className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-purple-300 text-white px-3 py-2.5 rounded-xl text-sm font-medium"
+            >
+              {managerCreating ? 'Creating...' : 'Create manager'}
+            </button>
+          </div>
+        </div>
+
+        {managerError && (
+          <div className="mb-3 text-xs bg-red-50 border border-red-100 text-red-600 rounded-xl px-3 py-2">{managerError}</div>
+        )}
+        {managerNotice && (
+          <div className="mb-3 text-xs bg-green-50 border border-green-100 text-green-700 rounded-xl px-3 py-2">{managerNotice}</div>
+        )}
+
+        <div className="flex flex-col gap-2">
+          {activeSelfStudyManagers.length === 0 && archivedSelfStudyManagers.length === 0 && (
+            <div className="border border-dashed border-purple-200 rounded-xl p-5 text-center text-sm text-gray-400">
+              No Self-Study Manager account exists yet.
+            </div>
+          )}
+
+          {activeSelfStudyManagers.map(manager => (
+            <div key={manager.id} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border border-gray-100 rounded-xl px-4 py-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="text-sm font-semibold text-gray-800">{manager.name || 'Unnamed manager'}</p>
+                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-green-50 text-green-700">Active</span>
+                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-purple-50 text-purple-700">Self-Study Manager</span>
+                </div>
+                <p className="text-xs text-gray-400 truncate mt-0.5">{manager.email}</p>
+                <p className="text-[11px] text-gray-400 mt-0.5">Platform scope · Email login only · No institution seat</p>
+              </div>
+              <div className="flex gap-2 flex-wrap">
+                <button onClick={() => handleEdit(manager)} className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-1.5 rounded-lg">Edit</button>
+                <button onClick={() => handleSendPasswordReset(manager)} className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-600 px-3 py-1.5 rounded-lg">Email Reset</button>
+                <button onClick={() => handleDelete(manager.id)} className="text-xs bg-amber-50 hover:bg-amber-100 text-amber-700 px-3 py-1.5 rounded-lg">Archive</button>
+              </div>
+            </div>
+          ))}
+
+          {archivedSelfStudyManagers.map(manager => (
+            <div key={manager.id} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border border-gray-100 rounded-xl px-4 py-3 bg-gray-50/60">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="text-sm font-semibold text-gray-700">{manager.name || 'Unnamed manager'}</p>
+                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-gray-200 text-gray-600">Archived</span>
+                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-purple-50 text-purple-700">Self-Study Manager</span>
+                </div>
+                <p className="text-xs text-gray-400 truncate mt-0.5">{manager.email}</p>
+              </div>
+              <div className="flex gap-2 flex-wrap">
+                <button
+                  disabled={restoreBusyId === manager.id || permanentDeleteBusyId === manager.id}
+                  onClick={() => handleRestoreManagedUser(manager)}
+                  className="text-xs bg-green-100 hover:bg-green-200 disabled:bg-gray-100 disabled:text-gray-400 text-green-700 px-3 py-1.5 rounded-lg"
+                >
+                  {restoreBusyId === manager.id ? 'Restoring...' : 'Restore Account'}
+                </button>
+                <button
+                  disabled={permanentDeleteBusyId === manager.id}
+                  onClick={() => handlePermanentDeleteUser(manager)}
+                  className="text-xs bg-red-100 hover:bg-red-200 disabled:bg-gray-100 disabled:text-gray-400 text-red-700 px-3 py-1.5 rounded-lg"
+                >
+                  {permanentDeleteBusyId === manager.id ? 'Deleting...' : 'Delete Permanently'}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
 
           <div className="bg-white border border-gray-100 rounded-2xl p-5 text-center">
@@ -3982,7 +4188,7 @@ export default function AdminDashboard() {
 
             <h2 className="font-semibold text-gray-800 mb-1">Edit account</h2>
 
-            <p className="text-xs text-gray-400 mb-4">Email, school username and password controls are managed server-side.</p>
+            <p className="text-xs text-gray-400 mb-4">Email, login identity and password controls are managed server-side.</p>
 
             <div className="flex flex-col gap-3 mb-4">
 
@@ -4016,7 +4222,7 @@ export default function AdminDashboard() {
 
               </div>
 
-              {!isIndividualAccount(editUser) ? (
+              {!usesEmailOnlyAccount(editUser) ? (
                 <div>
                   <label className="text-xs text-gray-400 mb-1 block">School username (optional)</label>
                   <input
@@ -4031,7 +4237,9 @@ export default function AdminDashboard() {
                 </div>
               ) : (
                 <div className="bg-purple-50 border border-purple-100 text-purple-700 rounded-xl px-4 py-3 text-xs leading-5">
-                  Self-study accounts use email login only. School username is not available.
+                  {isSelfStudyManagerAccount(editUser)
+                    ? 'Self-Study Manager accounts use email login only and are not attached to an institution.'
+                    : 'Self-study learner accounts use email login only. School username is not available.'}
                 </div>
               )}
 
@@ -4043,7 +4251,7 @@ export default function AdminDashboard() {
 
                   <div className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm bg-gray-50 text-gray-500 capitalize">
 
-                    {editRole}
+                    {roleLabel(editRole)}
 
                   </div>
 
@@ -4051,11 +4259,15 @@ export default function AdminDashboard() {
 
                 <div>
 
-                  <label className="text-xs text-gray-400 mb-1 block">{isIndividualAccount(editUser) ? 'Account type' : 'School'}</label>
+                  <label className="text-xs text-gray-400 mb-1 block">{usesEmailOnlyAccount(editUser) ? 'Account type' : 'School'}</label>
 
                   <div className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm bg-gray-50 text-gray-500 truncate">
 
-                    {isIndividualAccount(editUser) ? 'Individual / Self-Study' : schoolLabel(editUser.schoolId)}
+                    {isSelfStudyManagerAccount(editUser)
+                      ? 'Platform / Self-Study Management'
+                      : isIndividualAccount(editUser)
+                        ? 'Individual / Self-Study'
+                        : schoolLabel(editUser.schoolId)}
 
                   </div>
 
@@ -4071,39 +4283,41 @@ export default function AdminDashboard() {
 
 
 
-              <div>
+              {!isSelfStudyManagerAccount(editUser) && (
+                <div>
 
-                <label className="text-xs text-gray-400 mb-1 block">Target Band</label>
+                  <label className="text-xs text-gray-400 mb-1 block">Target Band</label>
 
-                <input
+                  <input
 
-                  type="number"
+                    type="number"
 
-                  min="0"
+                    min="0"
 
-                  max="9"
+                    max="9"
 
-                  step="0.5"
+                    step="0.5"
 
-                  disabled={editRole !== 'student'}
+                    disabled={editRole !== 'student'}
 
-                  placeholder="Example: 6.5"
+                    placeholder="Example: 6.5"
 
-                  className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-purple-400 disabled:bg-gray-100 disabled:text-gray-400"
+                    className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-purple-400 disabled:bg-gray-100 disabled:text-gray-400"
 
-                  value={editTargetBand}
+                    value={editTargetBand}
 
-                  onChange={e => setEditTargetBand(e.target.value)}
+                    onChange={e => setEditTargetBand(e.target.value)}
 
-                />
+                  />
 
-                <p className="text-[11px] text-gray-400 mt-1">
+                  <p className="text-[11px] text-gray-400 mt-1">
 
-                  Leave empty if no target band is set.
+                    Leave empty if no target band is set.
 
-                </p>
+                  </p>
 
-              </div>
+                </div>
+              )}
 
               <div className="border-t border-gray-100 pt-4 mt-1">
 

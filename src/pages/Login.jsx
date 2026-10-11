@@ -166,7 +166,16 @@ export default function Login() {
 
     const userData = snap.data()
     const individualAccount = userData.accountType === 'individual' || userData.schoolId === '__individual__'
-    const accountHelp = individualAccount ? 'Please contact support.' : 'Please contact your institution administrator.'
+    const selfStudyManager =
+      userData.role === 'selfStudyManager' &&
+      userData.accountType === 'platform' &&
+      userData.scope === 'selfStudy' &&
+      userData.schoolId === '__platform__'
+    const accountHelp = selfStudyManager
+      ? 'Please contact the platform administrator.'
+      : individualAccount
+        ? 'Please contact support.'
+        : 'Please contact your institution administrator.'
 
     if (userData.deleted === true || userData.status === 'deleted') {
       await safelySignOut()
@@ -194,13 +203,15 @@ export default function Login() {
 
     if (userData.role === 'admin') {
       navigate('/admin')
+    } else if (selfStudyManager) {
+      navigate('/self-study-manager')
     } else if (userData.role === 'student') {
       navigate(individualAccount ? '/self-study' : '/student')
     } else if (userData.role === 'teacher') {
       navigate('/teacher')
     } else {
       await safelySignOut()
-      setError('Your account role is not assigned. Please contact your institution administrator.')
+      setError('Your account role is not assigned correctly. Please contact the platform administrator.')
       return false
     }
 
@@ -345,7 +356,7 @@ export default function Login() {
           </h1>
 
           <p className="text-gray-400 text-sm mb-5">
-            Institution users can sign in by email or school username. Individual learners use email.
+            Institution users can sign in by email or school username. Self-Study Managers and individual learners use email.
           </p>
 
           <div className="grid grid-cols-2 gap-2 bg-gray-50 rounded-xl p-1 mb-5">
@@ -394,7 +405,7 @@ export default function Login() {
             style={{ backgroundColor: primarySoft, borderColor: primaryBorder, color: primaryColor }}
           >
             {loginMode === 'email'
-              ? 'Institution and individual accounts can sign in with email. New independent learner? Create a self-study account below.'
+              ? 'Institution, Self-Study Manager and individual accounts can sign in with email. New independent learner? Create a self-study account below.'
               : 'Use your institution code and username if your school assigned one. Your real account email is not shown during username login.'}
           </div>
 
