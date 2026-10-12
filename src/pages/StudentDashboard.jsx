@@ -1665,7 +1665,7 @@
   }
 
 
-  function ReadingHomeworkSection({ user, profile }) {
+  function ReadingHomeworkSection({ user, profile, mode = 'all' }) {
     const [readings, setReadings] = useState([])
     const [submissions, setSubmissions] = useState([])
     const navigate = useNavigate()
@@ -1721,15 +1721,15 @@
     const todoReadings = readings.filter(r => !isDone(r.id))
     const completedReadings = readings.filter(r => isDone(r.id))
 
-    if (readings.length === 0) return null
+    if (readings.length === 0) return mode === 'completed' ? <StudentEmptyResults label="Reading" /> : null
 
     return (
       <div className="mt-8 mb-8">
         <h2 className="font-semibold text-gray-800 mb-4">
-          📖 Reading Homework
+          {mode === 'completed' ? '📖 Reading Results' : '📖 Reading Homework'}
         </h2>
 
-        {todoReadings.length > 0 && (
+        {mode !== 'completed' && todoReadings.length > 0 && (
           <div className="mb-6">
             <p className="text-xs font-semibold text-red-500 uppercase tracking-wider mb-3">
               To Do
@@ -1745,7 +1745,7 @@
                 return (
                   <div
                     key={r.id}
-                    className="bg-white border border-red-100 rounded-2xl p-5 flex items-center justify-between shadow-sm"
+                    className="bg-white border border-red-100 rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 shadow-sm"
                   >
                     <div>
                       <p className="text-sm font-medium text-gray-800">
@@ -1795,6 +1795,8 @@
           </div>
         )}
 
+        {mode === 'completed' && completedReadings.length === 0 && <StudentEmptyResults label="Reading" />}
+
         {completedReadings.length > 0 && (
           <div>
             <p className="text-xs font-semibold text-green-600 uppercase tracking-wider mb-3">
@@ -1808,7 +1810,7 @@
                 return (
                   <div
                     key={r.id}
-                    className="bg-white border border-gray-100 rounded-2xl p-5 flex items-center justify-between"
+                    className="bg-white border border-gray-100 rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4"
                   >
                     <div>
                       <p className="text-sm font-medium text-gray-800">
@@ -1841,7 +1843,7 @@
   }
 
 
-  function ListeningHomeworkSection({ user, profile }) {
+  function ListeningHomeworkSection({ user, profile, mode = 'all' }) {
     const [listenings, setListenings] = useState([])
     const [submissions, setSubmissions] = useState([])
     const navigate = useNavigate()
@@ -1897,15 +1899,15 @@
     const todoListenings = listenings.filter(l => !isDone(l.id))
     const completedListenings = listenings.filter(l => isDone(l.id))
 
-    if (listenings.length === 0) return null
+    if (listenings.length === 0) return mode === 'completed' ? <StudentEmptyResults label="Listening" /> : null
 
     return (
       <div className="mt-8 mb-8">
         <h2 className="font-semibold text-gray-800 mb-4">
-          🎧 Listening Homework
+          {mode === 'completed' ? '🎧 Listening Results' : '🎧 Listening Homework'}
         </h2>
 
-        {todoListenings.length > 0 && (
+        {mode !== 'completed' && todoListenings.length > 0 && (
           <div className="mb-6">
             <p className="text-xs font-semibold text-red-500 uppercase tracking-wider mb-3">
               To Do
@@ -1921,7 +1923,7 @@
                 return (
                   <div
                     key={l.id}
-                    className="bg-white border border-red-100 rounded-2xl p-5 flex items-center justify-between shadow-sm"
+                    className="bg-white border border-red-100 rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 shadow-sm"
                   >
                     <div>
                       <p className="text-sm font-medium text-gray-800">
@@ -1970,6 +1972,8 @@
           </div>
         )}
 
+        {mode === 'completed' && completedListenings.length === 0 && <StudentEmptyResults label="Listening" />}
+
         {completedListenings.length > 0 && (
           <div>
             <p className="text-xs font-semibold text-green-600 uppercase tracking-wider mb-3">
@@ -1983,7 +1987,7 @@
                 return (
                   <div
                     key={l.id}
-                    className="bg-white border border-gray-100 rounded-2xl p-5 flex items-center justify-between"
+                    className="bg-white border border-gray-100 rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4"
                   >
                     <div>
                       <p className="text-sm font-medium text-gray-800">
@@ -2382,7 +2386,7 @@
   }
 
 
-  function VocabularyHomeworkSection({ user, profile }) {
+  function VocabularyHomeworkSection({ user, profile, mode = 'all' }) {
     const [vocabularyTests, setVocabularyTests] = useState([])
     const [submissions, setSubmissions] = useState([])
     const navigate = useNavigate()
@@ -2451,15 +2455,15 @@
     const todoVocabularyTests = vocabularyTests.filter(item => !isDone(item.id))
     const completedVocabularyTests = vocabularyTests.filter(item => isDone(item.id))
 
-    if (vocabularyTests.length === 0) return null
+    if (vocabularyTests.length === 0) return mode === 'completed' ? <StudentEmptyResults label="Vocabulary" /> : null
 
     return (
       <div className="mt-8 mb-8">
         <h2 className="font-semibold text-gray-800 mb-4">
-          🧩 Vocabulary Tests
+          {mode === 'completed' ? '🧩 Vocabulary Results' : '🧩 Vocabulary Tests'}
         </h2>
 
-        {todoVocabularyTests.length > 0 && (
+        {mode !== 'completed' && todoVocabularyTests.length > 0 && (
           <div className="mb-6">
             <p className="text-xs font-semibold text-red-500 uppercase tracking-wider mb-3">
               To Do
@@ -2475,7 +2479,7 @@
                 return (
                   <div
                     key={item.id}
-                    className="bg-white border border-red-100 rounded-2xl p-5 flex items-center justify-between shadow-sm"
+                    className="bg-white border border-red-100 rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 shadow-sm"
                   >
                     <div>
                       <p className="text-sm font-medium text-gray-800">
@@ -2524,6 +2528,8 @@
           </div>
         )}
 
+        {mode === 'completed' && completedVocabularyTests.length === 0 && <StudentEmptyResults label="Vocabulary" />}
+
         {completedVocabularyTests.length > 0 && (
           <div>
             <p className="text-xs font-semibold text-green-600 uppercase tracking-wider mb-3">
@@ -2537,7 +2543,7 @@
                 return (
                   <div
                     key={item.id}
-                    className="bg-white border border-gray-100 rounded-2xl p-5 flex items-center justify-between"
+                    className="bg-white border border-gray-100 rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4"
                   >
                     <div>
                       <p className="text-sm font-medium text-gray-800">
@@ -2570,7 +2576,7 @@
   }
 
 
-  function MockTestSection({ user, profile }) {
+  function MockTestSection({ user, profile, mode = 'all' }) {
     const [mocks, setMocks] = useState([])
     const [submissions, setSubmissions] = useState([])
     const navigate = useNavigate()
@@ -2753,15 +2759,15 @@
     const todoMocks = mocks.filter(mock => !isDone(mock.id))
     const completedMocks = mocks.filter(mock => isDone(mock.id))
 
-    if (mocks.length === 0) return null
+    if (mocks.length === 0) return mode === 'completed' ? <StudentEmptyResults label="Mock Test" /> : null
 
     return (
       <div className="mt-8 mb-8">
         <h2 className="font-semibold text-gray-800 mb-4">
-          🧠 Mock Tests
+          {mode === 'completed' ? '🧠 Mock Results' : '🧠 Mock Tests'}
         </h2>
 
-        {todoMocks.length > 0 && (
+        {mode !== 'completed' && todoMocks.length > 0 && (
           <div className="mb-6">
             <p className="text-xs font-semibold text-red-500 uppercase tracking-wider mb-3">
               To Do
@@ -2777,7 +2783,7 @@
                 return (
                   <div
                     key={mock.id}
-                    className="bg-white border border-purple-100 rounded-2xl p-5 flex items-center justify-between shadow-sm"
+                    className="bg-white border border-purple-100 rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 shadow-sm"
                   >
                     <div>
                       <p className="text-sm font-medium text-gray-800">
@@ -2844,6 +2850,8 @@
           </div>
         )}
 
+        {mode === 'completed' && completedMocks.length === 0 && <StudentEmptyResults label="Mock Test" />}
+
         {completedMocks.length > 0 && (
           <div>
             <p className="text-xs font-semibold text-green-600 uppercase tracking-wider mb-3">
@@ -2860,7 +2868,7 @@
                 return (
                   <div
                     key={mock.id}
-                    className="bg-white border border-gray-100 rounded-2xl p-5 flex items-center justify-between gap-4"
+                    className="bg-white border border-gray-100 rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4"
                   >
                     <div>
                       <p className="text-sm font-medium text-gray-800">
@@ -3249,7 +3257,7 @@
     )
   }
 
-  function WritingHomeworkSection({ user, profile }) {
+  function WritingHomeworkSection({ user, profile, mode = 'all' }) {
     const [writings, setWritings] = useState([])
     const [submissions, setSubmissions] = useState([])
     const [selectedReview, setSelectedReview] = useState(null)
@@ -3303,15 +3311,15 @@
     const todoWritings = writings.filter(w => !isDone(w.id))
     const completedWritings = writings.filter(w => isDone(w.id))
 
-    if (writings.length === 0) return null
+    if (writings.length === 0) return mode === 'completed' ? <StudentEmptyResults label="Writing" /> : null
 
     return (
       <div className="mt-8 mb-8">
         <h2 className="font-semibold text-gray-800 mb-4">
-          ✍️ Writing Homework
+          {mode === 'completed' ? '✍️ Writing Feedback' : '✍️ Writing Homework'}
         </h2>
 
-        {todoWritings.length > 0 && (
+        {mode !== 'completed' && todoWritings.length > 0 && (
           <div className="mb-6">
             <p className="text-xs font-semibold text-red-500 uppercase tracking-wider mb-3">
               To Do
@@ -3327,7 +3335,7 @@
                 return (
                   <div
                     key={w.id}
-                    className="bg-white border border-red-100 rounded-2xl p-5 flex items-center justify-between shadow-sm"
+                    className="bg-white border border-red-100 rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 shadow-sm"
                   >
                     <div>
                       <p className="text-sm font-medium text-gray-800">
@@ -3383,6 +3391,8 @@
           </div>
         )}
 
+        {mode === 'completed' && completedWritings.length === 0 && <StudentEmptyResults label="Writing" />}
+
         {completedWritings.length > 0 && (
           <div>
             <p className="text-xs font-semibold text-green-600 uppercase tracking-wider mb-3">
@@ -3397,7 +3407,7 @@
                 return (
                   <div
                     key={w.id}
-                    className="bg-white border border-gray-100 rounded-2xl p-5 flex items-center justify-between gap-4"
+                    className="bg-white border border-gray-100 rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4"
                   >
                     <div>
                       <p className="text-sm font-medium text-gray-800">
@@ -3603,7 +3613,7 @@
   }
 
 
-  function StudentTodoSummary({ user, profile }) {
+  function StudentTodoSummary({ user, profile, compact = false, onViewAll = null }) {
     const [readings, setReadings] = useState([])
     const [listenings, setListenings] = useState([])
     const [writings, setWritings] = useState([])
@@ -3857,7 +3867,13 @@
           isRetake: hasOpenMockRetake(item.id),
           retakeState: mockAttemptStates[item.id] || null
         }))
-    ].sort(sortByAssignedDateDesc)
+    ].sort((a, b) => {
+      const aDays = daysUntilDue(a.dueDate)
+      const bDays = daysUntilDue(b.dueDate)
+      const aPriority = aDays === null || !Number.isFinite(aDays) ? Infinity : aDays
+      const bPriority = bDays === null || !Number.isFinite(bDays) ? Infinity : bDays
+      return aPriority - bPriority || sortByAssignedDateDesc(a, b)
+    })
 
     const overdueCount = todoItems.filter(item => daysUntilDue(item.dueDate) !== null && daysUntilDue(item.dueDate) < 0).length
     const urgentCount = todoItems.filter(item => {
@@ -3877,6 +3893,8 @@
       ? Math.round((completedCount / totalAssigned) * 100)
       : 0
 
+    const visibleTodoItems = compact ? todoItems.slice(0, 4) : todoItems
+
     const getTypeBadgeStyle = type => {
       if (type === 'Reading') return 'bg-blue-50 text-blue-600'
       if (type === 'Listening') return 'bg-purple-50 text-purple-600'
@@ -3890,11 +3908,11 @@
         <div className="flex items-start justify-between gap-4 mb-5">
           <div>
             <h2 className="font-semibold text-gray-800">
-              🔔 New / Remaining Homework
+              Your next assignments
             </h2>
 
             <p className="text-xs text-gray-400 mt-1">
-              Newly assigned or unfinished tasks are listed here.
+              Prioritised by deadline, including teacher-reopened attempts.
             </p>
           </div>
 
@@ -3953,19 +3971,29 @@
           </div>
         </div>
 
+        <div className="mb-5 rounded-xl bg-slate-50 px-4 py-3">
+          <div className="mb-2 flex items-center justify-between gap-3 text-xs">
+            <span className="font-medium text-slate-600">Homework completion</span>
+            <span className="font-bold text-indigo-700">{completedCount} / {totalAssigned} · {completionRate}%</span>
+          </div>
+          <div className="h-2 overflow-hidden rounded-full bg-slate-200">
+            <div className="h-full rounded-full bg-indigo-600 transition-all" style={{ width: `${completionRate}%` }} />
+          </div>
+        </div>
+
         {todoItems.length === 0 ? (
           <div className="bg-green-50 text-green-700 rounded-xl p-4 text-sm">
             ✅ No remaining homework right now.
           </div>
         ) : (
           <div className="flex flex-col gap-3">
-            {todoItems.map((item, index) => {
+            {visibleTodoItems.map((item, index) => {
               const badge = dueLabel(item)
 
               return (
                 <div
                   key={`${item.type}-${item.id}`}
-                  className="border border-gray-100 bg-gray-50 rounded-xl p-4 flex items-center justify-between gap-4"
+                  className="border border-slate-200 bg-slate-50 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3"
                 >
                   <div>
                     <div className="flex items-center gap-2 mb-1">
@@ -3991,7 +4019,7 @@
 
                   <button
                     onClick={() => navigate(item.path)}
-                    className="bg-purple-600 text-white px-4 py-2 rounded-xl text-xs font-medium hover:bg-purple-700"
+                    className="shrink-0 self-start sm:self-auto bg-indigo-600 text-white px-4 py-2.5 rounded-xl text-xs font-semibold hover:bg-indigo-700"
                   >
                     {item.isRetake ? 'Continue Retake →' : 'Start →'}
                   </button>
@@ -3999,10 +4027,13 @@
               )
             })}
 
-            {todoItems.length > 5 && (
-              <p className="text-xs text-gray-400 text-center pt-1">
-                Showing all remaining homework.
-              </p>
+            {compact && onViewAll && (
+              <button type="button" onClick={onViewAll}
+                className="mt-1 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm font-semibold text-indigo-700 hover:bg-indigo-100">
+                {todoItems.length > visibleTodoItems.length
+                  ? `View all ${todoItems.length} assignments`
+                  : 'Open My Homework'} →
+              </button>
             )}
           </div>
         )}
@@ -4228,17 +4259,88 @@
     )
   }
 
+
+  // MAXIMA Student Learning Hub V2: presentation-only navigation and pictograms.
+  // Academic submissions, attempt permissions, content access, and review rules stay unchanged.
+  function StudentEmptyResults({ label }) {
+    return (
+      <div className="rounded-2xl border border-slate-200 bg-white px-6 py-10 text-center shadow-sm">
+        <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-700">
+          <StudentWorkspaceIcon name="results" className="h-6 w-6" />
+        </div>
+        <p className="text-base font-semibold text-slate-800">No completed {label} work yet</p>
+        <p className="mt-2 text-sm text-slate-500">Complete an assigned activity to see its results here.</p>
+      </div>
+    )
+  }
+
+  function StudentWorkspaceIcon({ name, className = 'h-5 w-5' }) {
+    const glyphs = {
+      overview: <><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></>,
+      homework: <><path d="M9 3h6l2 2h3v16H4V5h3l2-2Z"/><path d="M9 3v3h6V3M8 12l2 2 5-5M8 18h8"/></>,
+      mock: <><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 3.5h6M9 10h6M9 14h6M9 18h4"/></>,
+      results: <><circle cx="12" cy="8" r="5"/><path d="m8 12-2 9 6-3 6 3-2-9M9.5 8l1.5 1.5L14.5 6"/></>,
+      progress: <><path d="M3 21h18M6 18v-6M12 18V4M18 18V9"/></>,
+      inbox: <><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m4 7 8 6 8-6"/></>,
+      reading: <path d="M4 19V5c3-1.5 5.5-1.5 8 0 2.5-1.5 5-1.5 8 0v14c-3-1.5-5.5-1.5-8 0-2.5-1.5-5-1.5-8 0ZM12 5v14"/>,
+      listening: <><path d="M4 12v-2a8 8 0 0 1 16 0v2M4 12h3v7H5a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2ZM20 12h-3v7h2a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2Z"/></>,
+      writing: <><path d="m4 16 11-11a3 3 0 0 1 4 4L8 20l-5 1 1-5Z"/><path d="m13 7 4 4"/></>,
+      vocabulary: <><path d="M5 4h14v16H5zM9 4v16M12 9h4M12 13h4M12 17h4"/></>,
+      all: <><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 10h8M8 14h8"/></>,
+      lock: <><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></>,
+      exit: <><path d="M10 17l5-5-5-5M15 12H3M12 3h7a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-7"/></>,
+      arrow: <path d="M5 12h14m-6-6 6 6-6 6"/>,
+      target: <><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/></>,
+      spark: <path d="m12 2 2.5 7.5L22 12l-7.5 2.5L12 22l-2.5-7.5L2 12l7.5-2.5L12 2Z"/>,
+      clock: <><circle cx="12" cy="12" r="9"/><path d="M12 7v5l4 2"/></>,
+      check: <path d="m4 12 5 5L20 6"/>,
+    }
+    return (
+      <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+        strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        {glyphs[name] || glyphs.overview}
+      </svg>
+    )
+  }
+
+  const STUDENT_WORKSPACE_NAV = [
+    { id: 'overview', label: 'My Dashboard', icon: 'overview', description: 'Your learning priorities and latest achievements' },
+    { id: 'todo', label: 'My Homework', icon: 'homework', description: 'All assignments, reading, listening, writing and vocabulary' },
+    { id: 'mock', label: 'Mock Tests', icon: 'mock', description: 'IELTS mock examinations and your test history' },
+    { id: 'results', label: 'My Results', icon: 'results', description: 'Review completed work and teacher feedback' },
+    { id: 'analytics', label: 'My Progress', icon: 'progress', description: 'Your IELTS skills, accuracy and writing development' },
+    { id: 'inbox', label: 'Messages & Files', icon: 'inbox', description: 'Updates and learning materials from your teacher' },
+  ]
+
+  const STUDENT_HOMEWORK_CATEGORIES = [
+    { id: 'todo', label: 'All Homework', icon: 'all' },
+    { id: 'reading', label: 'Reading', icon: 'reading' },
+    { id: 'listening', label: 'Listening', icon: 'listening' },
+    { id: 'writing', label: 'Writing', icon: 'writing' },
+    { id: 'vocabulary', label: 'Vocabulary', icon: 'vocabulary' },
+  ]
+
+  const STUDENT_RESULT_CATEGORIES = [
+    { id: 'reading', label: 'Reading', icon: 'reading' },
+    { id: 'listening', label: 'Listening', icon: 'listening' },
+    { id: 'writing', label: 'Writing', icon: 'writing' },
+    { id: 'vocabulary', label: 'Vocabulary', icon: 'vocabulary' },
+    { id: 'mock', label: 'Mock Tests', icon: 'mock' },
+  ]
+
   export default function StudentDashboard() {
     const [scores, setScores] = useState([])
     const [user, setUser] = useState(null)
     const [showPasswordModal, setShowPasswordModal] = useState(false)
     const [newPassword, setNewPassword] = useState('')
     const [passwordMsg, setPasswordMsg] = useState('')
+    const [resultsCategory, setResultsCategory] = useState('writing')
     const [activeTab, setActiveTab] = useState(() => {
       try {
         const storedTab = window.sessionStorage.getItem('maxima_student_dashboard_active_tab')
         const allowedTabs = [
           'overview',
+          'results',
           'todo',
           'reading',
           'listening',
@@ -4419,141 +4521,87 @@
     )
     const latestMockScore = mockScores[0]
 
-    const overviewCards = [
-      {
-        title: 'Latest Mock Estimate',
-        value: latestMockScore ? latestMockScore.overall : '--',
-        note: latestMockScore ? latestMockScore.date || 'Mock completed' : 'No mock completed yet',
-        style: 'bg-gray-900 text-white',
-        valueStyle: 'text-white'
-      },
-      {
-        title: 'Target Band',
-        value: targetBand ? targetBand.toFixed(1) : 'Not set',
-        note: targetBand
-          ? 'Your target band set by admin'
-          : 'Ask admin to set your target',
-        style: 'bg-blue-50 text-gray-900',
-        valueStyle: 'text-blue-600'
-      },
-      {
-        title: 'Mock History',
-        value: mockScores.length,
-        note: mockScores.length === 1 ? '1 mock score saved' : `${mockScores.length} mock scores saved`,
-        style: 'bg-purple-50 text-gray-900',
-        valueStyle: 'text-purple-600'
-      }
-    ]
-
     const displayName = getStudentDisplayName(profile, user)
     const firstName = getFirstName(profile, user)
-    const todayText = new Date().toLocaleDateString(undefined, {
-      weekday: 'long',
-      month: 'short',
-      day: 'numeric'
+    const todayText = new Date().toLocaleDateString('en-GB', {
+      weekday: 'long', month: 'short', day: 'numeric'
     })
-
-    const tabs = [
-      { key: 'overview', label: 'Overview', icon: '🏠' },
-      { key: 'todo', label: 'To Do', icon: '🔔' },
-      { key: 'reading', label: 'Reading', icon: '📖' },
-      { key: 'listening', label: 'Listening', icon: '🎧' },
-      { key: 'writing', label: 'Writing', icon: '✍️' },
-      { key: 'vocabulary', label: 'Vocabulary', icon: '🧩' },
-      { key: 'mock', label: 'Mock Tests', icon: '🧠' },
-      { key: 'inbox', label: 'Messages & Files', icon: '💬' },
-      { key: 'analytics', label: 'Analytics', icon: '📊' }
-    ]
-
-    const activeTabMeta = tabs.find(tab => tab.key === activeTab) || tabs[0]
+    const homeworkSectionIds = ['todo', 'reading', 'listening', 'writing', 'vocabulary']
+    const studentSectionId = homeworkSectionIds.includes(activeTab) ? 'todo' : activeTab
+    const studentPage = STUDENT_WORKSPACE_NAV.find(item => item.id === studentSectionId) || STUDENT_WORKSPACE_NAV[0]
+    const targetDisplay = Number.isFinite(targetBand) && targetBand > 0
+      ? targetBand.toFixed(1)
+      : '--'
+    const latestMockDisplay = formatBand(latestMockScore?.overall)
 
     const renderOverview = () => (
-      <div>
-        <StudentTodoSummary user={user} profile={profile} />
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-          {overviewCards.map(card => (
-            <div
-              key={card.title}
-              className={`${card.style} rounded-2xl p-5 border border-gray-100`}
-            >
-              <p className="text-xs opacity-70 mb-1">
-                {card.title}
-              </p>
-
-              <p className={`text-3xl font-bold ${card.valueStyle}`}>
-                {card.value}
-              </p>
-
-              <p className="text-xs opacity-60 mt-2">
-                {card.note}
-              </p>
-            </div>
-          ))}
-        </div>
-
-        <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
-          <div className="flex items-start justify-between gap-4">
+      <div className="space-y-6">
+        <section className="relative overflow-hidden rounded-[26px] bg-slate-900 text-white shadow-sm">
+          <div className="absolute -right-12 -top-20 h-64 w-64 rounded-full bg-indigo-500/20 blur-3xl pointer-events-none" />
+          <div className="absolute bottom-0 right-1/3 h-36 w-36 rounded-full bg-sky-500/10 blur-3xl pointer-events-none" />
+          <div className="relative grid gap-6 p-6 sm:p-8 xl:grid-cols-[1.15fr_0.85fr] xl:items-end">
             <div>
-              <h2 className="font-semibold text-gray-800">
-                🧠 Mock Progress
-              </h2>
-
-              <p className="text-sm text-gray-400 mt-1">
-                Manual IELTS score logging was removed. Your progress is now based on mock tests, homework analytics and writing reviews.
+              <p className="text-xs font-semibold uppercase tracking-[.17em] text-indigo-200 mb-3">{todayText} · Your learning space</p>
+              <h2 className="text-2xl sm:text-3xl font-semibold tracking-tight">Welcome back, {firstName}.</h2>
+              <p className="mt-3 text-sm leading-7 text-slate-300 max-w-xl">
+                Focus on your next assignment, check your feedback and keep moving toward your IELTS goal.
               </p>
+              <div className="flex flex-wrap gap-2 mt-5">
+                <button type="button" onClick={() => setActiveTab('todo')}
+                  className="inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-slate-900 hover:bg-indigo-50">
+                  My Homework <StudentWorkspaceIcon name="arrow" className="h-4 w-4" />
+                </button>
+                <button type="button" onClick={() => setActiveTab('results')}
+                  className="inline-flex items-center gap-2 rounded-xl border border-white/20 bg-white/10 px-4 py-2.5 text-sm font-medium text-white hover:bg-white/20">
+                  View feedback
+                </button>
+              </div>
             </div>
-
-            <button
-              type="button"
-              onClick={() => setActiveTab('mock')}
-              className="bg-purple-600 text-white px-4 py-2 rounded-xl text-xs font-medium hover:bg-purple-700"
-            >
-              View Mock History →
-            </button>
+            <div className="grid grid-cols-3 gap-2 sm:gap-3">
+              <div className="rounded-2xl border border-white/10 bg-white/10 p-3 sm:p-4">
+                <p className="text-[11px] text-slate-300">Target band</p>
+                <p className="mt-2 text-xl sm:text-2xl font-semibold tabular-nums">{targetDisplay}</p>
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-white/10 p-3 sm:p-4">
+                <p className="text-[11px] text-slate-300">Latest mock</p>
+                <p className="mt-2 text-xl sm:text-2xl font-semibold tabular-nums">{latestMockDisplay}</p>
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-white/10 p-3 sm:p-4">
+                <p className="text-[11px] text-slate-300">Mock history</p>
+                <p className="mt-2 text-xl sm:text-2xl font-semibold tabular-nums">{mockScores.length}</p>
+              </div>
+            </div>
           </div>
-        </div>
+        </section>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <button
-            onClick={() => setActiveTab('todo')}
-            className="bg-white border border-gray-100 rounded-2xl p-5 text-left hover:border-purple-200 hover:shadow-sm"
-          >
-            <p className="font-semibold text-gray-800 mb-1">
-              🔔 To Do
-            </p>
+        <StudentTodoSummary user={user} profile={profile} compact onViewAll={() => setActiveTab('todo')} />
 
-            <p className="text-sm text-gray-400">
-              See new or remaining homework first.
-            </p>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('mock')}
-            className="bg-white border border-gray-100 rounded-2xl p-5 text-left hover:border-purple-200 hover:shadow-sm"
-          >
-            <p className="font-semibold text-gray-800 mb-1">
-              🧠 Mock Tests
-            </p>
-
-            <p className="text-sm text-gray-400">
-              Start or review your full IELTS mock tests.
-            </p>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('analytics')}
-            className="bg-white border border-gray-100 rounded-2xl p-5 text-left hover:border-purple-200 hover:shadow-sm"
-          >
-            <p className="font-semibold text-gray-800 mb-1">
-              📊 Analytics
-            </p>
-
-            <p className="text-sm text-gray-400">
-              See your reading, listening and writing progress.
-            </p>
-          </button>
-        </div>
+        <section>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="text-lg font-semibold text-slate-900">Explore your learning</h3>
+              <p className="text-sm text-slate-500 mt-1">Your exams, teacher comments and performance are one click away.</p>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            {[
+              { key: 'mock', icon: 'mock', label: 'Mock Tests', description: 'Start or review an IELTS mock examination' },
+              { key: 'results', icon: 'results', label: 'My Results', description: 'Read feedback and revisit completed homework' },
+              { key: 'analytics', icon: 'progress', label: 'My Progress', description: 'See your strong and weak question types' },
+            ].map(item => (
+              <button key={item.key} type="button" onClick={() => setActiveTab(item.key)}
+                className="group rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-indigo-200 hover:shadow-md">
+                <span className="mb-4 inline-flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-50 text-indigo-700">
+                  <StudentWorkspaceIcon name={item.icon} className="h-5 w-5" />
+                </span>
+                <span className="flex items-center justify-between gap-2 font-semibold text-slate-900">
+                  {item.label}<StudentWorkspaceIcon name="arrow" className="h-4 w-4 text-slate-400 group-hover:text-indigo-700" />
+                </span>
+                <p className="mt-2 text-xs leading-5 text-slate-500">{item.description}</p>
+              </button>
+            ))}
+          </div>
+        </section>
       </div>
     )
 
@@ -4575,191 +4623,186 @@
     }
 
     return (
-      <div className="min-h-screen bg-[#faf9f6]">
-        <nav className="flex justify-between items-center px-4 sm:px-8 py-4 bg-white border-b border-gray-100 sticky top-0 z-40">
-          <img
-            src="/1.png"
-            alt="Maxima"
-            className="h-12 sm:h-14 object-contain"
-          />
-
-          <div className="flex items-center gap-2 sm:gap-4">
-            <span className="hidden md:inline text-sm text-gray-400">
-              {user?.email}
-            </span>
-
-            <button
-              onClick={() => setShowPasswordModal(true)}
-              className="text-xs sm:text-sm text-gray-400 hover:text-gray-600 bg-gray-50 px-3 py-2 rounded-xl"
-            >
-              Password
-            </button>
-
-            <button
-              onClick={() => {
-                signOut(auth)
-                navigate('/')
-              }}
-              className="text-xs sm:text-sm text-gray-400 hover:text-gray-600 bg-gray-50 px-3 py-2 rounded-xl"
-            >
-              Logout
-            </button>
-          </div>
-        </nav>
-
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 lg:py-10">
-          {dataSyncErrorCount > 0 && (
-            <div className="mb-5 bg-amber-50 border border-amber-200 text-amber-800 rounded-2xl px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-              <div>
-                <p className="text-sm font-semibold">Some dashboard data could not refresh.</p>
-                <p className="text-xs text-amber-700 mt-1">
-                  Your last successfully loaded data is still shown. Refresh when your connection is stable.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => window.location.reload()}
-                className="self-start sm:self-auto bg-white border border-amber-200 px-3 py-2 rounded-xl text-xs font-semibold hover:bg-amber-100"
-              >
-                Refresh data
-              </button>
-            </div>
-          )}
-
-          <div className="bg-gray-900 text-white rounded-[2rem] p-6 md:p-8 mb-6 overflow-hidden relative">
-            <div className="absolute -right-12 -top-12 w-48 h-48 bg-purple-500/20 rounded-full blur-2xl" />
-            <div className="absolute right-20 bottom-0 w-36 h-36 bg-blue-500/10 rounded-full blur-2xl" />
-
-            <div className="relative grid grid-cols-1 lg:grid-cols-[1.25fr_0.75fr] gap-6 items-end">
-              <div>
-                <p className="text-xs text-purple-200 uppercase tracking-[0.18em] mb-3">
-                  {todayText}
-                </p>
-
-                <h1 className="text-3xl md:text-4xl font-bold tracking-tight mb-3">
-                  Welcome back, {firstName}
-                </h1>
-
-                <p className="text-sm md:text-base text-gray-300 max-w-2xl leading-7">
-                  Your IELTS homework, mock tests, feedback and progress are all here. Start with your To Do list, then check your analytics.
-                </p>
-
-                <div className="flex flex-wrap gap-2 mt-5">
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('todo')}
-                    className="bg-white text-gray-900 px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-gray-100"
-                  >
-                    View To Do →
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('mock')}
-                    className="bg-white/10 text-white border border-white/10 px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-white/15"
-                  >
-                    Mock Tests
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('analytics')}
-                    className="bg-white/10 text-white border border-white/10 px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-white/15"
-                  >
-                    Analytics
-                  </button>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 gap-3">
-                <div className="bg-white/10 border border-white/10 rounded-2xl p-4">
-                  <p className="text-[11px] text-gray-300 mb-1">Latest Mock</p>
-                  <p className="text-2xl font-bold">{latestMockScore ? latestMockScore.overall : '--'}</p>
-                </div>
-
-                <div className="bg-white/10 border border-white/10 rounded-2xl p-4">
-                  <p className="text-[11px] text-gray-300 mb-1">Mock Count</p>
-                  <p className="text-2xl font-bold">{mockScores.length}</p>
-                </div>
-
-                <div className="bg-white/10 border border-white/10 rounded-2xl p-4">
-                  <p className="text-[11px] text-gray-300 mb-1">Target</p>
-                  <p className="text-2xl font-bold">{targetBand ? targetBand.toFixed(1) : '--'}</p>
+      <div className="min-h-screen bg-slate-50 text-slate-900">
+        <div className="min-h-screen lg:flex">
+          {/* Desktop learning navigation */}
+          <aside className="hidden lg:flex lg:w-64 xl:w-72 shrink-0 flex-col border-r border-slate-200 bg-white sticky top-0 h-screen">
+            <div className="px-6 py-7 border-b border-slate-100">
+              <div className="flex items-center gap-3">
+                <img src="/1.png" alt="Maxima" className="h-9 max-w-[116px] object-contain" />
+                <div className="border-l border-slate-200 pl-3">
+                  <p className="text-xs font-bold tracking-wider text-slate-800">MAXIMA</p>
+                  <p className="text-[11px] text-slate-500">Student Learning Hub</p>
                 </div>
               </div>
             </div>
-          </div>
-
-          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 mb-6">
-            <div>
-              <h2 className="text-xl font-bold text-gray-900">
-                {activeTabMeta.icon} {activeTabMeta.label}
-              </h2>
-
-              <p className="text-sm text-gray-400 mt-1">
-                {displayName} · {user?.email}
-              </p>
+            <div className="flex-1 overflow-y-auto px-4 py-6">
+              <p className="mb-3 px-3 text-[11px] font-semibold uppercase tracking-[.16em] text-slate-400">My workspace</p>
+              <nav className="space-y-1" aria-label="Student navigation">
+                {STUDENT_WORKSPACE_NAV.map(item => (
+                  <button key={item.id} type="button" onClick={() => setActiveTab(item.id)}
+                    aria-current={studentSectionId === item.id ? 'page' : undefined}
+                    className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-medium transition-colors ${
+                      studentSectionId === item.id
+                        ? 'bg-indigo-50 text-indigo-700'
+                        : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                    }`}>
+                    <StudentWorkspaceIcon name={item.icon} />
+                    <span className="min-w-0 flex-1">{item.label}</span>
+                  </button>
+                ))}
+              </nav>
+              <div className="mt-7 border-t border-slate-100 pt-5">
+                <p className="mb-3 px-3 text-[11px] font-semibold uppercase tracking-[.16em] text-slate-400">Quick access</p>
+                <div className="space-y-1">
+                  {STUDENT_HOMEWORK_CATEGORIES.slice(1).map(item => (
+                    <button key={item.id} type="button" onClick={() => setActiveTab(item.id)}
+                      className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-xs font-medium ${
+                        activeTab === item.id ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'
+                      }`}>
+                      <StudentWorkspaceIcon name={item.icon} className="h-4 w-4" />{item.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
-
-            <div className="bg-white border border-gray-100 rounded-2xl p-2 flex gap-2 overflow-x-auto max-w-full shadow-sm">
-              {tabs.map(tab => (
-                <button
-                  key={tab.key}
-                  onClick={() => setActiveTab(tab.key)}
-                  className={`whitespace-nowrap px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                    activeTab === tab.key
-                      ? 'bg-purple-600 text-white shadow-sm'
-                      : 'text-gray-500 hover:bg-gray-100'
-                  }`}
-                >
-                  <span className="mr-1.5">{tab.icon}</span>
-                  {tab.label}
-                </button>
-              ))}
+            <div className="border-t border-slate-100 px-6 py-5">
+              <p className="text-xs font-semibold text-slate-800 truncate" title={displayName}>{displayName}</p>
+              <p className="mt-1 truncate text-[11px] text-slate-500" title={user?.email}>{user?.email}</p>
+              <div className="mt-3 inline-flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                <StudentWorkspaceIcon name="target" className="h-4 w-4 text-indigo-600" /> Target band {targetDisplay}
+              </div>
             </div>
+          </aside>
+
+          <div className="min-w-0 flex-1">
+            <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur">
+              <div className="flex items-center justify-between gap-3 px-4 py-4 sm:px-7 lg:px-9">
+                <div className="flex min-w-0 items-center gap-3">
+                  <img src="/1.png" alt="Maxima" className="h-8 max-w-[100px] object-contain lg:hidden" />
+                  <p className="hidden text-sm font-semibold text-slate-800 sm:block">Student Learning Hub</p>
+                  <span className="rounded-md bg-indigo-50 px-2 py-1 text-[11px] font-semibold text-indigo-700">STUDENT</span>
+                </div>
+                <div className="flex shrink-0 items-center gap-1 sm:gap-3">
+                  <span className="hidden max-w-[210px] truncate text-xs text-slate-500 xl:block" title={user?.email}>{user?.email}</span>
+                  <button type="button" onClick={() => setShowPasswordModal(true)}
+                    className="inline-flex items-center gap-2 rounded-lg px-2 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-500"
+                    aria-label="Change password">
+                    <StudentWorkspaceIcon name="lock" className="h-4 w-4" /><span className="hidden sm:inline">Password</span>
+                  </button>
+                  <button type="button" onClick={() => { signOut(auth); navigate('/') }}
+                    className="inline-flex items-center gap-2 rounded-lg px-2 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-500" aria-label="Sign out">
+                    <StudentWorkspaceIcon name="exit" className="h-4 w-4" /><span className="hidden sm:inline">Sign out</span>
+                  </button>
+                </div>
+              </div>
+              <nav className="flex gap-1 overflow-x-auto px-3 pb-3 lg:hidden" aria-label="Mobile student navigation">
+                {STUDENT_WORKSPACE_NAV.map(item => (
+                  <button key={item.id} type="button" onClick={() => setActiveTab(item.id)}
+                    aria-current={studentSectionId === item.id ? 'page' : undefined}
+                    className={`flex shrink-0 items-center gap-2 rounded-lg px-3 py-2.5 text-xs font-medium ${
+                      studentSectionId === item.id ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-100'
+                    }`}>
+                    <StudentWorkspaceIcon name={item.icon} className="h-4 w-4" />{item.label}
+                  </button>
+                ))}
+              </nav>
+            </header>
+
+            <main className="mx-auto max-w-[1440px] px-4 pb-20 pt-7 sm:px-7 sm:pt-9 lg:px-9">
+              {dataSyncErrorCount > 0 && (
+                <div role="alert" className="mb-6 flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm font-semibold text-amber-800">Some dashboard data could not refresh.</p>
+                    <p className="mt-1 text-xs text-amber-700">Your last successfully loaded data is still shown. Refresh when your connection is stable.</p>
+                  </div>
+                  <button type="button" onClick={() => window.location.reload()}
+                    className="shrink-0 self-start rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs font-semibold text-amber-800 hover:bg-amber-100 sm:self-auto">
+                    Refresh data
+                  </button>
+                </div>
+              )}
+
+              <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-[.12em] text-indigo-700">Maxima / Student</p>
+                  <h1 className="text-2xl font-semibold tracking-tight text-slate-900 sm:text-3xl">{studentPage.label}</h1>
+                  <p className="mt-2 max-w-2xl text-sm text-slate-500">{studentPage.description}</p>
+                </div>
+                {studentSectionId !== 'overview' && (
+                  <button type="button" onClick={() => setActiveTab('overview')}
+                    className="inline-flex shrink-0 items-center gap-2 self-start rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-600 hover:border-indigo-200 hover:text-indigo-700">
+                    <StudentWorkspaceIcon name="overview" className="h-4 w-4" /> Back to Dashboard
+                  </button>
+                )}
+              </div>
+
+              {studentSectionId === 'todo' && (
+                <nav aria-label="Homework categories" className="mb-5 flex gap-2 overflow-x-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-sm">
+                  {STUDENT_HOMEWORK_CATEGORIES.map(item => (
+                    <button key={item.id} type="button" onClick={() => setActiveTab(item.id)}
+                      aria-current={activeTab === item.id ? 'page' : undefined}
+                      className={`inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-xl px-4 py-2.5 text-sm font-medium ${
+                        activeTab === item.id ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-100'
+                      }`}>
+                      <StudentWorkspaceIcon name={item.icon} className="h-4 w-4" />{item.label}
+                    </button>
+                  ))}
+                </nav>
+              )}
+
+              {activeTab === 'results' && (
+                <>
+                  <div className="mb-5 rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3 text-sm text-indigo-800">
+                    Choose a subject to see completed work, answers and teacher-reviewed Writing feedback. Pending assignments remain under My Homework.
+                  </div>
+                  <nav aria-label="Completed work categories" className="mb-5 flex gap-2 overflow-x-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-sm">
+                    {STUDENT_RESULT_CATEGORIES.map(item => (
+                      <button key={item.id} type="button" onClick={() => setResultsCategory(item.id)}
+                        aria-current={resultsCategory === item.id ? 'page' : undefined}
+                        className={`inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-xl px-4 py-2.5 text-sm font-medium ${
+                          resultsCategory === item.id ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-100'
+                        }`}>
+                        <StudentWorkspaceIcon name={item.icon} className="h-4 w-4" />{item.label}
+                      </button>
+                    ))}
+                  </nav>
+                </>
+              )}
+
+              {activeTab === 'overview' && renderOverview()}
+              {activeTab === 'todo' && <StudentTodoSummary user={user} profile={profile} />}
+              {activeTab === 'reading' && <ReadingHomeworkSection user={user} profile={profile} />}
+              {activeTab === 'listening' && <ListeningHomeworkSection user={user} profile={profile} />}
+              {activeTab === 'writing' && <WritingHomeworkSection user={user} profile={profile} />}
+              {activeTab === 'vocabulary' && <VocabularyHomeworkSection user={user} profile={profile} />}
+
+              {activeTab === 'mock' && (
+                <>
+                  <MockAnalysis user={user} profile={profile} />
+                  <MockTestSection user={user} profile={profile} />
+                </>
+              )}
+
+              {activeTab === 'results' && (
+                <div>
+                  {resultsCategory === 'reading' && <ReadingHomeworkSection user={user} profile={profile} mode="completed" />}
+                  {resultsCategory === 'listening' && <ListeningHomeworkSection user={user} profile={profile} mode="completed" />}
+                  {resultsCategory === 'writing' && <WritingHomeworkSection user={user} profile={profile} mode="completed" />}
+                  {resultsCategory === 'vocabulary' && <VocabularyHomeworkSection user={user} profile={profile} mode="completed" />}
+                  {resultsCategory === 'mock' && <MockTestSection user={user} profile={profile} mode="completed" />}
+                </div>
+              )}
+
+              {activeTab === 'inbox' && <StudentCommunicationCenter user={user} />}
+              {activeTab === 'analytics' && (
+                <>
+                  <StudentSkillAnalytics user={user} profile={profile} />
+                  <WritingProgressAnalytics user={user} profile={profile} />
+                </>
+              )}
+            </main>
           </div>
-
-          {activeTab === 'overview' && renderOverview()}
-
-          {activeTab === 'todo' && (
-            <StudentTodoSummary user={user} profile={profile} />
-          )}
-
-          {activeTab === 'reading' && (
-            <ReadingHomeworkSection user={user} profile={profile} />
-          )}
-
-          {activeTab === 'listening' && (
-            <ListeningHomeworkSection user={user} profile={profile} />
-          )}
-
-          {activeTab === 'writing' && (
-            <WritingHomeworkSection user={user} profile={profile} />
-          )}
-
-          {activeTab === 'vocabulary' && (
-            <VocabularyHomeworkSection user={user} profile={profile} />
-          )}
-
-          {activeTab === 'mock' && (
-            <>
-              <MockAnalysis user={user} profile={profile} />
-
-              <MockTestSection user={user} profile={profile} />
-            </>
-          )}
-
-          {activeTab === 'inbox' && (
-            <StudentCommunicationCenter user={user} />
-          )}
-
-          {activeTab === 'analytics' && (
-            <>
-              <StudentSkillAnalytics user={user} profile={profile} />
-
-              <WritingProgressAnalytics user={user} profile={profile} />
-            </>
-          )}
         </div>
 
         {showPasswordModal && (
