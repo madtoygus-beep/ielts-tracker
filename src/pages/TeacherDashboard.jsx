@@ -41,6 +41,10 @@ const setSubmissionAttemptControlCall = httpsCallable(
   functions,
   'setSubmissionAttemptControl'
 )
+const setManagedSubmissionStatsExclusionCall = httpsCallable(
+  functions,
+  'setManagedSubmissionStatsExclusion'
+)
 
 function assignmentAccessKey(contentType, contentId) {
   return `${contentType}:${contentId}`
@@ -335,6 +339,10 @@ export default function TeacherDashboard() {
   const [attemptManagerSaving, setAttemptManagerSaving] = useState(false)
   const [attemptManagerError, setAttemptManagerError] = useState('')
   const [attemptManagerNotice, setAttemptManagerNotice] = useState('')
+  const [attemptManagerWarning, setAttemptManagerWarning] = useState('')
+  const [statsDialogMode, setStatsDialogMode] = useState(null)
+  const [statsDialogReason, setStatsDialogReason] = useState('')
+  const [statsDialogError, setStatsDialogError] = useState('')
   const [attemptHistory, setAttemptHistory] = useState([])
   const [attemptHistoryLoading, setAttemptHistoryLoading] = useState(false)
   const [attemptHistoryError, setAttemptHistoryError] = useState('')
@@ -1110,6 +1118,15 @@ export default function TeacherDashboard() {
   const currentMockSubmissions = dedupeSubmissionHeadsByStudent(
     mockSubmissions,
     submission => submission.mockTestId
+  )
+
+  // Q1A: completion/review lists keep every saved result; only performance
+  // metrics drop submissions explicitly excluded by an authorized manager.
+  const analyticsReadingSubmissions = currentReadingSubmissions.filter(
+    submission => submission.excludedFromStats !== true
+  )
+  const analyticsListeningSubmissions = currentListeningSubmissions.filter(
+    submission => submission.excludedFromStats !== true
   )
 
   const handleAddScore = async () => {
@@ -2481,6 +2498,10 @@ export default function TeacherDashboard() {
     setAttemptManager(base)
     setAttemptManagerError('')
     setAttemptManagerNotice('')
+    setAttemptManagerWarning('')
+    setStatsDialogMode(null)
+    setStatsDialogReason('')
+    setStatsDialogError('')
     setAttemptHistory([])
     setAttemptHistoryError('')
     setAttemptManagerLoading(true)
@@ -2524,10 +2545,109 @@ export default function TeacherDashboard() {
     setAttemptManager(null)
     setAttemptManagerError('')
     setAttemptManagerNotice('')
+    setAttemptManagerWarning('')
+    setStatsDialogMode(null)
+    setStatsDialogReason('')
+    setStatsDialogError('')
     setAttemptManagerLoading(false)
     setAttemptHistory([])
     setAttemptHistoryError('')
     setAttemptHistoryLoading(false)
+  }
+
+  // A focused V2 dialog replaces browser prompts; cancel never writes to Firebase.
+  const openStatsDialog = excluded => {
+    if (!attemptManager?.state?.hasSubmission || attemptManagerSaving) return
+    setStatsDialogMode(excluded ? 'exclude' : 'restore')
+    setStatsDialogReason('')
+    setStatsDialogError('')
+    setAttemptManagerError('')
+    setAttemptManagerNotice('')
+    setAttemptManagerWarning('')
+  }
+
+  const closeStatsDialog = () => {
+    if (attemptManagerSaving) return
+    setStatsDialogMode(null)
+    setStatsDialogReason('')
+    setStatsDialogError('')
+  }
+
+  const setManagedStatsExclusion = async (excluded, reasonInput = '') => {
+    if (!attemptManager?.student || !attemptManager.contentId || !attemptManager.contentType) return
+    if (!attemptManager.state?.hasSubmission || attemptManagerSaving) return
+
+    const reason = excluded ? reasonInput.trim() : 'Restored to statistics'
+    if (excluded && (reason.length < 5 || reason.length > 400)) {
+      setStatsDialogError('Please provide a reason between 5 and 400 characters.')
+      return
+    }
+
+    const target = {
+      contentType: attemptManager.contentType,
+      contentId: attemptManager.contentId,
+      studentId: getStudentPrimaryAssignmentId(attemptManager.student),
+      excluded,
+      reason
+    }
+    const sameTarget = current =>
+      current?.contentType === target.contentType &&
+      current?.contentId === target.contentId &&
+      getStudentPrimaryAssignmentId(current?.student) === target.studentId
+
+    setAttemptManagerSaving(true)
+    setAttemptManagerError('')
+    setAttemptManagerNotice('')
+    setAttemptManagerWarning('')
+    setStatsDialogError('')
+    try {
+      // A successful callable is the write result. Refresh errors must not be
+      // presented as failed writes, since repeating a successful write is unsafe.
+      await setManagedSubmissionStatsExclusionCall(target)
+
+      setStatsDialogMode(null)
+      setStatsDialogReason('')
+      setAttemptManager(current => sameTarget(current)
+        ? { ...current, state: { ...current.state, excludedFromStats: excluded } }
+        : current
+      )
+      setAttemptHistory(current => current.map(attempt =>
+        attempt.isCurrent ? { ...attempt, excludedFromStats: excluded } : attempt
+      ))
+      setAttemptManagerNotice(excluded
+        ? 'Result saved and excluded from performance statistics.'
+        : 'Result restored to performance statistics.'
+      )
+
+      const [stateResult, historyResult] = await Promise.allSettled([
+        loadManagedAttemptState(attemptManager),
+        loadManagedAttemptHistory(attemptManager)
+      ])
+      if (stateResult.status === 'fulfilled') {
+        setAttemptManager(current => sameTarget(current)
+          ? { ...current, state: stateResult.value }
+          : current
+        )
+      }
+      if (historyResult.status === 'fulfilled') {
+        setAttemptHistory(historyResult.value)
+        setAttemptHistoryError('')
+      }
+      if (stateResult.status === 'rejected' || historyResult.status === 'rejected') {
+        console.warn('Q1A result was saved but attempt details could not be refreshed:', {
+          state: stateResult.status,
+          history: historyResult.status
+        })
+        setAttemptManagerWarning(
+          'Your change was saved, but the latest details could not be refreshed. Close and reopen this panel to reload them.'
+        )
+      }
+    } catch (error) {
+      console.error('Could not update result statistics status:', error)
+      setStatsDialogError(getCallableErrorMessage(error, 'Could not update result statistics status.'))
+    } finally {
+      setAttemptManagerSaving(false)
+    }
   }
 
   const setManagedAttemptMode = async mode => {
@@ -3388,7 +3508,7 @@ Continue permanent delete?`
 
   const getStudentAnalytics = studentId => {
     const student = getStudentByAnyId(studentId)
-    const studentSubs = currentReadingSubmissions.filter(sub => submissionBelongsToStudent(sub, student))
+    const studentSubs = analyticsReadingSubmissions.filter(sub => submissionBelongsToStudent(sub, student))
 
     const stats = {
       matching: { correct: 0, total: 0 },
@@ -3798,7 +3918,7 @@ Continue permanent delete?`
   }
 
   const getAverageReadingEstimatedBand = () => {
-    const bands = submissions
+    const bands = analyticsReadingSubmissions
       .map(submission => {
         if (submission.result?.band) return Number(submission.result.band)
         if (submission.result?.estimatedBand) return Number(submission.result.estimatedBand)
@@ -3838,7 +3958,7 @@ Continue permanent delete?`
   const getMostMissedReadingQuestions = () => {
     const stats = {}
 
-    submissions.forEach(submission => {
+    analyticsReadingSubmissions.forEach(submission => {
       const reading = readings.find(item => item.id === submission.readingId)
       if (!reading) return
 
@@ -3965,7 +4085,7 @@ Continue permanent delete?`
   const getAtRiskReadingStudents = () => {
     return students
       .map(student => {
-        const studentSubs = currentReadingSubmissions
+        const studentSubs = analyticsReadingSubmissions
           .filter(sub => submissionBelongsToStudent(sub, student))
           .sort(
             (a, b) =>
@@ -4013,7 +4133,7 @@ Continue permanent delete?`
       shortAnswer: { correct: 0, total: 0 }
     }
 
-    submissions.forEach(submission => {
+    analyticsReadingSubmissions.forEach(submission => {
       if (mergeStoredGradingBreakdown(stats, submission, { mcq_multi: 'mcq' })) return
 
       const reading = readings.find(item => item.id === submission.readingId)
@@ -4133,7 +4253,7 @@ Continue permanent delete?`
     const student = getStudentByAnyId(studentId)
 
     return currentReadingSubmissions
-      .filter(submission => submissionBelongsToStudent(submission, student))
+      .filter(submission => submissionBelongsToStudent(submission, student) && submission.excludedFromStats !== true)
       .sort((a, b) => new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0))
   }
 
@@ -4432,7 +4552,7 @@ Continue permanent delete?`
     const student = getStudentByAnyId(studentId)
 
     return currentListeningSubmissions
-      .filter(submission => submissionBelongsToStudent(submission, student))
+      .filter(submission => submissionBelongsToStudent(submission, student) && submission.excludedFromStats !== true)
       .sort((a, b) => new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0))
   }
 
@@ -4678,7 +4798,7 @@ Continue permanent delete?`
     const student = getStudentByAnyId(studentId)
 
     return currentVocabularySubmissions
-      .filter(submission => submissionBelongsToStudent(submission, student))
+      .filter(submission => submissionBelongsToStudent(submission, student) && submission.excludedFromStats !== true)
       .sort((a, b) => new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0))
   }
 
@@ -4791,7 +4911,7 @@ Continue permanent delete?`
 
 
   const getAverageListeningBand = () => {
-    const bands = currentListeningSubmissions
+    const bands = analyticsListeningSubmissions
       .map(sub => Number(sub.result?.band))
       .filter(value => !Number.isNaN(value) && value > 0)
 
@@ -4825,7 +4945,7 @@ Continue permanent delete?`
   const getMostMissedListeningQuestions = () => {
     const stats = {}
 
-    currentListeningSubmissions.forEach(submission => {
+    analyticsListeningSubmissions.forEach(submission => {
       const listening = listenings.find(item => item.id === submission.listeningId)
       if (!listening) return
 
@@ -4931,7 +5051,7 @@ Continue permanent delete?`
   const getAtRiskListeningStudents = () => {
     return students
       .map(student => {
-        const studentSubs = currentListeningSubmissions
+        const studentSubs = analyticsListeningSubmissions
           .filter(sub => submissionBelongsToStudent(sub, student) && sub.result?.band)
           .sort(
             (a, b) =>
@@ -4966,7 +5086,7 @@ Continue permanent delete?`
       shortAnswer: { correct: 0, total: 0 }
     }
 
-    currentListeningSubmissions.forEach(submission => {
+    analyticsListeningSubmissions.forEach(submission => {
       if (mergeStoredGradingBreakdown(stats, submission, {
         matching: 'listeningMatching',
         mcq_multi: 'mcq'
@@ -5597,7 +5717,8 @@ Continue permanent delete?`
       updatedBy: user.uid,
       teacherId: scoreTeacherIds[0] || '',
       teacherIds: scoreTeacherIds,
-      schoolId: submission.schoolId || profile?.schoolId || DEFAULT_SCHOOL_ID
+      schoolId: submission.schoolId || profile?.schoolId || DEFAULT_SCHOOL_ID,
+      ...(submission.excludedFromStats === true ? { excludedFromStats: true } : {})
     }
 
     const candidateScoreItems = [
@@ -8541,6 +8662,11 @@ Continue permanent delete?`
                     )}
                   </div>
 
+                  {attemptManager.state?.excludedFromStats && (
+                    <p className="text-xs text-amber-700 mt-3 font-semibold">
+                      Excluded from statistics. The reason is retained in the protected moderation audit.
+                    </p>
+                  )}
                   {attemptManager.state?.open && (
                     <p className="text-xs text-blue-700 mt-3">
                       {attemptManager.state.mode === 'reopen_answers'
@@ -8583,6 +8709,22 @@ Continue permanent delete?`
                 <p className="text-xs text-gray-400 mt-4 leading-relaxed">
                   Reopening never deletes the current submitted attempt. The previous answers, submission time and review are preserved for attempt history when the student resubmits.
                 </p>
+                <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-sm font-semibold text-slate-800">Result statistics control</p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Keep the submitted answer and review, but exclude its grade from performance statistics; you can restore it later.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => openStatsDialog(!attemptManager.state?.excludedFromStats)}
+                    disabled={attemptManagerSaving || !attemptManager.state?.hasSubmission}
+                    className={`mt-3 rounded-xl px-4 py-2.5 text-sm font-semibold disabled:opacity-50 ${attemptManager.state?.excludedFromStats
+                      ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+                      : 'border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100'}`}
+                  >
+                    {attemptManager.state?.excludedFromStats ? 'Restore to statistics' : 'Exclude from statistics'}
+                  </button>
+                </div>
 
                 <div className="border border-gray-100 rounded-xl p-4 mt-4">
                   <div className="flex items-center justify-between gap-3 mb-3">
@@ -8629,6 +8771,9 @@ Continue permanent delete?`
                               <p className="text-xs text-gray-500 mt-1">
                                 {getAttemptHistoryResultLabel(attemptManager.contentType, attempt)}
                               </p>
+                              {attempt.excludedFromStats === true && (
+                                <span className="mt-1 inline-flex rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">Excluded from statistics</span>
+                              )}
                               <p className="text-[11px] text-gray-400 mt-1">
                                 {formatAttemptHistoryDate(attempt.submittedAt)}
                               </p>
@@ -8652,6 +8797,12 @@ Continue permanent delete?`
                   </div>
                 )}
 
+                {attemptManagerWarning && (
+                  <div role="status" className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm text-amber-800 mt-4">
+                    {attemptManagerWarning}
+                  </div>
+                )}
+
                 {attemptManagerError && (
                   <div className="bg-red-50 border border-red-100 rounded-xl p-3 text-sm text-red-700 mt-4">
                     {attemptManagerError}
@@ -8660,12 +8811,71 @@ Continue permanent delete?`
 
                 {attemptManagerSaving && (
                   <p className="text-xs text-gray-400 mt-4">
-                    Saving retake option...
+                    Saving changes...
                   </p>
                 )}
               </>
             )}
           </div>
+          {statsDialogMode && (
+            <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-950/60 px-4 py-6">
+              <div role="dialog" aria-modal="true" aria-labelledby="q1a-stats-dialog-title" className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Result management</p>
+                    <h3 id="q1a-stats-dialog-title" className="mt-1 text-lg font-bold text-slate-900">
+                      {statsDialogMode === 'exclude' ? 'Exclude from statistics' : 'Restore to statistics'}
+                    </h3>
+                    <p className="mt-2 text-sm leading-relaxed text-slate-600">
+                      {statsDialogMode === 'exclude'
+                        ? 'The submitted result will remain in the student history, but it will not count towards performance statistics.'
+                        : 'The saved result will count towards performance statistics again.'}
+                    </p>
+                  </div>
+                  <button type="button" onClick={closeStatsDialog} disabled={attemptManagerSaving}
+                    aria-label="Close result management dialog"
+                    className="rounded-lg px-2 py-1 text-xl text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-50">
+                    ×
+                  </button>
+                </div>
+                <form className="mt-5 space-y-4" onSubmit={event => {
+                  event.preventDefault()
+                  setManagedStatsExclusion(statsDialogMode === 'exclude', statsDialogReason)
+                }}>
+                  {statsDialogMode === 'exclude' && (
+                    <div>
+                      <label htmlFor="q1a-stats-reason" className="block text-sm font-semibold text-slate-800">
+                        Reason for excluding this result
+                      </label>
+                      <textarea id="q1a-stats-reason" required minLength={5} maxLength={400} rows={4}
+                        value={statsDialogReason} onChange={event => {
+                          setStatsDialogReason(event.target.value)
+                          if (statsDialogError) setStatsDialogError('')
+                        }} autoFocus disabled={attemptManagerSaving}
+                        placeholder="Example: This was a trial attempt and must not affect the student's average."
+                        className="mt-2 w-full resize-y rounded-xl border border-slate-300 px-3 py-3 text-sm leading-relaxed text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:opacity-60" />
+                      <p className="mt-1 text-xs text-slate-500">{statsDialogReason.length}/400 characters · at least 5 required</p>
+                    </div>
+                  )}
+                  {statsDialogError && (
+                    <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                      {statsDialogError}
+                    </div>
+                  )}
+                  <div className="flex flex-wrap justify-end gap-3">
+                    <button type="button" onClick={closeStatsDialog} disabled={attemptManagerSaving}
+                      className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+                      Cancel
+                    </button>
+                    <button type="submit" disabled={attemptManagerSaving || (statsDialogMode === 'exclude' && statsDialogReason.trim().length < 5)}
+                      className={`rounded-xl px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50 ${statsDialogMode === 'exclude' ? 'bg-amber-700 hover:bg-amber-800' : 'bg-emerald-700 hover:bg-emerald-800'}`}>
+                      {attemptManagerSaving ? 'Saving...' : statsDialogMode === 'exclude' ? 'Exclude result' : 'Restore result'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

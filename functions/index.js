@@ -4644,6 +4644,7 @@ function submissionAttemptSummary(config, data, extra = {}) {
     task2WordCount: Number.isFinite(Number(data?.task2WordCount)) ? Number(data.task2WordCount) : 0,
     status: typeof data?.status === 'string' ? data.status : '',
     contentType: config.contentType,
+    excludedFromStats: data?.excludedFromStats === true,
     ...extra
   }
 }
@@ -4677,6 +4678,7 @@ exports.getManagedSubmissionAttemptState = onCall(async request => {
     studentId,
     hasSubmission: Boolean(current),
     currentSubmissionId: current?.id || '',
+    excludedFromStats: current?.data?.excludedFromStats === true,
     ...attemptControlClientState(controlSnap.exists ? (controlSnap.data() || {}) : null, current)
   }
 })
@@ -4764,6 +4766,187 @@ exports.getManagedSubmissionAttemptHistory = onCall(async request => {
     currentSubmissionId: current?.id || '',
     currentAttemptNumber: current ? attemptNumberOf(current.data) : 0,
     attempts
+  }
+})
+
+// Q1A (candidate, do NOT deploy alone): result exclusion is separate from archive
+// and permanent deletion. This changes the CURRENT submitted attempt only.
+// Earlier attempts remain immutable; new retakes start with their own status.
+// Q1A safety fix: a Mock submission has one current score. Older attempts
+// are archived separately; never moderate every score with the same Mock ID.
+async function matchingCurrentMockScoreForStats(studentId, mockTestId, schoolId, currentSubmission) {
+  const currentData = currentSubmission?.data || {}
+  const currentAttemptNumber = attemptNumberOf(currentData)
+  const currentSubmittedAt = typeof currentData.submittedAt === 'string'
+    ? currentData.submittedAt : ''
+
+  const belongsToCurrentAttempt = (snap, requireExactTimestamp) => {
+    const score = snap.data() || {}
+    if ((score.uid !== studentId && score.studentId !== studentId) ||
+      (score.mockTestId !== mockTestId && score.mockId !== mockTestId) ||
+      schoolIdOf(score) !== schoolId ||
+      attemptNumberOf(score) !== currentAttemptNumber) return false
+
+    const scoreCreatedAt = typeof score.createdAt === 'string' ? score.createdAt : ''
+    if (requireExactTimestamp) {
+      return Boolean(currentSubmittedAt && scoreCreatedAt &&
+        currentSubmittedAt === scoreCreatedAt)
+    }
+    // The canonical score ID already identifies the current Mock. If both
+    // timestamps exist they must agree; reject mismatched reused score data.
+    return !(currentSubmittedAt && scoreCreatedAt && currentSubmittedAt !== scoreCreatedAt)
+  }
+
+  const canonical = await db.doc(`scores/${studentId}_${mockTestId}`).get()
+  if (canonical.exists) {
+    if (!belongsToCurrentAttempt(canonical, false)) {
+      throw new HttpsError('failed-precondition',
+        'The current Mock score does not match this attempt. Review the result before changing statistics.')
+    }
+    return canonical
+  }
+
+  // Legacy IDs are not deterministic. Only accept one uniquely timestamped
+  // score for this exact attempt; ambiguous historical records must not change.
+  const [uidSnap, studentSnap] = await Promise.all([
+    db.collection('scores').where('uid', '==', studentId).get(),
+    db.collection('scores').where('studentId', '==', studentId).get()
+  ])
+  const candidates = new Map()
+  for (const snap of [...uidSnap.docs, ...studentSnap.docs]) {
+    const score = snap.data() || {}
+    if ((score.uid !== studentId && score.studentId !== studentId) ||
+      (score.mockTestId !== mockTestId && score.mockId !== mockTestId) ||
+      schoolIdOf(score) !== schoolId) continue
+    candidates.set(snap.id, snap)
+  }
+  if (!candidates.size) return null
+
+  const matches = [...candidates.values()].filter(snap => belongsToCurrentAttempt(snap, true))
+  if (matches.length !== 1) {
+    throw new HttpsError('failed-precondition',
+      'Legacy Mock score records cannot be matched safely to this attempt. Review them before changing statistics.')
+  }
+  return matches[0]
+}
+
+exports.setManagedSubmissionStatsExclusion = onCall(async request => {
+  const manager = await requireAssignmentManager(request)
+  const data = request.data || {}
+  const config = submissionContentConfigFor(data.contentType)
+  const contentId = assertDocumentId(data.contentId, 'Content ID')
+  const studentId = assertDocumentId(data.studentId, 'Student ID')
+  const excluded = data.excluded
+  if (typeof excluded !== 'boolean') {
+    throw new HttpsError('invalid-argument', 'excluded must be true or false.')
+  }
+  const reason = typeof data.reason === 'string' ? data.reason.trim() : ''
+  if (excluded && (reason.length < 5 || reason.length > 400)) {
+    throw new HttpsError('invalid-argument', 'Provide an exclusion reason of 5-400 characters.')
+  }
+  if (!excluded && reason.length > 400) {
+    throw new HttpsError('invalid-argument', 'Reason is too long.')
+  }
+
+  const source = await getSource(config.sourceCollection, contentId)
+  if (!managerCanManageSource(manager, source)) {
+    throw new HttpsError('permission-denied', 'You cannot manage this result.')
+  }
+  const schoolId = schoolIdOf(source)
+  const studentSnap = await db.doc(`users/${studentId}`).get()
+  const studentProfile = studentSnap.exists ? (studentSnap.data() || {}) : {}
+  if (studentProfile.role !== 'student' || schoolIdOf(studentProfile) !== schoolId) {
+    throw new HttpsError('permission-denied', 'This is not a learner in the content school.')
+  }
+
+  const current = await findCurrentSubmissionRecord(config, studentId, contentId)
+  if (!current) {
+    throw new HttpsError('not-found', 'This learner has no submitted result for this content.')
+  }
+  const mockScore = config.contentType === 'mock'
+    ? await matchingCurrentMockScoreForStats(studentId, contentId, schoolId, current)
+    : null
+  const auditRef = db.collection('resultModerationAudit').doc()
+
+  const result = await db.runTransaction(async tx => {
+    const submissionSnap = await tx.get(current.ref)
+    const scoreSnap = mockScore ? await tx.get(mockScore.ref) : null
+    if (!submissionSnap.exists) {
+      throw new HttpsError('aborted', 'The result changed. Refresh and try again.')
+    }
+    const submission = submissionSnap.data() || {}
+    if (
+      (submission.uid !== studentId && submission.studentId !== studentId) ||
+      !submissionMatchesContent(config, submission, contentId) ||
+      schoolIdOf(submission) !== schoolId ||
+      attemptNumberOf(submission) !== attemptNumberOf(current.data) ||
+      submittedAtMillis(submission) !== submittedAtMillis(current.data)
+    ) {
+      throw new HttpsError('aborted', 'The selected attempt changed. Refresh and try again.')
+    }
+
+    if (mockScore) {
+      if (!scoreSnap.exists) {
+        throw new HttpsError('aborted', 'The linked Mock score changed. Refresh and try again.')
+      }
+      const score = scoreSnap.data() || {}
+      if (
+        (score.uid !== studentId && score.studentId !== studentId) ||
+        (score.mockTestId !== contentId && score.mockId !== contentId) ||
+        schoolIdOf(score) !== schoolId ||
+        attemptNumberOf(score) !== attemptNumberOf(submission) ||
+        (typeof score.createdAt === 'string' &&
+          typeof submission.submittedAt === 'string' &&
+          score.createdAt !== submission.submittedAt)
+      ) {
+        throw new HttpsError('aborted', 'The linked Mock score no longer matches this attempt.')
+      }
+      // Legacy IDs require the exact timestamp already checked above.
+      if (mockScore.id !== `${studentId}_${contentId}` &&
+        (typeof score.createdAt !== 'string' ||
+          typeof submission.submittedAt !== 'string' ||
+          score.createdAt !== submission.submittedAt)) {
+        throw new HttpsError('aborted', 'The legacy Mock score cannot be matched safely.')
+      }
+    }
+
+    const previous = submission.excludedFromStats === true
+    const scoreAlreadyMatched = !scoreSnap || (scoreSnap.data()?.excludedFromStats === true) === excluded
+    if (previous === excluded && scoreAlreadyMatched) {
+      return { ok: true, changed: false, excludedFromStats: excluded }
+    }
+
+    const patch = {
+      excludedFromStats: excluded,
+      statsExcludedAt: excluded ? FieldValue.serverTimestamp() : FieldValue.delete(),
+      statsExcludedBy: excluded ? manager.uid : FieldValue.delete(),
+      statsChangedAt: FieldValue.serverTimestamp(),
+      statsChangedBy: manager.uid
+    }
+    if (previous !== excluded) tx.update(current.ref, patch)
+    if (mockScore && !scoreAlreadyMatched) tx.update(mockScore.ref, patch)
+    tx.create(auditRef, {
+      schemaVersion: 1,
+      action: excluded ? 'exclude_from_stats' : 'restore_to_stats',
+      uid: studentId,
+      schoolId,
+      contentType: config.contentType,
+      contentId,
+      submissionId: submissionSnap.id,
+      attemptNumber: attemptNumberOf(submission),
+      performedBy: manager.uid,
+      performedByRole: manager.profile.role,
+      reason: excluded ? reason : (reason || 'Restored to statistics'),
+      createdAt: FieldValue.serverTimestamp()
+    })
+    return { ok: true, changed: true, excludedFromStats: excluded }
+  })
+
+  return {
+    ...result,
+    contentType: config.contentType,
+    contentId,
+    studentId
   }
 })
 

@@ -1195,7 +1195,7 @@
     let totalQuestions = 0
     const storedBands = []
 
-    submissions.forEach(submission => {
+    submissions.filter(submission => submission.excludedFromStats !== true).forEach(submission => {
       const result = submission?.result || {}
       const storedCorrect = Number(result.correct)
       const storedTotal = Number(result.total)
@@ -1816,6 +1816,9 @@
                       <p className="text-sm font-medium text-gray-800">
                         {index + 1}. {r.title}
                       </p>
+                      {getSubmission(r.id)?.excludedFromStats === true && (
+                        <span className="mt-1 inline-flex rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">Excluded from statistics</span>
+                      )}
 
                       <p className="text-xs text-gray-400 mt-0.5">
                         ⏱ {r.timeLimit} min · {r.questions?.length || 0} question sets
@@ -1993,6 +1996,9 @@
                       <p className="text-sm font-medium text-gray-800">
                         {index + 1}. {l.title}
                       </p>
+                      {getSubmission(l.id)?.excludedFromStats === true && (
+                        <span className="mt-1 inline-flex rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">Excluded from statistics</span>
+                      )}
 
                       <p className="text-xs text-gray-400 mt-0.5">
                         ⏱ {l.timeLimit || 30} min · {l.questions?.length || 0} questions
@@ -2158,20 +2164,21 @@
 
     const completedFull = fullMockSubmissions.length
     const completedMini = miniMockSubmissions.length
-    const latest = fullMockSubmissions[0]
-    const previous = fullMockSubmissions[1]
+    const countedFullMocks = fullMockSubmissions.filter(sub => sub.excludedFromStats !== true)
+    const latest = countedFullMocks[0]
+    const previous = countedFullMocks[1]
 
     const latestOverall = getMockOverall(latest)
     const previousOverall = getMockOverall(previous)
 
-    const trend = [...fullMockSubmissions]
+    const trend = [...countedFullMocks]
       .reverse()
       .slice(-6)
 
     const overallChange = getChangeLabel(latestOverall, previousOverall)
     const latestMockTitle = latest
       ? getSubmissionMock(latest)?.title || latest.mockTitle || latest.title || 'Mock Test'
-      : 'No Full Mock completed yet'
+      : 'No Full Mock included in statistics'
 
     if (currentMockSubmissions.length === 0) {
       return (
@@ -2285,7 +2292,7 @@
             </p>
 
             <p className="text-lg font-bold text-amber-700">
-              {getWritingStatus(latest)}
+              {latest ? getWritingStatus(latest) : 'No included result'}
             </p>
 
             <p className={`text-xs mt-2 ${getChangeColor(latestOverall, previousOverall)}`}>
@@ -2355,6 +2362,9 @@
                       <p className="text-sm font-medium text-gray-800">
                         {title}
                       </p>
+                      {submission.excludedFromStats === true && (
+                        <span className="text-[10px] rounded-full bg-amber-50 px-2 py-0.5 font-semibold text-amber-700">Excluded from statistics</span>
+                      )}
                       <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${
                         isMini
                           ? 'bg-blue-50 text-blue-600'
@@ -2549,6 +2559,9 @@
                       <p className="text-sm font-medium text-gray-800">
                         {index + 1}. {item.title}
                       </p>
+                      {getSubmission(item.id)?.excludedFromStats === true && (
+                        <span className="mt-1 inline-flex rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">Excluded from statistics</span>
+                      )}
 
                       <p className="text-xs text-gray-400 mt-0.5">
                         ⏱ {item.timeLimit || 20} min · {item.questions?.length || 0} questions
@@ -2874,6 +2887,9 @@
                       <p className="text-sm font-medium text-gray-800">
                         {index + 1}. {mock.title}
                       </p>
+                      {submission?.excludedFromStats === true && (
+                        <span className="mt-1 inline-flex rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">Excluded from statistics</span>
+                      )}
 
                       <p className="text-xs text-gray-400 mt-0.5">
                         {getMockFlowLabel(mock)} · {getMockTotalTime(mock)} min
@@ -2976,6 +2992,7 @@
 
     const reviewed = currentWritingSubmissions
       .filter(sub => {
+        if (sub.excludedFromStats === true) return false
         const band = toNumber(sub.review?.overall)
         return sub.reviewed && band !== null && band > 0
       })
@@ -3413,6 +3430,9 @@
                       <p className="text-sm font-medium text-gray-800">
                         {index + 1}. {w.title}
                       </p>
+                      {submission?.excludedFromStats === true && (
+                        <span className="mt-1 inline-flex rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">Excluded from statistics</span>
+                      )}
 
                       <p className="text-xs text-gray-400 mt-0.5">
                         ⏱ {getWritingTimeLimit(w, submission)} min · {getWritingModeLabel(w, submission)}
@@ -4519,7 +4539,7 @@
       scores.filter(score => score.source === 'mock_test'),
       score => score.mockTestId || score.mockId || score.id
     )
-    const latestMockScore = mockScores[0]
+    const latestMockScore = mockScores.find(score => score.excludedFromStats !== true)
 
     const displayName = getStudentDisplayName(profile, user)
     const firstName = getFirstName(profile, user)

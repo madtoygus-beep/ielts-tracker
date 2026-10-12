@@ -3888,6 +3888,9 @@ export default function AdminDashboard() {
                               <div>
 
                                 <p className="text-sm text-gray-700">{s.date || 'No date'}</p>
+                                {s.excludedFromStats === true && (
+                                  <span className="text-[10px] font-semibold text-amber-700">Excluded from statistics</span>
+                                )}
 
                                 <p className="text-xs text-gray-400">
 
@@ -4183,6 +4186,9 @@ export default function AdminDashboard() {
                               <div>
 
                                 <p className="text-sm text-gray-700">{s.date || 'No date'}</p>
+                                {s.excludedFromStats === true && (
+                                  <span className="text-[10px] font-semibold text-amber-700">Excluded from statistics</span>
+                                )}
 
                                 <p className="text-xs text-gray-400">
 

@@ -327,6 +327,15 @@ service cloud.firestore {
         && documentId == expectedSubmissionId(parentId);
     }
 
+    // Q1A: prevent browser callers from falsifying exclusion metadata.
+    // Server callables use Admin SDK and are not subject to Firestore rules.
+    function statsModerationFieldsUnchanged() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+        'excludedFromStats', 'statsExcludedAt',
+        'statsExcludedBy', 'statsChangedAt', 'statsChangedBy'
+      ]);
+    }
+
     function teacherListedOn(data) {
       return isTeacher()
         && (
@@ -662,7 +671,12 @@ service cloud.firestore {
           && userDoc(request.resource.data.uid).data.get('teacherIds', []).hasAny([request.auth.uid])
         );
 
-      allow update, delete: if isAdmin()
+      allow update: if statsModerationFieldsUnchanged() && (
+        isAdmin()
+        || teacherListedOn(resource.data)
+        || teacherOwnsScoreMock(resource.data)
+      );
+      allow delete: if isAdmin()
         || teacherListedOn(resource.data)
         || teacherOwnsScoreMock(resource.data);
     }
@@ -692,6 +706,11 @@ service cloud.firestore {
     // get access is allowed only through the validated mockResourceAccess path.
     // Writes are server-only (Admin SDK / Cloud Functions bypass rules).
     // ============================================================
+
+    // Moderation audit is append-only via trusted backend, never exposed to browsers.
+    match /resultModerationAudit/{auditId} {
+      allow read, write: if false;
+    }
 
     match /studentReadings/{id} {
       allow get: if isAdmin()
@@ -763,7 +782,12 @@ service cloud.firestore {
       // Cloud Functions use the Admin SDK and bypass Firestore client rules.
       allow create: if isAdmin();
 
-      allow update, delete: if isAdmin()
+      allow update: if statsModerationFieldsUnchanged() && (
+        isAdmin()
+        || teacherListedOn(resource.data)
+        || teacherOwnsReadingParent(resource.data)
+      );
+      allow delete: if isAdmin()
         || teacherListedOn(resource.data)
         || teacherOwnsReadingParent(resource.data);
     }
@@ -804,7 +828,12 @@ service cloud.firestore {
       // 8D-2: student Listening submissions are created only by submitListeningSecure.
       allow create: if isAdmin();
 
-      allow update, delete: if isAdmin()
+      allow update: if statsModerationFieldsUnchanged() && (
+        isAdmin()
+        || teacherListedOn(resource.data)
+        || teacherOwnsListeningParent(resource.data)
+      );
+      allow delete: if isAdmin()
         || teacherListedOn(resource.data)
         || teacherOwnsListeningParent(resource.data);
     }
@@ -850,7 +879,12 @@ service cloud.firestore {
       // submitWritingSecure. Cloud Functions use the Admin SDK and bypass rules.
       allow create: if isAdmin();
 
-      allow update, delete: if isAdmin()
+      allow update: if statsModerationFieldsUnchanged() && (
+        isAdmin()
+        || teacherListedOn(resource.data)
+        || teacherOwnsWritingParent(resource.data)
+      );
+      allow delete: if isAdmin()
         || teacherListedOn(resource.data)
         || teacherOwnsWritingParent(resource.data);
     }
@@ -900,7 +934,12 @@ service cloud.firestore {
       // 8D-2: student Mock submissions are created only by submitMockSecure.
       allow create: if isAdmin();
 
-      allow update, delete: if isAdmin()
+      allow update: if statsModerationFieldsUnchanged() && (
+        isAdmin()
+        || teacherListedOn(resource.data)
+        || teacherOwnsMockParent(resource.data)
+      );
+      allow delete: if isAdmin()
         || teacherListedOn(resource.data)
         || teacherOwnsMockParent(resource.data);
     }
@@ -940,7 +979,12 @@ service cloud.firestore {
       // 8D-2: student Vocabulary submissions are created only by submitVocabularySecure.
       allow create: if isAdmin();
 
-      allow update, delete: if isAdmin()
+      allow update: if statsModerationFieldsUnchanged() && (
+        isAdmin()
+        || teacherListedOn(resource.data)
+        || teacherOwnsVocabularyParent(resource.data)
+      );
+      allow delete: if isAdmin()
         || teacherListedOn(resource.data)
         || teacherOwnsVocabularyParent(resource.data);
     }
