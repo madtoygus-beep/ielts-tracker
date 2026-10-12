@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { auth, db, storage, functions } from '../firebase'
 import {
   collection,
@@ -44,6 +44,14 @@ const setSubmissionAttemptControlCall = httpsCallable(
 const setManagedSubmissionStatsExclusionCall = httpsCallable(
   functions,
   'setManagedSubmissionStatsExclusion'
+)
+const previewManagedSubmissionPermanentDeleteCall = httpsCallable(
+  functions,
+  'previewManagedSubmissionPermanentDelete'
+)
+const permanentlyDeleteManagedSubmissionResultCall = httpsCallable(
+  functions,
+  'permanentlyDeleteManagedSubmissionResult'
 )
 
 function assignmentAccessKey(contentType, contentId) {
@@ -341,6 +349,64 @@ function StatsModerationDialog({ mode, saving, error, onCancel, onConfirm, onCle
   )
 }
 
+// Q1B: the confirmation input must stay local; each keystroke should not
+// re-render the entire teacher workspace (same principle as Q1A's reason box).
+function ResultPermanentDeleteDialog({ loading, preview, saving, error, studentName, contentTitle, onCancel, onConfirm }) {
+  const [confirmation, setConfirmation] = useState('')
+  const valid = confirmation.trim() === 'DELETE RESULTS'
+  const available = !loading && preview?.totalRecords > 0
+  const submit = event => {
+    event.preventDefault()
+    if (!available || saving || !valid) return
+    onConfirm()
+  }
+
+  return (
+    <div className="absolute inset-0 z-20 flex items-center justify-center bg-slate-950/70 px-4 py-6">
+      <div role="dialog" aria-modal="true" aria-labelledby="q1b-delete-title"
+        className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-2xl border border-red-200 bg-white p-6 shadow-2xl">
+        <h3 id="q1b-delete-title" className="text-lg font-bold text-red-800">Permanently delete results</h3>
+        <p className="mt-2 text-sm font-semibold text-slate-900">{studentName} · {contentTitle}</p>
+        <p className="mt-3 text-sm text-slate-700 leading-relaxed">
+          This deletes the selected student's submissions, previous attempts, attempt controls and matching
+          Mock scores or Vocabulary drafts for <strong>this one test</strong>. It does not delete the student,
+          the test content, assignments, or other students' results.
+        </p>
+        <p className="mt-2 text-sm font-semibold text-red-700">This cannot be undone.</p>
+        {loading ? (
+          <p className="mt-4 text-sm text-slate-500">Checking linked records securely...</p>
+        ) : preview ? (
+          <div className="mt-4 rounded-xl bg-red-50 border border-red-100 p-3 text-sm text-red-900">
+            <p><strong>{preview.totalRecords}</strong> Firestore record(s) will be removed.</p>
+            <p className="mt-1 text-xs">Current/legacy submissions: {preview.counts?.submissions || 0} · Previous attempts: {preview.counts?.attemptHistory || 0} · Mock scores: {preview.counts?.mockScores || 0} · Attempt controls: {preview.counts?.attemptControls || 0} · Vocabulary drafts: {preview.counts?.vocabularyDrafts || 0}</p>
+            <p className="mt-2 text-xs text-slate-600">A minimal, staff-only deletion audit is retained without student answers.</p>
+          </div>
+        ) : null}
+        {error && <p role="alert" className="mt-3 rounded-xl bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+        <form onSubmit={submit} className="mt-5 space-y-4">
+          <div>
+            <label htmlFor="q1b-delete-confirm" className="block text-sm font-semibold text-slate-800">
+              Type DELETE RESULTS to confirm
+            </label>
+            <input id="q1b-delete-confirm" type="text" autoComplete="off" autoCapitalize="off"
+              value={confirmation} onChange={event => setConfirmation(event.target.value)}
+              disabled={loading || saving || !available}
+              className="mt-2 w-full rounded-xl border border-red-200 px-3 py-3 text-sm outline-none focus:border-red-500 focus:ring-2 focus:ring-red-100 disabled:opacity-50" />
+          </div>
+          <div className="flex flex-wrap justify-end gap-3">
+            <button type="button" onClick={onCancel} disabled={saving}
+              className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 disabled:opacity-50">Cancel</button>
+            <button type="submit" disabled={saving || !available || !valid}
+              className="rounded-xl bg-red-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-red-800 disabled:opacity-50">
+              {saving ? 'Deleting...' : 'Permanently delete all results'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
 export default function TeacherDashboard() {
   const [students, setStudents] = useState([])
   const [classes, setClasses] = useState([])
@@ -420,6 +486,11 @@ export default function TeacherDashboard() {
   const [attemptManagerWarning, setAttemptManagerWarning] = useState('')
   const [statsDialogMode, setStatsDialogMode] = useState(null)
   const [statsDialogError, setStatsDialogError] = useState('')
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [deleteDialogLoading, setDeleteDialogLoading] = useState(false)
+  const [deleteDialogPreview, setDeleteDialogPreview] = useState(null)
+  const [deleteDialogError, setDeleteDialogError] = useState('')
+  const deletePreviewRequestRef = useRef(0)
   const [attemptHistory, setAttemptHistory] = useState([])
   const [attemptHistoryLoading, setAttemptHistoryLoading] = useState(false)
   const [attemptHistoryError, setAttemptHistoryError] = useState('')
@@ -2578,6 +2649,11 @@ export default function TeacherDashboard() {
     setAttemptManagerWarning('')
     setStatsDialogMode(null)
     setStatsDialogError('')
+    deletePreviewRequestRef.current += 1
+    setDeleteDialogOpen(false)
+    setDeleteDialogLoading(false)
+    setDeleteDialogPreview(null)
+    setDeleteDialogError('')
     setAttemptHistory([])
     setAttemptHistoryError('')
     setAttemptManagerLoading(true)
@@ -2616,7 +2692,7 @@ export default function TeacherDashboard() {
   }
 
   const closeSubmissionAttemptManager = () => {
-    if (attemptManagerSaving) return
+    if (attemptManagerSaving || deleteDialogOpen) return
 
     setAttemptManager(null)
     setAttemptManagerError('')
@@ -2720,6 +2796,104 @@ export default function TeacherDashboard() {
     } finally {
       setAttemptManagerSaving(false)
     }
+  }
+
+  const closeDeleteDialog = () => {
+    if (attemptManagerSaving) return
+    deletePreviewRequestRef.current += 1
+    setDeleteDialogOpen(false)
+    setDeleteDialogLoading(false)
+    setDeleteDialogPreview(null)
+    setDeleteDialogError('')
+  }
+
+  const openDeleteDialog = async () => {
+    if (!attemptManager?.student || !attemptManager?.contentId || attemptManagerSaving) return
+    const requestId = ++deletePreviewRequestRef.current
+    const target = {
+      contentType: attemptManager.contentType,
+      contentId: attemptManager.contentId,
+      studentId: getStudentPrimaryAssignmentId(attemptManager.student)
+    }
+    setStatsDialogMode(null)
+    setDeleteDialogOpen(true)
+    setDeleteDialogLoading(true)
+    setDeleteDialogPreview(null)
+    setDeleteDialogError('')
+    try {
+      const response = await previewManagedSubmissionPermanentDeleteCall(target)
+      if (deletePreviewRequestRef.current === requestId) {
+        setDeleteDialogPreview(response.data)
+      }
+    } catch (error) {
+      if (deletePreviewRequestRef.current === requestId) {
+        setDeleteDialogError(getCallableErrorMessage(error, 'Could not check linked results.'))
+      }
+    } finally {
+      if (deletePreviewRequestRef.current === requestId) setDeleteDialogLoading(false)
+    }
+  }
+
+  const confirmDeleteResult = async () => {
+    if (!deleteDialogPreview?.previewToken || !attemptManager?.student || attemptManagerSaving) return
+    const target = {
+      contentType: attemptManager.contentType,
+      contentId: attemptManager.contentId,
+      studentId: getStudentPrimaryAssignmentId(attemptManager.student)
+    }
+    const sameTarget = current => current?.contentType === target.contentType &&
+      current?.contentId === target.contentId &&
+      getStudentPrimaryAssignmentId(current?.student) === target.studentId
+
+    setAttemptManagerSaving(true)
+    setDeleteDialogError('')
+    setAttemptManagerWarning('')
+    try {
+      const response = await permanentlyDeleteManagedSubmissionResultCall({
+        ...target,
+        previewToken: deleteDialogPreview.previewToken,
+        confirmPermanentDelete: true,
+        confirmationPhrase: 'DELETE RESULTS'
+      })
+      // The callable finished the permanent write. A subsequent refresh failure
+      // is only a refresh warning, never a deletion failure.
+      closeDeleteDialogAfterSuccess()
+      setAttemptManager(current => sameTarget(current)
+        ? { ...current, state: { ...current.state, hasSubmission: false, excludedFromStats: false, open: false } }
+        : current
+      )
+      setAttemptHistory([])
+      setAttemptHistoryError('')
+      setAttemptManagerError('')
+      setAttemptManagerNotice(`Permanently deleted ${response.data?.deletedDocuments || 0} linked result record(s). The student and homework assignment remain.`)
+      const results = await Promise.allSettled([
+        loadManagedAttemptState(attemptManager),
+        loadManagedAttemptHistory(attemptManager)
+      ])
+      if (results[0].status === 'fulfilled') {
+        setAttemptManager(current => sameTarget(current)
+          ? { ...current, state: results[0].value }
+          : current
+        )
+      }
+      if (results[1].status === 'fulfilled') setAttemptHistory(results[1].value)
+      if (results.some(result => result.status === 'rejected')) {
+        setAttemptManagerWarning('Deletion succeeded, but the latest view could not be refreshed. Reopen this panel to reload it.')
+      }
+    } catch (error) {
+      console.error('Could not permanently delete selected result:', error)
+      setDeleteDialogError(getCallableErrorMessage(error, 'Could not confirm deletion. If the connection was interrupted, close this dialog and refresh the result before retrying.'))
+    } finally {
+      setAttemptManagerSaving(false)
+    }
+  }
+
+  const closeDeleteDialogAfterSuccess = () => {
+    deletePreviewRequestRef.current += 1
+    setDeleteDialogOpen(false)
+    setDeleteDialogLoading(false)
+    setDeleteDialogPreview(null)
+    setDeleteDialogError('')
   }
 
   const setManagedAttemptMode = async mode => {
@@ -6052,10 +6226,17 @@ Continue permanent delete?`
     remove: () => deleteVocabularyTest(item),
   })
 
-  const homeworkProgressByStudent = students.map(student => ({
+  const homeworkProgressByStudent = useMemo(() => students.map(student => ({
     student,
     progress: getStudentHomeworkProgress(student.id)
-  }))
+  })), [
+    students, readings, writings, listenings, vocabularyTests, mockTests,
+    submissions, writingSubmissions, listeningSubmissions,
+    vocabularySubmissions, mockSubmissions, assignmentStudentIdsByContent
+  ])
+  const homeworkProgressById = useMemo(() => new Map(
+    homeworkProgressByStudent.map(({ student, progress }) => [student.id, progress])
+  ), [homeworkProgressByStudent])
 
   const overallHomeworkProgress = homeworkProgressByStudent.reduce(
     (summary, item) => {
@@ -6104,12 +6285,8 @@ Continue permanent delete?`
       : 0
   })
 
-  const averageReadingEstimatedBand = getAverageReadingEstimatedBand()
-  const readingCompletionStats = getReadingCompletionStats()
-  const mostMissedReadingQuestions = getMostMissedReadingQuestions()
-  const atRiskReadingStudents = getAtRiskReadingStudents()
-  const readingTypeAnalytics = getReadingTypeAnalytics()
-  const selectedAnalyticsStudent = analyticsStudentId === 'all'
+  // Do not compute heavy per-student analytics outside the Analytics page.
+  const selectedAnalyticsStudent = activeTab !== 'analytics' || analyticsStudentId === 'all'
     ? null
     : getStudentByAnyId(analyticsStudentId)
 
@@ -6166,12 +6343,6 @@ Continue permanent delete?`
   const selectedAnalyticsMostMissedVocabularyQuestions = selectedAnalyticsStudent
     ? getMostMissedVocabularyQuestionsForSubmissions(selectedAnalyticsVocabularySubmissions)
     : []
-
-  const averageListeningBand = getAverageListeningBand()
-  const listeningCompletionStats = getListeningCompletionStats()
-  const mostMissedListeningQuestions = getMostMissedListeningQuestions()
-  const atRiskListeningStudents = getAtRiskListeningStudents()
-  const listeningTypeAnalytics = getListeningTypeAnalytics()
 
   const teacherSectionId = TEACHER_CONTENT_TABS.some(item => item.id === activeTab)
     ? 'library'
@@ -7857,29 +8028,17 @@ Continue permanent delete?`
           )}
 
           {filteredTeacherStudents.map(student => {
-            const studentReadings = getStudentReadings(student.id)
-            const studentWritings = getStudentWritings(student.id)
-            const studentListenings = getStudentListenings(student.id)
-            const studentVocabularyTests = getStudentVocabularyTests(student.id)
-            const analytics = getStudentAnalytics(student.id)
-
-            const completedReadingCount = studentReadings.filter(reading =>
-              getSubmission(student.id, reading.id)
-            ).length
-
-            const completedWritingCount = studentWritings.filter(writing =>
-              getWritingSubmission(student.id, writing.id)
-            ).length
-
-            const completedListeningCount = studentListenings.filter(listening =>
-              getListeningSubmission(student.id, listening.id)
-            ).length
-
-            const completedVocabularyCount = studentVocabularyTests.filter(vocabularyTest =>
-              getVocabularySubmission(student.id, vocabularyTest.id)
-            ).length
-
-            const homeworkProgress = getStudentHomeworkProgress(student.id)
+            // The collapsed rows must not recalculate full homework/analytics.
+            const detailsOpen = selected?.id === student.id && selectedStudentSection === 'homework'
+            const studentReadings = detailsOpen ? getStudentReadings(student.id) : []
+            const studentWritings = detailsOpen ? getStudentWritings(student.id) : []
+            const studentListenings = detailsOpen ? getStudentListenings(student.id) : []
+            const studentVocabularyTests = detailsOpen ? getStudentVocabularyTests(student.id) : []
+            const analytics = detailsOpen ? getStudentAnalytics(student.id) : null
+            const homeworkProgress = homeworkProgressById.get(student.id) || {
+              assigned: 0, completed: 0, notCompleted: 0, overdue: 0, rate: 0, types: {}
+            }
+            const latestMock = latestMockSubmission(student.id)
 
             return (
               <div
@@ -7911,13 +8070,13 @@ Continue permanent delete?`
                   </div>
 
                   <div className="flex items-center gap-4">
-                    {latestMockSubmission(student.id) && (
+                    {latestMock && (
                       <div className="text-right">
                         <p className="text-xs text-gray-400">
-                          Latest {getMockTypeLabelForSubmission(latestMockSubmission(student.id))}
+                          Latest {getMockTypeLabelForSubmission(latestMock)}
                         </p>
                         <p className="text-lg font-bold text-purple-600">
-                          {formatBand(getMockOverall(latestMockSubmission(student.id)))}
+                          {formatBand(getMockOverall(latestMock))}
                         </p>
                       </div>
                     )}
@@ -8719,7 +8878,9 @@ Continue permanent delete?`
                     <div>
                       <p className="text-xs text-gray-400">Current submitted attempt</p>
                       <p className="text-lg font-bold text-gray-800 mt-0.5">
-                        Attempt {attemptManager.state?.currentAttemptNumber || 1}
+                        {attemptManager.state?.hasSubmission
+                          ? `Attempt ${attemptManager.state?.currentAttemptNumber || 1}`
+                          : 'No submitted attempt'}
                       </p>
                     </div>
 
@@ -8727,9 +8888,13 @@ Continue permanent delete?`
                       <span className="text-xs bg-blue-100 text-blue-700 px-3 py-1.5 rounded-full font-semibold">
                         Attempt {attemptManager.state?.nextAttemptNumber || 2} open
                       </span>
-                    ) : (
+                    ) : attemptManager.state?.hasSubmission ? (
                       <span className="text-xs bg-green-50 text-green-700 px-3 py-1.5 rounded-full font-semibold">
                         Submitted
+                      </span>
+                    ) : (
+                      <span className="text-xs bg-slate-100 text-slate-600 px-3 py-1.5 rounded-full font-semibold">
+                        No result
                       </span>
                     )}
                   </div>
@@ -8795,6 +8960,20 @@ Continue permanent delete?`
                       : 'border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100'}`}
                   >
                     {attemptManager.state?.excludedFromStats ? 'Restore to statistics' : 'Exclude from statistics'}
+                  </button>
+                </div>
+
+                <div className="mt-4 rounded-xl border border-red-200 bg-red-50/60 p-4">
+                  <p className="text-sm font-semibold text-red-800">Permanent result removal</p>
+                  <p className="mt-1 text-xs text-red-700 leading-relaxed">
+                    Hard Delete removes this student's current submission and all saved attempts for this test,
+                    plus matching scores and attempt controls. The assignment and original test are preserved.
+                    Unlike statistics exclusion, this cannot be restored.
+                  </p>
+                  <button type="button" onClick={openDeleteDialog}
+                    disabled={attemptManagerSaving || attemptManagerLoading || (!attemptManager.state?.hasSubmission && attemptHistory.length === 0)}
+                    className="mt-3 rounded-xl border border-red-300 bg-white px-4 py-2.5 text-sm font-semibold text-red-700 hover:bg-red-100 disabled:opacity-50">
+                    Permanently Delete Results
                   </button>
                 </div>
 
@@ -8897,6 +9076,18 @@ Continue permanent delete?`
               onCancel={closeStatsDialog}
               onConfirm={setManagedStatsExclusion}
               onClearError={() => setStatsDialogError('')}
+            />
+          )}
+          {deleteDialogOpen && (
+            <ResultPermanentDeleteDialog
+              loading={deleteDialogLoading}
+              preview={deleteDialogPreview}
+              saving={attemptManagerSaving}
+              error={deleteDialogError}
+              studentName={attemptManager.student?.name || attemptManager.student?.email || 'Selected student'}
+              contentTitle={attemptManager.title}
+              onCancel={closeDeleteDialog}
+              onConfirm={confirmDeleteResult}
             />
           )}
         </div>

@@ -4950,6 +4950,271 @@ exports.setManagedSubmissionStatsExclusion = onCall(async request => {
   }
 })
 
+// Q1B candidate: permanently delete one learner's complete result history for
+// one piece of content, without deleting the content or its assignment.
+// Always preview first; the fingerprint protects against stale confirmation.
+const RESULT_DELETE_MAX_RECORDS = 180
+
+function resultDeleteFingerprint({ config, studentId, contentId, records }) {
+  const rows = records.map(({ snap }) => {
+    const version = snap.updateTime
+    return `${snap.ref.path}|${version?.seconds || 0}:${version?.nanoseconds || 0}`
+  }).sort()
+  return createHash('sha256')
+    .update([config.contentType, studentId, contentId, ...rows].join('\n'), 'utf8')
+    .digest('hex')
+}
+
+async function collectManagedResultDeletion({ config, studentId, contentId, schoolId }) {
+  const refs = new Map()
+  const counts = { submissions: 0, attemptHistory: 0, attemptControls: 0, mockScores: 0, vocabularyDrafts: 0 }
+
+  const include = (snap, category) => {
+    if (!snap?.exists || refs.has(snap.ref.path)) return
+    refs.set(snap.ref.path, { snap, category })
+    counts[category] += 1
+  }
+  const assertSameSchool = data => {
+    if (schoolIdOf(data) !== schoolId) {
+      throw new HttpsError('failed-precondition', 'A linked record has a different school. Deletion stopped for review.')
+    }
+  }
+  const belongs = data => {
+    // A conflicting uid/studentId pair must never result in cross-account deletion.
+    if (data?.uid && data.uid !== studentId) return false
+    if (data?.studentId && data.studentId !== studentId) return false
+    return data?.uid === studentId || data?.studentId === studentId
+  }
+  const getByStudent = async collectionName => {
+    const source = db.collection(collectionName)
+    return Promise.all([
+      source.where('uid', '==', studentId).get(),
+      source.where('studentId', '==', studentId).get()
+    ]).then(snaps => {
+      const unique = new Map()
+      snaps.flatMap(snap => snap.docs).forEach(snap => unique.set(snap.ref.path, snap))
+      return [...unique.values()]
+    })
+  }
+
+  const canonicalSubmissionRef = db.doc(`${config.submissionCollection}/${studentId}_${contentId}`)
+  const controlRef = db.doc(`${ATTEMPT_CONTROL_COLLECTION}/${attemptControlId(studentId, config.contentType, contentId)}`)
+  const draftRef = config.contentType === 'vocabulary'
+    ? db.doc(`vocabularyDrafts/${studentId}_${contentId}`)
+    : null
+  const canonicalScoreRef = config.contentType === 'mock'
+    ? db.doc(`scores/${studentId}_${contentId}`)
+    : null
+
+  const [submissions, histories, currentSnap, controlSnap, draftSnap, scores, canonicalScoreSnap] = await Promise.all([
+    getByStudent(config.submissionCollection),
+    getByStudent(ATTEMPT_HISTORY_COLLECTION),
+    canonicalSubmissionRef.get(),
+    controlRef.get(),
+    draftRef ? draftRef.get() : Promise.resolve(null),
+    canonicalScoreRef ? getByStudent('scores') : Promise.resolve([]),
+    canonicalScoreRef ? canonicalScoreRef.get() : Promise.resolve(null)
+  ])
+
+  const allSubmissions = new Map(submissions.map(snap => [snap.ref.path, snap]))
+  if (currentSnap.exists) allSubmissions.set(currentSnap.ref.path, currentSnap)
+  for (const snap of allSubmissions.values()) {
+    const data = snap.data() || {}
+    if (!submissionMatchesContent(config, data, contentId)) {
+      if (snap.ref.path === canonicalSubmissionRef.path) {
+        throw new HttpsError('failed-precondition', 'The canonical submission has conflicting content. Deletion stopped.')
+      }
+      continue
+    }
+    if (!belongs(data)) {
+      throw new HttpsError('failed-precondition', 'A matching submission has conflicting student ownership.')
+    }
+    assertSameSchool(data)
+    include(snap, 'submissions')
+  }
+
+  for (const snap of histories) {
+    const data = snap.data() || {}
+    if (data.contentId !== contentId || data.contentType !== config.contentType) continue
+    if (data.sourceCollection !== config.sourceCollection ||
+        data.submissionCollection !== config.submissionCollection || !belongs(data)) {
+      throw new HttpsError('failed-precondition', 'Attempt history is inconsistent; deletion stopped for review.')
+    }
+    assertSameSchool(data)
+    include(snap, 'attemptHistory')
+  }
+
+  if (controlSnap.exists) {
+    const data = controlSnap.data() || {}
+    if (!belongs(data) || data.contentId !== contentId || data.contentType !== config.contentType ||
+        data.sourceCollection !== config.sourceCollection || data.submissionCollection !== config.submissionCollection) {
+      throw new HttpsError('failed-precondition', 'Attempt control is inconsistent; deletion stopped for review.')
+    }
+    assertSameSchool(data)
+    include(controlSnap, 'attemptControls')
+  }
+
+  if (draftSnap?.exists) {
+    const data = draftSnap.data() || {}
+    if (data.uid !== studentId || data.studentId !== studentId || data.vocabularyTestId !== contentId) {
+      throw new HttpsError('failed-precondition', 'Vocabulary draft has inconsistent ownership. Deletion stopped.')
+    }
+    assertSameSchool(data)
+    include(draftSnap, 'vocabularyDrafts')
+  }
+
+  if (canonicalScoreRef) {
+    const allScores = new Map(scores.map(snap => [snap.ref.path, snap]))
+    if (canonicalScoreSnap.exists) allScores.set(canonicalScoreSnap.ref.path, canonicalScoreSnap)
+    for (const snap of allScores.values()) {
+      const data = snap.data() || {}
+      if (data.mockTestId !== contentId && data.mockId !== contentId) {
+        if (snap.ref.path === canonicalScoreRef.path) {
+          throw new HttpsError('failed-precondition', 'The canonical Mock score belongs to different content.')
+        }
+        continue
+      }
+      if (!belongs(data)) {
+        throw new HttpsError('failed-precondition', 'The linked Mock score belongs to another student.')
+      }
+      assertSameSchool(data)
+      include(snap, 'mockScores')
+    }
+  }
+
+  const records = [...refs.values()].sort((a, b) => a.snap.ref.path.localeCompare(b.snap.ref.path))
+  if (records.length > RESULT_DELETE_MAX_RECORDS) {
+    throw new HttpsError('resource-exhausted',
+      'Too many linked records for one atomic deletion. Contact an administrator for a supervised cleanup.')
+  }
+  return {
+    records,
+    counts,
+    totalRecords: records.length,
+    previewToken: resultDeleteFingerprint({ config, studentId, contentId, records }),
+    canonicalSubmissionRef,
+    controlRef,
+    draftRef,
+    canonicalScoreRef
+  }
+}
+
+async function managedResultDeletionContext(request) {
+  const manager = await requireAssignmentManager(request)
+  const data = request.data || {}
+  const config = submissionContentConfigFor(data.contentType)
+  const contentId = assertDocumentId(data.contentId, 'Content ID')
+  const studentId = assertDocumentId(data.studentId, 'Student ID')
+  const source = await getSource(config.sourceCollection, contentId)
+  if (!managerCanManageSource(manager, source)) {
+    throw new HttpsError('permission-denied', 'You cannot permanently delete this result.')
+  }
+  const schoolId = schoolIdOf(source)
+  const studentSnap = await db.doc(`users/${studentId}`).get()
+  if (!studentSnap.exists || studentSnap.data()?.role !== 'student' ||
+      schoolIdOf(studentSnap.data() || {}) !== schoolId) {
+    throw new HttpsError('permission-denied', 'This learner is not in the content school.')
+  }
+  return { manager, config, contentId, studentId, schoolId, source }
+}
+
+exports.previewManagedSubmissionPermanentDelete = onCall(async request => {
+  const ctx = await managedResultDeletionContext(request)
+  const deletion = await collectManagedResultDeletion(ctx)
+  return {
+    ok: true,
+    contentType: ctx.config.contentType,
+    contentId: ctx.contentId,
+    studentId: ctx.studentId,
+    counts: deletion.counts,
+    totalRecords: deletion.totalRecords,
+    previewToken: deletion.previewToken
+  }
+})
+
+exports.permanentlyDeleteManagedSubmissionResult = onCall(async request => {
+  const ctx = await managedResultDeletionContext(request)
+  const data = request.data || {}
+  if (data.confirmPermanentDelete !== true || data.confirmationPhrase !== 'DELETE RESULTS') {
+    throw new HttpsError('invalid-argument', 'Type DELETE RESULTS to confirm permanent deletion.')
+  }
+  if (typeof data.previewToken !== 'string' || !/^[a-f0-9]{64}$/.test(data.previewToken)) {
+    throw new HttpsError('invalid-argument', 'A valid deletion preview is required.')
+  }
+  const deletion = await collectManagedResultDeletion(ctx)
+  if (deletion.totalRecords === 0) {
+    throw new HttpsError('not-found', 'No remaining result records were found for this student and content.')
+  }
+  if (data.previewToken !== deletion.previewToken) {
+    throw new HttpsError('failed-precondition', 'Results changed since preview. Cancel and review the deletion again.')
+  }
+
+  const auditRef = db.collection('resultModerationAudit').doc()
+  const sourceRef = db.doc(`${ctx.config.sourceCollection}/${ctx.contentId}`)
+  const studentRef = db.doc(`users/${ctx.studentId}`)
+  const managerRef = db.doc(`users/${ctx.manager.uid}`)
+  const selectedRefs = deletion.records.map(item => item.snap.ref)
+  const sentinelRefs = [deletion.canonicalSubmissionRef, deletion.controlRef,
+    deletion.draftRef, deletion.canonicalScoreRef].filter(Boolean)
+  const readRefs = new Map([sourceRef, studentRef, managerRef, ...selectedRefs, ...sentinelRefs]
+    .map(ref => [ref.path, ref]))
+
+  await db.runTransaction(async tx => {
+    // Read every relevant document before writing. A changed version aborts the
+    // operation so it cannot partially remove another user's latest submission.
+    const snaps = await tx.getAll(...readRefs.values())
+    const byPath = new Map(snaps.map(snap => [snap.ref.path, snap]))
+    const source = byPath.get(sourceRef.path)
+    const student = byPath.get(studentRef.path)
+    const manager = byPath.get(managerRef.path)
+    if (!source?.exists || !student?.exists || !manager?.exists ||
+        student.data()?.role !== 'student' || schoolIdOf(student.data() || {}) !== ctx.schoolId ||
+        manager.data()?.status !== 'approved' || manager.data()?.deleted === true ||
+        !['teacher', 'admin'].includes(manager.data()?.role) ||
+        !managerCanManageSource({ uid: ctx.manager.uid, profile: manager.data() }, source.data())) {
+      throw new HttpsError('permission-denied', 'The result deletion authorization changed.')
+    }
+
+    for (const sentinelRef of sentinelRefs) {
+      const snap = byPath.get(sentinelRef.path)
+      if (snap?.exists && !deletion.records.some(item => item.snap.ref.path === sentinelRef.path)) {
+        throw new HttpsError('aborted', 'A new linked result appeared. Preview the deletion again.')
+      }
+    }
+    for (const { snap } of deletion.records) {
+      const fresh = byPath.get(snap.ref.path)
+      if (!fresh?.exists || !fresh.updateTime.isEqual(snap.updateTime)) {
+        throw new HttpsError('aborted', 'A result changed. Preview the deletion again.')
+      }
+    }
+
+    for (const { snap } of deletion.records) tx.delete(snap.ref)
+    tx.create(auditRef, {
+      schemaVersion: 2,
+      action: 'permanently_delete_results',
+      schoolId: ctx.schoolId,
+      contentType: ctx.config.contentType,
+      contentId: ctx.contentId,
+      // Keep only identifiers and record counts in the protected audit, never answers.
+      studentId: ctx.studentId,
+      performedBy: ctx.manager.uid,
+      performedByRole: manager.data().role,
+      counts: deletion.counts,
+      deletedDocuments: deletion.totalRecords,
+      createdAt: FieldValue.serverTimestamp()
+    })
+  })
+
+  return {
+    ok: true,
+    contentType: ctx.config.contentType,
+    contentId: ctx.contentId,
+    studentId: ctx.studentId,
+    deletedDocuments: deletion.totalRecords,
+    counts: deletion.counts
+  }
+})
+
 exports.setSubmissionAttemptControl = onCall(async request => {
   const manager = await requireAssignmentManager(request)
   const data = request.data || {}
