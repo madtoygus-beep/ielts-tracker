@@ -263,6 +263,84 @@ const TEACHER_CREATION_ROUTES = [
   { label: 'Mock test', path: '/create-mock', icon: 'book' },
 ]
 
+// Q1A performance: keep reason typing state inside this small dialog.
+// Typing must not re-render the large Teacher Dashboard or its live data views.
+function StatsModerationDialog({ mode, saving, error, onCancel, onConfirm, onClearError }) {
+  const [reason, setReason] = useState('')
+  const [localError, setLocalError] = useState('')
+  const excluding = mode === 'exclude'
+  const reasonIsValid = !excluding || (reason.trim().length >= 5 && reason.length <= 400)
+
+  const submit = event => {
+    event.preventDefault()
+    if (saving) return
+    if (!reasonIsValid) {
+      setLocalError('Please provide a reason between 5 and 400 characters.')
+      return
+    }
+    onConfirm(excluding, excluding ? reason : '')
+  }
+
+  return (
+    <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-950/60 px-4 py-6">
+      <div role="dialog" aria-modal="true" aria-labelledby="q1a-stats-dialog-title"
+        className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Result management</p>
+            <h3 id="q1a-stats-dialog-title" className="mt-1 text-lg font-bold text-slate-900">
+              {excluding ? 'Exclude from statistics' : 'Restore to statistics'}
+            </h3>
+            <p className="mt-2 text-sm leading-relaxed text-slate-600">
+              {excluding
+                ? 'The submitted result will remain in the student history, but it will not count towards performance statistics.'
+                : 'The saved result will count towards performance statistics again.'}
+            </p>
+          </div>
+          <button type="button" onClick={onCancel} disabled={saving}
+            aria-label="Close result management dialog"
+            className="rounded-lg px-2 py-1 text-xl text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-50">
+            ×
+          </button>
+        </div>
+        <form className="mt-5 space-y-4" onSubmit={submit}>
+          {excluding && (
+            <div>
+              <label htmlFor="q1a-stats-reason" className="block text-sm font-semibold text-slate-800">
+                Reason for excluding this result
+              </label>
+              <textarea id="q1a-stats-reason" required minLength={5} maxLength={400} rows={4}
+                value={reason} onChange={event => {
+                  setReason(event.target.value)
+                  if (localError) setLocalError('')
+                  if (error) onClearError()
+                }} autoFocus disabled={saving}
+                placeholder="Example: This was a trial attempt and must not affect the student's average."
+                className="mt-2 w-full resize-y rounded-xl border border-slate-300 px-3 py-3 text-sm leading-relaxed text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:opacity-60" />
+              <p className="mt-1 text-xs text-slate-500">{reason.length}/400 characters · at least 5 required</p>
+            </div>
+          )}
+          {(localError || error) && (
+            <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+              {localError || error}
+            </div>
+          )}
+          <div className="flex flex-wrap justify-end gap-3">
+            <button type="button" onClick={onCancel} disabled={saving}
+              className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+              Cancel
+            </button>
+            <button type="submit" disabled={saving || !reasonIsValid}
+              className={`rounded-xl px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50 ${excluding ? 'bg-amber-700 hover:bg-amber-800' : 'bg-emerald-700 hover:bg-emerald-800'}`}>
+              {saving ? 'Saving...' : excluding ? 'Exclude result' : 'Restore result'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
 export default function TeacherDashboard() {
   const [students, setStudents] = useState([])
   const [classes, setClasses] = useState([])
@@ -341,7 +419,6 @@ export default function TeacherDashboard() {
   const [attemptManagerNotice, setAttemptManagerNotice] = useState('')
   const [attemptManagerWarning, setAttemptManagerWarning] = useState('')
   const [statsDialogMode, setStatsDialogMode] = useState(null)
-  const [statsDialogReason, setStatsDialogReason] = useState('')
   const [statsDialogError, setStatsDialogError] = useState('')
   const [attemptHistory, setAttemptHistory] = useState([])
   const [attemptHistoryLoading, setAttemptHistoryLoading] = useState(false)
@@ -2500,7 +2577,6 @@ export default function TeacherDashboard() {
     setAttemptManagerNotice('')
     setAttemptManagerWarning('')
     setStatsDialogMode(null)
-    setStatsDialogReason('')
     setStatsDialogError('')
     setAttemptHistory([])
     setAttemptHistoryError('')
@@ -2547,7 +2623,6 @@ export default function TeacherDashboard() {
     setAttemptManagerNotice('')
     setAttemptManagerWarning('')
     setStatsDialogMode(null)
-    setStatsDialogReason('')
     setStatsDialogError('')
     setAttemptManagerLoading(false)
     setAttemptHistory([])
@@ -2559,7 +2634,6 @@ export default function TeacherDashboard() {
   const openStatsDialog = excluded => {
     if (!attemptManager?.state?.hasSubmission || attemptManagerSaving) return
     setStatsDialogMode(excluded ? 'exclude' : 'restore')
-    setStatsDialogReason('')
     setStatsDialogError('')
     setAttemptManagerError('')
     setAttemptManagerNotice('')
@@ -2569,7 +2643,6 @@ export default function TeacherDashboard() {
   const closeStatsDialog = () => {
     if (attemptManagerSaving) return
     setStatsDialogMode(null)
-    setStatsDialogReason('')
     setStatsDialogError('')
   }
 
@@ -2606,7 +2679,6 @@ export default function TeacherDashboard() {
       await setManagedSubmissionStatsExclusionCall(target)
 
       setStatsDialogMode(null)
-      setStatsDialogReason('')
       setAttemptManager(current => sameTarget(current)
         ? { ...current, state: { ...current.state, excludedFromStats: excluded } }
         : current
@@ -8818,63 +8890,14 @@ Continue permanent delete?`
             )}
           </div>
           {statsDialogMode && (
-            <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-950/60 px-4 py-6">
-              <div role="dialog" aria-modal="true" aria-labelledby="q1a-stats-dialog-title" className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Result management</p>
-                    <h3 id="q1a-stats-dialog-title" className="mt-1 text-lg font-bold text-slate-900">
-                      {statsDialogMode === 'exclude' ? 'Exclude from statistics' : 'Restore to statistics'}
-                    </h3>
-                    <p className="mt-2 text-sm leading-relaxed text-slate-600">
-                      {statsDialogMode === 'exclude'
-                        ? 'The submitted result will remain in the student history, but it will not count towards performance statistics.'
-                        : 'The saved result will count towards performance statistics again.'}
-                    </p>
-                  </div>
-                  <button type="button" onClick={closeStatsDialog} disabled={attemptManagerSaving}
-                    aria-label="Close result management dialog"
-                    className="rounded-lg px-2 py-1 text-xl text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-50">
-                    ×
-                  </button>
-                </div>
-                <form className="mt-5 space-y-4" onSubmit={event => {
-                  event.preventDefault()
-                  setManagedStatsExclusion(statsDialogMode === 'exclude', statsDialogReason)
-                }}>
-                  {statsDialogMode === 'exclude' && (
-                    <div>
-                      <label htmlFor="q1a-stats-reason" className="block text-sm font-semibold text-slate-800">
-                        Reason for excluding this result
-                      </label>
-                      <textarea id="q1a-stats-reason" required minLength={5} maxLength={400} rows={4}
-                        value={statsDialogReason} onChange={event => {
-                          setStatsDialogReason(event.target.value)
-                          if (statsDialogError) setStatsDialogError('')
-                        }} autoFocus disabled={attemptManagerSaving}
-                        placeholder="Example: This was a trial attempt and must not affect the student's average."
-                        className="mt-2 w-full resize-y rounded-xl border border-slate-300 px-3 py-3 text-sm leading-relaxed text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:opacity-60" />
-                      <p className="mt-1 text-xs text-slate-500">{statsDialogReason.length}/400 characters · at least 5 required</p>
-                    </div>
-                  )}
-                  {statsDialogError && (
-                    <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-                      {statsDialogError}
-                    </div>
-                  )}
-                  <div className="flex flex-wrap justify-end gap-3">
-                    <button type="button" onClick={closeStatsDialog} disabled={attemptManagerSaving}
-                      className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">
-                      Cancel
-                    </button>
-                    <button type="submit" disabled={attemptManagerSaving || (statsDialogMode === 'exclude' && statsDialogReason.trim().length < 5)}
-                      className={`rounded-xl px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50 ${statsDialogMode === 'exclude' ? 'bg-amber-700 hover:bg-amber-800' : 'bg-emerald-700 hover:bg-emerald-800'}`}>
-                      {attemptManagerSaving ? 'Saving...' : statsDialogMode === 'exclude' ? 'Exclude result' : 'Restore result'}
-                    </button>
-                  </div>
-                </form>
-              </div>
-            </div>
+            <StatsModerationDialog
+              mode={statsDialogMode}
+              saving={attemptManagerSaving}
+              error={statsDialogError}
+              onCancel={closeStatsDialog}
+              onConfirm={setManagedStatsExclusion}
+              onClearError={() => setStatsDialogError('')}
+            />
           )}
         </div>
       )}
