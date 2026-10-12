@@ -1,5 +1,5 @@
 import { lazy, Suspense } from 'react'
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 
 const Landing = lazy(() => import('./pages/Landing'))
 const Login = lazy(() => import('./pages/Login'))
@@ -59,6 +59,9 @@ function App() {
 
           <Route path="/student" element={<StudentDashboard />} />
           <Route path="/self-study" element={<SelfStudyDashboard />} />
+          {/* P4D interim checkpoint: incomplete individual practice is disabled.
+              Preserve the prototype file; direct/bookmarked links return to the protected learner dashboard. */}
+          <Route path="/self-study/practice/:masterId" element={<Navigate to="/self-study" replace />} />
           <Route path="/self-study-manager" element={<SelfStudyManagerDashboard />} />
           <Route path="/teacher" element={<TeacherDashboard />} />
           <Route path="/admin" element={<AdminDashboard />} />

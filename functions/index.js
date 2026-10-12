@@ -2708,7 +2708,10 @@ const STUDENT_PERMANENT_DELETE_COLLECTIONS = [
   { name: 'vocabularyDrafts', fields: ['uid', 'studentId'] },
   { name: 'scores', fields: ['uid', 'studentId'] },
   { name: 'submissionAttemptControls', fields: ['uid', 'studentId'] },
-  { name: 'submissionAttemptHistory', fields: ['uid', 'studentId'] }
+  { name: 'submissionAttemptHistory', fields: ['uid', 'studentId'] },
+  // P4D: permanent deletion also removes independent learning access and attempts.
+  { name: 'selfStudyEntitlements', fields: ['userId'] },
+  { name: 'selfStudyAttempts', fields: ['userId'] }
 ]
 
 // Canonical assignment membership lives in studentAccess, but old source/class
@@ -5865,3 +5868,5 @@ exports.getCompletedMockReview = onCall(async request => {
 
 // P4C: Isolated, manager-only independent Master Library callables.
 Object.assign(exports, require('./lib/masterContent'))
+// P4D: Independent package catalog, manual entitlements and learner practice.
+Object.assign(exports, require('./lib/selfStudyPackages'))

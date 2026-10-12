@@ -127,6 +127,33 @@ const permanentlyDeleteManagedUserCall = httpsCallable(functions, 'permanentlyDe
 
 
 
+
+// Simple, dependency-free icons. No additional UI package or runtime dependency.
+function AdminIcon({ name, className = 'h-5 w-5' }) {
+  const common = { className, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true }
+  const paths = {
+    overview: <><rect x="3" y="3" width="7" height="7" rx="1.4"/><rect x="14" y="3" width="7" height="7" rx="1.4"/><rect x="3" y="14" width="7" height="7" rx="1.4"/><rect x="14" y="14" width="7" height="7" rx="1.4"/></>,
+    schools: <><path d="M3 21h18M5 21V7l7-4 7 4v14M9 21v-6h6v6M9 10h.01M15 10h.01"/></>,
+    users: <><circle cx="9" cy="8" r="3"/><path d="M3 20v-2a6 6 0 0 1 12 0v2M17 5a3 3 0 0 1 0 6M18 14a5 5 0 0 1 3 4v2"/></>,
+    selfstudy: <><path d="M4 19.5V5.9c2.8-1.2 5.5-1 8 .5 2.5-1.5 5.2-1.7 8-.5v13.6c-2.8-1.2-5.5-1-8 .5-2.5-1.5-5.2-1.7-8-.5ZM12 6.4V20"/></>,
+    classes: <><rect x="3" y="5" width="18" height="15" rx="2"/><path d="M3 10h18M8 2v6M16 2v6"/></>,
+    arrow: <><path d="M5 12h14m-6-6 6 6-6 6"/></>,
+    bell: <><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></>,
+    exit: <><path d="M10 17l5-5-5-5M15 12H3M12 3h7a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-7"/></>,
+    plus: <><path d="M12 5v14M5 12h14"/></>,
+    shield: <><path d="m12 3 8 3v6c0 5-3.4 8-8 9-4.6-1-8-4-8-9V6l8-3ZM9 12l2 2 4-4"/></>,
+    search: <><circle cx="10.8" cy="10.8" r="6.5"/><path d="m16 16 4.2 4.2"/></>,
+  }
+  return <svg {...common}>{paths[name] || paths.overview}</svg>
+}
+
+const ADMIN_NAV_ITEMS = [
+  { id: 'overview', label: 'Overview', icon: 'overview', description: 'A clear view of your platform and priorities' },
+  { id: 'schools', label: 'Institutions', icon: 'schools', description: 'School identity, seat limits, branding and status' },
+  { id: 'users', label: 'Users', icon: 'users', description: 'Institution accounts, approvals and academic history' },
+  { id: 'selfstudy', label: 'Self-Study', icon: 'selfstudy', description: 'Individual accounts and platform managers' },
+]
+
 export default function AdminDashboard() {
 
   const [users, setUsers] = useState([])
@@ -248,6 +275,16 @@ export default function AdminDashboard() {
   })
 
   const [pendingSchoolSelections, setPendingSchoolSelections] = useState({})
+
+  // UI-only navigation. No permissions, account boundaries or database APIs change.
+  const [adminSection, setAdminSection] = useState('overview')
+  const [userTab, setUserTab] = useState('students')
+  const [selfStudyTab, setSelfStudyTab] = useState('learners')
+  const [institutionScope, setInstitutionScope] = useState(DEFAULT_SCHOOL_ID)
+  const [schoolEditorOpen, setSchoolEditorOpen] = useState(false)
+  const [schoolEditorTab, setSchoolEditorTab] = useState('identity')
+  const [accountCreatorOpen, setAccountCreatorOpen] = useState(false)
+  const [managerCreatorOpen, setManagerCreatorOpen] = useState(false)
 
   const navigate = useNavigate()
 
@@ -1055,6 +1092,7 @@ export default function AdminDashboard() {
       setSchoolLogoFile(null)
 
       setSchoolLogoRemove(false)
+      setSchoolEditorOpen(false)
 
 
 
@@ -1152,6 +1190,7 @@ export default function AdminDashboard() {
   const handleSchoolScopeChange = schoolId => {
 
     setSelectedSchoolId(schoolId)
+    setInstitutionScope(schoolId)
     setSearch('')
     setSelectedStudent(null)
     setAccountAudienceView('institution')
@@ -1418,6 +1457,7 @@ export default function AdminDashboard() {
 
 
 
+      setAccountCreatorOpen(false)
       setAccountForm(previous => ({
 
         ...previous,
@@ -1482,6 +1522,7 @@ export default function AdminDashboard() {
           : `${name} was created as a Self-Study Manager. The setup email could not be sent; use Edit to set a password.`
       )
       setManagerForm({ name: '', email: '' })
+      setManagerCreatorOpen(false)
     } catch (error) {
       console.error(error)
       setManagerError(error?.message || 'Could not create Self-Study Manager account.')
@@ -2656,6 +2697,62 @@ export default function AdminDashboard() {
   }
 
 
+
+  // Keep institution scoping completely separate from B2C account scope.
+  const openSection = section => {
+    setAdminSection(section)
+    setSearch('')
+    setSelectedStudent(null)
+    if (section === 'selfstudy') {
+      setSelectedSchoolId(ALL_SCHOOLS_ID)
+      setAccountAudienceView('individual')
+      setAccountListView(selfStudyTab === 'archived' ? 'archived' : 'active')
+    } else if (section === 'users') {
+      const validSchool = institutionScope === ALL_SCHOOLS_ID || schools.some(s => s.schoolId === institutionScope)
+      const nextSchool = validSchool ? institutionScope : (schools.find(s => s.schoolId === DEFAULT_SCHOOL_ID)?.schoolId || schools[0]?.schoolId || ALL_SCHOOLS_ID)
+      setSelectedSchoolId(nextSchool)
+      setAccountAudienceView('institution')
+      setAccountListView(userTab === 'archived' ? 'archived' : 'active')
+      setAccountForm(previous => ({ ...previous, schoolId: nextSchool === ALL_SCHOOLS_ID ? '' : nextSchool }))
+    }
+  }
+
+  const changeUserTab = tab => {
+    setUserTab(tab)
+    setAccountListView(tab === 'archived' ? 'archived' : 'active')
+    setSelectedStudent(null)
+    setSearch('')
+  }
+
+  const changeSelfStudyTab = tab => {
+    setSelfStudyTab(tab)
+    setAccountListView(tab === 'archived' ? 'archived' : 'active')
+    setSelectedStudent(null)
+    setSearch('')
+  }
+
+  const openSchoolEditor = school => {
+    if (school) handleEditSchool(school)
+    else resetSchoolForm()
+    setSchoolEditorTab('identity')
+    setSchoolEditorOpen(true)
+  }
+
+  const openSchoolUsers = schoolId => {
+    handleSchoolScopeChange(schoolId)
+    setAdminSection('users')
+    changeUserTab('students')
+  }
+
+  const allInstitutionUsers = users.filter(u => !isIndividualAccount(u) && !isSelfStudyManagerAccount(u))
+  const currentlyActive = u => u.deleted !== true && u.status !== 'deleted' && (u.status === 'approved' || !u.status)
+  const totalInstitutionStudents = allInstitutionUsers.filter(u => u.role === 'student' && currentlyActive(u)).length
+  const totalInstitutionTeachers = allInstitutionUsers.filter(u => u.role === 'teacher' && currentlyActive(u)).length
+  const totalPending = allInstitutionUsers.filter(u => u.deleted !== true && u.status === 'pending').length
+  const totalIndividualLearners = users.filter(u => isIndividualAccount(u) && u.role === 'student' && currentlyActive(u)).length
+  const activeInstitutions = schools.filter(s => s.status === 'active').length
+  const page = ADMIN_NAV_ITEMS.find(item => item.id === adminSection) || ADMIN_NAV_ITEMS[0]
+
   if (authChecking) {
 
     return (
@@ -2671,161 +2768,190 @@ export default function AdminDashboard() {
   }
 
 
-
   return (
-
-    <div className="min-h-screen bg-[#faf9f6]">
-
-      <nav className="flex justify-between items-center px-8 py-4 bg-white border-b border-gray-100">
-
-        <div className="flex items-center gap-3">
-
-          <img src="/1.png" alt="Maxima" className="h-10 object-contain" />
-
-          <span className="text-xs bg-purple-100 text-purple-600 px-2 py-1 rounded-full font-medium">Admin</span>
-
-        </div>
-
-        <button onClick={handleLogout} className="text-sm text-gray-400 hover:text-gray-600">Logout</button>
-
-      </nav>
-
-
-
-      <div className="max-w-4xl mx-auto px-6 py-10">
-
-        <div className="flex items-start justify-between gap-4 mb-6">
-
-          <div>
-
-            <h1 className="text-2xl font-bold text-gray-900 mb-1">Admin Panel</h1>
-
-            <p className="text-gray-400 text-sm">Manage schools, institution accounts, individual learners, Self-Study Managers, mock history and classes</p>
-
-          </div>
-
-
-
-          <button
-
-            onClick={() => navigate(`/admin/classes?school=${encodeURIComponent(selectedSchoolId)}`)}
-
-            className="bg-white border border-purple-200 text-purple-600 px-4 py-2 rounded-xl text-sm font-medium hover:bg-purple-50"
-
-          >
-
-            🏫 Manage Classes
-
-          </button>
-
-        </div>
-
-        <div className="bg-white border border-purple-100 rounded-2xl p-5 mb-8">
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-            <div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <h2 className="font-semibold text-gray-800">School view</h2>
-                <span className="text-xs bg-purple-50 text-purple-600 px-2 py-1 rounded-full">P3 Branding</span>
+    <div className="min-h-screen bg-slate-50 text-slate-900">
+      <div className="min-h-screen lg:flex">
+        <aside className="hidden lg:flex lg:w-64 xl:w-72 shrink-0 flex-col border-r border-slate-200 bg-white sticky top-0 h-screen">
+          <div className="px-6 py-7 border-b border-slate-100">
+            <div className="flex items-center gap-3">
+              <img src="/1.png" alt="Maxima" className="h-9 w-auto max-w-[120px] object-contain" />
+              <div className="border-l border-slate-200 pl-3">
+                <p className="text-xs font-bold tracking-wider text-slate-800">MAXIMA</p>
+                <p className="text-[11px] text-slate-500">Administration</p>
               </div>
-              <p className="text-xs text-gray-400 mt-1">
-                Student, teacher, approval and summary lists below are limited to the selected school. Choose All Schools for a platform-wide view, then switch between Institution Accounts and Self-Study Accounts below.
-              </p>
-            </div>
-
-            <div className="w-full md:w-72">
-              <label className="text-xs text-gray-400 mb-1 block">Viewing</label>
-              <select
-                value={selectedSchoolId}
-                onChange={e => handleSchoolScopeChange(e.target.value)}
-                disabled={schoolsLoading}
-                className="w-full border border-purple-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 bg-white"
-              >
-                {schools.map(school => (
-                  <option key={school.schoolId} value={school.schoolId}>
-                    {school.name}{school.status !== 'active' ? ' (Inactive)' : ''}
-                  </option>
-                ))}
-                <option value={ALL_SCHOOLS_ID}>All Schools</option>
-              </select>
             </div>
           </div>
-
-          <div className="mt-3 text-xs text-gray-500 flex flex-wrap gap-x-3 gap-y-1">
-            <span>Current view: <span className="font-semibold text-purple-700">{selectedSchoolLabel}</span></span>
-            {selectedSchool && (
-              <>
-                <span>Students: <span className="font-semibold">{selectedSchool.studentSeatsUsed || 0} / {seatLimitLabel(selectedSchool.studentSeatLimit)}</span></span>
-                <span>Teachers: <span className="font-semibold">{selectedSchool.teacherSeatsUsed || 0} / {seatLimitLabel(selectedSchool.teacherSeatLimit)}</span></span>
-              </>
-            )}
-            {selectedSchoolId !== ALL_SCHOOLS_ID && selectedSchool?.status !== 'active' && (
-              <span className="text-amber-600">This school is inactive. Account creation and approvals are disabled.</span>
-            )}
-          </div>
-        </div>
-
-
-
-        <div className="bg-white border border-gray-100 rounded-2xl p-5 mb-8">
-
-        <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3 mb-5">
-
-          <div>
-
-            <div className="flex items-center gap-2">
-
-              <h2 className="font-semibold text-gray-800">Schools</h2>
-
-              <span className="text-xs bg-purple-50 text-purple-600 px-2 py-1 rounded-full">P3 Branding</span>
-
-            </div>
-
-            <p className="text-xs text-gray-400 mt-1">
-
-              School identity, branding and Student/Teacher seat limits are enforced by admin-only server functions. Leave a seat limit blank for Unlimited.
-
-            </p>
-
-          </div>
-
-          <div className="flex gap-2">
-
-            {schools.length === 0 && (
-
-              <button
-
-                onClick={prepareMaximaSchool}
-
-                className="text-xs bg-purple-50 hover:bg-purple-100 text-purple-700 px-3 py-2 rounded-lg font-medium"
-
-              >
-
-                Prepare Maxima
-
+          <div className="px-4 py-6 flex-1">
+            <p className="px-3 text-[11px] font-semibold uppercase tracking-[.16em] text-slate-400 mb-3">Workspace</p>
+            <nav className="space-y-1" aria-label="Admin navigation">
+              {ADMIN_NAV_ITEMS.map(item => (
+                <button key={item.id} type="button" onClick={() => openSection(item.id)}
+                  aria-current={adminSection === item.id ? 'page' : undefined}
+                  className={`w-full flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium text-left transition-colors ${adminSection === item.id ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'}`}>
+                  <AdminIcon name={item.icon} />
+                  {item.label}
+                  {item.id === 'users' && totalPending > 0 && (
+                    <span className="ml-auto text-[11px] rounded-md bg-amber-100 px-2 py-0.5 text-amber-800">{totalPending}</span>
+                  )}
+                </button>
+              ))}
+            </nav>
+            <div className="mt-7 border-t border-slate-100 pt-5">
+              <p className="px-3 text-[11px] font-semibold uppercase tracking-[.16em] text-slate-400 mb-3">Tools</p>
+              <button type="button" onClick={() => navigate(`/admin/classes?school=${encodeURIComponent(institutionScope)}`)}
+                className="w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm text-slate-600 hover:bg-slate-50 hover:text-slate-900 text-left">
+                <AdminIcon name="classes" /> Manage classes <AdminIcon name="arrow" className="w-4 h-4 ml-auto" />
               </button>
+            </div>
+          </div>
+          <div className="px-6 py-5 border-t border-slate-100">
+            <div className="flex items-center gap-2 text-xs text-slate-500"><AdminIcon name="shield" className="w-4 h-4" /> Platform admin access</div>
+          </div>
+        </aside>
 
+        <div className="min-w-0 flex-1">
+          <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 backdrop-blur">
+            <div className="px-4 sm:px-7 lg:px-9 py-4 flex items-center justify-between gap-4">
+              <div className="flex items-center gap-3 min-w-0">
+                <img src="/1.png" alt="Maxima" className="h-8 w-auto max-w-[105px] object-contain lg:hidden" />
+                <span className="text-sm font-semibold text-slate-800 truncate hidden sm:block">Platform administration</span>
+                <span className="rounded-md bg-indigo-50 px-2 py-1 text-[11px] font-semibold text-indigo-700">ADMIN</span>
+              </div>
+              <button type="button" onClick={handleLogout} className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 rounded-lg px-2 py-1">
+                <AdminIcon name="exit" className="w-4 h-4" /> Sign out
+              </button>
+            </div>
+            <nav className="lg:hidden flex gap-1 px-3 pb-3 overflow-x-auto" aria-label="Mobile admin navigation">
+              {ADMIN_NAV_ITEMS.map(item => (
+                <button key={item.id} type="button" onClick={() => openSection(item.id)} aria-current={adminSection === item.id ? 'page' : undefined}
+                  className={`shrink-0 flex items-center gap-2 px-3 py-2.5 rounded-lg text-xs font-medium ${adminSection === item.id ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-100'}`}>
+                  <AdminIcon name={item.icon} className="h-4 w-4" />{item.label}
+                </button>
+              ))}
+              <button type="button" onClick={() => navigate(`/admin/classes?school=${encodeURIComponent(institutionScope)}`)} className="shrink-0 px-3 py-2.5 rounded-lg text-xs text-slate-600 hover:bg-slate-100">Classes</button>
+            </nav>
+          </header>
+
+          <main className="max-w-[1480px] mx-auto px-4 sm:px-7 lg:px-9 py-7 sm:py-9 pb-20">
+            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-8">
+              <div>
+                <p className="text-xs font-medium text-indigo-700 mb-2 uppercase tracking-[.12em]">Maxima / Administration</p>
+                <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight text-slate-900">{page.label}</h1>
+                <p className="text-sm text-slate-500 mt-2 max-w-2xl">{page.description}</p>
+              </div>
+              {adminSection === 'users' && (
+                <button type="button" onClick={() => setAccountCreatorOpen(v => !v)}
+                  className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm text-sm font-medium">
+                  <AdminIcon name="plus" className="w-4 h-4" /> {accountCreatorOpen ? 'Close form' : 'Create account'}
+                </button>
+              )}
+              {adminSection === 'schools' && (
+                <button type="button" onClick={() => openSchoolEditor(null)}
+                  className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm text-sm font-medium">
+                  <AdminIcon name="plus" className="w-4 h-4" /> Add institution
+                </button>
+              )}
+              {adminSection === 'selfstudy' && selfStudyTab === 'managers' && (
+                <button type="button" onClick={() => setManagerCreatorOpen(v => !v)}
+                  className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm text-sm font-medium">
+                  <AdminIcon name="plus" className="w-4 h-4" /> {managerCreatorOpen ? 'Close form' : 'Create manager'}
+                </button>
+              )}
+            </div>
+
+            {adminSection === 'overview' && (
+              <div className="space-y-7">
+                <section className="grid grid-cols-2 xl:grid-cols-4 gap-3 sm:gap-4" aria-label="Platform statistics">
+                  {[
+                    { label: 'Active institutions', value: activeInstitutions, detail: `${schools.length} institutions total`, icon: 'schools' },
+                    { label: 'Institution students', value: totalInstitutionStudents, detail: 'Active approved accounts', icon: 'users' },
+                    { label: 'Institution teachers', value: totalInstitutionTeachers, detail: 'Active approved accounts', icon: 'classes' },
+                    { label: 'Pending requests', value: totalPending, detail: 'Requires account review', icon: 'bell' },
+                  ].map(metric => (
+                    <div key={metric.label} className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-sm min-w-0">
+                      <div className="flex justify-between items-center gap-2 text-slate-500"><span className="text-xs font-medium">{metric.label}</span><AdminIcon name={metric.icon} className="h-4 w-4 shrink-0" /></div>
+                      <p className="text-3xl font-semibold tracking-tight text-slate-900 mt-4">{metric.value}</p>
+                      <p className="text-[11px] sm:text-xs text-slate-500 mt-1">{metric.detail}</p>
+                    </div>
+                  ))}
+                </section>
+
+                <div className="grid grid-cols-1 xl:grid-cols-5 gap-5">
+                  <section className="xl:col-span-3 bg-white border border-slate-200 shadow-sm rounded-2xl p-5 sm:p-6">
+                    <div className="flex items-start justify-between gap-3 mb-5">
+                      <div><h2 className="text-base font-semibold text-slate-900">Quick actions</h2><p className="text-sm text-slate-500 mt-1">The tasks you use most often</p></div>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <button type="button" onClick={() => { openSection('users'); setAccountCreatorOpen(true) }}
+                        className="text-left flex items-start gap-3 p-4 border border-slate-200 rounded-xl hover:border-indigo-300 hover:bg-indigo-50/50 transition-colors">
+                        <div className="rounded-lg bg-indigo-50 text-indigo-700 p-2"><AdminIcon name="plus" /></div>
+                        <div><p className="font-medium text-sm text-slate-900">Create an account</p><p className="text-xs text-slate-500 mt-1">Student or teacher</p></div>
+                      </button>
+                      <button type="button" onClick={() => { openSection('users'); handleSchoolScopeChange(ALL_SCHOOLS_ID); changeUserTab('pending') }}
+                        className="text-left flex items-start gap-3 p-4 border border-slate-200 rounded-xl hover:border-indigo-300 hover:bg-indigo-50/50 transition-colors">
+                        <div className="rounded-lg bg-amber-50 text-amber-700 p-2"><AdminIcon name="bell" /></div>
+                        <div><p className="font-medium text-sm text-slate-900">Review requests</p><p className="text-xs text-slate-500 mt-1">{totalPending} pending across institutions</p></div>
+                      </button>
+                      <button type="button" onClick={() => openSection('schools')}
+                        className="text-left flex items-start gap-3 p-4 border border-slate-200 rounded-xl hover:border-indigo-300 hover:bg-indigo-50/50 transition-colors">
+                        <div className="rounded-lg bg-slate-100 text-slate-700 p-2"><AdminIcon name="schools" /></div>
+                        <div><p className="font-medium text-sm text-slate-900">Manage institutions</p><p className="text-xs text-slate-500 mt-1">Branding, seats and status</p></div>
+                      </button>
+                      <button type="button" onClick={() => navigate(`/admin/classes?school=${encodeURIComponent(institutionScope)}`)}
+                        className="text-left flex items-start gap-3 p-4 border border-slate-200 rounded-xl hover:border-indigo-300 hover:bg-indigo-50/50 transition-colors">
+                        <div className="rounded-lg bg-slate-100 text-slate-700 p-2"><AdminIcon name="classes" /></div>
+                        <div><p className="font-medium text-sm text-slate-900">Manage classes</p><p className="text-xs text-slate-500 mt-1">School-scoped class management</p></div>
+                      </button>
+                    </div>
+                  </section>
+                  <section className="xl:col-span-2 bg-white border border-slate-200 shadow-sm rounded-2xl p-5 sm:p-6">
+                    <div className="flex items-center justify-between gap-3"><h2 className="font-semibold text-slate-900">Self-Study</h2><span className="text-[11px] rounded-md bg-amber-50 text-amber-700 px-2 py-1">Practice paused</span></div>
+                    <p className="text-sm text-slate-500 mt-2">Individual practice is temporarily postponed, not cancelled. Accounts and package data remain intact.</p>
+                    <div className="grid grid-cols-2 gap-3 mt-5">
+                      <div className="rounded-xl border border-slate-100 bg-slate-50 p-4"><p className="text-2xl font-semibold">{totalIndividualLearners}</p><p className="text-xs text-slate-500 mt-1">Individual learners</p></div>
+                      <div className="rounded-xl border border-slate-100 bg-slate-50 p-4"><p className="text-2xl font-semibold">{activeSelfStudyManagers.length}</p><p className="text-xs text-slate-500 mt-1">Platform managers</p></div>
+                    </div>
+                    <button type="button" onClick={() => openSection('selfstudy')} className="mt-5 inline-flex items-center gap-2 text-sm font-medium text-indigo-700 hover:text-indigo-900">View accounts <AdminIcon name="arrow" className="w-4 h-4" /></button>
+                  </section>
+                </div>
+                <section className="rounded-2xl border border-slate-200 bg-white shadow-sm p-5 sm:p-6">
+                  <div className="flex items-center justify-between mb-4"><h2 className="font-semibold text-slate-900">Institutions</h2><button type="button" className="text-xs font-medium text-indigo-700 hover:underline" onClick={() => openSection('schools')}>Manage all</button></div>
+                  {schoolsLoading ? <p className="text-sm text-slate-500">Loading institutions...</p> : schools.length === 0 ? <p className="text-sm text-slate-500">No institutions configured yet.</p> : (
+                    <div className="divide-y divide-slate-100">
+                      {schools.map(school => (
+                        <div key={school.schoolId} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 py-3 first:pt-0 last:pb-0">
+                          <div className="min-w-0"><p className="text-sm font-medium text-slate-800">{school.name}</p><p className="text-xs text-slate-500 mt-0.5">{Number(school.studentSeatsUsed) || 0} students · {Number(school.teacherSeatsUsed) || 0} teachers</p></div>
+                          <div className="flex items-center gap-3"><span className={`text-xs ${school.status === 'active' ? 'text-emerald-700' : 'text-slate-500'}`}>{school.status === 'active' ? 'Active' : 'Inactive'}</span><button type="button" onClick={() => openSchoolUsers(school.schoolId)} className="text-xs font-medium text-indigo-700 hover:underline">View users →</button></div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </section>
+              </div>
             )}
 
-            <button
-
-              onClick={resetSchoolForm}
-
-              className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-2 rounded-lg font-medium"
-
-            >
-
-              + New School
-
-            </button>
-
-          </div>
-
-        </div>
-
-
-
-        <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end bg-[#faf9f6] border border-gray-100 rounded-xl p-4 mb-4">
-
+            {adminSection === 'schools' && (
+              <div className="space-y-5">
+                {schoolsError && <div role="alert" className="rounded-xl border border-red-200 bg-red-50 text-red-700 p-4 text-sm">{schoolsError}</div>}
+                {schoolNotice && <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-700 p-4 text-sm">{schoolNotice}</div>}
+                {schools.length === 0 && !schoolsLoading && (
+                  <button type="button" onClick={() => { prepareMaximaSchool(); setSchoolEditorTab('identity'); setSchoolEditorOpen(true) }}
+                    className="text-sm rounded-xl bg-indigo-50 text-indigo-700 px-4 py-3 border border-indigo-200">Prepare default Maxima institution</button>
+                )}
+                {schoolEditorOpen && (
+                  <section className="rounded-2xl bg-white border border-indigo-200 shadow-sm p-5 sm:p-6">
+                    <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-5">
+                      <div><h2 className="font-semibold text-slate-900">{editingSchoolId ? `Edit ${schoolForm.name || editingSchoolId}` : 'New institution'}</h2><p className="text-sm text-slate-500 mt-1">Change details and seats separately from branding and login settings.</p></div>
+                      <button type="button" onClick={() => setSchoolEditorOpen(false)} className="text-xs border border-slate-200 px-3 py-2 rounded-lg text-slate-600 hover:bg-slate-50">Close</button>
+                    </div>
+                    <div role="tablist" aria-label="Institution settings" className="flex flex-wrap gap-2 border-b border-slate-100 pb-4 mb-5">
+                      <button type="button" role="tab" aria-selected={schoolEditorTab === 'identity'} onClick={() => setSchoolEditorTab('identity')}
+                        className={`text-sm px-4 py-2 rounded-lg ${schoolEditorTab === 'identity' ? 'bg-indigo-50 text-indigo-700 font-medium' : 'text-slate-600 hover:bg-slate-50'}`}>Institution & seats</button>
+                      <button type="button" role="tab" aria-selected={schoolEditorTab === 'branding'} onClick={() => setSchoolEditorTab('branding')}
+                        className={`text-sm px-4 py-2 rounded-lg ${schoolEditorTab === 'branding' ? 'bg-indigo-50 text-indigo-700 font-medium' : 'text-slate-600 hover:bg-slate-50'}`}>Branding & login</button>
+                    </div>
+                    {schoolEditorTab === 'identity' && (
+                      <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
           <div className="md:col-span-3">
 
             <label className="text-xs text-gray-400 mb-1 block">School ID</label>
@@ -2911,28 +3037,6 @@ export default function AdminDashboard() {
             </select>
 
           </div>
-
-
-
-          <div className="md:col-span-2">
-
-            <button
-
-              onClick={handleSaveSchool}
-
-              disabled={schoolSaving}
-
-              className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-purple-300 text-white px-3 py-2.5 rounded-xl text-sm font-medium"
-
-            >
-
-              {schoolSaving ? 'Saving...' : editingSchoolId ? 'Save School' : 'Create School'}
-
-            </button>
-
-          </div>
-
-
           <div className="md:col-span-3">
 
             <label className="text-xs text-gray-400 mb-1 block">Student seat limit</label>
@@ -2992,7 +3096,10 @@ export default function AdminDashboard() {
           <div className="md:col-span-6 text-xs text-gray-400 pb-2">
             Blank = Unlimited. Active approved accounts consume seats; Archived, Pending and Rejected accounts do not.
           </div>
-
+                      </div>
+                    )}
+                    {schoolEditorTab === 'branding' && (
+                      <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
           <div className="md:col-span-4">
             <label className="text-xs text-gray-400 mb-1 block">Institution logo</label>
             <input
@@ -3057,221 +3164,61 @@ export default function AdminDashboard() {
             </select>
             <p className="text-[11px] text-gray-400 mt-1">Preference controls the branded login experience; it does not disable the other Firebase sign-in method.</p>
           </div>
-
-        </div>
-
-
-
-        {schoolsError && (
-
-          <div className="mb-4 text-xs bg-red-50 border border-red-100 text-red-600 rounded-xl px-3 py-2">
-
-            {schoolsError}
-
-          </div>
-
-        )}
-
-
-
-        {schoolNotice && (
-
-          <div className="mb-4 text-xs bg-green-50 border border-green-100 text-green-700 rounded-xl px-3 py-2">
-
-            {schoolNotice}
-
-          </div>
-
-        )}
-
-
-
-        {schoolsLoading ? (
-
-          <p className="text-sm text-gray-400 py-4 text-center">Loading schools...</p>
-
-        ) : schools.length === 0 ? (
-
-          <div className="border border-dashed border-purple-200 rounded-xl p-5 text-center">
-
-            <p className="text-sm font-medium text-gray-700">No school record exists yet.</p>
-
-            <p className="text-xs text-gray-400 mt-1">
-
-              Keep School ID as <span className="font-mono">maxima</span>, School name as Maxima Eğitim, then click Create School.
-
-            </p>
-
-          </div>
-
-        ) : (
-
-          <div className="flex flex-col gap-2">
-
-            {schools.map(school => {
-
-              const studentCount = Number(school.studentSeatsUsed) || 0
-
-              const teacherCount = Number(school.teacherSeatsUsed) || 0
-
-              const studentLimit = school.studentSeatLimit
-
-              const teacherLimit = school.teacherSeatLimit
-
-              const studentFull = studentLimit !== null && studentLimit !== undefined && studentCount >= Number(studentLimit)
-
-              const teacherFull = teacherLimit !== null && teacherLimit !== undefined && teacherCount >= Number(teacherLimit)
-
-
-
-              return (
-
-                <div key={school.schoolId} className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 border border-gray-100 rounded-xl px-4 py-3">
-
-                  <div className="min-w-0">
-
-                    <div className="flex items-center gap-2 flex-wrap">
-
-                      <p className="text-sm font-semibold text-gray-800">{school.name}</p>
-
-                      <span className={`text-[11px] px-2 py-0.5 rounded-full ${school.status === 'active' ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
-
-                        {school.status === 'active' ? 'Active' : 'Inactive'}
-
-                      </span>
-
-                    </div>
-
-                    <p className="text-xs text-gray-400 mt-1">
-
-                      ID: <span className="font-mono">{school.schoolId}</span>
-
-                    </p>
-
-                    <div className="flex flex-wrap gap-2 mt-2">
-                      <span className={`text-[11px] px-2 py-1 rounded-full ${studentFull ? 'bg-amber-50 text-amber-700' : 'bg-blue-50 text-blue-700'}`}>
-                        Students {studentCount} / {seatLimitLabel(studentLimit)}
-                      </span>
-                      <span className={`text-[11px] px-2 py-1 rounded-full ${teacherFull ? 'bg-amber-50 text-amber-700' : 'bg-green-50 text-green-700'}`}>
-                        Teachers {teacherCount} / {seatLimitLabel(teacherLimit)}
-                      </span>
-                      <span className="text-[11px] px-2 py-1 rounded-full bg-gray-50 text-gray-600">
-                        Login: {school.loginPreference || 'both'}
-                      </span>
-                      {school.logoPath && (
-                        <span className="text-[11px] px-2 py-1 rounded-full bg-purple-50 text-purple-700">Logo</span>
-                      )}
-                      <span className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-full bg-gray-50 text-gray-600">
-                        <span className="inline-block h-2.5 w-2.5 rounded-full border border-black/10" style={{ backgroundColor: school.primaryColor || DEFAULT_SCHOOL_PRIMARY_COLOR }} />
-                        <span className="inline-block h-2.5 w-2.5 rounded-full border border-black/10" style={{ backgroundColor: school.accentColor || DEFAULT_SCHOOL_ACCENT_COLOR }} />
-                        Brand
-                      </span>
-                    </div>
-
-                  </div>
-
-
-
-                  <div className="flex gap-2 flex-wrap">
-
-                    <button
-
-                      onClick={() => handleSchoolScopeChange(school.schoolId)}
-
-                      className={`text-xs px-3 py-1.5 rounded-lg ${selectedSchoolId === school.schoolId ? 'bg-purple-600 text-white' : 'bg-purple-50 hover:bg-purple-100 text-purple-700'}`}
-
-                    >
-
-                      {selectedSchoolId === school.schoolId ? 'Viewing' : 'View'}
-
-                    </button>
-
-                    <button
-
-                      onClick={() => handleEditSchool(school)}
-
-                      className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-1.5 rounded-lg"
-
-                    >
-
-                      Edit
-
-                    </button>
-
-                    <button
-
-                      onClick={() => handleToggleSchoolStatus(school)}
-
-                      disabled={schoolSaving}
-
-                      className={`text-xs px-3 py-1.5 rounded-lg ${school.status === 'active' ? 'bg-amber-50 hover:bg-amber-100 text-amber-700' : 'bg-green-50 hover:bg-green-100 text-green-700'}`}
-
-                    >
-
-                      {school.status === 'active' ? 'Deactivate' : 'Activate'}
-
-                    </button>
-
-                    {school.status === 'inactive' && school.schoolId !== DEFAULT_SCHOOL_ID && (
-
-                      <button
-
-                        onClick={() => handleDeleteSchool(school)}
-
-                        disabled={schoolSaving}
-
-                        className="text-xs bg-red-50 hover:bg-red-100 disabled:text-red-300 text-red-600 px-3 py-1.5 rounded-lg"
-
-                      >
-
-                        Delete All Data
-
-                      </button>
-
+                      </div>
                     )}
+                    <div className="flex flex-wrap justify-end gap-3 mt-6 border-t border-slate-100 pt-5">
+                      <button type="button" onClick={() => setSchoolEditorOpen(false)} disabled={schoolSaving} className="px-4 py-2.5 text-sm text-slate-600 border border-slate-200 rounded-xl hover:bg-slate-50">Cancel</button>
+                      <button type="button" onClick={handleSaveSchool} disabled={schoolSaving} className="px-5 py-2.5 text-sm font-medium bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 disabled:opacity-50">{schoolSaving ? 'Saving...' : editingSchoolId ? 'Save changes' : 'Create institution'}</button>
+                    </div>
+                  </section>
+                )}
+                <section className="rounded-2xl bg-white border border-slate-200 shadow-sm p-5 sm:p-6">
+                  <div className="flex items-center justify-between gap-2 mb-4"><div><h2 className="text-base font-semibold">Institution directory</h2><p className="text-sm text-slate-500 mt-1">{schools.length} institution(s). Manage accounts and settings without leaving this area.</p></div></div>
+                  {schoolsLoading ? <p className="py-8 text-sm text-slate-500 text-center">Loading institutions...</p> : schools.length === 0 ? <p className="py-8 text-sm text-slate-500 text-center">No institutions have been added.</p> : (
+                    <div className="divide-y divide-slate-100">
+                      {schools.map(school => (
+                        <div key={school.schoolId} className="grid lg:grid-cols-[minmax(0,1fr)_auto] gap-3 lg:items-center py-5 first:pt-1 last:pb-1">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2"><h3 className="font-medium text-slate-900">{school.name}</h3><span className={`text-[11px] rounded-md px-2 py-0.5 ${school.status === 'active' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>{school.status === 'active' ? 'Active' : 'Inactive'}</span></div>
+                            <p className="text-xs text-slate-500 mt-1">ID: <span className="font-mono">{school.schoolId}</span></p>
+                            <p className="text-xs text-slate-600 mt-2">Students <strong>{Number(school.studentSeatsUsed) || 0}</strong> / {seatLimitLabel(school.studentSeatLimit)} <span className="mx-2 text-slate-300">·</span> Teachers <strong>{Number(school.teacherSeatsUsed) || 0}</strong> / {seatLimitLabel(school.teacherSeatLimit)}</p>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+                            <button type="button" onClick={() => openSchoolUsers(school.schoolId)} className="text-xs font-medium px-3 py-2 rounded-lg bg-indigo-50 text-indigo-700 hover:bg-indigo-100">View users</button>
+                            <button type="button" onClick={() => openSchoolEditor(school)} className="text-xs font-medium px-3 py-2 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50">Settings</button>
+                            <details className="relative">
+                              <summary className="cursor-pointer list-none text-xs px-3 py-2 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50">More ▾</summary>
+                              <div className="absolute right-0 z-30 mt-2 min-w-48 bg-white border border-slate-200 shadow-xl rounded-xl p-2 flex flex-col gap-1">
+                                <button type="button" disabled={schoolSaving} onClick={() => handleToggleSchoolStatus(school)} className="text-left px-3 py-2 rounded-lg text-xs hover:bg-slate-50 disabled:opacity-50">{school.status === 'active' ? 'Deactivate institution' : 'Activate institution'}</button>
+                                {school.status === 'inactive' && school.schoolId !== DEFAULT_SCHOOL_ID && <button type="button" disabled={schoolSaving} onClick={() => handleDeleteSchool(school)} className="text-left px-3 py-2 rounded-lg text-xs text-red-700 hover:bg-red-50 disabled:opacity-50">Delete institution & all data</button>}
+                              </div>
+                            </details>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </section>
+              </div>
+            )}
 
+            {adminSection === 'users' && (
+              <div className="space-y-5">
+                <div className="bg-white border border-slate-200 shadow-sm rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                  <div className="min-w-0"><p className="text-sm font-medium text-slate-800">Institution scope</p><p className="text-xs text-slate-500 mt-1">Account lists and approvals follow this selection. Individual learners are managed separately.</p></div>
+                  <div className="w-full sm:w-72 shrink-0">
+                    <label htmlFor="admin-institution-scope" className="sr-only">Select institution</label>
+                    <select id="admin-institution-scope" value={selectedSchoolId} disabled={schoolsLoading} onChange={e => handleSchoolScopeChange(e.target.value)} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 outline-none">
+                      {schools.map(school => <option key={school.schoolId} value={school.schoolId}>{school.name}{school.status !== 'active' ? ' (Inactive)' : ''}</option>)}
+                      <option value={ALL_SCHOOLS_ID}>All institutions</option>
+                    </select>
                   </div>
-
                 </div>
-
-              )
-
-            })}
-
-          </div>
-
-        )}
-
-      </div>
-
-
-
-      <div className="bg-white border border-gray-100 rounded-2xl p-5 mb-8">
-
-        <div className="flex items-start justify-between gap-4 mb-4">
-
-          <div>
-
-            <div className="flex items-center gap-2">
-
-              <h2 className="font-semibold text-gray-800">Create account</h2>
-
-              <span className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded-full">P2B</span>
-
-            </div>
-
-            <p className="text-xs text-gray-400 mt-1">
-
-              Create an approved Student or Teacher directly in an active school. Username is optional and unique inside that school; seat quota is still enforced server-side.
-
-            </p>
-
-          </div>
-
-        </div>
-
-
-
+                {selectedSchool && selectedSchool.status !== 'active' && <div role="status" className="border border-amber-200 bg-amber-50 text-amber-800 text-sm rounded-xl p-4">This institution is inactive. Account creation and approvals are unavailable until it is reactivated.</div>}
+                {accountNotice && !accountCreatorOpen && <div role="status" className="border border-emerald-200 bg-emerald-50 text-emerald-700 p-4 text-sm rounded-xl">{accountNotice}</div>}
+                {accountCreatorOpen && (
+                  <section className="rounded-2xl border border-indigo-200 bg-white shadow-sm p-5 sm:p-6">
+                    <div className="flex justify-between items-start gap-3 mb-5"><div><h2 className="text-base font-semibold">Create institution account</h2><p className="text-sm text-slate-500 mt-1">Create a student or teacher account in an active institution.</p></div><button type="button" onClick={() => setAccountCreatorOpen(false)} className="text-xs rounded-lg px-3 py-2 border border-slate-200">Close</button></div>
         <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
 
           <div className="md:col-span-3">
@@ -3468,221 +3415,28 @@ export default function AdminDashboard() {
           </button>
 
         </div>
-
-      </div>
-
-
-
-      <div className="bg-white border border-purple-100 rounded-2xl p-5 mb-8">
-
-        <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3 mb-4">
-          <div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <h2 className="font-semibold text-gray-800">Self-Study Managers</h2>
-              <span className="text-xs bg-purple-50 text-purple-600 px-2 py-1 rounded-full">P4B</span>
-              <span className="text-xs bg-green-50 text-green-700 px-2 py-1 rounded-full">Platform account</span>
-            </div>
-            <p className="text-xs text-gray-400 mt-1 max-w-2xl">
-              Separate B2C management accounts. They are not Teachers, do not belong to a school, use email login only and consume no institution seat.
-            </p>
-          </div>
-          <div className="text-xs text-gray-500">
-            Active: <span className="font-semibold text-gray-800">{activeSelfStudyManagers.length}</span>
-            <span className="mx-2">·</span>
-            Archived: <span className="font-semibold text-gray-800">{archivedSelfStudyManagers.length}</span>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end bg-[#faf9f6] border border-gray-100 rounded-xl p-4 mb-4">
-          <div className="md:col-span-5">
-            <label className="text-xs text-gray-400 mb-1 block">Full name</label>
-            <input
-              value={managerForm.name}
-              onChange={e => setManagerForm(previous => ({ ...previous, name: e.target.value }))}
-              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400"
-              placeholder="Self-Study Manager name"
-            />
-          </div>
-          <div className="md:col-span-5">
-            <label className="text-xs text-gray-400 mb-1 block">Email</label>
-            <input
-              type="email"
-              value={managerForm.email}
-              onChange={e => setManagerForm(previous => ({ ...previous, email: e.target.value }))}
-              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400"
-              placeholder="manager@example.com"
-            />
-          </div>
-          <div className="md:col-span-2">
-            <button
-              onClick={handleCreateSelfStudyManager}
-              disabled={managerCreating}
-              className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-purple-300 text-white px-3 py-2.5 rounded-xl text-sm font-medium"
-            >
-              {managerCreating ? 'Creating...' : 'Create manager'}
-            </button>
-          </div>
-        </div>
-
-        {managerError && (
-          <div className="mb-3 text-xs bg-red-50 border border-red-100 text-red-600 rounded-xl px-3 py-2">{managerError}</div>
-        )}
-        {managerNotice && (
-          <div className="mb-3 text-xs bg-green-50 border border-green-100 text-green-700 rounded-xl px-3 py-2">{managerNotice}</div>
-        )}
-
-        <div className="flex flex-col gap-2">
-          {activeSelfStudyManagers.length === 0 && archivedSelfStudyManagers.length === 0 && (
-            <div className="border border-dashed border-purple-200 rounded-xl p-5 text-center text-sm text-gray-400">
-              No Self-Study Manager account exists yet.
-            </div>
-          )}
-
-          {activeSelfStudyManagers.map(manager => (
-            <div key={manager.id} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border border-gray-100 rounded-xl px-4 py-3">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <p className="text-sm font-semibold text-gray-800">{manager.name || 'Unnamed manager'}</p>
-                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-green-50 text-green-700">Active</span>
-                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-purple-50 text-purple-700">Self-Study Manager</span>
-                </div>
-                <p className="text-xs text-gray-400 truncate mt-0.5">{manager.email}</p>
-                <p className="text-[11px] text-gray-400 mt-0.5">Platform scope · Email login only · No institution seat</p>
-              </div>
-              <div className="flex gap-2 flex-wrap">
-                <button onClick={() => handleEdit(manager)} className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-1.5 rounded-lg">Edit</button>
-                <button onClick={() => handleSendPasswordReset(manager)} className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-600 px-3 py-1.5 rounded-lg">Email Reset</button>
-                <button onClick={() => handleDelete(manager.id)} className="text-xs bg-amber-50 hover:bg-amber-100 text-amber-700 px-3 py-1.5 rounded-lg">Archive</button>
-              </div>
-            </div>
-          ))}
-
-          {archivedSelfStudyManagers.map(manager => (
-            <div key={manager.id} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border border-gray-100 rounded-xl px-4 py-3 bg-gray-50/60">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <p className="text-sm font-semibold text-gray-700">{manager.name || 'Unnamed manager'}</p>
-                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-gray-200 text-gray-600">Archived</span>
-                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-purple-50 text-purple-700">Self-Study Manager</span>
-                </div>
-                <p className="text-xs text-gray-400 truncate mt-0.5">{manager.email}</p>
-              </div>
-              <div className="flex gap-2 flex-wrap">
-                <button
-                  disabled={restoreBusyId === manager.id || permanentDeleteBusyId === manager.id}
-                  onClick={() => handleRestoreManagedUser(manager)}
-                  className="text-xs bg-green-100 hover:bg-green-200 disabled:bg-gray-100 disabled:text-gray-400 text-green-700 px-3 py-1.5 rounded-lg"
-                >
-                  {restoreBusyId === manager.id ? 'Restoring...' : 'Restore Account'}
-                </button>
-                <button
-                  disabled={permanentDeleteBusyId === manager.id}
-                  onClick={() => handlePermanentDeleteUser(manager)}
-                  className="text-xs bg-red-100 hover:bg-red-200 disabled:bg-gray-100 disabled:text-gray-400 text-red-700 px-3 py-1.5 rounded-lg"
-                >
-                  {permanentDeleteBusyId === manager.id ? 'Deleting...' : 'Delete Permanently'}
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-
-          <div className="bg-white border border-gray-100 rounded-2xl p-5 text-center">
-
-            <p className="text-3xl font-bold text-gray-900">{activeSchoolScopedUsers.length}</p>
-
-            <p className="text-sm text-gray-400 mt-1">Active users</p>
-
-          </div>
-
-          <div className="bg-white border border-gray-100 rounded-2xl p-5 text-center">
-
-            <p className="text-3xl font-bold text-orange-500">{scopedPendingCount}</p>
-
-            <p className="text-sm text-gray-400 mt-1">Pending</p>
-
-          </div>
-
-          <div className="bg-white border border-gray-100 rounded-2xl p-5 text-center">
-
-            <p className="text-3xl font-bold text-purple-600">{scopedStudentCount}</p>
-
-            <p className="text-sm text-gray-400 mt-1">Students</p>
-
-          </div>
-
-          <div className="bg-white border border-gray-100 rounded-2xl p-5 text-center">
-
-            <p className="text-3xl font-bold text-green-600">{scopedTeacherCount}</p>
-
-            <p className="text-sm text-gray-400 mt-1">Teachers</p>
-
-          </div>
-
-        </div>
-
-
-
-        {selectedSchoolId === ALL_SCHOOLS_ID && (
-          <div className="mb-5 flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => { setAccountAudienceView('institution'); setSearch(''); setSelectedStudent(null) }}
-              className={`px-4 py-2 rounded-xl text-sm font-medium border ${accountAudienceView === 'institution' ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}
-            >
-              Institution Accounts ({institutionAccountCount})
-            </button>
-            <button
-              type="button"
-              onClick={() => { setAccountAudienceView('individual'); setSearch(''); setSelectedStudent(null) }}
-              className={`px-4 py-2 rounded-xl text-sm font-medium border ${accountAudienceView === 'individual' ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}
-            >
-              Self-Study Accounts ({individualAccountCount})
-            </button>
-            <p className="text-xs text-gray-400 ml-1">Institution and individual accounts are kept in separate views.</p>
-          </div>
-        )}
-
-        <div className="mb-6">
-
-          <input
-
-            type="text"
-
-            placeholder={`Search ${selectedSchoolLabel} by name, email or username...`}
-
-            className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400"
-
-            value={search}
-
-            onChange={e => setSearch(e.target.value)}
-
-          />
-
-        </div>
-
-
-
-        <div className="mb-6 flex flex-wrap items-center gap-2">
-          <button
-            onClick={() => setAccountListView('active')}
-            className={`px-4 py-2 rounded-xl text-sm font-medium border ${accountListView === 'active' ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}
-          >
-            Active Accounts ({activeSchoolScopedUsers.length})
-          </button>
-          <button
-            onClick={() => { setAccountListView('archived'); setSelectedStudent(null) }}
-            className={`px-4 py-2 rounded-xl text-sm font-medium border ${accountListView === 'archived' ? 'bg-gray-800 text-white border-gray-800' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}
-          >
-            Archived Accounts ({archivedSchoolScopedUsers.length})
-          </button>
-          <p className="text-xs text-gray-400 ml-1">Archived accounts are hidden from the default view.</p>
-        </div>
-
+                  </section>
+                )}
+                <section className="bg-white border border-slate-200 shadow-sm rounded-2xl p-4 sm:p-5">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5">
+                    <div><h2 className="font-semibold">Institution accounts</h2><p className="text-sm text-slate-500 mt-1">{selectedSchoolLabel} · {scopedStudentCount} students · {scopedTeacherCount} teachers</p></div>
+                    <div className="relative w-full sm:w-80">
+                      <AdminIcon name="search" className="w-4 h-4 absolute top-3.5 left-3 text-slate-400" />
+                      <input type="search" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name, email or username" aria-label="Search institution accounts" className="w-full pl-9 pr-3 py-2.5 text-sm border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-400" />
+                    </div>
+                  </div>
+                  <div role="tablist" aria-label="Institution account categories" className="flex flex-wrap gap-2">
+                    {[
+                      { id: 'students', label: 'Students', count: scopedStudentCount },
+                      { id: 'teachers', label: 'Teachers', count: scopedTeacherCount },
+                      { id: 'pending', label: 'Approvals', count: scopedPendingCount },
+                      { id: 'archived', label: 'Archive', count: archivedSchoolScopedUsers.length },
+                    ].map(tab => <button key={tab.id} type="button" role="tab" aria-selected={userTab === tab.id} onClick={() => changeUserTab(tab.id)}
+                      className={`px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium rounded-lg border ${userTab === tab.id ? 'bg-indigo-50 border-indigo-200 text-indigo-700' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}>{tab.label} <span className="ml-1 text-xs opacity-70">{tab.count}</span></button>)}
+                  </div>
+                </section>
+                {userTab === 'pending' && (
+                  <div className="space-y-5">
         {!showingIndividualAccounts && (
         <div className={accountListView === 'active' ? 'mb-8' : 'hidden'}>
 
@@ -3766,8 +3520,6 @@ export default function AdminDashboard() {
         </div>
         )}
 
-
-
         {!showingIndividualAccounts && accountListView === 'active' && rejectedUsers.length > 0 && (
 
           <div className="mb-8">
@@ -3846,9 +3598,10 @@ export default function AdminDashboard() {
           </div>
 
         )}
-
-
-
+                  </div>
+                )}
+                {userTab === 'archived' && (
+                  <>
         {accountListView === 'archived' && archivedUsers.length > 0 && (
 
           <div className="mb-8">
@@ -3930,13 +3683,16 @@ export default function AdminDashboard() {
             No archived accounts found.
           </div>
         )}
-
+                  </>
+                )}
+                {userTab === 'teachers' && (
+                  <>
         {!showingIndividualAccounts && (
         <div className={accountListView === 'active' ? 'mb-8' : 'hidden'}>
 
           <h2 className="font-semibold text-gray-700 mb-3">Teachers ({teachers.length})</h2>
 
-          <div className="bg-white border border-gray-100 rounded-2xl overflow-hidden">
+          <div className="bg-white border border-slate-200 rounded-2xl overflow-visible shadow-sm">
 
             {teachers.length === 0 ? (
 
@@ -3977,14 +3733,15 @@ export default function AdminDashboard() {
 
                 </div>
 
-                <div className="flex gap-2">
-
-                  <button onClick={() => handleEdit(u)} className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-1.5 rounded-lg">Edit</button>
-
-                  <button onClick={() => handleSendPasswordReset(u)} className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-600 px-3 py-1.5 rounded-lg">Email Reset</button>
-
-                  <button onClick={() => handleDelete(u.id)} className="text-xs bg-amber-50 hover:bg-amber-100 text-amber-700 px-3 py-1.5 rounded-lg">Archive</button>
-
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button onClick={() => handleEdit(u)} className="text-xs px-3 py-2 rounded-lg bg-indigo-50 text-indigo-700 hover:bg-indigo-100">Edit</button>
+                  <details className="relative">
+                    <summary className="cursor-pointer list-none text-xs px-3 py-2 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50">More ▾</summary>
+                    <div className="absolute right-0 z-20 mt-2 w-48 rounded-xl border border-slate-200 bg-white p-2 shadow-xl flex flex-col gap-1">
+                      <button onClick={() => handleSendPasswordReset(u)} className="text-left text-xs px-3 py-2 rounded-lg hover:bg-slate-50">Password reset</button>
+                      <button onClick={() => handleDelete(u.id)} className="text-left text-xs px-3 py-2 rounded-lg hover:bg-amber-50 text-amber-700">Archive account</button>
+                    </div>
+                  </details>
                 </div>
 
               </div>
@@ -3995,9 +3752,9 @@ export default function AdminDashboard() {
 
         </div>
         )}
-
-
-
+                  </>
+                )}
+                {userTab === 'students' && (
         <div className={accountListView === 'active' ? '' : 'hidden'}>
 
           <h2 className="font-semibold text-gray-700 mb-3">{showingIndividualAccounts ? 'Self-Study Learners' : 'Students'} ({students.length})</h2>
@@ -4010,13 +3767,11 @@ export default function AdminDashboard() {
 
             ) : students.map(u => (
 
-              <div key={u.id} className="bg-white border border-gray-100 rounded-2xl overflow-hidden">
+              <div key={u.id} className="bg-white border border-slate-200 rounded-2xl overflow-visible shadow-sm">
 
                 <div
 
-                  className="flex items-center justify-between px-5 py-4 cursor-pointer hover:bg-gray-50"
-
-                  onClick={() => setSelectedStudent(selectedStudent === u.id ? null : u.id)}
+                  className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 px-5 py-4 hover:bg-slate-50"
 
                 >
 
@@ -4051,39 +3806,37 @@ export default function AdminDashboard() {
 
                   </div>
 
-                  <div className="flex gap-2 items-center flex-wrap justify-end">
-
-                    <button onClick={e => { e.stopPropagation(); handleEdit(u) }} className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-1.5 rounded-lg">Edit</button>
-
-                    <button onClick={e => { e.stopPropagation(); handleSendPasswordReset(u) }} className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-600 px-3 py-1.5 rounded-lg">Email Reset</button>
-
-
-
-                    {!isIndividualAccount(u) && (
-                      <>
-                        <button onClick={e => { e.stopPropagation(); hideStudentRecords(u, 'mock') }} className="text-xs bg-purple-50 hover:bg-purple-100 text-purple-600 px-3 py-1.5 rounded-lg">Hide Mock</button>
-                        <button onClick={e => { e.stopPropagation(); restoreStudentRecords(u, 'mock') }} className="text-xs bg-green-50 hover:bg-green-100 text-green-600 px-3 py-1.5 rounded-lg">Restore Mock</button>
-                        <button onClick={e => { e.stopPropagation(); hardDeleteStudentRecords(u, 'mock') }} className="text-xs bg-red-50 hover:bg-red-100 text-red-600 px-3 py-1.5 rounded-lg">Delete Mock</button>
-                        <button onClick={e => { e.stopPropagation(); hideStudentRecords(u, 'homework') }} className="text-xs bg-amber-50 hover:bg-amber-100 text-amber-600 px-3 py-1.5 rounded-lg">Hide Homework</button>
-                        <button onClick={e => { e.stopPropagation(); restoreStudentRecords(u, 'homework') }} className="text-xs bg-emerald-50 hover:bg-emerald-100 text-emerald-600 px-3 py-1.5 rounded-lg">Restore Homework</button>
-                        <button onClick={e => { e.stopPropagation(); hardDeleteStudentRecords(u, 'homework') }} className="text-xs bg-rose-50 hover:bg-rose-100 text-rose-600 px-3 py-1.5 rounded-lg">Delete Homework</button>
-                      </>
-                    )}
-
-
-
-                    <button onClick={e => { e.stopPropagation(); handleDelete(u.id) }} className="text-xs bg-amber-100 hover:bg-amber-200 text-amber-800 px-3 py-1.5 rounded-lg">Archive User</button>
-
-                    <button
-                      disabled={permanentDeleteBusyId === u.id}
-                      onClick={e => { e.stopPropagation(); handlePermanentDeleteUser(u) }}
-                      className="text-xs bg-red-100 hover:bg-red-200 disabled:bg-gray-100 disabled:text-gray-400 text-red-700 px-3 py-1.5 rounded-lg"
-                    >
-                      {permanentDeleteBusyId === u.id ? 'Deleting...' : 'Delete Permanently'}
+                  <div className="flex items-center gap-2 flex-wrap lg:justify-end">
+                    <button type="button" onClick={() => setSelectedStudent(selectedStudent === u.id ? null : u.id)}
+                      aria-expanded={selectedStudent === u.id}
+                      className="text-xs border border-slate-200 rounded-lg px-3 py-2 bg-white text-slate-700 hover:bg-slate-100">
+                      {selectedStudent === u.id ? 'Hide mock history' : 'Mock history'}
                     </button>
-
-                    <div className="text-gray-300">{selectedStudent === u.id ? '▲' : '▼'}</div>
-
+                    <button type="button" onClick={() => handleEdit(u)}
+                      className="text-xs border border-indigo-200 rounded-lg px-3 py-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-medium">Edit</button>
+                    <details className="relative" onClick={e => e.stopPropagation()}>
+                      <summary className="cursor-pointer list-none text-xs border border-slate-200 rounded-lg px-3 py-2 bg-white text-slate-700 hover:bg-slate-100 select-none">More actions ▾</summary>
+                      <div className="absolute right-0 z-30 mt-2 w-56 max-h-[65vh] overflow-auto rounded-xl border border-slate-200 bg-white shadow-xl p-2 flex flex-col gap-1">
+                        <button type="button" onClick={() => handleSendPasswordReset(u)} className="text-left text-xs px-3 py-2 rounded-lg hover:bg-slate-50 text-slate-700">Send password reset</button>
+                        {!isIndividualAccount(u) && (
+                          <>
+                            <p className="px-3 pt-2 text-[11px] font-semibold text-slate-400 uppercase">Mock results</p>
+                            <button type="button" onClick={() => hideStudentRecords(u, 'mock')} className="text-left text-xs px-3 py-2 rounded-lg hover:bg-slate-50">Hide mock results</button>
+                            <button type="button" onClick={() => restoreStudentRecords(u, 'mock')} className="text-left text-xs px-3 py-2 rounded-lg hover:bg-slate-50">Restore mock results</button>
+                            <button type="button" onClick={() => hardDeleteStudentRecords(u, 'mock')} className="text-left text-xs px-3 py-2 rounded-lg hover:bg-red-50 text-red-700">Delete mock results</button>
+                            <p className="px-3 pt-2 text-[11px] font-semibold text-slate-400 uppercase">Homework</p>
+                            <button type="button" onClick={() => hideStudentRecords(u, 'homework')} className="text-left text-xs px-3 py-2 rounded-lg hover:bg-slate-50">Hide homework</button>
+                            <button type="button" onClick={() => restoreStudentRecords(u, 'homework')} className="text-left text-xs px-3 py-2 rounded-lg hover:bg-slate-50">Restore homework</button>
+                            <button type="button" onClick={() => hardDeleteStudentRecords(u, 'homework')} className="text-left text-xs px-3 py-2 rounded-lg hover:bg-red-50 text-red-700">Delete homework records</button>
+                          </>
+                        )}
+                        <div className="border-t border-slate-100 mt-1 pt-1 flex flex-col gap-1">
+                          <button type="button" onClick={() => handleDelete(u.id)} className="text-left text-xs px-3 py-2 rounded-lg hover:bg-amber-50 text-amber-700">Archive account</button>
+                          <button type="button" disabled={permanentDeleteBusyId === u.id} onClick={() => handlePermanentDeleteUser(u)}
+                            className="text-left text-xs px-3 py-2 rounded-lg hover:bg-red-50 text-red-700 disabled:opacity-40">{permanentDeleteBusyId === u.id ? 'Deleting...' : 'Permanently delete account'}</button>
+                        </div>
+                      </div>
+                    </details>
                   </div>
 
                 </div>
@@ -4114,7 +3867,7 @@ export default function AdminDashboard() {
 
                           <p className="text-xs text-gray-400">
 
-                            No visible mock scores yet. Hidden results can be restored with the Restore button.
+                            No visible mock scores yet. Use More actions to restore hidden results.
 
                           </p>
 
@@ -4175,11 +3928,392 @@ export default function AdminDashboard() {
           </div>
 
         </div>
+                )}
+              </div>
+            )}
 
+            {adminSection === 'selfstudy' && (
+              <div className="space-y-5">
+                <div className="rounded-2xl border border-amber-200 bg-amber-50/70 px-5 py-4">
+                  <div className="flex gap-3 items-start"><AdminIcon name="shield" className="w-5 h-5 shrink-0 text-amber-700 mt-0.5" /><div><p className="text-sm font-semibold text-amber-900">Individual practice temporarily postponed</p><p className="text-sm text-amber-800 mt-1">The learner practice interface is paused, not cancelled. Account management, packages and existing data are preserved.</p></div></div>
+                </div>
+                <section className="rounded-2xl border border-slate-200 bg-white shadow-sm p-4 sm:p-5">
+                  <div className="flex justify-between items-start gap-3 mb-4"><div><h2 className="font-semibold">Self-Study administration</h2><p className="text-xs text-slate-500 mt-1">Individual users never consume institution seats.</p></div><span className="text-xs rounded-lg bg-slate-100 text-slate-600 px-2 py-1">Separate scope</span></div>
+                  <div role="tablist" aria-label="Self-Study accounts" className="flex flex-wrap gap-2">
+                    {[
+                      { id: 'learners', label: 'Individual learners', count: totalIndividualLearners },
+                      { id: 'managers', label: 'Platform managers', count: activeSelfStudyManagers.length },
+                      { id: 'archived', label: 'Learner archive', count: archivedSchoolScopedUsers.length }
+                    ].map(tab => <button key={tab.id} type="button" role="tab" aria-selected={selfStudyTab === tab.id} onClick={() => changeSelfStudyTab(tab.id)} className={`px-3 sm:px-4 py-2 rounded-lg text-sm border font-medium ${selfStudyTab === tab.id ? 'bg-indigo-50 text-indigo-700 border-indigo-200' : 'text-slate-600 border-slate-200 hover:bg-slate-50'}`}>{tab.label} <span className="text-xs ml-1 opacity-70">{tab.count}</span></button>)}
+                  </div>
+                  {selfStudyTab !== 'managers' && <div className="relative mt-4"><AdminIcon name="search" className="absolute left-3 top-3.5 w-4 h-4 text-slate-400" /><input type="search" aria-label="Search individual learners" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search individuals by name or email" className="w-full pl-9 pr-3 py-2.5 text-sm border border-slate-200 rounded-xl outline-none focus:border-indigo-400" /></div>}
+                </section>
+                {selfStudyTab === 'managers' && (
+                  <section className="bg-white border border-slate-200 rounded-2xl shadow-sm p-5 sm:p-6">
+                    <div className="flex justify-between gap-2 items-start mb-4"><div><h2 className="font-semibold">Platform managers</h2><p className="text-sm text-slate-500 mt-1">Email-only management accounts without institution membership.</p></div><span className="text-xs text-slate-500">{activeSelfStudyManagers.length} active · {archivedSelfStudyManagers.length} archived</span></div>
+                    {managerNotice && !managerCreatorOpen && <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-700 text-sm p-3 mb-4">{managerNotice}</div>}
+                    {managerCreatorOpen && (
+                      <div className="rounded-xl border border-indigo-200 bg-slate-50 p-4 mb-5">
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end bg-[#faf9f6] border border-gray-100 rounded-xl p-4 mb-4">
+          <div className="md:col-span-5">
+            <label className="text-xs text-gray-400 mb-1 block">Full name</label>
+            <input
+              value={managerForm.name}
+              onChange={e => setManagerForm(previous => ({ ...previous, name: e.target.value }))}
+              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400"
+              placeholder="Self-Study Manager name"
+            />
+          </div>
+          <div className="md:col-span-5">
+            <label className="text-xs text-gray-400 mb-1 block">Email</label>
+            <input
+              type="email"
+              value={managerForm.email}
+              onChange={e => setManagerForm(previous => ({ ...previous, email: e.target.value }))}
+              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400"
+              placeholder="manager@example.com"
+            />
+          </div>
+          <div className="md:col-span-2">
+            <button
+              onClick={handleCreateSelfStudyManager}
+              disabled={managerCreating}
+              className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-purple-300 text-white px-3 py-2.5 rounded-xl text-sm font-medium"
+            >
+              {managerCreating ? 'Creating...' : 'Create manager'}
+            </button>
+          </div>
+        </div>
+        {managerError && (
+          <div className="mb-3 text-xs bg-red-50 border border-red-100 text-red-600 rounded-xl px-3 py-2">{managerError}</div>
+        )}
+        {managerNotice && (
+          <div className="mb-3 text-xs bg-green-50 border border-green-100 text-green-700 rounded-xl px-3 py-2">{managerNotice}</div>
+        )}
+                      </div>
+                    )}
+        <div className="flex flex-col gap-2">
+          {activeSelfStudyManagers.length === 0 && archivedSelfStudyManagers.length === 0 && (
+            <div className="border border-dashed border-purple-200 rounded-xl p-5 text-center text-sm text-gray-400">
+              No Self-Study Manager account exists yet.
+            </div>
+          )}
+
+          {activeSelfStudyManagers.map(manager => (
+            <div key={manager.id} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border border-gray-100 rounded-xl px-4 py-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="text-sm font-semibold text-gray-800">{manager.name || 'Unnamed manager'}</p>
+                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-green-50 text-green-700">Active</span>
+                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-purple-50 text-purple-700">Self-Study Manager</span>
+                </div>
+                <p className="text-xs text-gray-400 truncate mt-0.5">{manager.email}</p>
+                <p className="text-[11px] text-gray-400 mt-0.5">Platform scope · Email login only · No institution seat</p>
+              </div>
+              <div className="flex gap-2 flex-wrap">
+                <button onClick={() => handleEdit(manager)} className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-1.5 rounded-lg">Edit</button>
+                <button onClick={() => handleSendPasswordReset(manager)} className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-600 px-3 py-1.5 rounded-lg">Email Reset</button>
+                <button onClick={() => handleDelete(manager.id)} className="text-xs bg-amber-50 hover:bg-amber-100 text-amber-700 px-3 py-1.5 rounded-lg">Archive</button>
+              </div>
+            </div>
+          ))}
+
+          {archivedSelfStudyManagers.map(manager => (
+            <div key={manager.id} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border border-gray-100 rounded-xl px-4 py-3 bg-gray-50/60">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="text-sm font-semibold text-gray-700">{manager.name || 'Unnamed manager'}</p>
+                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-gray-200 text-gray-600">Archived</span>
+                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-purple-50 text-purple-700">Self-Study Manager</span>
+                </div>
+                <p className="text-xs text-gray-400 truncate mt-0.5">{manager.email}</p>
+              </div>
+              <div className="flex gap-2 flex-wrap">
+                <button
+                  disabled={restoreBusyId === manager.id || permanentDeleteBusyId === manager.id}
+                  onClick={() => handleRestoreManagedUser(manager)}
+                  className="text-xs bg-green-100 hover:bg-green-200 disabled:bg-gray-100 disabled:text-gray-400 text-green-700 px-3 py-1.5 rounded-lg"
+                >
+                  {restoreBusyId === manager.id ? 'Restoring...' : 'Restore Account'}
+                </button>
+                <button
+                  disabled={permanentDeleteBusyId === manager.id}
+                  onClick={() => handlePermanentDeleteUser(manager)}
+                  className="text-xs bg-red-100 hover:bg-red-200 disabled:bg-gray-100 disabled:text-gray-400 text-red-700 px-3 py-1.5 rounded-lg"
+                >
+                  {permanentDeleteBusyId === manager.id ? 'Deleting...' : 'Delete Permanently'}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+                  </section>
+                )}
+                {selfStudyTab === 'learners' && (
+        <div className={accountListView === 'active' ? '' : 'hidden'}>
+
+          <h2 className="font-semibold text-gray-700 mb-3">{showingIndividualAccounts ? 'Self-Study Learners' : 'Students'} ({students.length})</h2>
+
+          <div className="flex flex-col gap-3">
+
+            {students.length === 0 ? (
+
+              <div className="bg-white border border-gray-100 rounded-2xl p-8 text-center text-gray-400 text-sm">{showingIndividualAccounts ? 'No self-study accounts found.' : 'No students found.'}</div>
+
+            ) : students.map(u => (
+
+              <div key={u.id} className="bg-white border border-slate-200 rounded-2xl overflow-visible shadow-sm">
+
+                <div
+
+                  className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 px-5 py-4 hover:bg-slate-50"
+
+                >
+
+                  <div className="flex items-center gap-3">
+
+                    <div className="w-9 h-9 rounded-full bg-purple-100 flex items-center justify-center text-purple-600 font-semibold text-sm">
+
+                      {u.name?.charAt(0).toUpperCase()}
+
+                    </div>
+
+                    <div>
+
+                      <p className="text-sm font-medium text-gray-800">{u.name}</p>
+
+                      <p className="text-xs text-gray-400">{u.email}</p>
+                  {u.username && <p className="text-[11px] text-purple-500 mt-0.5">Username: {u.username}</p>}
+
+                    <p className="text-[11px] text-gray-400 mt-0.5">{isIndividualAccount(u) ? 'Account: Self-Study / Individual' : `School: ${schoolLabel(u.schoolId)}`}</p>
+
+                  {u.role === 'student' && (
+
+                    <p className="text-xs text-blue-500 mt-0.5">
+
+                      Target Band: {u.targetBand !== undefined && u.targetBand !== null ? Number(u.targetBand).toFixed(1) : 'Not set'}
+
+                    </p>
+
+                  )}
+
+                    </div>
+
+                  </div>
+
+                  <div className="flex items-center gap-2 flex-wrap lg:justify-end">
+                    <button type="button" onClick={() => setSelectedStudent(selectedStudent === u.id ? null : u.id)}
+                      aria-expanded={selectedStudent === u.id}
+                      className="text-xs border border-slate-200 rounded-lg px-3 py-2 bg-white text-slate-700 hover:bg-slate-100">
+                      {selectedStudent === u.id ? 'Hide mock history' : 'Mock history'}
+                    </button>
+                    <button type="button" onClick={() => handleEdit(u)}
+                      className="text-xs border border-indigo-200 rounded-lg px-3 py-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-medium">Edit</button>
+                    <details className="relative" onClick={e => e.stopPropagation()}>
+                      <summary className="cursor-pointer list-none text-xs border border-slate-200 rounded-lg px-3 py-2 bg-white text-slate-700 hover:bg-slate-100 select-none">More actions ▾</summary>
+                      <div className="absolute right-0 z-30 mt-2 w-56 max-h-[65vh] overflow-auto rounded-xl border border-slate-200 bg-white shadow-xl p-2 flex flex-col gap-1">
+                        <button type="button" onClick={() => handleSendPasswordReset(u)} className="text-left text-xs px-3 py-2 rounded-lg hover:bg-slate-50 text-slate-700">Send password reset</button>
+                        {!isIndividualAccount(u) && (
+                          <>
+                            <p className="px-3 pt-2 text-[11px] font-semibold text-slate-400 uppercase">Mock results</p>
+                            <button type="button" onClick={() => hideStudentRecords(u, 'mock')} className="text-left text-xs px-3 py-2 rounded-lg hover:bg-slate-50">Hide mock results</button>
+                            <button type="button" onClick={() => restoreStudentRecords(u, 'mock')} className="text-left text-xs px-3 py-2 rounded-lg hover:bg-slate-50">Restore mock results</button>
+                            <button type="button" onClick={() => hardDeleteStudentRecords(u, 'mock')} className="text-left text-xs px-3 py-2 rounded-lg hover:bg-red-50 text-red-700">Delete mock results</button>
+                            <p className="px-3 pt-2 text-[11px] font-semibold text-slate-400 uppercase">Homework</p>
+                            <button type="button" onClick={() => hideStudentRecords(u, 'homework')} className="text-left text-xs px-3 py-2 rounded-lg hover:bg-slate-50">Hide homework</button>
+                            <button type="button" onClick={() => restoreStudentRecords(u, 'homework')} className="text-left text-xs px-3 py-2 rounded-lg hover:bg-slate-50">Restore homework</button>
+                            <button type="button" onClick={() => hardDeleteStudentRecords(u, 'homework')} className="text-left text-xs px-3 py-2 rounded-lg hover:bg-red-50 text-red-700">Delete homework records</button>
+                          </>
+                        )}
+                        <div className="border-t border-slate-100 mt-1 pt-1 flex flex-col gap-1">
+                          <button type="button" onClick={() => handleDelete(u.id)} className="text-left text-xs px-3 py-2 rounded-lg hover:bg-amber-50 text-amber-700">Archive account</button>
+                          <button type="button" disabled={permanentDeleteBusyId === u.id} onClick={() => handlePermanentDeleteUser(u)}
+                            className="text-left text-xs px-3 py-2 rounded-lg hover:bg-red-50 text-red-700 disabled:opacity-40">{permanentDeleteBusyId === u.id ? 'Deleting...' : 'Permanently delete account'}</button>
+                        </div>
+                      </div>
+                    </details>
+                  </div>
+
+                </div>
+
+
+
+                {selectedStudent === u.id && (
+
+                  <div className="border-t border-gray-100 px-5 py-4">
+
+                    <h3 className="text-sm font-semibold text-gray-700 mb-1">Mock history</h3>
+
+                    <p className="text-xs text-gray-400 mb-3">
+
+                      Manual IELTS score logging is no longer used. This area shows mock scores only.
+
+                    </p>
+
+                    {(() => {
+
+                      const mockScores = (scores[u.id] || []).filter(isMockScore)
+
+
+
+                      if (mockScores.length === 0) {
+
+                        return (
+
+                          <p className="text-xs text-gray-400">
+
+                            No visible mock scores yet. Use More actions to restore hidden results.
+
+                          </p>
+
+                        )
+
+                      }
+
+
+
+                      return (
+
+                        <div className="flex flex-col gap-2">
+
+                          {mockScores.map(s => (
+
+                            <div key={s.id} className="flex items-center justify-between py-2 border-b border-gray-50 last:border-0">
+
+                              <div>
+
+                                <p className="text-sm text-gray-700">{s.date || 'No date'}</p>
+
+                                <p className="text-xs text-gray-400">
+
+                                  L:{s.listening || '-'} R:{s.reading || '-'} W:{s.writing || 'Pending'} Overall:{s.overall || '-'}
+
+                                </p>
+
+                              </div>
+
+                              <div className="flex items-center gap-2">
+
+                                <p className="text-lg font-bold text-purple-600">{s.overall || '-'}</p>
+
+                                <button onClick={() => handleEditScore(s)} className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-2 py-1 rounded-lg">Edit</button>
+
+                                <button onClick={() => handleDeleteScore(s.id)} className="text-xs bg-red-50 hover:bg-red-100 text-red-500 px-2 py-1 rounded-lg">Delete</button>
+
+                              </div>
+
+                            </div>
+
+                          ))}
+
+                        </div>
+
+                      )
+
+                    })()}
+
+                  </div>
+
+                )}
+
+              </div>
+
+            ))}
+
+          </div>
+
+        </div>
+                )}
+                {selfStudyTab === 'archived' && (
+                  <>
+        {accountListView === 'archived' && archivedUsers.length > 0 && (
+
+          <div className="mb-8">
+
+            <h2 className="font-semibold text-gray-600 mb-3">Archived Accounts ({archivedUsers.length})</h2>
+
+            <div className="bg-white border border-gray-100 rounded-2xl overflow-hidden">
+
+              {archivedUsers.map(u => (
+
+                <div key={u.id} className="flex items-center justify-between gap-4 px-5 py-4 border-b border-gray-50 last:border-0">
+
+                  <div className="min-w-0">
+
+                    <div className="flex items-center gap-2 flex-wrap">
+
+                      <p className="text-sm font-medium text-gray-700">{u.name || 'Unnamed account'}</p>
+
+                      <span className="text-[11px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">Archived</span>
+
+                      <span className="text-[11px] px-2 py-0.5 rounded-full bg-blue-50 text-blue-600">{u.role || u.requestedRole || 'account'}</span>
+
+                    </div>
+
+                    <p className="text-xs text-gray-400 truncate">{u.email}</p>
+
+                    {u.username && <p className="text-[11px] text-purple-500 mt-0.5">Username: {u.username}</p>}
+
+                    <p className="text-[11px] text-gray-400 mt-0.5">{isIndividualAccount(u) ? 'Account: Self-Study / Individual' : `School: ${schoolLabel(u.schoolId)}`}</p>
+
+                  </div>
+
+                  <div className="flex items-center gap-2 flex-wrap justify-end">
+
+                    {['student', 'teacher'].includes((u.role || u.requestedRole || '').toLowerCase()) ? (
+                      <button
+                        disabled={restoreBusyId === u.id || permanentDeleteBusyId === u.id}
+                        onClick={() => handleRestoreManagedUser(u)}
+                        className="text-xs bg-green-100 hover:bg-green-200 disabled:bg-gray-100 disabled:text-gray-400 text-green-700 px-3 py-1.5 rounded-lg"
+                      >
+                        {restoreBusyId === u.id ? 'Restoring...' : 'Restore Account'}
+                      </button>
+                    ) : (
+                      <span className="text-xs text-gray-400">Restore unavailable: role unknown</span>
+                    )}
+
+                    {(u.role || u.requestedRole) === 'admin' ? (
+
+                      <span className="text-xs text-gray-400">Admin accounts cannot be permanently deleted here</span>
+
+                    ) : (
+
+                      <button
+                        disabled={permanentDeleteBusyId === u.id}
+                        onClick={() => handlePermanentDeleteUser(u)}
+                        className="text-xs bg-red-100 hover:bg-red-200 disabled:bg-gray-100 disabled:text-gray-400 text-red-700 px-3 py-1.5 rounded-lg"
+                      >
+                        {permanentDeleteBusyId === u.id ? 'Deleting...' : 'Delete Permanently'}
+                      </button>
+
+                    )}
+
+                  </div>
+
+                </div>
+
+              ))}
+
+            </div>
+
+          </div>
+
+        )}
+
+
+
+        {accountListView === 'archived' && archivedUsers.length === 0 && (
+          <div className="mb-8 bg-white border border-gray-100 rounded-2xl p-8 text-center text-gray-400 text-sm">
+            No archived accounts found.
+          </div>
+        )}
+                  </>
+                )}
+              </div>
+            )}
+          </main>
+        </div>
       </div>
-
-
-
       {editUser && (
 
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 px-4 py-6 overflow-y-auto">
@@ -4452,9 +4586,6 @@ export default function AdminDashboard() {
         </div>
 
       )}
-
     </div>
-
   )
-
 }

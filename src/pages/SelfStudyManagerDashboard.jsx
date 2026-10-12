@@ -4,6 +4,7 @@ import { doc, onSnapshot } from 'firebase/firestore'
 import { useNavigate } from 'react-router-dom'
 import { auth, db } from '../firebase'
 import SelfStudyMasterLibrary from './SelfStudyMasterLibrary'
+import SelfStudyPackages from './SelfStudyPackages'
 
 // P4B: Platform Self-Study Managers are not institution Teachers or Students.
 // Their workspace uses only their own users/{uid} profile at this stage.
@@ -12,34 +13,6 @@ import SelfStudyMasterLibrary from './SelfStudyMasterLibrary'
 const PLATFORM_SCHOOL_ID = '__platform__'
 const SELF_STUDY_MANAGER_ROLE = 'selfStudyManager'
 const SELF_STUDY_SCOPE = 'selfStudy'
-
-const UPCOMING_SECTIONS = [
-  {
-    title: 'Packages',
-    phase: 'P4D',
-    description: 'Build and organize self-study packages using content in the Master Library.'
-  },
-  {
-    title: 'Free Samples',
-    phase: 'P4D',
-    description: 'Choose sample activities learners may access without purchasing a package.'
-  },
-  {
-    title: 'Entitlements',
-    phase: 'P4D',
-    description: 'Manage which independent learners can access which published packages.'
-  },
-  {
-    title: 'Self-Study Accounts',
-    phase: 'Future phase',
-    description: 'View and manage independent learner accounts without accessing institution users.'
-  },
-  {
-    title: 'Sales',
-    phase: 'P8A',
-    description: 'Track purchases and package access after the payment integration is launched.'
-  }
-]
 
 function isAuthorizedManager(profile) {
   return profile?.role === SELF_STUDY_MANAGER_ROLE &&
@@ -57,6 +30,7 @@ export default function SelfStudyManagerDashboard() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [logoutLoading, setLogoutLoading] = useState(false)
+  const [workspace, setWorkspace] = useState('library')
 
   useEffect(() => {
     let active = true
@@ -210,115 +184,52 @@ export default function SelfStudyManagerDashboard() {
     )
   }
 
-  const displayName = profile.name || authUser?.displayName || 'Self-Study Manager'
   const displayEmail = profile.email || authUser?.email || ''
 
   return (
     <div className="min-h-screen bg-[#faf9f6]">
       <header className="bg-white border-b border-gray-100">
-        <div className="max-w-6xl mx-auto px-5 sm:px-6 py-5 flex flex-col sm:flex-row gap-4 sm:items-center sm:justify-between">
-          <div className="flex items-center gap-4">
-            <img src="/1.png" alt="Maxima" className="h-12 max-w-32 object-contain" />
+        <div className="max-w-6xl mx-auto px-5 sm:px-6 py-5 flex flex-wrap gap-4 items-center justify-between">
+          <div className="flex items-center gap-3 min-w-0">
+            <img src="/1.png" alt="Maxima" className="h-11 max-w-28 object-contain" />
             <div>
-              <p className="text-xs font-semibold tracking-wide uppercase text-purple-600">Platform workspace</p>
+              <p className="text-xs font-semibold tracking-wide uppercase text-purple-700">Platform workspace</p>
               <h1 className="text-xl font-bold text-gray-900">Self-Study Manager</h1>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => navigate('/')}
-              className="px-3 py-2 text-sm font-medium text-gray-500 hover:text-gray-800 hover:bg-gray-50 rounded-lg"
-            >
-              Home
-            </button>
-            <button
-              type="button"
-              onClick={handleLogout}
-              disabled={logoutLoading}
-              className="px-3 py-2 text-sm font-medium text-gray-500 hover:text-gray-800 hover:bg-gray-50 rounded-lg disabled:opacity-60"
-            >
-              {logoutLoading ? 'Signing out...' : 'Logout'}
-            </button>
+          <div className="flex gap-2">
+            <button type="button" onClick={() => navigate('/')} className="rounded-xl px-3 py-2 text-sm text-gray-600 hover:bg-gray-50">Home</button>
+            <button type="button" onClick={handleLogout} disabled={logoutLoading} className="rounded-xl px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50">{logoutLoading ? 'Signing out...' : 'Log out'}</button>
           </div>
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-5 sm:px-6 py-9 sm:py-11">
-        {error && (
-          <p role="alert" className="text-sm text-red-700 bg-red-50 border border-red-100 rounded-xl px-4 py-3 mb-6">
-            {error}
-          </p>
-        )}
+      <main className="max-w-6xl mx-auto px-5 sm:px-6 py-9">
+        {error && <p role="alert" className="text-red-700 bg-red-50 border border-red-100 p-4 rounded-xl mb-5 text-sm">{error}</p>}
 
-        <section className="bg-gradient-to-br from-purple-700 to-indigo-800 text-white rounded-3xl p-7 sm:p-9 mb-7 shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-4 mb-5">
-            <p className="text-xs font-semibold tracking-wide uppercase text-purple-100">MAXIMA IELTS TRACKER</p>
-            <span className="text-xs font-medium px-3 py-1 rounded-full bg-white/15 border border-white/20">P4C · Master Library active</span>
-          </div>
-          <h2 className="text-2xl sm:text-3xl font-bold mb-3">Welcome, {displayName}.</h2>
-          <p className="text-sm sm:text-base leading-7 text-purple-100 max-w-3xl">
-            This is the dedicated platform workspace for Self-Study content and packages. It is independent from institution teachers, students, classes and seat limits.
-          </p>
-        </section>
-
-        <section className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-9" aria-label="Manager account information">
-          <div className="bg-white border border-gray-100 rounded-2xl p-5">
-            <p className="text-xs font-medium uppercase tracking-wide text-gray-400 mb-2">Account type</p>
-            <p className="font-semibold text-gray-900">Platform manager</p>
-            <p className="text-xs text-gray-500 mt-1">Email login only</p>
-          </div>
-          <div className="bg-white border border-gray-100 rounded-2xl p-5">
-            <p className="text-xs font-medium uppercase tracking-wide text-gray-400 mb-2">Access scope</p>
-            <p className="font-semibold text-gray-900">Self-Study</p>
-            <p className="text-xs text-gray-500 mt-1">Separate from institutions</p>
-          </div>
-          <div className="bg-white border border-gray-100 rounded-2xl p-5">
-            <p className="text-xs font-medium uppercase tracking-wide text-gray-400 mb-2">Institution seats</p>
-            <p className="font-semibold text-gray-900">Not used</p>
-            <p className="text-xs text-gray-500 mt-1">No school assignment</p>
-          </div>
-        </section>
-
-        <section aria-labelledby="modules-heading">
-          <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2 mb-5">
+        <section className="rounded-2xl bg-white border border-gray-200 p-6 mb-6">
+          <div className="flex items-center justify-between gap-4 flex-wrap">
             <div>
-              <h2 id="modules-heading" className="text-lg font-bold text-gray-900">Self-Study management modules</h2>
-              <p className="text-sm text-gray-500 mt-1">
-                Master Content Library is now available below. Remaining modules will be activated in later packages.
-              </p>
+              <h2 className="text-xl font-bold text-gray-900 mb-2">Content and package setup</h2>
+              <p className="text-sm text-gray-600 leading-6 max-w-3xl">The independent learner practice screens are temporarily paused. You can prepare master content and package settings here without changing institution assignments. Payments and learner practice are not available yet.</p>
             </div>
-            <span className="text-xs text-gray-500">Remaining modules in development</span>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {UPCOMING_SECTIONS.map(section => (
-              <article key={section.title} className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm">
-                <div className="flex items-start justify-between gap-3 mb-4">
-                  <div className="w-10 h-10 bg-purple-50 text-purple-700 rounded-xl flex items-center justify-center font-bold text-sm">
-                    {section.title.charAt(0)}
-                  </div>
-                  <span className="text-[11px] font-medium text-gray-500 border border-gray-200 bg-gray-50 rounded-full px-2.5 py-1">
-                    {section.phase}
-                  </span>
-                </div>
-                <h3 className="font-semibold text-gray-900 mb-2">{section.title}</h3>
-                <p className="text-sm text-gray-500 leading-6 min-h-20">{section.description}</p>
-                <p className="text-xs font-medium text-purple-600 mt-3">Coming in a later package</p>
-              </article>
-            ))}
+            <span className="text-xs text-amber-800 rounded-full bg-amber-50 border border-amber-200 px-3 py-2 font-medium">Internal preparation</span>
           </div>
         </section>
 
-        <SelfStudyMasterLibrary />
+        <div className="flex flex-wrap gap-2 mb-6" role="tablist" aria-label="Self-Study manager tools">
+          <button type="button" role="tab" aria-selected={workspace === 'library'} onClick={() => setWorkspace('library')}
+            className={`rounded-xl px-5 py-3 text-sm font-semibold ${workspace === 'library' ? 'bg-purple-700 text-white' : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-50'}`}>
+            Master Library
+          </button>
+          <button type="button" role="tab" aria-selected={workspace === 'packages'} onClick={() => setWorkspace('packages')}
+            className={`rounded-xl px-5 py-3 text-sm font-semibold ${workspace === 'packages' ? 'bg-purple-700 text-white' : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-50'}`}>
+            Packages and access
+          </button>
+        </div>
 
-        <section className="mt-8 bg-white border border-gray-100 rounded-2xl p-6">
-          <h2 className="font-semibold text-gray-900">Signed-in manager</h2>
-          <p className="text-sm text-gray-500 mt-2 break-all">{displayEmail}</p>
-          <p className="text-xs leading-5 text-gray-400 mt-3">
-            Account creation, password changes, archiving and restoration remain with the Platform Admin. Institution content and learner records are not accessible from this page.
-          </p>
-        </section>
+        {workspace === 'library' ? <SelfStudyMasterLibrary /> : <SelfStudyPackages />}
+        <p className="text-xs text-gray-400 mt-9 text-right break-all">Signed in: {displayEmail}</p>
       </main>
     </div>
   )

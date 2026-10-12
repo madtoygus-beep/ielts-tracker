@@ -524,6 +524,28 @@ exports.updateSelfStudyMasterContent = onCall({ invoker: 'public' }, async reque
     if (!['draft', 'archived'].includes(changes.status)) {
       fail('invalid-argument', 'P4C allows only draft or archived status.')
     }
+    if (changes.status === 'archived' && original.status !== 'archived') {
+      // P4D: Do not silently remove content that active Self-Study packages or
+      // published free samples rely on. Mock child resources inherit their
+      // parent's visibility and must also be protected from archiving.
+      const rootId = original.linkedFromMasterMockId || masterId
+      const [packagesSnap, catalogSnap] = await Promise.all([
+        db.collection('selfStudyPackages').where('status', '==', 'active').limit(201).get(),
+        db.doc('selfStudySettings/catalog').get()
+      ])
+      if (packagesSnap.size > 200) {
+        fail('failed-precondition', 'Package listing is too large to verify content usage safely.')
+      }
+      const usedByPackage = packagesSnap.docs.some(pkg => {
+        const ids = pkg.data()?.contentIds
+        return Array.isArray(ids) && ids.includes(rootId)
+      })
+      const freeIds = catalogSnap.data()?.freeSampleContentIds
+      const usedBySample = Array.isArray(freeIds) && freeIds.includes(rootId)
+      if (usedByPackage || usedBySample) {
+        fail('failed-precondition', 'This master content is in an active package or free sample. Remove it from publication before archiving.')
+      }
+    }
     update.status = changes.status
   }
   await ref.update(update, { lastUpdateTime: snap.updateTime })

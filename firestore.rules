@@ -581,6 +581,21 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // P4D: price/catalog state, access grants and learner attempts must be
+    // server-authoritative. The browser cannot read or forge these records.
+    match /selfStudyPackages/{packageId} {
+      allow read, write: if false;
+    }
+    match /selfStudyEntitlements/{entitlementId} {
+      allow read, write: if false;
+    }
+    match /selfStudySettings/{settingsId} {
+      allow read, write: if false;
+    }
+    match /selfStudyAttempts/{attemptId} {
+      allow read, write: if false;
+    }
+
     // ============================================================
     // CLASSES
     // ============================================================

@@ -207,6 +207,58 @@ function buildTeacherSubmissionQueries(
   ]
 }
 
+
+// MAXIMA Teacher Workspace V2 - presentation-only components.
+// All academic data, assignment, review and content operations remain in this module.
+function TeacherIcon({ name, className = 'h-5 w-5' }) {
+  const base = { className, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.75, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true }
+  const glyphs = {
+    overview: <><rect x="3" y="3" width="7" height="7" rx="1.3"/><rect x="14" y="3" width="7" height="7" rx="1.3"/><rect x="3" y="14" width="7" height="7" rx="1.3"/><rect x="14" y="14" width="7" height="7" rx="1.3"/></>,
+    students: <><circle cx="9" cy="8" r="3"/><path d="M3 20v-2a6 6 0 0 1 12 0v2M17 5a3 3 0 0 1 0 6M18 14a5 5 0 0 1 3 4v2"/></>,
+    library: <><path d="M4 19.5V5.9c2.8-1.2 5.5-1 8 .5 2.5-1.5 5.2-1.7 8-.5v13.6c-2.8-1.2-5.5-1-8 .5-2.5-1.5-5.2-1.7-8-.5ZM12 6.4V20"/></>,
+    reviews: <><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4.5V3h6v1.5M9 11l2 2 4-4M9 17h6"/></>,
+    analytics: <><path d="M3 21h18M6 17V9M12 17V4M18 17v-6"/></>,
+    communication: <><path d="M20 11.5c0 4.2-3.6 7.5-8 7.5-1.1 0-2.2-.2-3.2-.6L4 21l1.3-4.3A7.2 7.2 0 0 1 4 12c0-4.2 3.6-7.5 8-7.5s8 3.3 8 7.5ZM8 11.5h8M8 14.5h5"/></>,
+    classes: <><rect x="3" y="5" width="18" height="15" rx="2"/><path d="M3 10h18M8 2v6M16 2v6"/></>,
+    plus: <path d="M12 5v14M5 12h14"/>,
+    down: <path d="m6 9 6 6 6-6"/>,
+    arrow: <path d="M5 12h14m-6-6 6 6-6 6"/>,
+    exit: <><path d="M10 17l5-5-5-5M15 12H3M12 3h7a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-7"/></>,
+    lock: <><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></>,
+    check: <path d="m5 12 5 5L20 7"/>,
+    clock: <><circle cx="12" cy="12" r="9"/><path d="M12 7v5l4 2"/></>,
+    search: <><circle cx="10.8" cy="10.8" r="6.5"/><path d="m16 16 4.2 4.2"/></>,
+    filter: <path d="M4 7h16M7 12h10M10 17h4"/>,
+    book: <path d="M4 19V6c3-1.5 5.5-1.5 8 0 2.5-1.5 5-1.5 8 0v13c-3-1.5-5.5-1.5-8 0-2.5-1.5-5-1.5-8 0Z"/>,
+  }
+  return <svg {...base}>{glyphs[name] || glyphs.overview}</svg>
+}
+
+const TEACHER_NAV_ITEMS = [
+  { id: 'overview', label: 'Overview', icon: 'overview', description: 'Your daily priorities, assignments and teaching activity' },
+  { id: 'students', label: 'Students & Classes', icon: 'students', description: 'Student progress, assignments, attempts and class management' },
+  { id: 'library', label: 'Content Library', icon: 'library', description: 'Create, preview, assign and reuse your IELTS content' },
+  { id: 'reviews', label: 'Reviews', icon: 'reviews', description: 'Grade Writing and Mock Writing submissions' },
+  { id: 'analytics', label: 'Analytics', icon: 'analytics', description: 'Explore reading, listening and vocabulary performance' },
+  { id: 'communication', label: 'Messages & Materials', icon: 'communication', description: 'Send messages and share teaching materials' },
+]
+
+const TEACHER_CONTENT_TABS = [
+  { id: 'reading', label: 'Reading' },
+  { id: 'listening', label: 'Listening' },
+  { id: 'writing', label: 'Writing' },
+  { id: 'vocabulary', label: 'Vocabulary' },
+  { id: 'mock', label: 'Mock Tests' },
+]
+
+const TEACHER_CREATION_ROUTES = [
+  { label: 'Reading homework', path: '/create-reading', icon: 'book' },
+  { label: 'Listening homework', path: '/create-listening', icon: 'book' },
+  { label: 'Writing homework', path: '/create-writing', icon: 'book' },
+  { label: 'Vocabulary test', path: '/create-vocabulary', icon: 'book' },
+  { label: 'Mock test', path: '/create-mock', icon: 'book' },
+]
+
 export default function TeacherDashboard() {
   const [students, setStudents] = useState([])
   const [classes, setClasses] = useState([])
@@ -337,6 +389,14 @@ export default function TeacherDashboard() {
       return 'overview'
     }
   })
+  const [createMenuOpen, setCreateMenuOpen] = useState(false)
+  const [studentSearchTerm, setStudentSearchTerm] = useState('')
+  const [studentClassId, setStudentClassId] = useState('all')
+  const [reviewView, setReviewView] = useState('pending')
+  const [librarySearchTerm, setLibrarySearchTerm] = useState('')
+  const [lastLibraryTab, setLastLibraryTab] = useState(() =>
+    TEACHER_CONTENT_TABS.some(item => item.id === activeTab) ? activeTab : 'reading'
+  )
   const [analyticsStudentId, setAnalyticsStudentId] = useState('all')
   const [dashboardDataError, setDashboardDataError] = useState('')
 
@@ -349,6 +409,20 @@ export default function TeacherDashboard() {
       // Browser storage can be unavailable in restricted/private contexts.
     }
   }, [activeTab])
+
+  const openTeacherSection = id => {
+    setCreateMenuOpen(false)
+    if (id === 'library') {
+      setActiveTab(lastLibraryTab)
+    } else {
+      setActiveTab(id)
+    }
+  }
+
+  const openTeacherContentTab = id => {
+    setLastLibraryTab(id)
+    setActiveTab(id)
+  }
 
   const openTeacherPreview = (type, contentId) => {
     navigate(`/preview/${type}/${contentId}`)
@@ -5679,511 +5753,111 @@ Continue permanent delete?`
     return times.listening + times.reading + times.writing
   }
 
-  const renderMockTestCard = (mockTest, archived = false, index = null) => (
-    <div
-      key={mockTest.id}
-      className={`border rounded-xl p-4 flex items-center justify-between gap-4 ${
-        archived
-          ? 'border-gray-100 bg-gray-50 opacity-80'
-          : 'border-gray-100 bg-gray-50'
-      }`}
-    >
-      <div>
-        <p className="text-sm font-medium text-gray-800">
-          {index !== null ? `${index + 1}. ` : ''}{mockTest.title || 'Untitled Mock Test'}
-        </p>
-
-        <div className="flex gap-2 mt-2 mb-1 flex-wrap">
-          <span className="text-[11px] bg-green-50 text-green-600 px-2.5 py-1 rounded-full">
-            {getContentTypeLabel(getLibraryContentType(mockTest, 'full_mock'))}
-          </span>
-          <span className="text-[11px] bg-gray-100 text-gray-500 px-2.5 py-1 rounded-full">
-            {getLibraryVisibilityLabel(mockTest)}
-          </span>
-        </div>
-
-        <p className="text-xs text-gray-400 mt-0.5">
-          Assigned to {getMockAssignedCount(mockTest)} students · Submitted by {getMockSubmittedCount(mockTest)} students
-        </p>
-
-        <p className="text-xs text-gray-400 mt-1">
-          {getMockFlowSummary(mockTest)} · {getMockTotalTime(mockTest)} min
-        </p>
-
-        {archived && (
-          <p className="text-xs text-amber-600 mt-1 font-medium">
-            Archived — hidden from students
-          </p>
-        )}
-      </div>
-
-      <div className="flex gap-2 flex-wrap justify-end">
-        <button
-          onClick={() => openTeacherPreview('mock', mockTest.id)}
-          className="text-xs bg-indigo-50 text-indigo-600 px-3 py-2 rounded-xl hover:bg-indigo-100"
-        >
-          Preview
-        </button>
-
-        {!archived && (
-          <button
-            onClick={() => openAssignmentManager(mockTest, 'mock')}
-            className="text-xs bg-purple-600 text-white px-3 py-2 rounded-xl hover:bg-purple-700"
-          >
-            Manage
-          </button>
-        )}
-
-        {isOwnedByCurrentTeacher(mockTest) && (
-          <>
-            <button
-              onClick={() => navigate(`/edit-mock/${mockTest.id}`)}
-              className="text-xs bg-blue-50 text-blue-600 px-3 py-2 rounded-xl hover:bg-blue-100"
-            >
-              Edit
-            </button>
-
-            {archived ? (
-              <button
-                onClick={() => restoreMockTest(mockTest)}
-                className="text-xs bg-green-50 text-green-600 px-3 py-2 rounded-xl hover:bg-green-100"
-              >
-                Restore
-              </button>
-            ) : (
-              <button
-                onClick={() => archiveMockTest(mockTest)}
-                className="text-xs bg-amber-50 text-amber-600 px-3 py-2 rounded-xl hover:bg-amber-100"
-              >
-                Archive
-              </button>
-            )}
-
-            <button
-              onClick={() => deleteMockTest(mockTest)}
-              className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
-            >
-              Delete
-            </button>
-          </>
-        )}
-      </div>
-    </div>
-  )
-
-  const renderReadingHomeworkCard = (reading, archived = false, index = null) => (
-    <div
-      key={reading.id}
-      className={`border rounded-xl p-4 flex items-center justify-between gap-4 ${
-        archived
-          ? 'border-gray-100 bg-gray-50 opacity-80'
-          : 'border-gray-100 bg-gray-50'
-      }`}
-    >
-      <div>
-        <p className="text-sm font-medium text-gray-800">
-          {index !== null ? `${index + 1}. ` : ''}{reading.title}
-        </p>
-
-        <div className="flex gap-2 mt-2 mb-1 flex-wrap">
-          <span className="text-[11px] bg-purple-50 text-purple-600 px-2.5 py-1 rounded-full">
-            {getContentTypeLabel(getLibraryContentType(reading, 'full_reading'))}
-          </span>
-          <span className="text-[11px] bg-gray-100 text-gray-500 px-2.5 py-1 rounded-full">
-            {getLibraryVisibilityLabel(reading)}
-          </span>
-        </div>
-
-        <p className="text-xs text-gray-400 mt-0.5">
-          Assigned to {getCanonicalAssignmentCount('reading', reading.id)} students · Completed by{' '}
-          {getCompletedCount(reading.id)} students · {reading.timeLimit} min
-        </p>
-
-        {archived && (
-          <p className="text-xs text-amber-600 mt-1 font-medium">
-            Archived — hidden from students
-          </p>
-        )}
-      </div>
-
-      <div className="flex gap-2 flex-wrap justify-end">
-        <button
-          onClick={() => openTeacherPreview('reading', reading.id)}
-          className="text-xs bg-indigo-50 text-indigo-600 px-3 py-2 rounded-xl hover:bg-indigo-100"
-        >
-          Preview
-        </button>
-
-        {!archived && (
-          <>
-            {isOwnedByCurrentTeacher(reading) && (
-            <button
-              onClick={() => navigate(`/edit-reading/${reading.id}`)}
-              className="text-xs bg-blue-50 text-blue-600 px-3 py-2 rounded-xl hover:bg-blue-100"
-            >
-              Edit
-            </button>
-            )}
-
-            <button
-              onClick={() => duplicateReadingHomework(reading)}
-              className="text-xs bg-gray-100 text-gray-600 px-3 py-2 rounded-xl hover:bg-gray-200"
-            >
-              Duplicate
-            </button>
-
-            <button
-              onClick={() => openAssignmentManager(reading, 'reading')}
-              className="text-xs bg-purple-600 text-white px-3 py-2 rounded-xl hover:bg-purple-700"
-            >
-              Manage
-            </button>
-          </>
-        )}
-
-        {isOwnedByCurrentTeacher(reading) && (
-          <>
-            {archived ? (
-              <button
-                onClick={() => restoreReadingHomework(reading)}
-                className="text-xs bg-green-50 text-green-600 px-3 py-2 rounded-xl hover:bg-green-100"
-              >
-                Restore
-              </button>
-            ) : (
-              <button
-                onClick={() => archiveReadingHomework(reading)}
-                className="text-xs bg-amber-50 text-amber-600 px-3 py-2 rounded-xl hover:bg-amber-100"
-              >
-                Archive
-              </button>
-            )}
-
-            <button
-              onClick={() => deleteReadingHomework(reading)}
-              className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
-            >
-              Delete
-            </button>
-          </>
-        )}
-      </div>
-    </div>
-  )
-
-  const renderWritingHomeworkCard = (writing, archived = false, index = null) => {
-    const submitted = getWritingSubmittedCount(writing.id)
-    const reviewed = getWritingReviewedCount(writing.id)
-
+  const libraryCard = ({ item, index, archived, type, description, detail,
+    canEdit, editPath, duplicate, manage, archive, restore, remove }) => {
+    const own = isOwnedByCurrentTeacher(item)
+    const hasMore = Boolean((duplicate && !archived) || (own && (archive || restore || remove)))
     return (
-      <div
-        key={writing.id}
-        className={`border rounded-xl p-4 flex items-center justify-between gap-4 ${
-          archived
-            ? 'border-gray-100 bg-gray-50 opacity-80'
-            : 'border-gray-100 bg-gray-50'
-        }`}
-      >
-        <div>
-          <p className="text-sm font-medium text-gray-800">
-            {index !== null ? `${index + 1}. ` : ''}{writing.title}
-          </p>
-
-          <div className="flex gap-2 mt-2 mb-1 flex-wrap">
-            <span className="text-[11px] bg-purple-50 text-purple-600 px-2.5 py-1 rounded-full">
-              {getContentTypeLabel(getLibraryContentType(writing, 'full_writing'))}
-            </span>
-            <span className="text-[11px] bg-gray-100 text-gray-500 px-2.5 py-1 rounded-full">
-              {getLibraryVisibilityLabel(writing)}
-            </span>
+      <div key={item.id} className={`rounded-2xl border border-slate-200 bg-white p-4 sm:p-5 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 shadow-sm ${archived ? 'opacity-80' : ''}`}>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm sm:text-base font-semibold text-slate-900 break-words">{index !== null ? `${index + 1}. ` : ''}{item.title || 'Untitled activity'}</p>
+          <div className="flex items-center flex-wrap gap-2 mt-2">
+            <span className="text-[11px] rounded-md bg-indigo-50 text-indigo-700 px-2.5 py-1 font-medium">{getContentTypeLabel(getLibraryContentType(item, type === 'mock' ? 'full_mock' : type === 'vocabulary' ? 'vocabulary_quiz' : `full_${type}`))}</span>
+            <span className="text-[11px] rounded-md bg-slate-100 text-slate-600 px-2.5 py-1">{getLibraryVisibilityLabel(item)}</span>
+            {archived && <span className="text-[11px] rounded-md bg-amber-50 text-amber-700 px-2.5 py-1">Archived</span>}
           </div>
-
-          <p className="text-xs text-gray-400 mt-0.5">
-            Assigned to {getCanonicalAssignmentCount('writing', writing.id)} students · Submitted by{' '}
-            {submitted} students · Reviewed {reviewed}/{submitted} ·{' '}
-            {writing.timeLimit || 60} min
-          </p>
-
-          {submitted > reviewed && (
-            <p className="text-xs text-amber-600 mt-1 font-medium">
-              {submitted - reviewed} pending teacher review
-            </p>
-          )}
-
-          {archived && (
-            <p className="text-xs text-amber-600 mt-1 font-medium">
-              Archived — hidden from students
-            </p>
-          )}
+          <p className="text-xs text-slate-500 mt-3">{description}</p>
+          {detail && <p className="text-xs text-slate-500 mt-1">{detail}</p>}
         </div>
-
-        <div className="flex gap-2 flex-wrap justify-end">
-          <button
-            onClick={() => openTeacherPreview('writing', writing.id)}
-            className="text-xs bg-indigo-50 text-indigo-600 px-3 py-2 rounded-xl hover:bg-indigo-100"
-          >
-            Preview
-          </button>
-
-          {!archived && (
-            <>
-              {isOwnedByCurrentTeacher(writing) && (
-              <button
-                onClick={() => navigate(`/edit-writing/${writing.id}`)}
-                className="text-xs bg-blue-50 text-blue-600 px-3 py-2 rounded-xl hover:bg-blue-100"
-              >
-                Edit
-                </button>
-            )}
-
-              <button
-                onClick={() => duplicateWritingHomework(writing)}
-                className="text-xs bg-gray-100 text-gray-600 px-3 py-2 rounded-xl hover:bg-gray-200"
-              >
-                Duplicate
-              </button>
-
-              <button
-                onClick={() => openAssignmentManager(writing, 'writing')}
-                className="text-xs bg-purple-600 text-white px-3 py-2 rounded-xl hover:bg-purple-700"
-              >
-                Manage
-              </button>
-            </>
+        <div className="flex flex-wrap items-center gap-2 lg:justify-end lg:shrink-0">
+          <button type="button" onClick={() => openTeacherPreview(type, item.id)}
+            className="rounded-xl border border-slate-200 bg-white hover:bg-slate-50 px-3.5 py-2 text-xs font-semibold text-slate-700">Preview</button>
+          {!archived && manage && own && (
+            <button type="button" onClick={manage} className="rounded-xl bg-indigo-600 hover:bg-indigo-700 px-3.5 py-2 text-xs font-semibold text-white">Assign</button>
           )}
-
-          {isOwnedByCurrentTeacher(writing) && (
-            <>
-              {archived ? (
-                <button
-                  onClick={() => restoreWritingHomework(writing)}
-                  className="text-xs bg-green-50 text-green-600 px-3 py-2 rounded-xl hover:bg-green-100"
-                >
-                  Restore
-                </button>
-              ) : (
-                <button
-                  onClick={() => archiveWritingHomework(writing)}
-                  className="text-xs bg-amber-50 text-amber-600 px-3 py-2 rounded-xl hover:bg-amber-100"
-                >
-                  Archive
-                </button>
-              )}
-
-              <button
-                onClick={() => deleteWritingHomework(writing)}
-                className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
-              >
-                Delete
-              </button>
-            </>
+          {!archived && manage && !own && duplicate && (
+            <button type="button" onClick={duplicate} className="rounded-xl bg-indigo-50 hover:bg-indigo-100 px-3.5 py-2 text-xs font-semibold text-indigo-700">Duplicate to assign</button>
+          )}
+          {own && canEdit && !archived && editPath && (
+            <button type="button" onClick={() => navigate(editPath)} className="rounded-xl bg-indigo-50 hover:bg-indigo-100 px-3.5 py-2 text-xs font-semibold text-indigo-700">Edit</button>
+          )}
+          {hasMore && (
+            <details className="relative group">
+              <summary className="list-none cursor-pointer select-none rounded-xl border border-slate-200 bg-white hover:bg-slate-50 px-3.5 py-2 text-xs font-semibold text-slate-700 flex items-center gap-2">
+                More <TeacherIcon name="down" className="h-3.5 w-3.5" />
+              </summary>
+              <div className="absolute right-0 top-full mt-2 z-20 min-w-[180px] rounded-xl border border-slate-200 bg-white shadow-xl p-1.5">
+                {!archived && duplicate && <button type="button" onClick={duplicate} className="w-full text-left px-3 py-2 rounded-lg hover:bg-slate-50 text-xs text-slate-700">Duplicate</button>}
+                {own && archived && restore && <button type="button" onClick={restore} className="w-full text-left px-3 py-2 rounded-lg hover:bg-emerald-50 text-xs text-emerald-700">Restore</button>}
+                {own && !archived && archive && <button type="button" onClick={archive} className="w-full text-left px-3 py-2 rounded-lg hover:bg-amber-50 text-xs text-amber-700">Archive</button>}
+                {own && remove && <button type="button" onClick={remove} className="w-full text-left px-3 py-2 rounded-lg hover:bg-red-50 text-xs text-red-700">Delete permanently</button>}
+              </div>
+            </details>
           )}
         </div>
       </div>
     )
   }
 
-  const renderListeningHomeworkCard = (listening, archived = false, index = null) => (
-    <div
-      key={listening.id}
-      className={`border rounded-xl p-4 flex items-center justify-between gap-4 ${
-        archived
-          ? 'border-gray-100 bg-gray-50 opacity-80'
-          : 'border-gray-100 bg-gray-50'
-      }`}
-    >
-      <div>
-        <p className="text-sm font-medium text-gray-800">
-          {index !== null ? `${index + 1}. ` : ''}{listening.title}
-        </p>
+  const renderMockTestCard = (item, archived = false, index = null) => libraryCard({
+    item, index, archived, type: 'mock', canEdit: true,
+    description: `Assigned to ${getMockAssignedCount(item)} students · Submitted by ${getMockSubmittedCount(item)} students`,
+    detail: `${getMockFlowSummary(item)} · ${getMockTotalTime(item)} min`,
+    manage: () => openAssignmentManager(item, 'mock'),
+    editPath: `/edit-mock/${item.id}`,
+    archive: () => archiveMockTest(item),
+    restore: () => restoreMockTest(item),
+    remove: () => deleteMockTest(item),
+  })
 
-        <div className="flex gap-2 mt-2 mb-1 flex-wrap">
-          <span className="text-[11px] bg-purple-50 text-purple-600 px-2.5 py-1 rounded-full">
-            {getContentTypeLabel(getLibraryContentType(listening, 'full_listening'))}
-          </span>
-          <span className="text-[11px] bg-gray-100 text-gray-500 px-2.5 py-1 rounded-full">
-            {getLibraryVisibilityLabel(listening)}
-          </span>
-        </div>
+  const renderReadingHomeworkCard = (item, archived = false, index = null) => libraryCard({
+    item, index, archived, type: 'reading', canEdit: true,
+    description: `Assigned to ${getCanonicalAssignmentCount('reading', item.id)} students · Completed by ${getCompletedCount(item.id)} students · ${item.timeLimit || 60} min`,
+    manage: () => openAssignmentManager(item, 'reading'),
+    editPath: `/edit-reading/${item.id}`,
+    duplicate: () => duplicateReadingHomework(item),
+    archive: () => archiveReadingHomework(item),
+    restore: () => restoreReadingHomework(item),
+    remove: () => deleteReadingHomework(item),
+  })
 
-        <p className="text-xs text-gray-400 mt-0.5">
-          Assigned to {getCanonicalAssignmentCount('listening', listening.id)} students · Completed by{' '}
-          {getListeningCompletedCount(listening.id)} students · {listening.timeLimit || 30} min
-        </p>
+  const renderWritingHomeworkCard = (item, archived = false, index = null) => {
+    const submitted = getWritingSubmittedCount(item.id)
+    const reviewed = getWritingReviewedCount(item.id)
+    return libraryCard({
+      item, index, archived, type: 'writing', canEdit: true,
+      description: `Assigned to ${getCanonicalAssignmentCount('writing', item.id)} students · Submitted by ${submitted} students · Reviewed ${reviewed}/${submitted} · ${item.timeLimit || 60} min`,
+      detail: submitted > reviewed ? `${submitted - reviewed} writing review(s) pending` : '',
+      manage: () => openAssignmentManager(item, 'writing'),
+      editPath: `/edit-writing/${item.id}`,
+      duplicate: () => duplicateWritingHomework(item),
+      archive: () => archiveWritingHomework(item),
+      restore: () => restoreWritingHomework(item),
+      remove: () => deleteWritingHomework(item),
+    })
+  }
 
-        {archived && (
-          <p className="text-xs text-amber-600 mt-1 font-medium">
-            Archived — hidden from students
-          </p>
-        )}
-      </div>
+  const renderListeningHomeworkCard = (item, archived = false, index = null) => libraryCard({
+    item, index, archived, type: 'listening', canEdit: true,
+    description: `Assigned to ${getCanonicalAssignmentCount('listening', item.id)} students · Completed by ${getListeningCompletedCount(item.id)} students · ${item.timeLimit || 30} min`,
+    manage: () => openAssignmentManager(item, 'listening'),
+    editPath: `/edit-listening/${item.id}`,
+    duplicate: () => duplicateListeningHomework(item),
+    archive: () => archiveListeningHomework(item),
+    restore: () => restoreListeningHomework(item),
+    remove: () => deleteListeningHomework(item),
+  })
 
-      <div className="flex gap-2 flex-wrap justify-end">
-        <button
-          onClick={() => openTeacherPreview('listening', listening.id)}
-          className="text-xs bg-indigo-50 text-indigo-600 px-3 py-2 rounded-xl hover:bg-indigo-100"
-        >
-          Preview
-        </button>
-
-        {!archived && (
-          <>
-            {isOwnedByCurrentTeacher(listening) && (
-            <button
-              onClick={() => navigate(`/edit-listening/${listening.id}`)}
-              className="text-xs bg-blue-50 text-blue-600 px-3 py-2 rounded-xl hover:bg-blue-100"
-            >
-              Edit
-            </button>
-            )}
-
-            <button
-              onClick={() => duplicateListeningHomework(listening)}
-              className="text-xs bg-gray-100 text-gray-600 px-3 py-2 rounded-xl hover:bg-gray-200"
-            >
-              Duplicate
-            </button>
-
-            <button
-              onClick={() => openAssignmentManager(listening, 'listening')}
-              className="text-xs bg-purple-600 text-white px-3 py-2 rounded-xl hover:bg-purple-700"
-            >
-              Manage
-            </button>
-          </>
-        )}
-
-        {isOwnedByCurrentTeacher(listening) && (
-          <>
-            {archived ? (
-              <button
-                onClick={() => restoreListeningHomework(listening)}
-                className="text-xs bg-green-50 text-green-600 px-3 py-2 rounded-xl hover:bg-green-100"
-              >
-                Restore
-              </button>
-            ) : (
-              <button
-                onClick={() => archiveListeningHomework(listening)}
-                className="text-xs bg-amber-50 text-amber-600 px-3 py-2 rounded-xl hover:bg-amber-100"
-              >
-                Archive
-              </button>
-            )}
-
-            <button
-              onClick={() => deleteListeningHomework(listening)}
-              className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
-            >
-              Delete
-            </button>
-          </>
-        )}
-      </div>
-    </div>
-  )
-
-
-  const renderVocabularyHomeworkCard = (vocabularyTest, archived = false, index = null) => (
-    <div
-      key={vocabularyTest.id}
-      className={`border rounded-xl p-4 flex items-center justify-between gap-4 ${
-        archived
-          ? 'border-gray-100 bg-gray-50 opacity-80'
-          : 'border-gray-100 bg-gray-50'
-      }`}
-    >
-      <div>
-        <p className="text-sm font-medium text-gray-800">
-          {index !== null ? `${index + 1}. ` : ''}{vocabularyTest.title}
-        </p>
-
-        <div className="flex gap-2 mt-2 mb-1 flex-wrap">
-          <span className="text-[11px] bg-purple-50 text-purple-600 px-2.5 py-1 rounded-full">
-            {getContentTypeLabel(getLibraryContentType(vocabularyTest, 'vocabulary_quiz'))}
-          </span>
-          <span className="text-[11px] bg-gray-100 text-gray-500 px-2.5 py-1 rounded-full">
-            {getLibraryVisibilityLabel(vocabularyTest)}
-          </span>
-        </div>
-
-        <p className="text-xs text-gray-400 mt-0.5">
-          Assigned to {getCanonicalAssignmentCount('vocabulary', vocabularyTest.id)} students · Completed by{' '}
-          {getVocabularyCompletedCount(vocabularyTest.id)} students · {vocabularyTest.timeLimit || 20} min · {vocabularyTest.questions?.length || 0} questions
-        </p>
-
-        {archived && (
-          <p className="text-xs text-amber-600 mt-1 font-medium">
-            Archived — hidden from students
-          </p>
-        )}
-      </div>
-
-      <div className="flex gap-2 flex-wrap justify-end">
-        <button
-          onClick={() => openTeacherPreview('vocabulary', vocabularyTest.id)}
-          className="text-xs bg-indigo-50 text-indigo-600 px-3 py-2 rounded-xl hover:bg-indigo-100"
-        >
-          Preview
-        </button>
-
-        {!archived && (
-          <>
-            {isOwnedByCurrentTeacher(vocabularyTest) && (
-            <button
-              onClick={() => navigate(`/edit-vocabulary/${vocabularyTest.id}`)}
-              className="text-xs bg-blue-50 text-blue-600 px-3 py-2 rounded-xl hover:bg-blue-100"
-            >
-              Edit
-            </button>
-            )}
-
-            <button
-              onClick={() => duplicateVocabularyTest(vocabularyTest)}
-              className="text-xs bg-gray-100 text-gray-600 px-3 py-2 rounded-xl hover:bg-gray-200"
-            >
-              Duplicate
-            </button>
-
-            <button
-              onClick={() => openAssignmentManager(vocabularyTest, 'vocabulary')}
-              className="text-xs bg-purple-600 text-white px-3 py-2 rounded-xl hover:bg-purple-700"
-            >
-              Manage
-            </button>
-          </>
-        )}
-
-        {isOwnedByCurrentTeacher(vocabularyTest) && (
-          <>
-            {archived ? (
-              <button
-                onClick={() => restoreVocabularyTest(vocabularyTest)}
-                className="text-xs bg-green-50 text-green-600 px-3 py-2 rounded-xl hover:bg-green-100"
-              >
-                Restore
-              </button>
-            ) : (
-              <button
-                onClick={() => archiveVocabularyTest(vocabularyTest)}
-                className="text-xs bg-amber-50 text-amber-600 px-3 py-2 rounded-xl hover:bg-amber-100"
-              >
-                Archive
-              </button>
-            )}
-
-            <button
-              onClick={() => deleteVocabularyTest(vocabularyTest)}
-              className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
-            >
-              Delete
-            </button>
-          </>
-        )}
-      </div>
-    </div>
-  )
-
+  const renderVocabularyHomeworkCard = (item, archived = false, index = null) => libraryCard({
+    item, index, archived, type: 'vocabulary', canEdit: true,
+    description: `Assigned to ${getCanonicalAssignmentCount('vocabulary', item.id)} students · Completed by ${getVocabularyCompletedCount(item.id)} students · ${item.timeLimit || 20} min · ${item.questions?.length || 0} questions`,
+    manage: () => openAssignmentManager(item, 'vocabulary'),
+    editPath: `/edit-vocabulary/${item.id}`,
+    duplicate: () => duplicateVocabularyTest(item),
+    archive: () => archiveVocabularyTest(item),
+    restore: () => restoreVocabularyTest(item),
+    remove: () => deleteVocabularyTest(item),
+  })
 
   const homeworkProgressByStudent = students.map(student => ({
     student,
@@ -6306,221 +5980,269 @@ Continue permanent delete?`
   const atRiskListeningStudents = getAtRiskListeningStudents()
   const listeningTypeAnalytics = getListeningTypeAnalytics()
 
-  const teacherTabs = [
-    ['overview', 'Overview'],
-    ['students', 'Students'],
-    ['reading', 'Reading'],
-    ['listening', 'Listening'],
-    ['vocabulary', 'Vocabulary'],
-    ['writing', 'Writing'],
-    ['mock', 'Mock Tests'],
-    ['analytics', 'Analytics'],
-    ['communication', 'Messages & Materials'],
-    ['reviews', 'Reviews']
-  ]
+  const teacherSectionId = TEACHER_CONTENT_TABS.some(item => item.id === activeTab)
+    ? 'library'
+    : activeTab
+  const teacherPage = TEACHER_NAV_ITEMS.find(item => item.id === teacherSectionId) || TEACHER_NAV_ITEMS[0]
+  const activeContentCount = activeReadings.length + activeListenings.length +
+    activeWritings.length + activeVocabularyTests.length + activeMockTests.length
+  const isStudentInClass = (student, classItem) => {
+    if (!classItem) return false
+    const keys = getStudentAssignmentValues(student).map(normalizeAssignmentId)
+    return (Array.isArray(classItem.studentIds) ? classItem.studentIds : [])
+      .some(id => keys.includes(normalizeAssignmentId(id)))
+  }
+  const filteredTeacherStudents = students.filter(student => {
+    const term = studentSearchTerm.trim().toLowerCase()
+    if (term && ![student.name, student.email, student.username]
+      .some(value => String(value || '').toLowerCase().includes(term))) return false
+    if (studentClassId !== 'all' && !isStudentInClass(student, classes.find(item => item.id === studentClassId))) return false
+    return true
+  })
+  const contentSearchMatch = item => {
+    const term = librarySearchTerm.trim().toLowerCase()
+    return !term || String(item?.title || '').toLowerCase().includes(term)
+  }
+  const allReviewCount = reviewedWritingReviews.length + reviewedMockWritingReviews.length
 
   return (
-    <div className="min-h-screen bg-[#faf9f6]">
-      <nav className="flex justify-between items-center px-8 py-4 bg-white border-b border-gray-100">
-        <img src="/1.png" alt="Maxima" className="h-10 object-contain" />
-
-        <div className="flex items-center gap-4">
-          <span className="text-sm text-gray-400">{user?.email}</span>
-
-          <button
-            onClick={() => setShowPasswordModal(true)}
-            className="text-sm text-gray-400 hover:text-gray-600"
-          >
-            Change Password
-          </button>
-
-          <button
-            onClick={() => {
-              signOut(auth)
-              navigate('/')
-            }}
-            className="text-sm text-gray-400 hover:text-gray-600"
-          >
-            Logout
-          </button>
-        </div>
-      </nav>
-
-      <div className="max-w-6xl mx-auto px-6 py-10">
-        <h1 className="text-2xl font-bold text-gray-900 mb-1">
-          Teacher Dashboard
-        </h1>
-
-        <p className="text-gray-400 text-sm mb-6">
-          Manage students, scores and reusable homework
-        </p>
-
-        {dashboardDataError && (
-          <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-            <p className="text-sm text-amber-800">{dashboardDataError}</p>
-            <button
-              type="button"
-              onClick={() => window.location.reload()}
-              className="shrink-0 rounded-xl bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700"
-            >
-              Retry
-            </button>
-          </div>
-        )}
-
-        <div className="flex items-center gap-4 mb-8">
-          <button
-            onClick={() => navigate('/create-reading')}
-            className="bg-purple-600 text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-purple-700"
-          >
-            📖 Create Reading Homework
-          </button>
-
-          <button
-            onClick={() => navigate('/create-writing')}
-            className="bg-purple-600 text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-purple-700"
-          >
-            ✍️ Create Writing Homework
-          </button>
-
-          <button
-            onClick={() => navigate('/create-listening')}
-            className="bg-purple-600 text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-purple-700"
-          >
-            🎧 Create Listening Homework
-          </button>
-
-          <button
-            onClick={() => navigate('/create-vocabulary')}
-            className="bg-purple-600 text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-purple-700"
-          >
-            🧩 Create Vocabulary Test
-          </button>
-
-          <button
-            onClick={() => navigate('/create-mock')}
-            className="bg-green-600 text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-green-700"
-          >
-            🧪 Create Mock Test
-          </button>
-
-          <button
-            onClick={() => navigate('/teacher/classes')}
-            className="bg-white border border-purple-200 text-purple-600 px-4 py-2 rounded-xl text-sm font-medium hover:bg-purple-50"
-          >
-            🏫 Manage Classes
-          </button>
-        </div>
-
-        <div className="bg-white border border-gray-100 rounded-2xl p-2 mb-8 flex gap-2 overflow-x-auto">
-          {teacherTabs.map(([key, label]) => (
-            <button
-              key={key}
-              onClick={() => setActiveTab(key)}
-              className={`whitespace-nowrap px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                activeTab === key
-                  ? 'bg-purple-600 text-white'
-                  : 'text-gray-500 hover:bg-gray-100'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-
-{activeTab === 'overview' && (
-          <>
-        <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8 shadow-sm">
-          <div className="flex items-start justify-between gap-4 mb-5">
-            <div>
-              <h2 className="font-semibold text-gray-800">
-                📚 Homework Completion
-              </h2>
-              <p className="text-xs text-gray-400 mt-1">
-                Current active assignments across Reading, Listening, Vocabulary, Writing and Mock Tests.
-              </p>
-            </div>
-
-            <span className="text-2xl font-bold text-purple-600">
-              {overallHomeworkProgress.rate}%
-            </span>
-          </div>
-
-          <div className="w-full bg-gray-100 rounded-full h-3 overflow-hidden mb-5">
-            <div
-              className="bg-purple-600 h-3 rounded-full"
-              style={{ width: `${overallHomeworkProgress.rate}%` }}
-            />
-          </div>
-
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div className="bg-gray-50 rounded-xl p-4">
-              <p className="text-xs text-gray-400">Assigned</p>
-              <p className="text-2xl font-bold text-gray-800">{overallHomeworkProgress.assigned}</p>
-            </div>
-            <div className="bg-green-50 rounded-xl p-4">
-              <p className="text-xs text-gray-500">Completed</p>
-              <p className="text-2xl font-bold text-green-600">{overallHomeworkProgress.completed}</p>
-            </div>
-            <div className="bg-amber-50 rounded-xl p-4">
-              <p className="text-xs text-gray-500">Not completed</p>
-              <p className="text-2xl font-bold text-amber-600">{overallHomeworkProgress.notCompleted}</p>
-            </div>
-            <div className="bg-red-50 rounded-xl p-4">
-              <p className="text-xs text-gray-500">Overdue</p>
-              <p className="text-2xl font-bold text-red-600">{overallHomeworkProgress.overdue}</p>
+    <div className="min-h-screen bg-slate-50 text-slate-900">
+      <div className="min-h-screen lg:flex">
+        <aside className="hidden lg:flex lg:w-64 xl:w-72 shrink-0 flex-col border-r border-slate-200 bg-white sticky top-0 h-screen">
+          <div className="px-6 py-7 border-b border-slate-100">
+            <div className="flex items-center gap-3">
+              <img src="/1.png" alt="Maxima" className="h-9 w-auto max-w-[116px] object-contain" />
+              <div className="border-l border-slate-200 pl-3">
+                <p className="text-xs font-bold tracking-wider text-slate-800">MAXIMA</p>
+                <p className="text-[11px] text-slate-500">Teacher Workspace</p>
+              </div>
             </div>
           </div>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-          <div className="bg-gray-900 text-white rounded-2xl p-5">
-            <p className="text-xs text-gray-400 mb-1">
-              Pending Essays
-            </p>
-
-            <p className="text-3xl font-bold">
-              {totalPendingWritingReviews}
-            </p>
-
-            <p className="text-xs text-gray-400 mt-2">
-              Need teacher grading
-            </p>
+          <div className="px-4 py-6 flex-1 overflow-y-auto">
+            <p className="px-3 text-[11px] font-semibold uppercase tracking-[.16em] text-slate-400 mb-3">Workspace</p>
+            <nav className="space-y-1" aria-label="Teacher navigation">
+              {TEACHER_NAV_ITEMS.map(item => (
+                <button key={item.id} type="button" onClick={() => openTeacherSection(item.id)}
+                  aria-current={teacherSectionId === item.id ? 'page' : undefined}
+                  className={`w-full flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium text-left transition-colors ${teacherSectionId === item.id ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'}`}>
+                  <TeacherIcon name={item.icon} />
+                  <span className="min-w-0 flex-1">{item.label}</span>
+                  {item.id === 'reviews' && totalPendingWritingReviews > 0 && (
+                    <span className="shrink-0 text-[11px] rounded-md bg-amber-100 px-2 py-0.5 text-amber-800">{totalPendingWritingReviews}</span>
+                  )}
+                </button>
+              ))}
+            </nav>
+            <div className="mt-7 border-t border-slate-100 pt-5">
+              <p className="px-3 text-[11px] font-semibold uppercase tracking-[.16em] text-slate-400 mb-3">Teaching tools</p>
+              <button type="button" onClick={() => navigate('/teacher/classes')}
+                className="w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm text-slate-600 hover:bg-slate-50 hover:text-slate-900 text-left">
+                <TeacherIcon name="classes" /> Manage classes <TeacherIcon name="arrow" className="w-4 h-4 ml-auto" />
+              </button>
+            </div>
           </div>
-
-          <div className="bg-white border border-gray-100 rounded-2xl p-5">
-            <p className="text-xs text-gray-400 mb-1">
-              Reviewed Writing
-            </p>
-
-            <p className="text-3xl font-bold text-green-600">
-              {reviewedWritingCount}
-            </p>
-
-            <p className="text-xs text-gray-400 mt-2">
-              Total reviewed submissions
-            </p>
+          <div className="px-6 py-5 border-t border-slate-100">
+            <div className="flex items-center gap-2 text-xs text-slate-500"><TeacherIcon name="check" className="w-4 h-4" /> Institution teaching workspace</div>
           </div>
+        </aside>
 
-          <div className="bg-white border border-gray-100 rounded-2xl p-5">
-            <p className="text-xs text-gray-400 mb-1">
-              Total Writing Submissions
-            </p>
+        <div className="min-w-0 flex-1">
+          <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur">
+            <div className="px-4 sm:px-7 lg:px-9 py-4 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <img src="/1.png" alt="Maxima" className="h-8 w-auto max-w-[100px] object-contain lg:hidden" />
+                <span className="hidden sm:block text-sm font-semibold text-slate-800 truncate">Teacher Workspace</span>
+                <span className="rounded-md bg-indigo-50 px-2 py-1 text-[11px] font-semibold text-indigo-700">TEACHER</span>
+              </div>
+              <div className="flex items-center gap-2 sm:gap-4 shrink-0">
+                <span className="hidden xl:block text-xs text-slate-500 max-w-[200px] truncate" title={user?.email}>{user?.email}</span>
+                <button type="button" onClick={() => setShowPasswordModal(true)} className="inline-flex items-center gap-2 text-xs sm:text-sm text-slate-600 hover:text-slate-900 rounded-lg px-2 py-1 focus-visible:ring-2 focus-visible:ring-indigo-500">
+                  <TeacherIcon name="lock" className="h-4 w-4" /> <span className="hidden sm:inline">Password</span>
+                </button>
+                <button type="button" onClick={() => { signOut(auth); navigate('/') }} className="inline-flex items-center gap-2 text-xs sm:text-sm text-slate-600 hover:text-slate-900 rounded-lg px-2 py-1 focus-visible:ring-2 focus-visible:ring-indigo-500">
+                  <TeacherIcon name="exit" className="h-4 w-4" /> Sign out
+                </button>
+              </div>
+            </div>
+            <nav className="lg:hidden flex gap-1 px-3 pb-3 overflow-x-auto" aria-label="Mobile teacher navigation">
+              {TEACHER_NAV_ITEMS.map(item => (
+                <button key={item.id} type="button" onClick={() => openTeacherSection(item.id)}
+                  aria-current={teacherSectionId === item.id ? 'page' : undefined}
+                  className={`shrink-0 flex items-center gap-2 px-3 py-2.5 rounded-lg text-xs font-medium ${teacherSectionId === item.id ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-100'}`}>
+                  <TeacherIcon name={item.icon} className="h-4 w-4" />{item.label}
+                  {item.id === 'reviews' && totalPendingWritingReviews > 0 && <span className="text-[10px] bg-amber-100 text-amber-800 rounded px-1.5">{totalPendingWritingReviews}</span>}
+                </button>
+              ))}
+            </nav>
+          </header>
 
-            <p className="text-3xl font-bold text-purple-600">
-              {submittedWritingCount}
-            </p>
+          <main className="max-w-[1480px] mx-auto px-4 sm:px-7 lg:px-9 py-7 sm:py-9 pb-20">
+            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-7">
+              <div>
+                <p className="text-xs font-medium text-indigo-700 mb-2 uppercase tracking-[.12em]">Maxima / Teaching</p>
+                <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight text-slate-900">{teacherPage.label}</h1>
+                <p className="text-sm text-slate-500 mt-2 max-w-2xl">{teacherPage.description}</p>
+              </div>
+              <div className="flex gap-2 items-center shrink-0">
+                {teacherSectionId === 'students' && (
+                  <button type="button" onClick={() => navigate('/teacher/classes')}
+                    className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white border border-slate-200 text-slate-700 text-sm font-medium hover:bg-slate-50">
+                    <TeacherIcon name="classes" className="h-4 w-4" /> Manage classes
+                  </button>
+                )}
+                <div className="relative">
+                  <button type="button" onClick={() => setCreateMenuOpen(value => !value)}
+                    aria-expanded={createMenuOpen} aria-haspopup="menu"
+                    className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm text-sm font-medium focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-indigo-500">
+                    <TeacherIcon name="plus" className="h-4 w-4" /> Create new <TeacherIcon name="down" className="h-4 w-4" />
+                  </button>
+                  {createMenuOpen && (
+                    <div role="menu" aria-label="Create new teaching content" className="absolute top-full right-0 mt-2 w-60 z-50 rounded-xl border border-slate-200 bg-white shadow-xl p-1.5">
+                      {TEACHER_CREATION_ROUTES.map(item => (
+                        <button key={item.path} type="button" role="menuitem"
+                          onClick={() => { setCreateMenuOpen(false); navigate(item.path) }}
+                          className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left text-sm text-slate-700 hover:bg-indigo-50 hover:text-indigo-700">
+                          <TeacherIcon name={item.icon} className="w-4 h-4" /> {item.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
 
-            <p className="text-xs text-gray-400 mt-2">
-              Submitted Task 1 + Task 2 sets
-            </p>
-          </div>
-        </div>
+            {dashboardDataError && (
+              <div className="mb-6 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3" role="alert">
+                <p className="text-sm text-amber-800">{dashboardDataError}</p>
+                <button type="button" onClick={() => window.location.reload()}
+                  className="shrink-0 rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700">Retry</button>
+              </div>
+            )}
 
-        
+            {teacherSectionId === 'library' && (
+              <div className="mb-6 space-y-4">
+                <nav aria-label="Content types" className="flex gap-2 overflow-x-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-sm">
+                  {TEACHER_CONTENT_TABS.map(item => (
+                    <button key={item.id} type="button" onClick={() => openTeacherContentTab(item.id)}
+                      aria-current={activeTab === item.id ? 'page' : undefined}
+                      className={`whitespace-nowrap rounded-xl px-4 py-2.5 text-sm font-medium transition-colors ${activeTab === item.id ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-100'}`}>
+                      {item.label}
+                      <span className={`ml-2 text-[11px] ${activeTab === item.id ? 'text-indigo-100' : 'text-slate-400'}`}>
+                        {item.id === 'reading' ? activeReadings.length : item.id === 'listening' ? activeListenings.length : item.id === 'writing' ? activeWritings.length : item.id === 'vocabulary' ? activeVocabularyTests.length : activeMockTests.length}
+                      </span>
+                    </button>
+                  ))}
+                </nav>
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                  <p className="text-xs text-slate-500">Preview, Edit and Assign remain available. School Library content may require duplication before assigning.</p>
+                  <div className="relative w-full sm:w-72 shrink-0">
+                    <TeacherIcon name="search" className="absolute h-4 w-4 left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input aria-label="Search content by title" value={librarySearchTerm} onChange={event => setLibrarySearchTerm(event.target.value)}
+                      placeholder="Search content by title..." className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-200 bg-white text-sm outline-none focus:ring-2 focus:ring-indigo-200" />
+                  </div>
+                </div>
+              </div>
+            )}
 
-          </>
-        )}
+            {activeTab === 'overview' && (
+              <div className="space-y-6">
+                <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 sm:gap-4" aria-label="Teacher overview metrics">
+                  {[
+                    { label: 'Students', value: students.length, icon: 'students', note: 'Assigned learners', target: 'students' },
+                    { label: 'Active content', value: activeContentCount, icon: 'library', note: 'Across five IELTS modules', target: 'library' },
+                    { label: 'Pending reviews', value: totalPendingWritingReviews, icon: 'reviews', note: 'Writing and Mock Writing', target: 'reviews' },
+                    { label: 'Homework completion', value: `${overallHomeworkProgress.rate}%`, icon: 'analytics', note: `${overallHomeworkProgress.completed} of ${overallHomeworkProgress.assigned} assigned`, target: 'analytics' },
+                  ].map(metric => (
+                    <button key={metric.label} type="button" onClick={() => openTeacherSection(metric.target)}
+                      className="text-left rounded-2xl border border-slate-200 bg-white p-4 sm:p-5 shadow-sm hover:border-indigo-300 hover:shadow-md transition-all focus-visible:ring-2 focus-visible:ring-indigo-400 min-w-0">
+                      <div className="flex items-center justify-between gap-2 text-xs font-medium text-slate-500">
+                        <span>{metric.label}</span><TeacherIcon name={metric.icon} className="h-4 w-4 shrink-0" />
+                      </div>
+                      <p className="mt-4 text-2xl sm:text-3xl font-semibold tracking-tight text-slate-900">{metric.value}</p>
+                      <p className="mt-1 text-[11px] sm:text-xs text-slate-500">{metric.note}</p>
+                    </button>
+                  ))}
+                </div>
+
+                <div className="grid grid-cols-1 xl:grid-cols-5 gap-5">
+                  <section className="xl:col-span-3 bg-white border border-slate-200 shadow-sm rounded-2xl p-5 sm:p-6">
+                    <div className="flex items-start justify-between gap-3 mb-5">
+                      <div>
+                        <h2 className="text-base font-semibold text-slate-900">Needs your attention</h2>
+                        <p className="text-sm text-slate-500 mt-1">Important work, without searching through the library</p>
+                      </div>
+                      {totalPendingWritingReviews > 0 && <span className="shrink-0 text-[11px] rounded-md bg-amber-50 text-amber-700 px-2 py-1">{totalPendingWritingReviews} pending</span>}
+                    </div>
+                    {totalPendingWritingReviews > 0 ? (
+                      <div className="space-y-3">
+                        {pendingWritingReviews.slice(0, 3).map(item => (
+                          <div key={`writing-${item.submission.id}`} className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 px-4 py-3">
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium text-slate-800 truncate">{item.student.name}</p>
+                              <p className="text-xs text-slate-500 truncate">Writing · {item.writing.title}</p>
+                            </div>
+                            <button type="button" onClick={() => openWritingReview(item)}
+                              className="shrink-0 rounded-lg bg-indigo-50 px-3 py-2 text-xs font-medium text-indigo-700 hover:bg-indigo-100">Grade now</button>
+                          </div>
+                        ))}
+                        {pendingMockWritingReviews.slice(0, 3).map(item => (
+                          <div key={`mock-${item.submission.id}`} className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 px-4 py-3">
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium text-slate-800 truncate">{item.student.name}</p>
+                              <p className="text-xs text-slate-500 truncate">Mock Writing · {item.mock?.title || 'Mock Test'}</p>
+                            </div>
+                            <button type="button" onClick={() => openMockWritingReview(item)}
+                              className="shrink-0 rounded-lg bg-indigo-50 px-3 py-2 text-xs font-medium text-indigo-700 hover:bg-indigo-100">Grade now</button>
+                          </div>
+                        ))}
+                        <button type="button" onClick={() => { setReviewView('pending'); openTeacherSection('reviews') }}
+                          className="inline-flex items-center gap-2 text-sm font-medium text-indigo-700 hover:text-indigo-900 mt-1">View all reviews <TeacherIcon name="arrow" className="h-4 w-4" /></button>
+                      </div>
+                    ) : (
+                      <div className="flex items-start gap-3 rounded-xl border border-emerald-100 bg-emerald-50/60 px-4 py-4">
+                        <TeacherIcon name="check" className="h-5 w-5 text-emerald-700 mt-0.5" />
+                        <div><p className="text-sm font-semibold text-emerald-800">All writing reviews are up to date</p><p className="text-xs text-emerald-700 mt-1">New submissions will appear here automatically.</p></div>
+                      </div>
+                    )}
+                  </section>
+                  <section className="xl:col-span-2 rounded-2xl border border-slate-200 bg-white p-5 sm:p-6 shadow-sm">
+                    <h2 className="text-base font-semibold text-slate-900">Assignment progress</h2>
+                    <p className="text-sm text-slate-500 mt-1">Current active student assignments</p>
+                    <div className="flex justify-between items-end gap-3 mt-6 mb-3">
+                      <div><span className="text-4xl font-semibold tracking-tight text-slate-900">{overallHomeworkProgress.rate}%</span><p className="text-xs text-slate-500 mt-1">Completion rate</p></div>
+                      <span className="text-sm font-medium text-slate-500">{overallHomeworkProgress.completed} / {overallHomeworkProgress.assigned}</span>
+                    </div>
+                    <div className="h-2.5 rounded-full bg-slate-100 overflow-hidden"><div className="h-full rounded-full bg-indigo-600 transition-all" style={{ width: `${Math.max(0, Math.min(100, overallHomeworkProgress.rate))}%` }} /></div>
+                    <div className="grid grid-cols-2 gap-3 mt-5">
+                      <div className="rounded-xl border border-slate-100 bg-slate-50 p-3"><p className="text-xs text-slate-500">Not completed</p><p className="text-2xl font-semibold text-slate-800 mt-1">{overallHomeworkProgress.notCompleted}</p></div>
+                      <div className="rounded-xl border border-amber-100 bg-amber-50/60 p-3"><p className="text-xs text-amber-700">Overdue</p><p className="text-2xl font-semibold text-amber-800 mt-1">{overallHomeworkProgress.overdue}</p></div>
+                    </div>
+                    <button type="button" onClick={() => openTeacherSection('analytics')}
+                      className="inline-flex items-center gap-2 mt-5 text-sm text-indigo-700 font-medium hover:text-indigo-900">View detailed analytics <TeacherIcon name="arrow" className="h-4 w-4"/></button>
+                  </section>
+                </div>
+
+                <section className="bg-white border border-slate-200 shadow-sm rounded-2xl p-5 sm:p-6">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-5">
+                    <div><h2 className="text-base font-semibold text-slate-900">Quick actions</h2><p className="text-sm text-slate-500 mt-1">The actions teachers use most often</p></div>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+                    {[
+                      { title: 'Create Reading', caption: 'Design a passage and questions', action: () => navigate('/create-reading'), icon: 'book' },
+                      { title: 'Create Listening', caption: 'Upload audio and questions', action: () => navigate('/create-listening'), icon: 'book' },
+                      { title: 'Content Library', caption: 'Find, preview and assign', action: () => openTeacherSection('library'), icon: 'library' },
+                      { title: 'Manage Classes', caption: 'Organise teaching groups', action: () => navigate('/teacher/classes'), icon: 'classes' },
+                    ].map(item => (
+                      <button key={item.title} type="button" onClick={item.action}
+                        className="flex gap-3 text-left rounded-xl border border-slate-200 p-4 hover:bg-indigo-50/50 hover:border-indigo-300 transition-colors">
+                        <span className="shrink-0 rounded-lg bg-indigo-50 text-indigo-700 p-2"><TeacherIcon name={item.icon} className="w-5 h-5" /></span>
+                        <span><span className="block text-sm font-semibold text-slate-900">{item.title}</span><span className="block text-xs text-slate-500 mt-1">{item.caption}</span></span>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              </div>
+            )}
 
         {activeTab === 'analytics' && (
           <>
@@ -7266,6 +6988,20 @@ Continue permanent delete?`
 
         {activeTab === 'reviews' && (
           <>
+            <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+              <nav aria-label="Review status" className="inline-flex rounded-xl border border-slate-200 bg-white p-1.5 gap-1 self-start">
+                <button type="button" onClick={() => setReviewView('pending')}
+                  className={`rounded-lg px-4 py-2.5 text-sm font-medium ${reviewView === 'pending' ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-100'}`}>
+                  Pending <span className="ml-1 opacity-80">({totalPendingWritingReviews})</span>
+                </button>
+                <button type="button" onClick={() => setReviewView('reviewed')}
+                  className={`rounded-lg px-4 py-2.5 text-sm font-medium ${reviewView === 'reviewed' ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-100'}`}>
+                  Reviewed <span className="ml-1 opacity-80">({allReviewCount})</span>
+                </button>
+              </nav>
+              <p className="text-xs text-slate-500">Task 1 / Task 2 rubrics and Mock Writing grading are unchanged.</p>
+            </div>
+            {reviewView === 'pending' && (<>)
 <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
           <div className="flex items-center justify-between gap-4 mb-4">
             <div>
@@ -7392,6 +7128,8 @@ Continue permanent delete?`
           )}
         </div>
 
+            </>)}
+            {reviewView === 'reviewed' && (<>)
         <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
           <div className="flex items-center justify-between gap-4 mb-4">
             <div>
@@ -7513,6 +7251,7 @@ Continue permanent delete?`
         </div>
 
 
+            </>)}
           </>
         )}
 
@@ -7576,13 +7315,13 @@ Continue permanent delete?`
             </select>
           </div>
 
-          {filteredReadings.length === 0 ? (
+          {filteredReadings.filter(contentSearchMatch).length === 0 ? (
             <p className="text-sm text-gray-400 bg-gray-50 rounded-xl p-4">
               No reading homework found for this filter.
             </p>
           ) : (
             <div className="flex flex-col gap-3">
-              {filteredReadings.map((reading, index) =>
+              {filteredReadings.filter(contentSearchMatch).map((reading, index) =>
                 renderReadingHomeworkCard(reading, reading.archived, index)
               )}
             </div>
@@ -7656,13 +7395,13 @@ Continue permanent delete?`
             </select>
           </div>
 
-          {filteredListenings.length === 0 ? (
+          {filteredListenings.filter(contentSearchMatch).length === 0 ? (
             <p className="text-sm text-gray-400 bg-gray-50 rounded-xl p-4">
               No listening homework found for this filter.
             </p>
           ) : (
             <div className="flex flex-col gap-3">
-              {filteredListenings.map((listening, index) =>
+              {filteredListenings.filter(contentSearchMatch).map((listening, index) =>
                 renderListeningHomeworkCard(listening, listening.archived, index)
               )}
             </div>
@@ -7732,13 +7471,13 @@ Continue permanent delete?`
             </select>
           </div>
 
-          {filteredVocabularyTests.length === 0 ? (
+          {filteredVocabularyTests.filter(contentSearchMatch).length === 0 ? (
             <p className="text-sm text-gray-400 bg-gray-50 rounded-xl p-4">
               No vocabulary tests found for this filter.
             </p>
           ) : (
             <div className="flex flex-col gap-3">
-              {filteredVocabularyTests.map((vocabularyTest, index) =>
+              {filteredVocabularyTests.filter(contentSearchMatch).map((vocabularyTest, index) =>
                 renderVocabularyHomeworkCard(vocabularyTest, vocabularyTest.archived, index)
               )}
             </div>
@@ -7807,13 +7546,13 @@ Continue permanent delete?`
             </select>
           </div>
 
-          {filteredWritings.length === 0 ? (
+          {filteredWritings.filter(contentSearchMatch).length === 0 ? (
             <p className="text-sm text-gray-400 bg-gray-50 rounded-xl p-4">
               No writing homework found for this filter.
             </p>
           ) : (
             <div className="flex flex-col gap-3">
-              {filteredWritings.map((writing, index) =>
+              {filteredWritings.filter(contentSearchMatch).map((writing, index) =>
                 renderWritingHomeworkCard(writing, writing.archived, index)
               )}
             </div>
@@ -7869,13 +7608,13 @@ Continue permanent delete?`
                 </button>
               </div>
 
-              {filteredActiveMockTests.length === 0 ? (
+              {filteredActiveMockTests.filter(contentSearchMatch).length === 0 ? (
                 <p className="text-sm text-gray-400 bg-gray-50 rounded-xl p-4">
                   No active mock tests found yet.
                 </p>
               ) : (
                 <div className="flex flex-col gap-3">
-                  {filteredActiveMockTests.map((mockTest, index) => renderMockTestCard(mockTest, false, index))}
+                  {filteredActiveMockTests.filter(contentSearchMatch).map((mockTest, index) => renderMockTestCard(mockTest, false, index))}
                 </div>
               )}
 
@@ -7886,7 +7625,7 @@ Continue permanent delete?`
                   </h3>
 
                   <div className="flex flex-col gap-3">
-                    {filteredArchivedMockTests.map((mockTest, index) => renderMockTestCard(mockTest, true, index))}
+                    {filteredArchivedMockTests.filter(contentSearchMatch).map((mockTest, index) => renderMockTestCard(mockTest, true, index))}
                   </div>
                 </div>
               )}
@@ -7896,14 +7635,35 @@ Continue permanent delete?`
 
         {activeTab === 'students' && (
           <>
+            <div className="mb-6 rounded-2xl border border-slate-200 bg-white p-4 sm:p-5 shadow-sm">
+              <div className="flex flex-col md:flex-row md:items-end gap-3">
+                <div className="flex-1 min-w-0">
+                  <label htmlFor="teacher-v2-student-search" className="block text-xs font-semibold text-slate-600 mb-2">Find a student</label>
+                  <div className="relative">
+                    <TeacherIcon name="search" className="absolute h-4 w-4 left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input id="teacher-v2-student-search" value={studentSearchTerm} onChange={event => setStudentSearchTerm(event.target.value)}
+                      placeholder="Name, email or username" className="w-full rounded-xl border border-slate-200 bg-white pl-9 pr-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-200" />
+                  </div>
+                </div>
+                <div className="w-full md:w-60">
+                  <label htmlFor="teacher-v2-class-filter" className="block text-xs font-semibold text-slate-600 mb-2">Class</label>
+                  <select id="teacher-v2-class-filter" value={studentClassId} onChange={event => setStudentClassId(event.target.value)}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-200">
+                    <option value="all">All students</option>
+                    {classes.map(item => <option key={item.id} value={item.id}>{item.name || 'Unnamed class'}</option>)}
+                  </select>
+                </div>
+                <p className="text-xs text-slate-500 pb-2 whitespace-nowrap">{filteredTeacherStudents.length} of {students.length} students</p>
+              </div>
+            </div>
         <div className="grid grid-cols-1 gap-4">
-          {students.length === 0 && (
+          {filteredTeacherStudents.length === 0 && (
             <div className="bg-white border border-gray-100 rounded-2xl p-8 text-center text-gray-400 text-sm">
-              No students signed up yet.
+              {students.length === 0 ? 'No students are assigned yet.' : 'No students match the selected filters.'}
             </div>
           )}
 
-          {students.map(student => {
+          {filteredTeacherStudents.map(student => {
             const studentReadings = getStudentReadings(student.id)
             const studentWritings = getStudentWritings(student.id)
             const studentListenings = getStudentListenings(student.id)
@@ -8720,6 +8480,8 @@ Continue permanent delete?`
           </>
         )}
 
+          </main>
+        </div>
       </div>
 
       {attemptManager && (
