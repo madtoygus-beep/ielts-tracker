@@ -6707,6 +6707,229 @@ exports.submitMockSecure = onCall(async request => {
   }
 })
 
+// Q2B: Learner-only historical attempt summaries. The history collection is
+// intentionally NOT readable by browser Firestore rules; never return the raw
+// submissionSnapshot or answer keys in this listing.
+async function requireStudentAttemptSource(student, config, contentId) {
+  const source = await getSource(config.sourceCollection, contentId)
+  const access = await requireAvailableStudentSource({
+    source,
+    student,
+    contentType: config.contentType,
+    contentId,
+    sourceCollection: config.sourceCollection
+  })
+  // Admin-hide is an independent visibility lock, even if status was left active.
+  if (access.adminHidden === true || access.accessType !== 'assignment') {
+    throw new HttpsError('permission-denied', 'This test is hidden from your account.')
+  }
+  return source
+}
+
+function studentAttemptHistoryMatches(config, history, uid, schoolId) {
+  return history.uid === uid &&
+    history.studentId === uid &&
+    schoolIdOf(history) === schoolId &&
+    history.contentType === config.contentType &&
+    history.sourceCollection === config.sourceCollection &&
+    history.submissionCollection === config.submissionCollection &&
+    typeof history.contentId === 'string' &&
+    history.contentId.length > 0
+}
+
+exports.getStudentSubmissionAttemptHistory = onCall(async request => {
+  const student = await requireStudent(request)
+  const config = submissionContentConfigFor(request.data?.contentType)
+  const [accessSnap, historySnap] = await Promise.all([
+    db.collection('studentAccess')
+      .where('uid', '==', student.uid)
+      .where('schoolId', '==', student.schoolId).get(),
+    db.collection(ATTEMPT_HISTORY_COLLECTION)
+      .where('studentId', '==', student.uid).get()
+  ])
+
+  const visibleIds = new Set(accessSnap.docs
+    .map(snap => snap.data() || {})
+    .filter(access => access.uid === student.uid &&
+      access.accessType === 'assignment' &&
+      access.contentType === config.contentType &&
+      access.sourceCollection === config.sourceCollection &&
+      access.status === 'active' &&
+      access.adminHidden !== true &&
+      schoolIdOf(access) === student.schoolId)
+    .map(access => access.contentId)
+    .filter(Boolean))
+
+  const matches = historySnap.docs.filter(docSnap => {
+    const history = docSnap.data() || {}
+    return studentAttemptHistoryMatches(config, history, student.uid, student.schoolId) &&
+      visibleIds.has(history.contentId) &&
+      !history.contentId.includes('/') && history.contentId.length <= 1500
+  })
+  const ids = [...new Set(matches.map(snap => snap.data().contentId))]
+  const availableIds = new Set()
+  const currentSourceTitles = new Map()
+  if (ids.length) {
+    const sources = await db.getAll(...ids.map(id =>
+      db.doc(`${config.sourceCollection}/${id}`)))
+    sources.forEach(sourceSnap => {
+      const source = sourceSnap.data() || {}
+      if (sourceSnap.exists && source.archived !== true &&
+        schoolIdOf(source) === student.schoolId) {
+        availableIds.add(sourceSnap.id)
+        currentSourceTitles.set(sourceSnap.id, source.title || '')
+      }
+    })
+  }
+
+  const attempts = matches
+    .filter(snap => availableIds.has(snap.data().contentId))
+    .map(snap => {
+      const history = snap.data() || {}
+      const snapshot = history.submissionSnapshot || {}
+      const n = Number(history.attemptNumber)
+      if (!Number.isInteger(n) || n < 1 || n > 1000 ||
+        (snapshot.uid && snapshot.uid !== student.uid) ||
+        (snapshot.studentId && snapshot.studentId !== student.uid)) return null
+      const summary = submissionAttemptSummary(config, snapshot, {
+        id: `history:${snap.id}`,
+        contentId: history.contentId,
+        attemptNumber: n,
+        isHistorical: true,
+        title: snapshot.title || snapshot.readingTitle || snapshot.listeningTitle ||
+          snapshot.writingTitle || snapshot.vocabularyTitle || snapshot.mockTitle ||
+          currentSourceTitles.get(history.contentId) || '',
+        submittedAt: snapshot.submittedAt || history.submittedAt || '',
+        archived: true,
+        reviewOverall: snapshot.review?.overall ?? null
+      })
+      return summary
+    })
+    .filter(Boolean)
+    .sort((a, b) => (Date.parse(b.submittedAt || '') || 0) -
+      (Date.parse(a.submittedAt || '') || 0))
+
+  return { ok: true, contentType: config.contentType, attempts }
+})
+
+// Q2B: Exact selected-attempt review. Never trust a studentId from the client.
+// During an open retake, no answer-key-bearing source or historic answers are
+// returned; this preserves the existing getCompletedObjectiveReview lock.
+exports.getStudentSubmissionAttemptReview = onCall(async request => {
+  const student = await requireStudent(request)
+  const data = request.data || {}
+  const config = submissionContentConfigFor(data.contentType)
+  const contentId = assertDocumentId(data.contentId, 'Content ID')
+  const attemptNumber = Number(data.attemptNumber)
+  if (!Number.isInteger(attemptNumber) || attemptNumber < 1 || attemptNumber > 1000) {
+    throw new HttpsError('invalid-argument', 'Choose a valid attempt number.')
+  }
+
+  const source = await requireStudentAttemptSource(student, config, contentId)
+  const current = await findCurrentSubmissionRecord(config, student.uid, contentId)
+  if (!current) {
+    throw new HttpsError('not-found', 'No submission was found for this test.')
+  }
+  const currentOwner = current.data || {}
+  if ((currentOwner.uid && currentOwner.uid !== student.uid) ||
+      (currentOwner.studentId && currentOwner.studentId !== student.uid) ||
+      schoolIdOf(currentOwner) !== student.schoolId) {
+    throw new HttpsError('permission-denied', 'This submission belongs to another account.')
+  }
+
+  const openControl = await getOpenSubmissionAttemptControl(config, student.uid, contentId)
+  if (openControl) {
+    throw new HttpsError('failed-precondition',
+      'Your retake is open. Submit the new attempt before reviewing answers.')
+  }
+
+  let selected = null
+  let isHistorical = false
+  if (attemptNumberOf(current.data) === attemptNumber) {
+    selected = current.data
+  } else {
+    const historyId = attemptHistoryId(
+      attemptControlId(student.uid, config.contentType, contentId),
+      attemptNumber
+    )
+    const historySnap = await db.doc(`${ATTEMPT_HISTORY_COLLECTION}/${historyId}`).get()
+    if (historySnap.exists) {
+      const history = historySnap.data() || {}
+      if (!studentAttemptHistoryMatches(config, history, student.uid, student.schoolId) ||
+          history.contentId !== contentId || Number(history.attemptNumber) !== attemptNumber) {
+        throw new HttpsError('permission-denied', 'The selected attempt is not yours.')
+      }
+      selected = history.submissionSnapshot || {}
+      isHistorical = true
+    } else {
+      // Legacy submissions may use non-deterministic IDs instead of snapshots.
+      const [byUid, byStudentId] = await Promise.all([
+        db.collection(config.submissionCollection).where('uid', '==', student.uid).get(),
+        db.collection(config.submissionCollection).where('studentId', '==', student.uid).get()
+      ])
+      const candidates = new Map()
+      for (const snap of [...byUid.docs, ...byStudentId.docs]) {
+        const record = snap.data() || {}
+        if ((record.uid && record.uid !== student.uid) ||
+          (record.studentId && record.studentId !== student.uid) ||
+          schoolIdOf(record) !== student.schoolId ||
+          !submissionMatchesContent(config, record, contentId) ||
+          attemptNumberOf(record) !== attemptNumber) continue
+        candidates.set(snap.id, recordFromSubmissionSnap(config, snap, false))
+      }
+      const legacy = chooseLegacyCurrentSubmission([...candidates.values()])
+      if (legacy) {
+        selected = legacy.data
+        isHistorical = legacy.id !== current.id
+      }
+    }
+  }
+  if (!selected ||
+      (selected.uid && selected.uid !== student.uid) ||
+      (selected.studentId && selected.studentId !== student.uid) ||
+      (selected.schoolId && schoolIdOf(selected) !== student.schoolId) ||
+      (selected.attemptNumber && attemptNumberOf(selected) !== attemptNumber)) {
+    throw new HttpsError('not-found', 'This attempt could not be found.')
+  }
+
+  const submission = {
+    attemptNumber,
+    submittedAt: selected.submittedAt || '',
+    result: toPlain(selected.result || null),
+    reviewed: selected.reviewed === true,
+    review: toPlain(selected.review || null),
+    autoSubmitted: selected.autoSubmitted === true,
+    excludedFromStats: selected.excludedFromStats === true,
+    answers: toPlain(selected.answers || {}),
+    task1Answer: selected.task1Answer || '',
+    task2Answer: selected.task2Answer || '',
+    listeningAnswers: toPlain(selected.listeningAnswers || {}),
+    readingAnswers: toPlain(selected.readingAnswers || {}),
+    writingAnswers: toPlain(selected.writingAnswers || {}),
+    matchingViewVersion: selected.matchingViewVersion || 0
+  }
+
+  if (config.contentType === 'mock') {
+    const mockSources = await getMockSources(source)
+    for (const item of [...mockSources.listenings, ...mockSources.readings,
+      ...(mockSources.writing ? [mockSources.writing] : [])]) {
+      if (schoolIdOf(item) !== student.schoolId) {
+        throw new HttpsError('permission-denied', 'A linked test belongs to another school.')
+      }
+    }
+    return {
+      ok: true, contentType: config.contentType, contentId, isHistorical,
+      submission, source: { id: source.id, title: source.title || '',
+        enabledSections: source.enabledSections || null },
+      reviewSources: mockReviewSources(mockSources)
+    }
+  }
+  return {
+    ok: true, contentType: config.contentType, contentId, isHistorical,
+    submission, source: toPlain(source)
+  }
+})
+
 exports.getCompletedObjectiveReview = onCall(async request => {
   const student = await requireStudent(request)
   const data = request.data || {}

@@ -1,4 +1,4 @@
-  import { useState, useEffect, useMemo } from 'react'
+  import { useState, useEffect, useMemo, useRef } from 'react'
   import { auth, db, storage, functions } from '../firebase'
   import { collection, query, where, onSnapshot, doc, getDoc, updateDoc, arrayUnion } from 'firebase/firestore'
   import { signOut, onAuthStateChanged, updatePassword } from 'firebase/auth'
@@ -10,6 +10,8 @@
     functions,
     'getStudentSubmissionAttemptState'
   )
+  const getStudentSubmissionAttemptHistoryCall = httpsCallable(functions, 'getStudentSubmissionAttemptHistory')
+  const getStudentSubmissionAttemptReviewCall = httpsCallable(functions, 'getStudentSubmissionAttemptReview')
 
   function normalizeId(value) {
     return value === undefined || value === null
@@ -4397,7 +4399,7 @@
   }
 
   function historyContentId(record, config) {
-    return config.contentIds.map(key => record?.[key]).find(value =>
+    return [record?.contentId, ...config.contentIds.map(key => record?.[key])].find(value =>
       typeof value === 'string' && value.trim()
     ) || ''
   }
@@ -4426,7 +4428,7 @@
     const result = record?.result || {}
     if (category === 'writing') {
       if (!record?.reviewed) return 'Submitted · Teacher review pending'
-      return `Teacher reviewed · Band ${formatBand(record?.review?.overall)}`
+      return `Teacher reviewed · Band ${formatBand(record?.review?.overall ?? record?.reviewOverall)}`
     }
     if (category === 'mock') {
       const overall = result.finalOverall ?? result.reviewedOverall ?? result.overall ?? result.overallEstimate
@@ -4449,12 +4451,254 @@
     return score
   }
 
+  // Q2B read-only historic answer review. The trusted callable controls access;
+  // these functions only render what it already authorized and returned.
+  function studentReviewValue(value) {
+    if (value === undefined || value === null || value === '') return '—'
+    if (Array.isArray(value)) return value.length ? value.map(studentReviewValue).join(', ') : '—'
+    if (typeof value === 'object') {
+      return Object.entries(value).map(([key, item]) => `${key}: ${studentReviewValue(item)}`).join('; ') || '—'
+    }
+    return String(value)
+  }
+
+  function studentReviewQuestionTitle(question, fallback = '') {
+    const fields = ['questionText', 'question', 'prompt', 'text', 'sentence', 'statement', 'word', 'term', 'title', 'label']
+    const text = fields.map(key => question?.[key])
+      .find(value => typeof value === 'string' && value.trim())
+    return text || fallback || question?.id || 'Question'
+  }
+
+  function studentReviewRow(id, question, yourAnswer, correctAnswer) {
+    return { id, question, yourAnswer: studentReviewValue(yourAnswer), correctAnswer: studentReviewValue(correctAnswer) }
+  }
+
+  function studentReviewQuestionRows(question, answers, type, sectionName) {
+    const q = question || {}
+    const qid = q.id || 'question'
+    const label = studentReviewQuestionTitle(q, sectionName)
+    const nested = answers?.[qid] || {}
+    const rows = []
+    const add = (id, subLabel, value, correct) => rows.push(studentReviewRow(
+      id, subLabel ? `${label} · ${subLabel}` : label, value, correct
+    ))
+
+    if (type === 'reading' && q.type === 'matching') {
+      ;(q.paragraphs || []).forEach((paragraph, i) =>
+        add(`${qid}:paragraph:${i}`, `Paragraph ${paragraph.letter || i + 1}`,
+          nested?.[paragraph.letter], paragraph.answer))
+    } else if (type === 'reading' &&
+      ['matchingInformation', 'sentenceEndings', 'summaryOptions', 'shortAnswer'].includes(q.type)) {
+      ;(q.items || []).forEach((item, i) =>
+        add(`${qid}:item:${i}`, studentReviewQuestionTitle(item, `Item ${i + 1}`),
+          nested?.[item.id], item.answer))
+    } else if (type === 'reading' && q.type === 'noteCompletion') {
+      ;(q.paragraphs || []).forEach((paragraph, paragraphIndex) =>
+        (paragraph.parts || []).forEach((part, i) => {
+          if (part.type !== 'blank') return
+          add(`${qid}:note:${paragraphIndex}:${i}`, `Blank ${paragraphIndex + 1}.${i + 1}`,
+            answers?.[`${qid}_${paragraph.id}_${part.id}`], part.answer)
+        }))
+    } else if ((type === 'reading' || type === 'listening') &&
+      ['table', 'summary', 'note'].includes(q.type)) {
+      ;(q.rows || []).forEach((row, rowIndex) =>
+        (row.cells || []).forEach((cell, cellIndex) => {
+          if (cell.type !== 'blank') return
+          add(`${qid}:table:${rowIndex}:${cellIndex}`, `Row ${rowIndex + 1}, blank ${cellIndex + 1}`,
+            answers?.[`${qid}_${row.id}_${cellIndex}`], cell.answer)
+        }))
+    } else if (type === 'listening' && q.type === 'listeningCompletion') {
+      ;(q.sections || []).forEach((section, sectionIndex) =>
+        (section.parts || []).forEach((part, i) => {
+          if (part.type !== 'blank') return
+          add(`${qid}:completion:${sectionIndex}:${i}`, `Blank ${sectionIndex + 1}.${i + 1}`,
+            answers?.[`${qid}_${section.id}_${part.id}`], part.answer)
+        }))
+    } else if (type === 'listening' && q.type === 'map') {
+      ;(q.mapItems || []).forEach((item, i) =>
+        add(`${qid}:map:${i}`, studentReviewQuestionTitle(item, `Location ${i + 1}`),
+          answers?.[`${qid}_${item.id}`], item.answer))
+    } else if (type === 'listening' && q.type === 'matching') {
+      ;(q.matchingItems || []).forEach((item, i) =>
+        add(`${qid}:matching:${i}`, studentReviewQuestionTitle(item, `Item ${i + 1}`),
+          answers?.[`${qid}_${item.id}`], item.answer))
+    } else {
+      add(`${qid}:answer`, '', answers?.[qid], q.mode === 'multi' ? q.answers : q.answer)
+    }
+    return rows
+  }
+
+  function studentReviewObjectiveRows(source, answers, type, mockListening = false) {
+    if (!source) return []
+    if (type === 'reading') {
+      return (source.questions || []).flatMap((question, index) =>
+        studentReviewQuestionRows(question, answers, 'reading', `Question ${index + 1}`))
+    }
+    const parts = Array.isArray(source.parts) && source.parts.length
+      ? source.parts
+      : [{ id: 'part-1', questions: source.questions || [] }]
+    return parts.flatMap((part, partIndex) => (part.questions || []).flatMap((question, i) => {
+      const mappedQuestion = mockListening
+        ? { ...question, id: `${source.id}__${part.id || `part-${partIndex + 1}`}__${question.id || i}` }
+        : question
+      return studentReviewQuestionRows(mappedQuestion, answers, 'listening',
+        `Part ${partIndex + 1}, question ${i + 1}`)
+    }))
+  }
+
+  function studentReviewVocabularyRows(source, answers) {
+    const questions = Array.isArray(source?.questions) ? source.questions : []
+    const matching = questions.filter(question => (question.type || 'mcq') === 'match_definition')
+    let ordered = matching
+    if (source?.matchingShuffle === true && matching.length > 1) {
+      const hash = Array.from(source.id || source.title || 'vocabulary')
+        .reduce((acc, character) => ((acc * 31) + character.charCodeAt(0)) >>> 0, 7)
+      const shift = (hash % (matching.length - 1)) + 1
+      ordered = [...matching.slice(shift), ...matching.slice(0, shift)]
+    }
+    return questions.map((question, index) => {
+      let correct = question.answerText || question.answer
+      if (question.type === 'match_definition') {
+        const definitionIndex = ordered.findIndex(item => item.id === question.id)
+        if (definitionIndex < 0) {
+          correct = '—'
+        } else {
+          let number = definitionIndex + 1
+          let letters = ''
+          while (number > 0) {
+            number -= 1
+            letters = String.fromCharCode(65 + (number % 26)) + letters
+            number = Math.floor(number / 26)
+          }
+          correct = letters
+        }
+      }
+      return studentReviewRow(`vocab:${question.id || index}`,
+        studentReviewQuestionTitle(question, `Question ${index + 1}`),
+        answers?.[question.id], correct)
+    })
+  }
+
+  function studentReviewMissingAnswerRows(answers, rows) {
+    const used = new Set(rows.map(row => row.id))
+    if (rows.length > 0) return rows
+    return Object.entries(answers || {}).filter(([key]) => !used.has(key))
+      .map(([key, answer]) => studentReviewRow(`saved:${key}`, key, answer, null))
+  }
+
+  function StudentAttemptReview({ payload, category }) {
+    const submission = payload?.submission || {}
+    const source = payload?.source || {}
+    const mockSources = payload?.reviewSources || {}
+    const groups = []
+    if (category === 'reading' || category === 'listening') {
+      groups.push({ label: `${category === 'reading' ? 'Reading' : 'Listening'} answers`,
+        rows: studentReviewMissingAnswerRows(submission.answers,
+          studentReviewObjectiveRows(source, submission.answers, category)) })
+    } else if (category === 'vocabulary') {
+      groups.push({ label: 'Vocabulary answers',
+        rows: studentReviewMissingAnswerRows(submission.answers,
+          studentReviewVocabularyRows(source, submission.answers)) })
+    } else if (category === 'mock') {
+      ;(mockSources.listenings || []).forEach((listening, i) =>
+        groups.push({ label: `Listening ${i + 1}: ${listening.title || 'Part'}`,
+          rows: studentReviewMissingAnswerRows(submission.listeningAnswers,
+            studentReviewObjectiveRows(listening, submission.listeningAnswers, 'listening', true)) }))
+      ;(mockSources.readings || []).forEach((reading, i) =>
+        groups.push({ label: `Reading ${i + 1}: ${reading.title || 'Passage'}`,
+          rows: studentReviewMissingAnswerRows(submission.readingAnswers?.[reading.id],
+            studentReviewObjectiveRows(reading, submission.readingAnswers?.[reading.id], 'reading')) }))
+      if (!(mockSources.listenings || []).length && Object.keys(submission.listeningAnswers || {}).length) {
+        groups.push({ label: 'Saved Listening answers',
+          rows: studentReviewMissingAnswerRows(submission.listeningAnswers, []) })
+      }
+      if (!(mockSources.readings || []).length && Object.keys(submission.readingAnswers || {}).length) {
+        groups.push({ label: 'Saved Reading answers',
+          rows: studentReviewMissingAnswerRows(submission.readingAnswers, []) })
+      }
+    }
+
+    const writing = category === 'writing'
+      ? { task1: submission.task1Answer || '', task2: submission.task2Answer || '' }
+      : category === 'mock' ? (submission.writingAnswers || {}) : null
+    const review = category === 'mock'
+      ? (submission.result?.writing?.review || submission.review || null)
+      : submission.review || null
+    const reviewed = category === 'mock'
+      ? (submission.result?.writing?.status === 'reviewed' || Boolean(review))
+      : submission.reviewed === true
+
+    return (
+      <div className="mt-4 space-y-4 rounded-xl border border-indigo-100 bg-indigo-50/30 p-4" aria-label={`Attempt ${submission.attemptNumber} answer review`}>
+        <p className="text-sm font-semibold text-indigo-950">Attempt {submission.attemptNumber} · Saved answers and feedback (read-only)</p>
+        <p className="text-xs text-slate-600">The score shown above is the score saved for this attempt. Answer keys below come from the current test version; if a teacher edited the test after submission, they may differ from the original marking key.</p>
+        {groups.map((group, groupIndex) => (
+          <details key={`${group.label}:${groupIndex}`} open className="rounded-xl border border-slate-200 bg-white">
+            <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-900">{group.label} ({group.rows.length})</summary>
+            <div className="space-y-2 border-t border-slate-100 p-3">
+              {group.rows.length === 0 ? (
+                <p className="text-xs text-slate-500">No saved answers for this section.</p>
+              ) : group.rows.map((row, i) => (
+                <div key={`${row.id}:${i}`} className="rounded-lg border border-slate-100 p-3">
+                  <p className="mb-2 break-words text-sm font-medium text-slate-800">{i + 1}. {row.question}</p>
+                  <div className="grid gap-2 text-xs sm:grid-cols-2">
+                    <div className="min-w-0 break-words rounded-lg bg-slate-50 p-2.5">
+                      <span className="block font-semibold text-slate-500">Your saved answer</span>
+                      <span className="mt-1 block whitespace-pre-wrap text-slate-900">{row.yourAnswer}</span>
+                    </div>
+                    <div className="min-w-0 break-words rounded-lg bg-green-50 p-2.5">
+                      <span className="block font-semibold text-green-700">Current answer key</span>
+                      <span className="mt-1 block whitespace-pre-wrap text-green-900">{row.correctAnswer}</span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </details>
+        ))}
+        {writing && (
+          <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
+            <p className="text-sm font-semibold text-slate-900">Writing submission and teacher feedback</p>
+            {['task1', 'task2'].map((task, i) => (
+              <div key={task}>
+                <p className="text-xs font-semibold text-slate-700">Task {i + 1} · Band {review?.[`${task}Band`] || '—'}</p>
+                <p className="mt-1 whitespace-pre-wrap break-words rounded-lg bg-slate-50 p-3 text-sm text-slate-800">{writing[task] || `No Task ${i + 1} answer saved.`}</p>
+                {review?.[`${task}Feedback`] && (
+                  <p className="mt-2 whitespace-pre-wrap break-words rounded-lg bg-indigo-50 p-3 text-sm text-indigo-900">{review[`${task}Feedback`]}</p>
+                )}
+              </div>
+            ))}
+            {review?.generalFeedback && (
+              <p className="whitespace-pre-wrap break-words rounded-lg bg-blue-50 p-3 text-sm text-blue-900">General feedback: {review.generalFeedback}</p>
+            )}
+            {reviewed && review?.overall !== undefined && review?.overall !== null && (
+              <p className="text-sm font-semibold text-indigo-900">Overall Writing band: {review.overall}</p>
+            )}
+            {!reviewed && <p className="text-xs text-amber-800">Awaiting teacher review.</p>}
+          </div>
+        )}
+      </div>
+    )
+  }
+
   function StudentResultsHistory({ user, category, resultsVisibility }) {
     const config = STUDENT_HISTORY_CONFIG[category]
     const [records, setRecords] = useState([])
+    const [archivedAttempts, setArchivedAttempts] = useState([])
     const [loading, setLoading] = useState(true)
+    const [historyLoading, setHistoryLoading] = useState(false)
+    const [historyError, setHistoryError] = useState('')
     const [visibleCount, setVisibleCount] = useState(20)
+    const [refreshNumber, setRefreshNumber] = useState(0)
+    const [expandedReview, setExpandedReview] = useState(null)
+    const reviewRequestRef = useRef(0)
 
+    const visibleIdsKey = resultsVisibility?.ready && config
+      ? [...(resultsVisibility.allowed?.[category] || [])].sort().join('\u001f')
+      : ''
+
+    // Keep Q2A's live head submissions untouched. Q2B adds server-authorized
+    // immutable snapshots, which Firestore rules deliberately hide from browsers.
     useEffect(() => {
       setRecords([])
       setLoading(true)
@@ -4464,30 +4708,103 @@
         return undefined
       }
       return listenUserCollection(config.collection, user.uid, items => {
-        // Keep archived historical attempt snapshots: an old retake must remain
-        // reviewable if the parent test itself is currently active.
         setRecords(items.filter(item => item.deleted !== true && item.status !== 'deleted'))
         setLoading(false)
       }, { includeArchived: true })
     }, [user?.uid, category])
 
+    useEffect(() => {
+      let active = true
+      setArchivedAttempts([])
+      setHistoryError('')
+      setHistoryLoading(Boolean(user?.uid && config && resultsVisibility?.ready && visibleIdsKey))
+      if (!user?.uid || !config || !resultsVisibility?.ready || !visibleIdsKey) {
+        return () => { active = false }
+      }
+
+      getStudentSubmissionAttemptHistoryCall({ contentType: category })
+        .then(response => {
+          if (!active) return
+          const attempts = Array.isArray(response?.data?.attempts) ? response.data.attempts : []
+          setArchivedAttempts(attempts)
+        })
+        .catch(error => {
+          if (!active) return
+          console.warn('Historical attempt summary unavailable:', error)
+          setHistoryError(error?.message || 'Saved earlier attempts could not be loaded.')
+        })
+        .finally(() => { if (active) setHistoryLoading(false) })
+
+      return () => { active = false }
+    }, [user?.uid, category, visibleIdsKey, resultsVisibility?.ready, refreshNumber])
+
+    useEffect(() => {
+      reviewRequestRef.current += 1
+      setExpandedReview(null)
+    }, [category, user?.uid, visibleIdsKey])
+
     const sortedRecords = useMemo(() => {
       if (!config || !resultsVisibility?.ready) return []
-      return records
-        .filter(record => studentCanSeeResult(
-          resultsVisibility, category, historyContentId(record, config)
-        ))
-        .sort((a, b) => {
-          const dateDiff = submissionTimeMillis(b) - submissionTimeMillis(a)
-          if (dateDiff) return dateDiff
-          const attemptDiff = submissionAttemptNumber(b) - submissionAttemptNumber(a)
-          if (attemptDiff) return attemptDiff
-          return (b.id || '').localeCompare(a.id || '')
+      const byAttempt = new Map()
+      // Q1B hard deletion removes both the live head and immutable snapshots.
+      // Never keep displaying a cached old attempt after its head is deleted.
+      const heads = new Set(records.map(record => normalizeId(historyContentId(record, config))))
+      // The live submission head wins when the same attempt is also present
+      // in a historical snapshot taken when a retake was opened.
+      for (const record of [...archivedAttempts, ...records]) {
+        const contentId = historyContentId(record, config)
+        if (record.isHistorical === true && !heads.has(normalizeId(contentId))) continue
+        if (!studentCanSeeResult(resultsVisibility, category, contentId)) continue
+        const key = `${normalizeId(contentId)}\u001f${submissionAttemptNumber(record)}`
+        const previous = byAttempt.get(key)
+        if (!previous || (previous.isHistorical === true && record.isHistorical !== true)) {
+          byAttempt.set(key, record)
+        } else if (previous.isHistorical !== true && record.isHistorical !== true) {
+          byAttempt.set(key, chooseCurrentSubmission([previous, record]))
+        }
+      }
+      return [...byAttempt.values()].sort((a, b) => {
+        const dateDiff = submissionTimeMillis(b) - submissionTimeMillis(a)
+        if (dateDiff) return dateDiff
+        const attemptDiff = submissionAttemptNumber(b) - submissionAttemptNumber(a)
+        if (attemptDiff) return attemptDiff
+        return (b.id || '').localeCompare(a.id || '')
+      })
+    }, [records, archivedAttempts, config, resultsVisibility, category])
+
+    const openAttemptReview = async record => {
+      const contentId = historyContentId(record, config)
+      const attemptNumber = submissionAttemptNumber(record)
+      const key = `${normalizeId(contentId)}:${attemptNumber}`
+      const seq = ++reviewRequestRef.current
+      if (expandedReview?.key === key) {
+        setExpandedReview(null)
+        return
+      }
+      setExpandedReview({ key, loading: true, payload: null, error: '' })
+      try {
+        const response = await getStudentSubmissionAttemptReviewCall({
+          contentType: category,
+          contentId,
+          attemptNumber
         })
-    }, [records, config, resultsVisibility, category])
+        if (reviewRequestRef.current !== seq) return
+        if (!response?.data?.ok || !response?.data?.submission) {
+          throw new Error('The selected attempt could not be reviewed.')
+        }
+        setExpandedReview({ key, loading: false, payload: response.data, error: '' })
+      } catch (error) {
+        if (reviewRequestRef.current !== seq) return
+        const message = error?.code === 'functions/failed-precondition'
+          ? 'A retake is currently open. Submit the new attempt before reviewing answer keys.'
+          : error?.code === 'functions/permission-denied'
+            ? 'Review access is not available. Your teacher may have archived or hidden this test.'
+            : error?.message || 'The selected attempt could not be opened.'
+        setExpandedReview({ key, loading: false, payload: null, error: message })
+      }
+    }
 
     const stillLoading = loading || !resultsVisibility?.ready
-
     if (!config) return null
 
     return (
@@ -4496,14 +4813,28 @@
           <div>
             <h2 className="text-lg font-semibold text-slate-900">{config.label} — All attempts</h2>
             <p className="mt-1 text-xs text-slate-500">
-              Results from archived tests stay saved, but are hidden until restored. Reopened retakes keep their earlier attempts.
+              Archived tests and their results remain hidden until restored. Reopened retakes keep their earlier attempts.
             </p>
           </div>
-          <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
-            {stillLoading ? 'Loading…' : `${sortedRecords.length} submission${sortedRecords.length === 1 ? '' : 's'}`}
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+              {stillLoading ? 'Loading…' : `${sortedRecords.length} attempt${sortedRecords.length === 1 ? '' : 's'}`}
+            </span>
+            <button type="button" onClick={() => { setRefreshNumber(n => n + 1); reviewRequestRef.current += 1; setExpandedReview(null) }}
+              disabled={historyLoading || stillLoading}
+              className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-50 disabled:opacity-50">
+              {historyLoading ? 'Syncing…' : 'Refresh history'}
+            </button>
+          </div>
         </div>
-
+        {historyError && (
+          <p role="alert" className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
+            Earlier attempt snapshots are temporarily unavailable: {historyError}. Current submissions are still displayed.
+          </p>
+        )}
+        {historyLoading && !historyError && (
+          <p className="mb-3 text-xs text-slate-500">Checking saved earlier attempts…</p>
+        )}
         {stillLoading ? (
           <div className="rounded-xl border border-slate-200 bg-white p-5 text-sm text-slate-500">Loading visible attempts…</div>
         ) : sortedRecords.length === 0 ? (
@@ -4513,34 +4844,53 @@
         ) : (
           <>
             <div className="space-y-3">
-              {sortedRecords.slice(0, visibleCount).map(record => (
-                <article key={record.id} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                  <div className="flex flex-wrap items-start justify-between gap-4">
-                    <div className="min-w-0 flex-1">
-                      <p className="break-words text-sm font-semibold text-slate-900">{historyTitle(record, config)}</p>
-                      <p className="mt-1 text-xs text-slate-500">
-                        Attempt {submissionAttemptNumber(record)} · Submitted {historyDate(record)}
-                      </p>
-                      <p className="mt-3 text-sm font-medium text-slate-700">{historySummary(record, category)}</p>
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        {record.excludedFromStats === true && (
-                          <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-800">
-                            Excluded from statistics · Result retained
-                          </span>
-                        )}
-                        {category === 'writing' && (
-                          <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${record.reviewed ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'}`}>
-                            {record.reviewed ? 'Reviewed' : 'Awaiting teacher review'}
-                          </span>
-                        )}
-                        {record.archived === true && (
-                          <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-600">Retained earlier attempt</span>
-                        )}
+              {sortedRecords.slice(0, visibleCount).map(record => {
+                const contentId = historyContentId(record, config)
+                const attemptNumber = submissionAttemptNumber(record)
+                const reviewKey = `${normalizeId(contentId)}:${attemptNumber}`
+                const isExpanded = expandedReview?.key === reviewKey
+                return (
+                  <article key={record.id} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                    <div className="flex flex-wrap items-start justify-between gap-4">
+                      <div className="min-w-0 flex-1">
+                        <p className="break-words text-sm font-semibold text-slate-900">{historyTitle(record, config)}</p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          Attempt {attemptNumber} · Submitted {historyDate(record)}
+                        </p>
+                        <p className="mt-3 text-sm font-medium text-slate-700">{historySummary(record, category)}</p>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {record.excludedFromStats === true && (
+                            <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-800">
+                              Excluded from statistics · Result retained
+                            </span>
+                          )}
+                          {category === 'writing' && (
+                            <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${record.reviewed ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'}`}>
+                              {record.reviewed ? 'Reviewed' : 'Awaiting teacher review'}
+                            </span>
+                          )}
+                          {record.archived === true && (
+                            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-600">Retained earlier attempt</span>
+                          )}
+                        </div>
                       </div>
+                      <button type="button" onClick={() => openAttemptReview(record)}
+                        className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-700">
+                        {isExpanded ? 'Close review' : `Review Attempt ${attemptNumber}`}
+                      </button>
                     </div>
-                  </div>
-                </article>
-              ))}
+                    {isExpanded && expandedReview?.loading && (
+                      <div className="mt-4 rounded-lg bg-slate-50 p-4 text-sm text-slate-600">Loading this attempt’s saved answers…</div>
+                    )}
+                    {isExpanded && expandedReview?.error && (
+                      <div role="alert" className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">{expandedReview.error}</div>
+                    )}
+                    {isExpanded && expandedReview?.payload && (
+                      <StudentAttemptReview payload={expandedReview.payload} category={category}/>
+                    )}
+                  </article>
+                )
+              })}
             </div>
             {visibleCount < sortedRecords.length && (
               <button type="button" onClick={() => setVisibleCount(count => count + 20)}
