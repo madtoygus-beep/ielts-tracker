@@ -1,4 +1,4 @@
-  import { useState, useEffect } from 'react'
+  import { useState, useEffect, useMemo } from 'react'
   import { auth, db, storage, functions } from '../firebase'
   import { collection, query, where, onSnapshot, doc, getDoc, updateDoc, arrayUnion } from 'firebase/firestore'
   import { signOut, onAuthStateChanged, updatePassword } from 'firebase/auth'
@@ -28,6 +28,8 @@
     if (value instanceof Date) return value.getTime()
     if (typeof value?.toMillis === 'function') return value.toMillis()
     if (typeof value?.toDate === 'function') return value.toDate().getTime()
+    if (typeof value?.seconds === 'number') return value.seconds * 1000
+    if (typeof value === 'number') return value
     return 0
   }
 
@@ -211,7 +213,12 @@
       `uid:${collectionName}:${uid}`,
       q,
       items => {
-        let nextItems = items.filter(item => item.archived !== true)
+        // A reopened attempt can carry an archived submission snapshot.
+        // Keep this distinction separate from teacher archiving the source test.
+        // Q2A result visibility is checked against canonical studentAccess.
+        let nextItems = options.includeArchived === true
+          ? items
+          : items.filter(item => item.archived !== true)
 
         if (typeof options.filter === 'function') {
           nextItems = nextItems.filter(options.filter)
@@ -1363,7 +1370,7 @@
   }
 
 
-  function StudentSkillAnalytics({ user, profile }) {
+  function StudentSkillAnalytics({ user, profile, resultsVisibility }) {
     const [readings, setReadings] = useState([])
     const [readingSubmissions, setReadingSubmissions] = useState([])
     const [listenings, setListenings] = useState([])
@@ -1432,13 +1439,17 @@
     )
 
     const currentReadingSubmissions = dedupeSubmissionHeads(
-      readingSubmissions,
+      readingSubmissions.filter(submission =>
+        studentCanSeeResult(resultsVisibility, 'reading', submission.readingId)
+      ),
       submission => submission.readingId,
       readingAttemptStates
     )
 
     const currentListeningSubmissions = dedupeSubmissionHeads(
-      listeningSubmissions,
+      listeningSubmissions.filter(submission =>
+        studentCanSeeResult(resultsVisibility, 'listening', submission.listeningId)
+      ),
       submission => submission.listeningId,
       listeningAttemptStates
     )
@@ -2027,7 +2038,7 @@
 
 
 
-  function MockAnalysis({ user, profile }) {
+  function MockAnalysis({ user, profile, resultsVisibility }) {
     const [mockSubmissions, setMockSubmissions] = useState([])
     const [mockMap, setMockMap] = useState({})
 
@@ -2151,8 +2162,10 @@
     }
 
     const currentMockSubmissions = dedupeSubmissionHeads(
-      mockSubmissions,
-      submission => submission.mockTestId
+      mockSubmissions.filter(submission =>
+        studentCanSeeResult(resultsVisibility, 'mock', submission.mockTestId || submission.mockId)
+      ),
+      submission => submission.mockTestId || submission.mockId
     )
 
     const fullMockSubmissions = currentMockSubmissions.filter(
@@ -2949,7 +2962,7 @@
   }
 
 
-  function WritingProgressAnalytics({ user, profile }) {
+  function WritingProgressAnalytics({ user, profile, resultsVisibility }) {
     const [submissions, setSubmissions] = useState([])
     const [writingMap, setWritingMap] = useState({})
 
@@ -2986,7 +2999,9 @@
     }, [user, profile])
 
     const currentWritingSubmissions = dedupeSubmissionHeads(
-      submissions,
+      submissions.filter(submission =>
+        studentCanSeeResult(resultsVisibility, 'writing', submission.writingId)
+      ),
       submission => submission.writingId
     )
 
@@ -4282,6 +4297,263 @@
 
   // MAXIMA Student Learning Hub V2: presentation-only navigation and pictograms.
   // Academic submissions, attempt permissions, content access, and review rules stay unchanged.
+  // Q2A: Student history is always scoped to the signed-in student's UID.
+  // Archive/restore visibility is controlled by the canonical studentAccess
+  // assignment status, not the archived flag on an older retake submission.
+  // Do not fetch answer-key-bearing source documents or change review permissions.
+  const STUDENT_HISTORY_CONFIG = Object.freeze({
+    reading: { collection: 'readingSubmissions', label: 'Reading', contentIds: ['readingId'], titleFields: ['readingTitle', 'title'] },
+    listening: { collection: 'listeningSubmissions', label: 'Listening', contentIds: ['listeningId'], titleFields: ['listeningTitle', 'title'] },
+    writing: { collection: 'writingSubmissions', label: 'Writing', contentIds: ['writingId'], titleFields: ['writingTitle', 'title'] },
+    vocabulary: { collection: 'vocabularySubmissions', label: 'Vocabulary', contentIds: ['vocabularyTestId', 'vocabularyId', 'testId', 'homeworkId'], titleFields: ['vocabularyTitle', 'title'] },
+    mock: { collection: 'mockSubmissions', label: 'Mock', contentIds: ['mockTestId', 'mockId'], titleFields: ['mockTitle', 'title'] }
+  })
+
+  // Canonical source collections used when the backend archives/restores tests.
+  const STUDENT_HISTORY_ACCESS_SOURCES = Object.freeze({
+    reading: 'readings',
+    listening: 'listenings',
+    writing: 'writingHomeworks',
+    vocabulary: 'vocabularyTests',
+    mock: 'mockTests'
+  })
+
+  function emptyStudentVisibleContentIds() {
+    return {
+      reading: new Set(),
+      listening: new Set(),
+      writing: new Set(),
+      vocabulary: new Set(),
+      mock: new Set()
+    }
+  }
+
+  // Build the current visible source IDs using only canonical studentAccess.
+  // Old attempt snapshots may themselves be archived during a retake; their
+  // visibility depends on the parent assignment, not that snapshot flag.
+  function studentVisibleContentIdsFromAccess(accessItems) {
+    const allowed = emptyStudentVisibleContentIds()
+    ;(accessItems || []).forEach(access => {
+      const source = STUDENT_HISTORY_ACCESS_SOURCES[access?.contentType]
+      if (
+        !source ||
+        access?.accessType !== 'assignment' ||
+        access?.sourceCollection !== source ||
+        access?.status !== 'active' ||
+        access?.adminHidden === true ||
+        !access?.contentId
+      ) return
+      allowed[access.contentType].add(normalizeId(access.contentId))
+    })
+    return allowed
+  }
+
+  // A single shared real-time studentAccess query covers all 5 result types.
+  // setContentArchivedState marks the matching assignments inactive on Archive,
+  // then active again on Restore (unless an admin has separately hidden them).
+  // This avoids reading privileged source documents from a student account.
+  function useStudentResultsVisibility(user, profile) {
+    const uid = user?.uid || ''
+    const schoolId = profile?.schoolId?.toString().trim() || 'maxima'
+    const identity = uid && profile ? `${uid}:${schoolId}` : ''
+    const [state, setState] = useState({
+      identity: '', ready: false, allowed: emptyStudentVisibleContentIds()
+    })
+
+    useEffect(() => {
+      setState({ identity, ready: false, allowed: emptyStudentVisibleContentIds() })
+      if (!identity) return undefined
+      let subscribed = true
+
+      const accessQuery = query(
+        collection(db, 'studentAccess'),
+        where('uid', '==', uid),
+        where('schoolId', '==', schoolId)
+      )
+
+      const unsubscribe = subscribeSharedSnapshot(
+        `studentAccess:${uid}:${schoolId}`,
+        accessQuery,
+        accessItems => {
+          if (!subscribed) return
+          const allowed = studentVisibleContentIdsFromAccess(accessItems)
+          setState({ identity, ready: true, allowed })
+        }
+      )
+      return () => {
+        subscribed = false
+        unsubscribe()
+      }
+    }, [uid, schoolId, identity])
+
+    return state.identity === identity
+      ? state
+      : { identity, ready: false, allowed: emptyStudentVisibleContentIds() }
+  }
+
+  function studentCanSeeResult(visibility, category, contentId) {
+    const id = normalizeId(contentId)
+    return Boolean(id && visibility?.ready === true && visibility.allowed?.[category]?.has(id))
+  }
+
+  function historyContentId(record, config) {
+    return config.contentIds.map(key => record?.[key]).find(value =>
+      typeof value === 'string' && value.trim()
+    ) || ''
+  }
+
+  function historyTitle(record, config) {
+    const stored = config.titleFields.map(key => record?.[key]).find(value =>
+      typeof value === 'string' && value.trim()
+    )
+    if (stored) return stored.trim()
+    const id = historyContentId(record, config)
+    return id ? `${config.label} · ${id.slice(0, 8)}` : `${config.label} submission`
+  }
+
+  function historyDate(record) {
+    const milliseconds = submissionTimeMillis(record)
+    if (!milliseconds) return 'Date not recorded'
+    const date = new Date(milliseconds)
+    if (Number.isNaN(date.getTime())) return 'Date not recorded'
+    return date.toLocaleString('en-GB', {
+      year: 'numeric', month: 'short', day: 'numeric',
+      hour: '2-digit', minute: '2-digit'
+    })
+  }
+
+  function historySummary(record, category) {
+    const result = record?.result || {}
+    if (category === 'writing') {
+      if (!record?.reviewed) return 'Submitted · Teacher review pending'
+      return `Teacher reviewed · Band ${formatBand(record?.review?.overall)}`
+    }
+    if (category === 'mock') {
+      const overall = result.finalOverall ?? result.reviewedOverall ?? result.overall ?? result.overallEstimate
+      const listening = result.listening?.band
+      const reading = result.reading?.band
+      const sections = [`Overall ${formatBand(overall)}`]
+      if (toNumber(listening) !== null) sections.push(`Listening ${formatBand(listening)}`)
+      if (toNumber(reading) !== null) sections.push(`Reading ${formatBand(reading)}`)
+      return sections.join(' · ')
+    }
+    const correct = toNumber(result.correct)
+    const total = toNumber(result.total)
+    const score = correct !== null && total !== null
+      ? `${correct}/${total} correct`
+      : 'Submitted'
+    const band = result.band ?? result.estimatedBand
+    const percentage = toNumber(result.percentage)
+    if (toNumber(band) !== null) return `${score} · Band ${formatBand(band)}`
+    if (percentage !== null) return `${score} · ${Math.round(percentage)}%`
+    return score
+  }
+
+  function StudentResultsHistory({ user, category, resultsVisibility }) {
+    const config = STUDENT_HISTORY_CONFIG[category]
+    const [records, setRecords] = useState([])
+    const [loading, setLoading] = useState(true)
+    const [visibleCount, setVisibleCount] = useState(20)
+
+    useEffect(() => {
+      setRecords([])
+      setLoading(true)
+      setVisibleCount(20)
+      if (!user?.uid || !config) {
+        setLoading(false)
+        return undefined
+      }
+      return listenUserCollection(config.collection, user.uid, items => {
+        // Keep archived historical attempt snapshots: an old retake must remain
+        // reviewable if the parent test itself is currently active.
+        setRecords(items.filter(item => item.deleted !== true && item.status !== 'deleted'))
+        setLoading(false)
+      }, { includeArchived: true })
+    }, [user?.uid, category])
+
+    const sortedRecords = useMemo(() => {
+      if (!config || !resultsVisibility?.ready) return []
+      return records
+        .filter(record => studentCanSeeResult(
+          resultsVisibility, category, historyContentId(record, config)
+        ))
+        .sort((a, b) => {
+          const dateDiff = submissionTimeMillis(b) - submissionTimeMillis(a)
+          if (dateDiff) return dateDiff
+          const attemptDiff = submissionAttemptNumber(b) - submissionAttemptNumber(a)
+          if (attemptDiff) return attemptDiff
+          return (b.id || '').localeCompare(a.id || '')
+        })
+    }, [records, config, resultsVisibility, category])
+
+    const stillLoading = loading || !resultsVisibility?.ready
+
+    if (!config) return null
+
+    return (
+      <section aria-label={`${config.label} attempt history`} className="mt-6 mb-8">
+        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900">{config.label} — All attempts</h2>
+            <p className="mt-1 text-xs text-slate-500">
+              Results from archived tests stay saved, but are hidden until restored. Reopened retakes keep their earlier attempts.
+            </p>
+          </div>
+          <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+            {stillLoading ? 'Loading…' : `${sortedRecords.length} submission${sortedRecords.length === 1 ? '' : 's'}`}
+          </span>
+        </div>
+
+        {stillLoading ? (
+          <div className="rounded-xl border border-slate-200 bg-white p-5 text-sm text-slate-500">Loading visible attempts…</div>
+        ) : sortedRecords.length === 0 ? (
+          <div className="rounded-xl border border-slate-200 bg-white p-5 text-sm text-slate-500">
+            No visible {config.label.toLowerCase()} submissions. Archived tests and their results are hidden until restored.
+          </div>
+        ) : (
+          <>
+            <div className="space-y-3">
+              {sortedRecords.slice(0, visibleCount).map(record => (
+                <article key={record.id} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div className="min-w-0 flex-1">
+                      <p className="break-words text-sm font-semibold text-slate-900">{historyTitle(record, config)}</p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        Attempt {submissionAttemptNumber(record)} · Submitted {historyDate(record)}
+                      </p>
+                      <p className="mt-3 text-sm font-medium text-slate-700">{historySummary(record, category)}</p>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {record.excludedFromStats === true && (
+                          <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-800">
+                            Excluded from statistics · Result retained
+                          </span>
+                        )}
+                        {category === 'writing' && (
+                          <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${record.reviewed ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'}`}>
+                            {record.reviewed ? 'Reviewed' : 'Awaiting teacher review'}
+                          </span>
+                        )}
+                        {record.archived === true && (
+                          <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-600">Retained earlier attempt</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </article>
+              ))}
+            </div>
+            {visibleCount < sortedRecords.length && (
+              <button type="button" onClick={() => setVisibleCount(count => count + 20)}
+                className="mt-4 rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-indigo-700 hover:bg-indigo-50">
+                Show 20 more attempts
+              </button>
+            )}
+          </>
+        )}
+      </section>
+    )
+  }
+
   function StudentEmptyResults({ label }) {
     return (
       <div className="rounded-2xl border border-slate-200 bg-white px-6 py-10 text-center shadow-sm">
@@ -4355,6 +4627,7 @@
     const [newPassword, setNewPassword] = useState('')
     const [passwordMsg, setPasswordMsg] = useState('')
     const [resultsCategory, setResultsCategory] = useState('writing')
+    const [resultsView, setResultsView] = useState('history')
     const [activeTab, setActiveTab] = useState(() => {
       try {
         const storedTab = window.sessionStorage.getItem('maxima_student_dashboard_active_tab')
@@ -4381,6 +4654,7 @@
     const [dataSyncErrors, setDataSyncErrors] = useState({})
     const [authRetryKey, setAuthRetryKey] = useState(0)
     const navigate = useNavigate()
+    const resultsVisibility = useStudentResultsVisibility(user, profile)
 
     useEffect(() => {
       try {
@@ -4536,7 +4810,10 @@
     }
 
     const mockScores = dedupeSubmissionHeads(
-      scores.filter(score => score.source === 'mock_test'),
+      scores.filter(score =>
+        score.source === 'mock_test' &&
+        studentCanSeeResult(resultsVisibility, 'mock', score.mockTestId || score.mockId)
+      ),
       score => score.mockTestId || score.mockId || score.id
     )
     const latestMockScore = mockScores.find(score => score.excludedFromStats !== true)
@@ -4774,7 +5051,7 @@
               {activeTab === 'results' && (
                 <>
                   <div className="mb-5 rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3 text-sm text-indigo-800">
-                    Choose a subject to see completed work, answers and teacher-reviewed Writing feedback. Pending assignments remain under My Homework.
+                    All Attempts lists saved results from tests you can currently access. Archived tests and their results are hidden until a teacher restores them; earlier retake attempts remain available. Use Current Assignment Reviews for existing review screens.
                   </div>
                   <nav aria-label="Completed work categories" className="mb-5 flex gap-2 overflow-x-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-sm">
                     {STUDENT_RESULT_CATEGORIES.map(item => (
@@ -4787,6 +5064,18 @@
                       </button>
                     ))}
                   </nav>
+                  <div className="mb-5 flex flex-wrap gap-2" role="group" aria-label="Results view">
+                    <button type="button" onClick={() => setResultsView('history')}
+                      aria-pressed={resultsView === 'history'}
+                      className={`rounded-xl border px-4 py-2 text-sm font-medium ${resultsView === 'history' ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`}>
+                      All Attempts
+                    </button>
+                    <button type="button" onClick={() => setResultsView('active')}
+                      aria-pressed={resultsView === 'active'}
+                      className={`rounded-xl border px-4 py-2 text-sm font-medium ${resultsView === 'active' ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`}>
+                      Current Assignment Reviews
+                    </button>
+                  </div>
                 </>
               )}
 
@@ -4799,26 +5088,31 @@
 
               {activeTab === 'mock' && (
                 <>
-                  <MockAnalysis user={user} profile={profile} />
+                  <MockAnalysis user={user} profile={profile} resultsVisibility={resultsVisibility} />
                   <MockTestSection user={user} profile={profile} />
                 </>
               )}
 
               {activeTab === 'results' && (
                 <div>
-                  {resultsCategory === 'reading' && <ReadingHomeworkSection user={user} profile={profile} mode="completed" />}
-                  {resultsCategory === 'listening' && <ListeningHomeworkSection user={user} profile={profile} mode="completed" />}
-                  {resultsCategory === 'writing' && <WritingHomeworkSection user={user} profile={profile} mode="completed" />}
-                  {resultsCategory === 'vocabulary' && <VocabularyHomeworkSection user={user} profile={profile} mode="completed" />}
-                  {resultsCategory === 'mock' && <MockTestSection user={user} profile={profile} mode="completed" />}
+                  {resultsView === 'history' && <StudentResultsHistory user={user} category={resultsCategory} resultsVisibility={resultsVisibility} />}
+                  {resultsView === 'active' && (
+                    <>
+                      {resultsCategory === 'reading' && <ReadingHomeworkSection user={user} profile={profile} mode="completed" />}
+                      {resultsCategory === 'listening' && <ListeningHomeworkSection user={user} profile={profile} mode="completed" />}
+                      {resultsCategory === 'writing' && <WritingHomeworkSection user={user} profile={profile} mode="completed" />}
+                      {resultsCategory === 'vocabulary' && <VocabularyHomeworkSection user={user} profile={profile} mode="completed" />}
+                      {resultsCategory === 'mock' && <MockTestSection user={user} profile={profile} mode="completed" />}
+                    </>
+                  )}
                 </div>
               )}
 
               {activeTab === 'inbox' && <StudentCommunicationCenter user={user} />}
               {activeTab === 'analytics' && (
                 <>
-                  <StudentSkillAnalytics user={user} profile={profile} />
-                  <WritingProgressAnalytics user={user} profile={profile} />
+                  <StudentSkillAnalytics user={user} profile={profile} resultsVisibility={resultsVisibility} />
+                  <WritingProgressAnalytics user={user} profile={profile} resultsVisibility={resultsVisibility} />
                 </>
               )}
             </main>
