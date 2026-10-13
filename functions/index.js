@@ -6947,7 +6947,14 @@ exports.getCompletedObjectiveReview = onCall(async request => {
     existing
   )
 
-  const source = await getSource(config.sourceCollection, assignmentId)
+  // Q2C-1: Recheck the canonical assignment, institution, admin-hide and
+  // source archive before releasing answer-key-bearing review content.
+  // Existing submissions remain saved, but archive/unassign must revoke review.
+  const source = await requireStudentAttemptSource(
+    student,
+    submissionContentConfigFor(config.contentType),
+    assignmentId
+  )
   return { source: toPlain(source), result: existing.result || null }
 })
 
@@ -6965,7 +6972,13 @@ exports.getCompletedMockReview = onCall(async request => {
     existing
   )
 
-  const mock = await getSource('mockTests', mockTestId)
+  // Q2C-1: A completed Mock must not reveal answer keys after its assignment
+  // is hidden, unassigned or archived. The new Q2B reviewer uses this guard too.
+  const mock = await requireStudentAttemptSource(
+    student,
+    submissionContentConfigFor('mock'),
+    mockTestId
+  )
   const sources = await getMockSources(mock)
   return {
     result: existing.result || null,
