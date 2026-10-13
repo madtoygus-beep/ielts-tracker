@@ -676,9 +676,7 @@ service cloud.firestore {
         || teacherListedOn(resource.data)
         || teacherOwnsScoreMock(resource.data)
       );
-      allow delete: if isAdmin()
-        || teacherListedOn(resource.data)
-        || teacherOwnsScoreMock(resource.data);
+      allow delete: if false; // Q1B-B audited server deletion only
     }
 
     // ============================================================
@@ -757,7 +755,7 @@ service cloud.firestore {
 
       allow create: if isAdmin() || teacherCanCreateContent(request.resource.data);
       allow update: if isAdmin() || teacherCanUpdateContent();
-      allow delete: if isAdmin() || teacherOwns(resource.data);
+      allow delete: if false; // Q1B-B audited server deletion only
     }
 
     function readingParentExists(data) {
@@ -787,9 +785,7 @@ service cloud.firestore {
         || teacherListedOn(resource.data)
         || teacherOwnsReadingParent(resource.data)
       );
-      allow delete: if isAdmin()
-        || teacherListedOn(resource.data)
-        || teacherOwnsReadingParent(resource.data);
+      allow delete: if false; // Q1B-B audited server deletion only
     }
 
     // ============================================================
@@ -804,7 +800,7 @@ service cloud.firestore {
 
       allow create: if isAdmin() || teacherCanCreateContent(request.resource.data);
       allow update: if isAdmin() || teacherCanUpdateContent();
-      allow delete: if isAdmin() || teacherOwns(resource.data);
+      allow delete: if false; // Q1B-B audited server deletion only
     }
 
     function listeningParentExists(data) {
@@ -833,9 +829,7 @@ service cloud.firestore {
         || teacherListedOn(resource.data)
         || teacherOwnsListeningParent(resource.data)
       );
-      allow delete: if isAdmin()
-        || teacherListedOn(resource.data)
-        || teacherOwnsListeningParent(resource.data);
+      allow delete: if false; // Q1B-B audited server deletion only
     }
 
     // ============================================================
@@ -854,7 +848,7 @@ service cloud.firestore {
 
       allow create: if isAdmin() || teacherCanCreateContent(request.resource.data);
       allow update: if isAdmin() || teacherCanUpdateContent();
-      allow delete: if isAdmin() || teacherOwns(resource.data);
+      allow delete: if false; // Q1B-B audited server deletion only
     }
 
     function writingParentExists(data) {
@@ -884,9 +878,7 @@ service cloud.firestore {
         || teacherListedOn(resource.data)
         || teacherOwnsWritingParent(resource.data)
       );
-      allow delete: if isAdmin()
-        || teacherListedOn(resource.data)
-        || teacherOwnsWritingParent(resource.data);
+      allow delete: if false; // Q1B-B audited server deletion only
     }
 
     // ============================================================
@@ -910,7 +902,7 @@ service cloud.firestore {
         && (resource.data.get('createdBy', '') != ''
           || request.resource.data.get('teacherId', '') == resource.data.get('teacherId', ''))
       );
-      allow delete: if isAdmin() || teacherOwns(resource.data);
+      allow delete: if false; // Q1B-B audited server deletion only
     }
 
     function mockParentExists(data) {
@@ -939,9 +931,7 @@ service cloud.firestore {
         || teacherListedOn(resource.data)
         || teacherOwnsMockParent(resource.data)
       );
-      allow delete: if isAdmin()
-        || teacherListedOn(resource.data)
-        || teacherOwnsMockParent(resource.data);
+      allow delete: if false; // Q1B-B audited server deletion only
     }
 
     // ============================================================
@@ -955,7 +945,7 @@ service cloud.firestore {
 
       allow create: if isAdmin() || teacherCanCreateContent(request.resource.data);
       allow update: if isAdmin() || teacherCanUpdateContent();
-      allow delete: if isAdmin() || teacherOwns(resource.data);
+      allow delete: if false; // Q1B-B audited server deletion only
     }
 
     function vocabularyParentExists(data) {
@@ -984,9 +974,7 @@ service cloud.firestore {
         || teacherListedOn(resource.data)
         || teacherOwnsVocabularyParent(resource.data)
       );
-      allow delete: if isAdmin()
-        || teacherListedOn(resource.data)
-        || teacherOwnsVocabularyParent(resource.data);
+      allow delete: if false; // Q1B-B audited server deletion only
     }
     // ============================================================
     // VOCABULARY DRAFTS / SAVE & CONTINUE LATER

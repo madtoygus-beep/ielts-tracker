@@ -14,7 +14,6 @@ import {
 
   updateDoc,
 
-  deleteDoc,
 
   getDocs,
 
@@ -76,6 +75,11 @@ const SCHOOL_LOGO_EXTENSIONS = {
 }
 
 
+
+const previewLegacyStudentResultPurgeCall = httpsCallable(functions, 'previewLegacyStudentResultPurge')
+const purgeLegacyStudentResultsCall = httpsCallable(functions, 'purgeLegacyStudentResults')
+const previewManagedSubmissionPermanentDeleteCall = httpsCallable(functions, 'previewManagedSubmissionPermanentDelete')
+const permanentlyDeleteManagedSubmissionResultCall = httpsCallable(functions, 'permanentlyDeleteManagedSubmissionResult')
 
 const setStudentAssignmentVisibilityCall = httpsCallable(
 
@@ -154,6 +158,64 @@ const ADMIN_NAV_ITEMS = [
   { id: 'selfstudy', label: 'Self-Study', icon: 'selfstudy', description: 'Individual accounts and platform managers' },
 ]
 
+// Q1B-B: keep the confirmation input local. Typing must not re-render an
+// entire Admin/Teacher Dashboard (the Q1A performance regression).
+function LegacyCascadeDialog({ state, onCancel, onConfirm }) {
+  const [phrase, setPhrase] = useState('')
+  if (!state) return null
+  const expectedPhrase = state.mode === 'content' ? 'DELETE CONTENT' : 'DELETE RESULTS'
+  const ready = state.preview?.ready !== false && (state.preview?.totalRecords || 0) > 0
+  const disabled = state.loading || state.saving || !ready || phrase !== expectedPhrase
+  const counts = Object.entries(state.preview?.counts || {}).filter(([, count]) => count > 0)
+  return (
+    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/55 px-4" role="dialog" aria-modal="true" aria-label="Permanent deletion confirmation">
+      <div className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-2xl border border-red-200 bg-white p-6 shadow-2xl">
+        <h2 className="text-lg font-bold text-red-800">Permanently delete — cannot be undone</h2>
+        <p className="mt-2 break-words text-sm font-semibold text-slate-800">{state.label}</p>
+        <p className="mt-2 text-sm leading-relaxed text-slate-600">{state.description}</p>
+        {state.loading ? (
+          <p className="mt-4 text-sm text-slate-500" role="status">Checking every linked Firestore record...</p>
+        ) : state.preview ? (
+          <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <p className="font-semibold text-slate-900">{state.preview.totalRecords || 0} linked Firestore document(s)</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {counts.map(([name, count]) => (
+                <span key={name} className="rounded-md bg-white border border-slate-200 px-2 py-1 text-xs text-slate-700">
+                  {name}: {count}
+                </span>
+              ))}
+            </div>
+            {state.preview.blockingReason && (
+              <p className="mt-3 text-sm font-medium text-amber-800" role="alert">{state.preview.blockingReason}</p>
+            )}
+            {!state.preview.blockingReason && state.preview.totalRecords === 0 && (
+              <p className="mt-3 text-xs text-slate-600">No matching records were found; nothing can be deleted.</p>
+            )}
+          </div>
+        ) : null}
+        {state.error && <p className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-700" role="alert">{state.error}</p>}
+        {ready && !state.loading && (
+          <label className="mt-4 block text-xs font-semibold text-slate-700">
+            To permanently delete, type <strong>{expectedPhrase}</strong>
+            <input autoComplete="off" spellCheck={false} value={phrase}
+              onChange={e => setPhrase(e.target.value)} disabled={state.saving}
+              className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm outline-none focus:border-red-500"
+              placeholder={expectedPhrase} />
+          </label>
+        )}
+        <div className="mt-5 flex flex-wrap justify-end gap-2">
+          <button type="button" onClick={onCancel} disabled={state.saving}
+            className="rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700 disabled:opacity-40">Cancel</button>
+          <button type="button" onClick={() => onConfirm(phrase)} disabled={disabled}
+            className="rounded-xl bg-red-700 px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40">
+            {state.saving ? 'Deleting...' : 'Permanently delete'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function AdminDashboard() {
 
   const [users, setUsers] = useState([])
@@ -186,6 +248,7 @@ export default function AdminDashboard() {
 
   const [selectedStudent, setSelectedStudent] = useState(null)
 
+  const [legacyCascadeDialog, setLegacyCascadeDialog] = useState(null)
   const [permanentDeleteBusyId, setPermanentDeleteBusyId] = useState('')
 
   const [restoreBusyId, setRestoreBusyId] = useState('')
@@ -1722,15 +1785,30 @@ export default function AdminDashboard() {
 
 
 
-  const handleDeleteScore = async (scoreId) => {
 
-    if (!window.confirm('Delete this score?')) return
-
-    await deleteDoc(doc(db, 'scores', scoreId))
-
+  const handleDeleteScore = async score => {
+    const mockTestId = score.mockTestId || score.mockId
+    const studentId = score.studentId || score.uid
+    if (!mockTestId || !studentId) {
+      alert('This legacy score has no safe Mock/learner link. Use the student bulk cleanup or request supervised deletion.')
+      return
+    }
+    const target = { contentType: 'mock', contentId: mockTestId, studentId }
+    const key = `score:${studentId}:${mockTestId}`
+    setLegacyCascadeDialog({ key, mode: 'score', target,
+      label: `Mock ${mockTestId} — learner ${studentId}`,
+      description: 'This removes ALL submitted attempts, Mock scores and review history for this one Mock Test and learner. It does not merely delete one score row. Other tests are preserved.',
+      loading: true, saving: false, preview: null, error: '' })
+    try {
+      const res = await previewManagedSubmissionPermanentDeleteCall(target)
+      setLegacyCascadeDialog(current => current?.key === key
+        ? { ...current, loading: false, preview: { ...(res.data || {}), ready: true } } : current)
+    } catch (error) {
+      console.error('Could not preview Mock score removal:', error)
+      setLegacyCascadeDialog(current => current?.key === key
+        ? { ...current, loading: false, error: error?.message || 'Could not preview Mock result deletion.' } : current)
+    }
   }
-
-
 
   const updateResultDocumentsByStudent = async (collectionName, uid, data, shouldInclude = () => true) => {
 
@@ -1795,66 +1873,6 @@ export default function AdminDashboard() {
 
 
     return updatedDocumentIds.size
-
-  }
-
-
-
-  const deleteResultDocumentsByStudent = async (collectionName, uid, shouldInclude = () => true) => {
-
-    const possibleFields = ['uid', 'userId', 'studentId']
-
-    const deletedDocumentIds = new Set()
-
-
-
-    for (const field of possibleFields) {
-
-      const q = query(
-
-        collection(db, collectionName),
-
-        where(field, '==', uid)
-
-      )
-
-
-
-      const snap = await getDocs(q)
-
-
-
-      for (const item of snap.docs) {
-
-        if (deletedDocumentIds.has(item.id)) continue
-
-
-
-        const itemData = {
-
-          id: item.id,
-
-          ...item.data()
-
-        }
-
-
-
-        if (!shouldInclude(itemData)) continue
-
-
-
-        await deleteDoc(doc(db, collectionName, item.id))
-
-        deletedDocumentIds.add(item.id)
-
-      }
-
-    }
-
-
-
-    return deletedDocumentIds.size
 
   }
 
@@ -2150,79 +2168,47 @@ export default function AdminDashboard() {
 
 
 
-  const hardDeleteStudentRecords = async (student, type) => {
 
-    const isMock = type === 'mock'
-
-    const label = isMock ? 'mock test results' : 'homework results'
-
-
-
-    const ok = window.confirm(
-
-      `PERMANENTLY DELETE ${label} for ${student.name || student.email}?\n\nThis cannot be undone.`
-
-    )
-
-
-
-    if (!ok) return
-
-
-
+  // Q1B-B: bulk deletion is previewed and performed only by audited Cloud Functions.
+  const hardDeleteStudentRecords = async (student, scope) => {
+    const target = { studentId: student.id, scope }
+    const key = `bulk:${scope}:${student.id}`
+    setLegacyCascadeDialog({ key, mode: 'bulk', target,
+      label: `${student.name || student.email || student.id} — ${scope === 'mock' ? 'Mock results' : 'Homework results'}`,
+      description: "This permanently removes this learner's matching current results, historical attempts, scores (Mock only), attempt controls and Vocabulary drafts. Student account, other result category and assigned test content are preserved. Hide this category of assignments first.",
+      loading: true, saving: false, preview: null, error: '' })
     try {
-
-      let deletedCount = 0
-
-
-
-      if (isMock) {
-
-        deletedCount += await deleteResultDocumentsByStudent('mockSubmissions', student.id)
-
-        deletedCount += await deleteResultDocumentsByStudent('scores', student.id, isMockScore)
-
-      } else {
-
-        const homeworkCollections = [
-
-          'readingSubmissions',
-
-          'listeningSubmissions',
-
-          'writingSubmissions',
-
-          'vocabularySubmissions'
-
-        ]
-
-
-
-        for (const collectionName of homeworkCollections) {
-
-          deletedCount += await deleteResultDocumentsByStudent(collectionName, student.id)
-
-        }
-
-      }
-
-
-
-      alert(`${student.name || student.email}'s ${label} were permanently deleted. Deleted ${deletedCount} record(s).`)
-
+      const res = await previewLegacyStudentResultPurgeCall(target)
+      setLegacyCascadeDialog(current => current?.key === key
+        ? { ...current, loading: false, preview: res.data || null } : current)
     } catch (error) {
-
-      console.error(error)
-
-      alert(`Could not permanently delete ${label}.`)
-
+      console.error('Bulk result deletion preview failed:', error)
+      setLegacyCascadeDialog(current => current?.key === key
+        ? { ...current, loading: false, error: error?.message || 'Could not preview bulk result deletion.' } : current)
     }
-
   }
 
-
-
-
+  const confirmLegacyCascadePurge = async phrase => {
+    const current = legacyCascadeDialog
+    if (!current || current.loading || current.saving ||
+        current.preview?.ready !== true || !current.preview?.previewToken ||
+        phrase !== 'DELETE RESULTS') return
+    setLegacyCascadeDialog(previous => previous ? { ...previous, saving: true, error: '' } : previous)
+    try {
+      const payload = { ...current.target, confirmPermanentDelete: true,
+        confirmationPhrase: phrase, previewToken: current.preview.previewToken }
+      const result = current.mode === 'score'
+        ? await permanentlyDeleteManagedSubmissionResultCall(payload)
+        : await purgeLegacyStudentResultsCall(payload)
+      setLegacyCascadeDialog(null)
+      alert(`${Number(result.data?.deletedDocuments) || 0} linked result documents were permanently deleted.`)
+    } catch (error) {
+      console.error('Result deletion failed:', error)
+      setLegacyCascadeDialog(previous => previous
+        ? { ...previous, saving: false, error: error?.message || 'Result deletion failed. Preview again before retrying.' }
+        : previous)
+    }
+  }
 
   const handleSendPasswordReset = async user => {
 
@@ -3906,7 +3892,7 @@ export default function AdminDashboard() {
 
                                 <button onClick={() => handleEditScore(s)} className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-2 py-1 rounded-lg">Edit</button>
 
-                                <button onClick={() => handleDeleteScore(s.id)} className="text-xs bg-red-50 hover:bg-red-100 text-red-500 px-2 py-1 rounded-lg">Delete</button>
+                                <button onClick={() => handleDeleteScore(s)} className="text-xs bg-red-50 hover:bg-red-100 text-red-500 px-2 py-1 rounded-lg">Delete</button>
 
                               </div>
 
@@ -4204,7 +4190,7 @@ export default function AdminDashboard() {
 
                                 <button onClick={() => handleEditScore(s)} className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-2 py-1 rounded-lg">Edit</button>
 
-                                <button onClick={() => handleDeleteScore(s.id)} className="text-xs bg-red-50 hover:bg-red-100 text-red-500 px-2 py-1 rounded-lg">Delete</button>
+                                <button onClick={() => handleDeleteScore(s)} className="text-xs bg-red-50 hover:bg-red-100 text-red-500 px-2 py-1 rounded-lg">Delete</button>
 
                               </div>
 
@@ -4520,6 +4506,11 @@ export default function AdminDashboard() {
       )}
 
 
+
+      {legacyCascadeDialog && (
+        <LegacyCascadeDialog key={legacyCascadeDialog.key} state={legacyCascadeDialog}
+          onCancel={() => setLegacyCascadeDialog(null)} onConfirm={confirmLegacyCascadePurge} />
+      )}
 
       {editScore && (
 

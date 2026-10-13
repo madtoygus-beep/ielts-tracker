@@ -5215,6 +5215,442 @@ exports.permanentlyDeleteManagedSubmissionResult = onCall(async request => {
   }
 })
 
+// Q1B-B candidate: audited, preview-first server cascades for the two remaining
+// legacy deletion paths. No browser-side multi-document deletion is permitted.
+// Caps deliberately fail closed rather than partially deleting large cohorts.
+const LEGACY_RESULT_CASCADE_LIMIT = 160
+
+function legacyCascadeFingerprint(identity, records, guardRecords = []) {
+  const parts = [...records, ...guardRecords].map(({ snap }) =>
+    `${snap.ref.path}:${snap.updateTime?.seconds || 0}:${snap.updateTime?.nanoseconds || 0}`
+  ).sort()
+  return createHash('sha256').update([identity, ...parts].join('\n'), 'utf8').digest('hex')
+}
+
+async function legacyCascadeFind(collectionName, field, value, group = false) {
+  const ref = group ? db.collectionGroup(collectionName) : db.collection(collectionName)
+  const snap = await ref.where(field, '==', value).limit(LEGACY_RESULT_CASCADE_LIMIT + 1).get()
+  if (snap.size > LEGACY_RESULT_CASCADE_LIMIT) {
+    throw new HttpsError('resource-exhausted',
+      'This deletion includes too many linked records for one safe transaction. Contact an administrator for a supervised cleanup.')
+  }
+  return snap.docs
+}
+
+async function legacyCascadeFindMulti(collectionName, fields, value, group = false) {
+  const results = await Promise.all(fields.map(field =>
+    legacyCascadeFind(collectionName, field, value, group)
+  ))
+  const found = new Map()
+  for (const snap of results.flat()) found.set(snap.ref.path, snap)
+  return [...found.values()]
+}
+
+function legacyCascadeCheckRecordSchool(snap, schoolId, label) {
+  if (schoolIdOf(snap.data() || {}) !== schoolId) {
+    throw new HttpsError('failed-precondition', `${label} has a conflicting institution. Deletion stopped.`)
+  }
+}
+
+function legacyCascadeCheckOwnership(data, expectedStudentId = '') {
+  const owners = ['uid', 'studentId', 'userId']
+    .map(field => typeof data[field] === 'string' ? data[field].trim() : '')
+    .filter(Boolean)
+  if (owners.length === 0 || new Set(owners).size !== 1 ||
+      (expectedStudentId && owners[0] !== expectedStudentId)) {
+    throw new HttpsError('failed-precondition',
+      'A linked record has ambiguous or conflicting student ownership. Deletion stopped.')
+  }
+  return owners[0]
+}
+
+function isLegacyMockScore(data) {
+  return data.source === 'mock_test' || data.source === 'mock' ||
+    Boolean(data.mockTestId) || Boolean(data.mockId)
+}
+
+function newLegacyCascadeCollector() {
+  const found = new Map()
+  const guards = new Map()
+  const counts = {}
+  const include = (snap, category) => {
+    if (!snap?.exists || found.has(snap.ref.path)) return
+    if (found.size >= LEGACY_RESULT_CASCADE_LIMIT) {
+      throw new HttpsError('resource-exhausted',
+        'Too many linked records for one safe transaction. No records have been deleted.')
+    }
+    found.set(snap.ref.path, { snap, category })
+    counts[category] = (counts[category] || 0) + 1
+  }
+  const guard = snap => {
+    if (snap?.exists) guards.set(snap.ref.path, { snap })
+  }
+  return { found, guards, counts, include, guard }
+}
+
+async function collectLegacyStudentResultPurge({ studentId, schoolId, scope }) {
+  const c = newLegacyCascadeCollector()
+  const types = scope === 'mock' ? ['mock'] : ['reading', 'listening', 'vocabulary', 'writing']
+  for (const type of types) {
+    const config = SUBMISSION_CONTENT_CONFIG[type]
+    for (const snap of await legacyCascadeFindMulti(config.submissionCollection,
+      ['uid', 'studentId', 'userId'], studentId)) {
+      legacyCascadeCheckRecordSchool(snap, schoolId, 'Student submission')
+      legacyCascadeCheckOwnership(snap.data() || {}, studentId)
+      c.include(snap, 'submissions')
+    }
+  }
+  for (const collectionName of [ATTEMPT_HISTORY_COLLECTION, ATTEMPT_CONTROL_COLLECTION]) {
+    for (const snap of await legacyCascadeFindMulti(collectionName, ['uid', 'studentId', 'userId'], studentId)) {
+      const data = snap.data() || {}
+      if (!types.includes(data.contentType)) continue
+      const config = SUBMISSION_CONTENT_CONFIG[data.contentType]
+      if (!config || data.sourceCollection !== config.sourceCollection ||
+          data.submissionCollection !== config.submissionCollection) {
+        throw new HttpsError('failed-precondition', 'A saved attempt has inconsistent content metadata.')
+      }
+      legacyCascadeCheckRecordSchool(snap, schoolId, 'Attempt history/control')
+      legacyCascadeCheckOwnership(data, studentId)
+      c.include(snap, collectionName === ATTEMPT_HISTORY_COLLECTION ? 'attemptHistory' : 'attemptControls')
+    }
+  }
+  if (scope === 'mock') {
+    // Resource grants are only used to open linked Mock sections. When all
+    // results in this student's Mock scope are purged, discard these grants.
+    for (const group of ['readings', 'listenings']) {
+      for (const snap of await legacyCascadeFind(`mockResourceAccess/${studentId}/${group}`, 'uid', studentId)) {
+        const parts = snap.ref.path.split('/')
+        const data = snap.data() || {}
+        if (parts.length !== 4 || parts[0] !== 'mockResourceAccess' ||
+            parts[1] !== studentId || parts[2] !== group ||
+            data.uid !== studentId || data.sourceCollection !== group ||
+            data.sourceId !== parts[3]) {
+          throw new HttpsError('failed-precondition', 'Mock resource access has conflicting ownership.')
+        }
+        c.include(snap, 'mockResourceAccess')
+      }
+    }
+    for (const snap of await legacyCascadeFindMulti('scores', ['uid', 'studentId', 'userId'], studentId)) {
+      const data = snap.data() || {}
+      if (!isLegacyMockScore(data)) continue // Never erase manual scores.
+      legacyCascadeCheckRecordSchool(snap, schoolId, 'Mock score')
+      legacyCascadeCheckOwnership(data, studentId)
+      c.include(snap, 'mockScores')
+    }
+  } else {
+    for (const snap of await legacyCascadeFindMulti('vocabularyDrafts', ['uid', 'studentId', 'userId'], studentId)) {
+      legacyCascadeCheckRecordSchool(snap, schoolId, 'Vocabulary draft')
+      legacyCascadeCheckOwnership(snap.data() || {}, studentId)
+      c.include(snap, 'vocabularyDrafts')
+    }
+  }
+
+  // Deleting all a student's historical results while an assignment is still
+  // active can race a new submission. Require Hide first and watch its version.
+  const assignmentSnaps = await legacyCascadeFind('studentAccess', 'uid', studentId)
+  for (const snap of assignmentSnaps) {
+    const data = snap.data() || {}
+    if (!types.includes(data.contentType) || data.accessType !== 'assignment') continue
+    legacyCascadeCheckRecordSchool(snap, schoolId, 'Student assignment')
+    legacyCascadeCheckOwnership(data, studentId)
+    c.guard(snap)
+  }
+  const activeAssignments = [...c.guards.values()].filter(({ snap }) =>
+    snap.data()?.status === 'active'
+  ).length
+  return {
+    ...c,
+    activeAssignments,
+    ready: activeAssignments === 0,
+    blockingReason: activeAssignments > 0
+      ? `Hide this student's ${scope === 'mock' ? 'mock' : 'homework'} results/assignments first, then preview again.`
+      : '',
+    totalRecords: c.found.size,
+    previewToken: legacyCascadeFingerprint(`student:${schoolId}:${studentId}:${scope}`,
+      [...c.found.values()], [...c.guards.values()])
+  }
+}
+
+function mockReferencesLegacySource(mock, type, contentId) {
+  if (type === 'reading') return mock.readingId === contentId ||
+    (Array.isArray(mock.readingIds) && mock.readingIds.includes(contentId))
+  if (type === 'listening') return mock.listeningId === contentId ||
+    (Array.isArray(mock.listeningIds) && mock.listeningIds.includes(contentId))
+  if (type === 'writing') return mock.writingId === contentId
+  return false
+}
+
+async function legacyMockReferenceGuards(type, contentId) {
+  if (!['reading', 'listening', 'writing'].includes(type)) return []
+  const fields = type === 'reading' ? ['readingId'] : type === 'listening' ? ['listeningId'] : ['writingId']
+  const refs = await legacyCascadeFindMulti('mockTests', fields, contentId)
+  if (type === 'reading' || type === 'listening') {
+    const arraySnaps = await db.collection('mockTests')
+      .where(`${type}Ids`, 'array-contains', contentId)
+      .limit(LEGACY_RESULT_CASCADE_LIMIT + 1).get()
+    if (arraySnaps.size > LEGACY_RESULT_CASCADE_LIMIT) {
+      throw new HttpsError('resource-exhausted', 'Too many Mock Test references for a safe deletion.')
+    }
+    refs.push(...arraySnaps.docs)
+  }
+  return [...new Map(refs.filter(s => mockReferencesLegacySource(s.data() || {}, type, contentId))
+    .map(s => [s.ref.path, s])).values()]
+}
+
+async function collectLegacyContentPurge({ manager, config, contentId, sourceSnap }) {
+  const schoolId = schoolIdOf(sourceSnap.data() || {})
+  const c = newLegacyCascadeCollector()
+  c.include(sourceSnap, 'content')
+  const isArchived = sourceSnap.data()?.archived === true
+  if (['reading', 'listening', 'vocabulary'].includes(config.contentType)) {
+    const projectionCollection = OBJECTIVE_CONFIG[config.contentType].publicCollection
+    const projection = await db.doc(`${projectionCollection}/${contentId}`).get()
+    if (projection.exists) {
+      legacyCascadeCheckRecordSchool(projection, schoolId, 'Student projection')
+      c.include(projection, 'studentProjections')
+    }
+  }
+
+  const submissionSnaps = await legacyCascadeFindMulti(config.submissionCollection,
+    config.parentFields, contentId)
+  for (const snap of submissionSnaps) {
+    const data = snap.data() || {}
+    if (!submissionMatchesContent(config, data, contentId)) continue
+    legacyCascadeCheckRecordSchool(snap, schoolId, 'Student submission')
+    legacyCascadeCheckOwnership(data)
+    c.include(snap, 'submissions')
+  }
+
+  for (const collectionName of [ATTEMPT_HISTORY_COLLECTION, ATTEMPT_CONTROL_COLLECTION]) {
+    const docs = await legacyCascadeFind(collectionName, 'contentId', contentId)
+    for (const snap of docs) {
+      const data = snap.data() || {}
+      if (data.contentType !== config.contentType) continue
+      if (data.sourceCollection !== config.sourceCollection ||
+          data.submissionCollection !== config.submissionCollection) {
+        throw new HttpsError('failed-precondition', 'A saved attempt has inconsistent source metadata.')
+      }
+      legacyCascadeCheckRecordSchool(snap, schoolId, 'Attempt history/control')
+      legacyCascadeCheckOwnership(data)
+      c.include(snap, collectionName === ATTEMPT_HISTORY_COLLECTION ? 'attemptHistory' : 'attemptControls')
+    }
+  }
+
+  if (config.contentType === 'reading' || config.contentType === 'listening') {
+    // Old grants remain in subcollections even after a Mock is archived or
+    // removed. Delete grants that point to a source being permanently erased.
+    const group = config.sourceCollection
+    for (const snap of await legacyCascadeFind(group, 'sourceId', contentId, true)) {
+      const parts = snap.ref.path.split('/')
+      if (parts.length !== 4 || parts[0] !== 'mockResourceAccess' || parts[2] !== group) continue
+      const data = snap.data() || {}
+      if (data.uid !== parts[1] || data.sourceId !== contentId || data.sourceCollection !== group) {
+        throw new HttpsError('failed-precondition', 'A linked Mock resource access is inconsistent.')
+      }
+      c.include(snap, 'mockResourceAccess')
+    }
+  }
+  if (config.contentType === 'mock') {
+    for (const snap of await legacyCascadeFindMulti('scores', ['mockTestId', 'mockId'], contentId)) {
+      legacyCascadeCheckRecordSchool(snap, schoolId, 'Mock score')
+      legacyCascadeCheckOwnership(snap.data() || {})
+      c.include(snap, 'mockScores')
+    }
+    for (const group of ['readings', 'listenings']) {
+      for (const snap of await legacyCascadeFind(group, 'mockTestId', contentId, true)) {
+        const parts = snap.ref.path.split('/')
+        if (parts.length !== 4 || parts[0] !== 'mockResourceAccess' || parts[2] !== group) continue
+        const data = snap.data() || {}
+        if (data.uid !== parts[1] || data.sourceId !== parts[3] ||
+            data.sourceCollection !== group || data.mockTestId !== contentId) {
+          throw new HttpsError('failed-precondition', 'Mock resource access ownership is inconsistent.')
+        }
+        c.include(snap, 'mockResourceAccess')
+      }
+    }
+  }
+  if (config.contentType === 'vocabulary') {
+    for (const snap of await legacyCascadeFind('vocabularyDrafts', 'vocabularyTestId', contentId)) {
+      legacyCascadeCheckRecordSchool(snap, schoolId, 'Vocabulary draft')
+      legacyCascadeCheckOwnership(snap.data() || {})
+      c.include(snap, 'vocabularyDrafts')
+    }
+  }
+  for (const snap of await legacyCascadeFind('studentAccess', 'contentId', contentId)) {
+    const data = snap.data() || {}
+    if (data.contentType !== config.contentType || data.sourceCollection !== config.sourceCollection ||
+        data.accessType !== 'assignment') continue
+    legacyCascadeCheckRecordSchool(snap, schoolId, 'Student assignment')
+    legacyCascadeCheckOwnership(data)
+    c.include(snap, 'studentAccess')
+  }
+  const refs = await legacyMockReferenceGuards(config.contentType, contentId)
+  for (const ref of refs) c.guard(ref)
+  const blockingReason = !isArchived
+    ? 'Archive this content first, then preview its permanent deletion again.'
+    : refs.length ? 'This content is used by another Mock Test. Unlink it from every Mock Test first.' : ''
+  return {
+    ...c,
+    ready: !blockingReason,
+    blockingReason,
+    totalRecords: c.found.size,
+    previewToken: legacyCascadeFingerprint(`content:${schoolId}:${config.contentType}:${contentId}`,
+      [...c.found.values()], [...c.guards.values()])
+  }
+}
+
+function legacyCascadePreviewPayload(data, identity, collectionResult) {
+  return {
+    ok: true,
+    ...identity,
+    counts: collectionResult.counts,
+    totalRecords: collectionResult.totalRecords,
+    ready: collectionResult.ready,
+    blockingReason: collectionResult.blockingReason,
+    previewToken: collectionResult.previewToken
+  }
+}
+
+async function legacyCascadeExecute({ request, kind, context, collected, confirmPhrase }) {
+  const data = request.data || {}
+  if (data.confirmPermanentDelete !== true || data.confirmationPhrase !== confirmPhrase ||
+      typeof data.previewToken !== 'string' || !/^[a-f0-9]{64}$/.test(data.previewToken)) {
+    throw new HttpsError('invalid-argument', `Type ${confirmPhrase} and use a fresh deletion preview.`)
+  }
+  if (!collected.ready || !collected.totalRecords) {
+    throw new HttpsError('failed-precondition', collected.blockingReason || 'No deletable records were found.')
+  }
+  if (collected.previewToken !== data.previewToken) {
+    throw new HttpsError('failed-precondition', 'Linked records changed since preview. Cancel and preview again.')
+  }
+
+  const managerRef = db.doc(`users/${context.manager.uid}`)
+  const studentRef = kind === 'student' ? db.doc(`users/${context.studentId}`) : null
+  const sourceRef = kind === 'content'
+    ? db.doc(`${context.config.sourceCollection}/${context.contentId}`) : null
+  const readRefs = new Map([managerRef, studentRef, sourceRef,
+    ...[...collected.found.values(), ...collected.guards.values()].map(item => item.snap.ref)]
+    .filter(Boolean).map(ref => [ref.path, ref]))
+  const auditRef = db.collection('resultModerationAudit').doc()
+
+  await db.runTransaction(async tx => {
+    const fresh = await tx.getAll(...readRefs.values())
+    const byPath = new Map(fresh.map(snap => [snap.ref.path, snap]))
+    const manager = byPath.get(managerRef.path)
+    if (!manager?.exists || manager.data()?.role !== context.manager.profile.role ||
+        manager.data()?.status !== 'approved' || manager.data()?.deleted === true) {
+      throw new HttpsError('permission-denied', 'Your staff authorization changed during deletion.')
+    }
+    if (kind === 'student') {
+      if (manager.data()?.role !== 'admin') {
+        throw new HttpsError('permission-denied', 'Admin role required for bulk deletion.')
+      }
+      const student = byPath.get(studentRef.path)
+      if (!student?.exists || student.data()?.role !== 'student' ||
+          schoolIdOf(student.data() || {}) !== context.schoolId) {
+        throw new HttpsError('permission-denied', 'The selected student no longer belongs to this institution.')
+      }
+      for (const { snap } of collected.guards.values()) {
+        const now = byPath.get(snap.ref.path)
+        if (!now?.exists || now.data()?.status === 'active') {
+          throw new HttpsError('aborted', 'Assignment visibility changed. Hide assignments and preview again.')
+        }
+      }
+    } else {
+      const source = byPath.get(sourceRef.path)
+      if (!source?.exists || source.data()?.archived !== true ||
+          !managerCanManageSource({ uid: context.manager.uid, profile: manager.data() }, source.data())) {
+        throw new HttpsError('permission-denied', 'Content deletion authorization or archive status changed.')
+      }
+      if (collected.guards.size > 0) {
+        throw new HttpsError('failed-precondition', 'A linked Mock Test must be unlinked first.')
+      }
+    }
+    for (const { snap } of [...collected.found.values(), ...collected.guards.values()]) {
+      const now = byPath.get(snap.ref.path)
+      if (!now?.exists || !now.updateTime.isEqual(snap.updateTime)) {
+        throw new HttpsError('aborted', 'Linked records changed since preview. Preview deletion again.')
+      }
+    }
+    for (const { snap } of collected.found.values()) tx.delete(snap.ref)
+    tx.create(auditRef, {
+      schemaVersion: 3,
+      action: kind === 'student' ? 'bulk_permanent_delete_student_results' : 'permanently_delete_content_cascade',
+      schoolId: context.schoolId,
+      studentId: context.studentId || null,
+      scope: context.scope || null,
+      contentType: context.config?.contentType || null,
+      contentId: context.contentId || null,
+      performedBy: context.manager.uid,
+      performedByRole: manager.data().role,
+      deletedDocuments: collected.totalRecords,
+      counts: collected.counts,
+      createdAt: FieldValue.serverTimestamp()
+    })
+  })
+
+  return { ok: true, deletedDocuments: collected.totalRecords, counts: collected.counts }
+}
+
+async function legacyStudentPurgeContext(request) {
+  const manager = await requireAdmin(request)
+  const data = request.data || {}
+  const studentId = assertDocumentId(data.studentId, 'Student ID')
+  const scope = typeof data.scope === 'string' ? data.scope.trim() : ''
+  if (!['mock', 'homework'].includes(scope)) {
+    throw new HttpsError('invalid-argument', 'Scope must be mock or homework.')
+  }
+  const studentSnap = await db.doc(`users/${studentId}`).get()
+  if (!studentSnap.exists || studentSnap.data()?.role !== 'student') {
+    throw new HttpsError('not-found', 'The selected student was not found.')
+  }
+  const schoolId = schoolIdOf(studentSnap.data() || {})
+  if (schoolId === INDIVIDUAL_SCHOOL_ID || schoolId === PLATFORM_SCHOOL_ID) {
+    throw new HttpsError('permission-denied', 'This tool is for institution learners only.')
+  }
+  return { manager, studentId, scope, schoolId }
+}
+
+async function legacyContentPurgeContext(request) {
+  const manager = await requireAssignmentManager(request)
+  const data = request.data || {}
+  const config = submissionContentConfigFor(data.contentType)
+  const contentId = assertDocumentId(data.contentId, 'Content ID')
+  const sourceSnap = await db.doc(`${config.sourceCollection}/${contentId}`).get()
+  if (!sourceSnap.exists || !managerCanManageSource(manager, sourceSnap.data() || {})) {
+    throw new HttpsError('permission-denied', 'You cannot permanently remove this content.')
+  }
+  return { manager, config, contentId, sourceSnap, schoolId: schoolIdOf(sourceSnap.data() || {}) }
+}
+
+exports.previewLegacyStudentResultPurge = onCall(async request => {
+  const ctx = await legacyStudentPurgeContext(request)
+  const result = await collectLegacyStudentResultPurge(ctx)
+  return legacyCascadePreviewPayload(request.data, { studentId: ctx.studentId, scope: ctx.scope }, result)
+})
+
+exports.purgeLegacyStudentResults = onCall(async request => {
+  const ctx = await legacyStudentPurgeContext(request)
+  const result = await collectLegacyStudentResultPurge(ctx)
+  return legacyCascadeExecute({ request, kind: 'student', context: ctx,
+    collected: result, confirmPhrase: 'DELETE RESULTS' })
+})
+
+exports.previewLegacyContentPurge = onCall(async request => {
+  const ctx = await legacyContentPurgeContext(request)
+  const result = await collectLegacyContentPurge(ctx)
+  return legacyCascadePreviewPayload(request.data,
+    { contentType: ctx.config.contentType, contentId: ctx.contentId }, result)
+})
+
+exports.purgeLegacyContent = onCall(async request => {
+  const ctx = await legacyContentPurgeContext(request)
+  const result = await collectLegacyContentPurge(ctx)
+  return legacyCascadeExecute({ request, kind: 'content', context: ctx,
+    collected: result, confirmPhrase: 'DELETE CONTENT' })
+})
+
+
 exports.setSubmissionAttemptControl = onCall(async request => {
   const manager = await requireAssignmentManager(request)
   const data = request.data || {}

@@ -49,6 +49,9 @@ const previewManagedSubmissionPermanentDeleteCall = httpsCallable(
   functions,
   'previewManagedSubmissionPermanentDelete'
 )
+const previewLegacyContentPurgeCall = httpsCallable(functions, 'previewLegacyContentPurge')
+const purgeLegacyContentCall = httpsCallable(functions, 'purgeLegacyContent')
+
 const permanentlyDeleteManagedSubmissionResultCall = httpsCallable(
   functions,
   'permanentlyDeleteManagedSubmissionResult'
@@ -407,9 +410,68 @@ function ResultPermanentDeleteDialog({ loading, preview, saving, error, studentN
   )
 }
 
+// Q1B-B: keep the confirmation input local. Typing must not re-render an
+// entire Admin/Teacher Dashboard (the Q1A performance regression).
+function LegacyCascadeDialog({ state, onCancel, onConfirm }) {
+  const [phrase, setPhrase] = useState('')
+  if (!state) return null
+  const expectedPhrase = state.mode === 'content' ? 'DELETE CONTENT' : 'DELETE RESULTS'
+  const ready = state.preview?.ready !== false && (state.preview?.totalRecords || 0) > 0
+  const disabled = state.loading || state.saving || !ready || phrase !== expectedPhrase
+  const counts = Object.entries(state.preview?.counts || {}).filter(([, count]) => count > 0)
+  return (
+    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/55 px-4" role="dialog" aria-modal="true" aria-label="Permanent deletion confirmation">
+      <div className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-2xl border border-red-200 bg-white p-6 shadow-2xl">
+        <h2 className="text-lg font-bold text-red-800">Permanently delete — cannot be undone</h2>
+        <p className="mt-2 break-words text-sm font-semibold text-slate-800">{state.label}</p>
+        <p className="mt-2 text-sm leading-relaxed text-slate-600">{state.description}</p>
+        {state.loading ? (
+          <p className="mt-4 text-sm text-slate-500" role="status">Checking every linked Firestore record...</p>
+        ) : state.preview ? (
+          <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <p className="font-semibold text-slate-900">{state.preview.totalRecords || 0} linked Firestore document(s)</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {counts.map(([name, count]) => (
+                <span key={name} className="rounded-md bg-white border border-slate-200 px-2 py-1 text-xs text-slate-700">
+                  {name}: {count}
+                </span>
+              ))}
+            </div>
+            {state.preview.blockingReason && (
+              <p className="mt-3 text-sm font-medium text-amber-800" role="alert">{state.preview.blockingReason}</p>
+            )}
+            {!state.preview.blockingReason && state.preview.totalRecords === 0 && (
+              <p className="mt-3 text-xs text-slate-600">No matching records were found; nothing can be deleted.</p>
+            )}
+          </div>
+        ) : null}
+        {state.error && <p className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-700" role="alert">{state.error}</p>}
+        {ready && !state.loading && (
+          <label className="mt-4 block text-xs font-semibold text-slate-700">
+            To permanently delete, type <strong>{expectedPhrase}</strong>
+            <input autoComplete="off" spellCheck={false} value={phrase}
+              onChange={e => setPhrase(e.target.value)} disabled={state.saving}
+              className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm outline-none focus:border-red-500"
+              placeholder={expectedPhrase} />
+          </label>
+        )}
+        <div className="mt-5 flex flex-wrap justify-end gap-2">
+          <button type="button" onClick={onCancel} disabled={state.saving}
+            className="rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700 disabled:opacity-40">Cancel</button>
+          <button type="button" onClick={() => onConfirm(phrase)} disabled={disabled}
+            className="rounded-xl bg-red-700 px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40">
+            {state.saving ? 'Deleting...' : 'Permanently delete'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function TeacherDashboard() {
   const [students, setStudents] = useState([])
   const [classes, setClasses] = useState([])
+  const [legacyCascadeDialog, setLegacyCascadeDialog] = useState(null)
   const [scores, setScores] = useState({})
 
   const [readings, setReadings] = useState([])
@@ -3075,40 +3137,47 @@ export default function TeacherDashboard() {
     }
   }
 
-  const deleteReadingHomework = async reading => {
-    const completedCount = getCompletedCount(reading.id)
 
-    if (completedCount > 0) {
-      const forceDelete = window.confirm(
-        `"${reading.title}" has ${completedCount} student submission(s).
-
-Deleting will permanently remove:
-- Homework
-- Student answers
-- Results/Bands
-
-Continue permanent delete?`
-      )
-
-      if (!forceDelete) return
-
-      const relatedSubs = submissions.filter(
-        sub => sub.readingId === reading.id
-      )
-
-      for (const sub of relatedSubs) {
-        await deleteDoc(doc(db, 'readingSubmissions', sub.id))
-      }
-
-      await deleteDoc(doc(db, 'readings', reading.id))
-      return
+  // Q1B-B: preview first, then server-authorized atomic content/results deletion.
+  const openLegacyContentPurge = async (contentType, item) => {
+    const target = { contentType, contentId: item.id }
+    const key = `${contentType}:${item.id}`
+    setLegacyCascadeDialog({ key, mode: 'content', target,
+      label: item.title || item.id,
+      description: 'This deletes the archived test itself, all learner answers, old attempts, scores, drafts and assignments linked to this test. The learner accounts and unrelated tests are preserved. It must not be linked to another Mock Test.',
+      loading: true, saving: false, preview: null, error: '' })
+    try {
+      const res = await previewLegacyContentPurgeCall(target)
+      setLegacyCascadeDialog(current => current?.key === key
+        ? { ...current, loading: false, preview: res.data || null } : current)
+    } catch (error) {
+      console.error('Legacy content deletion preview failed:', error)
+      setLegacyCascadeDialog(current => current?.key === key
+        ? { ...current, loading: false, error: error?.message || 'Could not preview this deletion.' } : current)
     }
-
-    const ok = window.confirm(`Delete "${reading.title}" permanently?`)
-    if (!ok) return
-
-    await deleteDoc(doc(db, 'readings', reading.id))
   }
+
+  const confirmLegacyContentPurge = async phrase => {
+    const current = legacyCascadeDialog
+    if (!current || current.saving || current.loading ||
+        current.preview?.ready !== true || !current.preview?.previewToken ||
+        phrase !== 'DELETE CONTENT') return
+    setLegacyCascadeDialog(previous => previous ? { ...previous, saving: true, error: '' } : previous)
+    try {
+      const result = await purgeLegacyContentCall({ ...current.target,
+        confirmPermanentDelete: true, confirmationPhrase: phrase,
+        previewToken: current.preview.previewToken })
+      setLegacyCascadeDialog(null)
+      alert(`Content and ${Number(result.data?.deletedDocuments) || 0} linked Firestore documents permanently deleted.`)
+    } catch (error) {
+      console.error('Legacy content deletion failed:', error)
+      setLegacyCascadeDialog(previous => previous
+        ? { ...previous, saving: false, error: error?.message || 'Deletion failed. Nothing was confirmed as removed. Preview again before retrying.' }
+        : previous)
+    }
+  }
+
+  const deleteReadingHomework = reading => openLegacyContentPurge('reading', reading)
 
   const duplicateReadingHomework = async reading => {
     const ok = window.confirm(
@@ -3172,40 +3241,7 @@ Continue permanent delete?`
     }
   }
 
-  const deleteWritingHomework = async writing => {
-    const submittedCount = getWritingSubmittedCount(writing.id)
-
-    if (submittedCount > 0) {
-      const forceDelete = window.confirm(
-        `"${writing.title}" has ${submittedCount} student submission(s).
-
-Deleting will permanently remove:
-- Writing homework
-- Student Task 1 / Task 2 answers
-- Teacher reviews
-
-Continue permanent delete?`
-      )
-
-      if (!forceDelete) return
-
-      const relatedSubs = writingSubmissions.filter(
-        sub => sub.writingId === writing.id
-      )
-
-      for (const sub of relatedSubs) {
-        await deleteDoc(doc(db, 'writingSubmissions', sub.id))
-      }
-
-      await deleteDoc(doc(db, 'writingHomeworks', writing.id))
-      return
-    }
-
-    const ok = window.confirm(`Delete "${writing.title}" permanently?`)
-    if (!ok) return
-
-    await deleteDoc(doc(db, 'writingHomeworks', writing.id))
-  }
+  const deleteWritingHomework = writing => openLegacyContentPurge('writing', writing)
 
   const duplicateWritingHomework = async writing => {
     const ok = window.confirm(
@@ -3269,40 +3305,7 @@ Continue permanent delete?`
     }
   }
 
-  const deleteListeningHomework = async listening => {
-    const completedCount = getListeningCompletedCount(listening.id)
-
-    if (completedCount > 0) {
-      const forceDelete = window.confirm(
-        `"${listening.title}" has ${completedCount} student submission(s).
-
-Deleting will permanently remove:
-- Listening homework
-- Student answers
-- Results/Bands
-
-Continue permanent delete?`
-      )
-
-      if (!forceDelete) return
-
-      const relatedSubs = listeningSubmissions.filter(
-        sub => sub.listeningId === listening.id
-      )
-
-      for (const sub of relatedSubs) {
-        await deleteDoc(doc(db, 'listeningSubmissions', sub.id))
-      }
-
-      await deleteDoc(doc(db, 'listenings', listening.id))
-      return
-    }
-
-    const ok = window.confirm(`Delete "${listening.title}" permanently?`)
-    if (!ok) return
-
-    await deleteDoc(doc(db, 'listenings', listening.id))
-  }
+  const deleteListeningHomework = listening => openLegacyContentPurge('listening', listening)
 
   const duplicateListeningHomework = async listening => {
     const ok = window.confirm(
@@ -3366,40 +3369,7 @@ Continue permanent delete?`
     }
   }
 
-  const deleteVocabularyTest = async vocabularyTest => {
-    const completedCount = getVocabularyCompletedCount(vocabularyTest.id)
-
-    if (completedCount > 0) {
-      const forceDelete = window.confirm(
-        `"${vocabularyTest.title}" has ${completedCount} student submission(s).
-
-Deleting will permanently remove:
-- Vocabulary test
-- Student answers
-- Results
-
-Continue permanent delete?`
-      )
-
-      if (!forceDelete) return
-
-      const relatedSubs = vocabularySubmissions.filter(sub =>
-        isVocabularySubmissionForTest(sub, vocabularyTest.id)
-      )
-
-      for (const sub of relatedSubs) {
-        await deleteDoc(doc(db, 'vocabularySubmissions', sub.id))
-      }
-
-      await deleteDoc(doc(db, 'vocabularyTests', vocabularyTest.id))
-      return
-    }
-
-    const ok = window.confirm(`Delete "${vocabularyTest.title}" permanently?`)
-    if (!ok) return
-
-    await deleteDoc(doc(db, 'vocabularyTests', vocabularyTest.id))
-  }
+  const deleteVocabularyTest = vocabularyTest => openLegacyContentPurge('vocabulary', vocabularyTest)
 
   const duplicateVocabularyTest = async vocabularyTest => {
     const ok = window.confirm(
@@ -3463,41 +3433,7 @@ Continue permanent delete?`
     }
   }
 
-  const deleteMockTest = async mockTest => {
-    const submittedCount = getMockSubmittedCount(mockTest)
-
-    if (submittedCount > 0) {
-      const forceDelete = window.confirm(
-        `"${mockTest.title}" has ${submittedCount} mock submission(s).
-
-Deleting will permanently remove:
-- Mock test
-- Student mock answers
-- Mock results/bands
-- Writing reviews connected to this mock
-
-Continue permanent delete?`
-      )
-
-      if (!forceDelete) return
-
-      const relatedSubs = mockSubmissions.filter(
-        submission => submission.mockTestId === mockTest.id
-      )
-
-      for (const submission of relatedSubs) {
-        await deleteDoc(doc(db, 'mockSubmissions', submission.id))
-      }
-
-      await deleteDoc(doc(db, 'mockTests', mockTest.id))
-      return
-    }
-
-    const ok = window.confirm(`Delete "${mockTest.title}" permanently?`)
-    if (!ok) return
-
-    await deleteDoc(doc(db, 'mockTests', mockTest.id))
-  }
+  const deleteMockTest = mockTest => openLegacyContentPurge('mock', mockTest)
 
   const numberWords = {
     zero: '0', one: '1', two: '2', three: '3', four: '4', five: '5',
@@ -10550,6 +10486,11 @@ Continue permanent delete?`
         </div>
         )
       })()}
+
+      {legacyCascadeDialog && (
+        <LegacyCascadeDialog key={legacyCascadeDialog.key} state={legacyCascadeDialog}
+          onCancel={() => setLegacyCascadeDialog(null)} onConfirm={confirmLegacyContentPurge} />
+      )}
 
       {showPasswordModal && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 px-4">
