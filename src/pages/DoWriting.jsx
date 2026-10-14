@@ -5,6 +5,8 @@ import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { httpsCallable } from 'firebase/functions'
 import { useNavigate, useParams } from 'react-router-dom'
 import { getStudentVisibleResultSnapshot, watchStudentVisibleResultDetail } from '../services/studentResultService'
+import AiWritingStudentPanel from '../components/AiWritingStudentPanel'
+import { isInstitutionWritingStudent } from '../services/aiWritingStudentPolicy'
 
 function countWords(text) {
   return text
@@ -87,6 +89,7 @@ export default function DoWriting() {
   const mountedRef = useRef(false)
 
   const [user, setUser] = useState(null)
+  const [isInstitutionStudent, setIsInstitutionStudent] = useState(false)
   const [writing, setWriting] = useState(null)
   const [currentTask, setCurrentTask] = useState(1)
   const [task1Answer, setTask1Answer] = useState('')
@@ -243,6 +246,7 @@ export default function DoWriting() {
       setWriting(null)
       setAttemptState(null)
       setCompletedSubmission(null)
+      setIsInstitutionStudent(false)
 
       if (!currentUser) {
         setUser(null)
@@ -273,6 +277,7 @@ export default function DoWriting() {
       }
 
       setUser(currentUser)
+      setIsInstitutionStudent(isInstitutionWritingStudent(profile))
 
       // Stage 16F-F: studentAccess is the canonical standalone entitlement.
       const accessId = `${currentUser.uid}_writing_${id}`
@@ -928,6 +933,14 @@ export default function DoWriting() {
                   {review?.generalFeedback || 'No general feedback.'}
                 </p>
               </div>
+            )}
+
+            {isInstitutionStudent && completedSubmission?.id && (
+              <AiWritingStudentPanel
+                key={`${user?.uid || ''}:${id}:${completedSubmission.id}`}
+                contentId={id}
+                attemptNumber={attemptNumberOfSubmission(completedSubmission)}
+              />
             )}
 
             <button
