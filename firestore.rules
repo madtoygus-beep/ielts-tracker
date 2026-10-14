@@ -1121,5 +1121,14 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // AI-generated reports and per-school usage counters are server-only.
+    match /aiWritingEvaluations/{evaluationId} {
+      allow read, write: if false;
+    }
+
+    match /aiWritingMonthlyUsage/{periodId} {
+      allow read, write: if false;
+    }
+
   }
 }

@@ -1,6 +1,7 @@
 'use strict'
 
 const { onCall, HttpsError } = require('firebase-functions/v2/https')
+const { defineSecret } = require('firebase-functions/params')
 const { createHash, randomBytes } = require('crypto')
 const { onDocumentWritten } = require('firebase-functions/v2/firestore')
 const { initializeApp } = require('firebase-admin/app')
@@ -84,6 +85,8 @@ const SCHOOL_CASCADE_COLLECTIONS = [
   'aiWritingSchoolSettings',
   'aiWritingStudentAccess',
   'aiWritingCreditOperations',
+  'aiWritingEvaluations',
+  'aiWritingMonthlyUsage',
   'messages',
   'materials',
   'schoolSeatLocks',
@@ -2716,6 +2719,7 @@ const STUDENT_PERMANENT_DELETE_COLLECTIONS = [
   // P5A-1: remove learner AI permissions and credit audit with permanent deletion.
   { name: 'aiWritingStudentAccess', fields: ['uid', 'studentId'] },
   { name: 'aiWritingCreditOperations', fields: ['studentId'] },
+  { name: 'aiWritingEvaluations', fields: ['uid', 'studentId'] },
   // P4D: permanent deletion also removes independent learning access and attempts.
   { name: 'selfStudyEntitlements', fields: ['userId'] },
   { name: 'selfStudyAttempts', fields: ['userId'] }
@@ -4976,7 +4980,7 @@ function resultDeleteFingerprint({ config, studentId, contentId, records }) {
 
 async function collectManagedResultDeletion({ config, studentId, contentId, schoolId }) {
   const refs = new Map()
-  const counts = { submissions: 0, attemptHistory: 0, attemptControls: 0, mockScores: 0, vocabularyDrafts: 0 }
+  const counts = { submissions: 0, attemptHistory: 0, attemptControls: 0, mockScores: 0, vocabularyDrafts: 0, aiEvaluations: 0 }
 
   const include = (snap, category) => {
     if (!snap?.exists || refs.has(snap.ref.path)) return
@@ -5015,14 +5019,16 @@ async function collectManagedResultDeletion({ config, studentId, contentId, scho
     ? db.doc(`scores/${studentId}_${contentId}`)
     : null
 
-  const [submissions, histories, currentSnap, controlSnap, draftSnap, scores, canonicalScoreSnap] = await Promise.all([
+  const [submissions, histories, currentSnap, controlSnap, draftSnap, scores, canonicalScoreSnap, aiEvaluations] = await Promise.all([
     getByStudent(config.submissionCollection),
     getByStudent(ATTEMPT_HISTORY_COLLECTION),
     canonicalSubmissionRef.get(),
     controlRef.get(),
     draftRef ? draftRef.get() : Promise.resolve(null),
     canonicalScoreRef ? getByStudent('scores') : Promise.resolve([]),
-    canonicalScoreRef ? canonicalScoreRef.get() : Promise.resolve(null)
+    canonicalScoreRef ? canonicalScoreRef.get() : Promise.resolve(null),
+    ['writing', 'mock'].includes(config.contentType)
+      ? getByStudent('aiWritingEvaluations') : Promise.resolve([])
   ])
 
   const allSubmissions = new Map(submissions.map(snap => [snap.ref.path, snap]))
@@ -5051,6 +5057,18 @@ async function collectManagedResultDeletion({ config, studentId, contentId, scho
     }
     assertSameSchool(data)
     include(snap, 'attemptHistory')
+  }
+
+  // P5A-2B: an audited permanent result deletion must also erase all AI
+  // evaluations for every attempt of this precise student/content pair.
+  for (const snap of aiEvaluations) {
+    const data = snap.data() || {}
+    if (data.contentId !== contentId || data.contentType !== config.contentType) continue
+    if (!belongs(data) || data.context !== (config.contentType === 'mock' ? 'mock' : 'homework')) {
+      throw new HttpsError('failed-precondition', 'AI evaluation ownership is inconsistent; deletion stopped.')
+    }
+    assertSameSchool(data)
+    include(snap, 'aiEvaluations')
   }
 
   if (controlSnap.exists) {
@@ -5091,6 +5109,36 @@ async function collectManagedResultDeletion({ config, studentId, contentId, scho
     }
   }
 
+  // P5A-2B: deterministic AI report sentinels prevent a new AI job from
+  // appearing after the deletion preview but before the atomic delete.
+  const aiSentinelRefs = []
+  if (config.contentType === 'writing' || config.contentType === 'mock') {
+    const attemptNumbers = new Set()
+    for (const snap of allSubmissions.values()) {
+      const item = snap.data() || {}
+      if (submissionMatchesContent(config, item, contentId) && belongs(item)) {
+        attemptNumbers.add(attemptNumberOf(item))
+      }
+    }
+    for (const snap of histories) {
+      const item = snap.data() || {}
+      if (item.contentType === config.contentType && item.contentId === contentId && belongs(item)) {
+        attemptNumbers.add(attemptNumberOf(item))
+      }
+    }
+    if (attemptNumbers.size > RESULT_DELETE_MAX_RECORDS) {
+      throw new HttpsError('resource-exhausted', 'Too many Writing attempts for atomic AI result deletion.')
+    }
+    for (const attemptNumber of attemptNumbers) {
+      const jobId = createHash('sha256').update([
+        'ai-writing-v1', studentId,
+        config.contentType === 'mock' ? 'mock' : 'homework',
+        contentId, attemptNumber
+      ].join('\0'), 'utf8').digest('hex')
+      aiSentinelRefs.push(db.doc(`aiWritingEvaluations/${jobId}`))
+    }
+  }
+
   const records = [...refs.values()].sort((a, b) => a.snap.ref.path.localeCompare(b.snap.ref.path))
   if (records.length > RESULT_DELETE_MAX_RECORDS) {
     throw new HttpsError('resource-exhausted',
@@ -5104,7 +5152,8 @@ async function collectManagedResultDeletion({ config, studentId, contentId, scho
     canonicalSubmissionRef,
     controlRef,
     draftRef,
-    canonicalScoreRef
+    canonicalScoreRef,
+    aiSentinelRefs
   }
 }
 
@@ -5164,7 +5213,7 @@ exports.permanentlyDeleteManagedSubmissionResult = onCall(async request => {
   const managerRef = db.doc(`users/${ctx.manager.uid}`)
   const selectedRefs = deletion.records.map(item => item.snap.ref)
   const sentinelRefs = [deletion.canonicalSubmissionRef, deletion.controlRef,
-    deletion.draftRef, deletion.canonicalScoreRef].filter(Boolean)
+    deletion.draftRef, deletion.canonicalScoreRef, ...deletion.aiSentinelRefs].filter(Boolean)
   const readRefs = new Map([sourceRef, studentRef, managerRef, ...selectedRefs, ...sentinelRefs]
     .map(ref => [ref.path, ref]))
 
@@ -7299,3 +7348,24 @@ exports.setAiWritingSchoolPilot = onCall(request =>
   aiWritingAccess.setAiWritingSchoolPilot(request))
 exports.setAiWritingStudentAccess = onCall(request =>
   aiWritingAccess.setAiWritingStudentAccess(request))
+
+
+// P5A-2B: do not deploy evaluateMyAiWriting until the pilot has been
+// explicitly approved, OPENAI secret installed and MAXIMA_AI_WRITING_ENABLED=true.
+// Model API calls are OFF by default even when these exports exist.
+const { createAiWritingEvaluationService } = require('./lib/aiWritingEvaluation')
+const { gradeWithOpenAi } = require('./lib/openAiWritingProvider')
+const maximaOpenAiKey = defineSecret('MAXIMA_OPENAI_API_KEY')
+const aiWritingEvaluationService = createAiWritingEvaluationService({
+  db, FieldValue, HttpsError, requireStudent, requireStudentAttemptSource,
+  submissionContentConfigFor, findCurrentSubmissionRecord, getOpenSubmissionAttemptControl,
+  schoolIdOf, getMockEnabledSections, getMockWritingMode,
+  provider: gradeWithOpenAi,
+  getApiKey: () => maximaOpenAiKey.value(),
+  providerEnabled: () => process.env.MAXIMA_AI_WRITING_ENABLED === 'true'
+})
+exports.evaluateMyAiWriting = onCall({
+  secrets: [maximaOpenAiKey], timeoutSeconds: 180, memory: '512MiB'
+}, request => aiWritingEvaluationService.evaluate(request))
+exports.getMyAiWritingReport = onCall(request =>
+  aiWritingEvaluationService.getReport(request))
