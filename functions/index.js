@@ -80,6 +80,10 @@ const SCHOOL_CASCADE_COLLECTIONS = [
   'scores',
   'submissionAttemptControls',
   'submissionAttemptHistory',
+  // P5A-1: AI pilot settings, access and adjustment audit cascade with school removal.
+  'aiWritingSchoolSettings',
+  'aiWritingStudentAccess',
+  'aiWritingCreditOperations',
   'messages',
   'materials',
   'schoolSeatLocks',
@@ -2709,6 +2713,9 @@ const STUDENT_PERMANENT_DELETE_COLLECTIONS = [
   { name: 'scores', fields: ['uid', 'studentId'] },
   { name: 'submissionAttemptControls', fields: ['uid', 'studentId'] },
   { name: 'submissionAttemptHistory', fields: ['uid', 'studentId'] },
+  // P5A-1: remove learner AI permissions and credit audit with permanent deletion.
+  { name: 'aiWritingStudentAccess', fields: ['uid', 'studentId'] },
+  { name: 'aiWritingCreditOperations', fields: ['studentId'] },
   // P4D: permanent deletion also removes independent learning access and attempts.
   { name: 'selfStudyEntitlements', fields: ['userId'] },
   { name: 'selfStudyAttempts', fields: ['userId'] }
@@ -7276,3 +7283,19 @@ exports.getCompletedMockReview = onCall(async request => {
 Object.assign(exports, require('./lib/masterContent'))
 // P4D: Independent package catalog, manual entitlements and learner practice.
 Object.assign(exports, require('./lib/selfStudyPackages'))
+
+// P5A-1: Default-off, institution-only AI Writing pilot access and credit grants.
+// AI model calls and credit consumption will be added only in P5A-2 after tests.
+const { createAiWritingAccessService } = require('./lib/aiWritingAccess')
+const aiWritingAccess = createAiWritingAccessService({
+  db, FieldValue, HttpsError, requireAdmin, requireStudent,
+  accountTypeOf, schoolIdOf, requireActiveSchoolForProfile
+})
+exports.getMyAiWritingAccess = onCall(request =>
+  aiWritingAccess.getMyAiWritingAccess(request))
+exports.getAdminAiWritingStudentAccess = onCall(request =>
+  aiWritingAccess.getAdminAiWritingStudentAccess(request))
+exports.setAiWritingSchoolPilot = onCall(request =>
+  aiWritingAccess.setAiWritingSchoolPilot(request))
+exports.setAiWritingStudentAccess = onCall(request =>
+  aiWritingAccess.setAiWritingStudentAccess(request))
