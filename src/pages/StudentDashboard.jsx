@@ -6,6 +6,8 @@
   import { useNavigate } from 'react-router-dom'
   import { httpsCallable } from 'firebase/functions'
   import { getStudentVisibleResultSnapshot, subscribeStudentVisibleResultSummaries } from '../services/studentResultService'
+  import AiWritingStudentPanel from '../components/AiWritingStudentPanel'
+  import { isInstitutionWritingStudent } from '../services/aiWritingStudentPolicy'
 
   const getStudentSubmissionAttemptStateCall = httpsCallable(
     functions,
@@ -3651,6 +3653,20 @@
                       : 'Your teacher has not reviewed this submission yet.'}
                   </p>
                 </div>
+
+                {/* Keep the teacher assessment above unchanged.  An AI report is
+                    attached only to the currently selected, server-authorized
+                    Writing attempt.  The panel itself independently checks
+                    server-side access and never reads AI data from Firestore. */}
+                {isInstitutionWritingStudent(profile) &&
+                  selectedReview.writing?.id &&
+                  selectedReview.submission?.id && (
+                    <AiWritingStudentPanel
+                      key={`${user?.uid || ''}:${selectedReview.writing.id}:${selectedReview.submission.id}`}
+                      contentId={selectedReview.writing.id}
+                      attemptNumber={submissionAttemptNumber(selectedReview.submission)}
+                    />
+                  )}
               </div>
             </div>
           )
