@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import AiWritingPilotPanel from '../components/AiWritingPilotPanel'
 
 import { auth, db, functions, storage } from '../firebase'
 
@@ -140,6 +141,7 @@ function AdminIcon({ name, className = 'h-5 w-5' }) {
     schools: <><path d="M3 21h18M5 21V7l7-4 7 4v14M9 21v-6h6v6M9 10h.01M15 10h.01"/></>,
     users: <><circle cx="9" cy="8" r="3"/><path d="M3 20v-2a6 6 0 0 1 12 0v2M17 5a3 3 0 0 1 0 6M18 14a5 5 0 0 1 3 4v2"/></>,
     selfstudy: <><path d="M4 19.5V5.9c2.8-1.2 5.5-1 8 .5 2.5-1.5 5.2-1.7 8-.5v13.6c-2.8-1.2-5.5-1-8 .5-2.5-1.5-5.2-1.7-8-.5ZM12 6.4V20"/></>,
+    aiWriting: <><path d="m12 3 1.9 5.9L20 11l-6.1 2.1L12 19l-1.9-5.9L4 11l6.1-2.1L12 3ZM19 17v4M17 19h4"/></>,
     classes: <><rect x="3" y="5" width="18" height="15" rx="2"/><path d="M3 10h18M8 2v6M16 2v6"/></>,
     arrow: <><path d="M5 12h14m-6-6 6 6-6 6"/></>,
     bell: <><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></>,
@@ -155,6 +157,7 @@ const ADMIN_NAV_ITEMS = [
   { id: 'overview', label: 'Overview', icon: 'overview', description: 'A clear view of your platform and priorities' },
   { id: 'schools', label: 'Institutions', icon: 'schools', description: 'School identity, seat limits, branding and status' },
   { id: 'users', label: 'Users', icon: 'users', description: 'Institution accounts, approvals and academic history' },
+  { id: 'aiWriting', label: 'AI Writing Pilot', icon: 'aiWriting', description: 'Maxima institution student access and evaluation credits' },
   { id: 'selfstudy', label: 'Self-Study', icon: 'selfstudy', description: 'Individual accounts and platform managers' },
 ]
 
@@ -258,6 +261,7 @@ export default function AdminDashboard() {
   const [accountAudienceView, setAccountAudienceView] = useState('institution')
 
   const [authChecking, setAuthChecking] = useState(true)
+  const [adminSchoolId, setAdminSchoolId] = useState('')
 
   const [schools, setSchools] = useState([])
 
@@ -513,8 +517,8 @@ export default function AdminDashboard() {
 
 
 
+        setAdminSchoolId(profile.schoolId || DEFAULT_SCHOOL_ID)
         setAuthChecking(false)
-
         loadSchools()
 
         unsubUsers = onSnapshot(collection(db, 'users'), snap => {
@@ -2844,6 +2848,14 @@ export default function AdminDashboard() {
                 </button>
               )}
             </div>
+
+            {adminSection === 'aiWriting' && (
+              <AiWritingPilotPanel
+                users={users}
+                adminSchoolId={adminSchoolId}
+                schoolActive={schools.some(school => school.schoolId === DEFAULT_SCHOOL_ID && school.status === 'active')}
+              />
+            )}
 
             {adminSection === 'overview' && (
               <div className="space-y-7">
