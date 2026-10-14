@@ -655,11 +655,13 @@ service cloud.firestore {
         );
     }
 
+    // Q2C-2: Students use getStudentVisibleResults (trusted Cloud Function).
+    // Browser get and collection queries are both denied, even for own uid,
+    // because Firestore queries cannot enforce archive + access joins safely.
     match /scores/{scoreId} {
-      allow read: if isAdmin()
+      allow get, list: if isAdmin()
         || teacherListedOn(resource.data)
-        || teacherOwnsScoreMock(resource.data)
-        || (isStudent() && resource.data.uid == request.auth.uid);
+        || teacherOwnsScoreMock(resource.data);
 
       // 8D-2: objective/mock scores are server-authored for students.
       // Teachers/admins keep their existing manual score path.
@@ -770,11 +772,13 @@ service cloud.firestore {
         );
     }
 
+    // Q2C-2: Students use getStudentVisibleResults (trusted Cloud Function).
+    // Browser get and collection queries are both denied, even for own uid,
+    // because Firestore queries cannot enforce archive + access joins safely.
     match /readingSubmissions/{id} {
-      allow read: if isAdmin()
+      allow get, list: if isAdmin()
         || teacherListedOn(resource.data)
-        || teacherOwnsReadingParent(resource.data)
-        || (isStudent() && resource.data.uid == request.auth.uid);
+        || teacherOwnsReadingParent(resource.data);
 
       // 8D-2: student Reading submissions are created only by submitReadingSecure.
       // Cloud Functions use the Admin SDK and bypass Firestore client rules.
@@ -815,11 +819,13 @@ service cloud.firestore {
         );
     }
 
+    // Q2C-2: Students use getStudentVisibleResults (trusted Cloud Function).
+    // Browser get and collection queries are both denied, even for own uid,
+    // because Firestore queries cannot enforce archive + access joins safely.
     match /listeningSubmissions/{id} {
-      allow read: if isAdmin()
+      allow get, list: if isAdmin()
         || teacherListedOn(resource.data)
-        || teacherOwnsListeningParent(resource.data)
-        || (isStudent() && resource.data.uid == request.auth.uid);
+        || teacherOwnsListeningParent(resource.data);
 
       // 8D-2: student Listening submissions are created only by submitListeningSecure.
       allow create: if isAdmin();
@@ -863,11 +869,13 @@ service cloud.firestore {
         );
     }
 
+    // Q2C-2: Students use getStudentVisibleResults (trusted Cloud Function).
+    // Browser get and collection queries are both denied, even for own uid,
+    // because Firestore queries cannot enforce archive + access joins safely.
     match /writingSubmissions/{id} {
-      allow read: if isAdmin()
+      allow get, list: if isAdmin()
         || teacherListedOn(resource.data)
-        || teacherOwnsWritingParent(resource.data)
-        || (isStudent() && resource.data.uid == request.auth.uid);
+        || teacherOwnsWritingParent(resource.data);
 
       // Stage 16L-2B3: student Writing submissions are server-authored by
       // submitWritingSecure. Cloud Functions use the Admin SDK and bypass rules.
@@ -917,11 +925,13 @@ service cloud.firestore {
         );
     }
 
+    // Q2C-2: Students use getStudentVisibleResults (trusted Cloud Function).
+    // Browser get and collection queries are both denied, even for own uid,
+    // because Firestore queries cannot enforce archive + access joins safely.
     match /mockSubmissions/{id} {
-      allow read: if isAdmin()
+      allow get, list: if isAdmin()
         || teacherListedOn(resource.data)
-        || teacherOwnsMockParent(resource.data)
-        || (isStudent() && resource.data.uid == request.auth.uid);
+        || teacherOwnsMockParent(resource.data);
 
       // 8D-2: student Mock submissions are created only by submitMockSecure.
       allow create: if isAdmin();
@@ -960,11 +970,13 @@ service cloud.firestore {
         );
     }
 
+    // Q2C-2: Students use getStudentVisibleResults (trusted Cloud Function).
+    // Browser get and collection queries are both denied, even for own uid,
+    // because Firestore queries cannot enforce archive + access joins safely.
     match /vocabularySubmissions/{id} {
-      allow read: if isAdmin()
+      allow get, list: if isAdmin()
         || teacherListedOn(resource.data)
-        || teacherOwnsVocabularyParent(resource.data)
-        || (isStudent() && resource.data.uid == request.auth.uid);
+        || teacherOwnsVocabularyParent(resource.data);
 
       // 8D-2: student Vocabulary submissions are created only by submitVocabularySecure.
       allow create: if isAdmin();

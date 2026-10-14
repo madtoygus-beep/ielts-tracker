@@ -1,17 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { auth, db, functions } from '../firebase'
-import {
-  collection,
-  doc,
-  getDoc,
-  getDocs,
-  onSnapshot,
-  query,
-  where
-} from 'firebase/firestore'
+import { doc, getDoc } from 'firebase/firestore'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { httpsCallable } from 'firebase/functions'
 import { useNavigate, useParams } from 'react-router-dom'
+import { getStudentVisibleResultSnapshot, watchStudentVisibleResultDetail } from '../services/studentResultService'
 
 function countWords(text) {
   return text
@@ -345,20 +338,19 @@ export default function DoWriting() {
       setCurrentTask(mode === 'task2_only' ? 2 : 1)
       setTimeLeft((data.timeLimit || defaultMinutes) * 60)
 
-      const [attemptResponse, existing] = await Promise.all([
-        getStudentSubmissionAttemptStateCall({
-          contentType: 'writing',
-          contentId: id
-        }),
-        getDocs(query(
-          collection(db, 'writingSubmissions'),
-          where('uid', '==', currentUser.uid),
-          where('writingId', '==', id)
-        ))
-      ])
+      const attemptResponse = await getStudentSubmissionAttemptStateCall({
+        contentType: 'writing',
+        contentId: id
+      })
       if (!isCurrentLoad()) return
 
       const secureAttemptState = attemptResponse?.data || { open: false, currentAttemptNumber: 0 }
+      // An open retake can resume through the dedicated attempt-state call,
+      // but previous submitted answers must never be fetched during the lock.
+      const existing = secureAttemptState.open
+        ? null
+        : await getStudentVisibleResultSnapshot('writing', id)
+      if (!isCurrentLoad()) return
       const currentSubmission = selectCurrentWritingSubmission(existing)
       setAttemptState(secureAttemptState)
 
@@ -603,14 +595,11 @@ export default function DoWriting() {
   useEffect(() => {
     if (!user || !submitted || !completedSubmission?.id) return undefined
 
-    const submissionRef = doc(db, 'writingSubmissions', completedSubmission.id)
-
-    return onSnapshot(
-      submissionRef,
+    return watchStudentVisibleResultDetail(
+      'writing', id,
       snapshot => {
-        if (!snapshot.exists()) return
-
-        const data = { id: snapshot.id, ...snapshot.data() }
+        const data = selectCurrentWritingSubmission(snapshot)
+        if (!data || data.id !== completedSubmission.id) return
         setCompletedSubmission(data)
         setAlreadyDone(true)
         setTask1Answer(data.task1Answer || '')
@@ -618,6 +607,11 @@ export default function DoWriting() {
       },
       error => {
         console.warn('Could not refresh writing review:', error)
+        if (['permission-denied', 'functions/permission-denied',
+          'failed-precondition', 'functions/failed-precondition',
+          'not-found', 'functions/not-found'].includes(error?.code)) {
+          setLoadError('This Writing result is no longer available. Return to your dashboard.')
+        }
       }
     )
   }, [user, submitted, completedSubmission?.id])
@@ -722,11 +716,7 @@ export default function DoWriting() {
       // If the request reached the server but the response was lost, recover the
       // durable current submission instead of inviting a duplicate submit.
       try {
-        const existing = await getDocs(query(
-          collection(db, 'writingSubmissions'),
-          where('uid', '==', user.uid),
-          where('writingId', '==', id)
-        ))
+        const existing = await getStudentVisibleResultSnapshot('writing', id)
         const durableSubmission = selectCurrentWritingSubmission(existing)
 
         if (

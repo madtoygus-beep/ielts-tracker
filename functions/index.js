@@ -3849,7 +3849,9 @@ async function requireAvailableStudentSource({
     sourceCollection
   })
 
-  if (source.archived === true) {
+  // A still-active status never overrides the independent Admin hide lock.
+  if (source.archived === true || access.adminHidden === true ||
+      access.accessType !== 'assignment') {
     throw new HttpsError('permission-denied', 'This homework is no longer available.')
   }
 
@@ -5813,15 +5815,9 @@ exports.getStudentSubmissionAttemptState = onCall(async request => {
   const data = request.data || {}
   const config = submissionContentConfigFor(data.contentType)
   const contentId = assertDocumentId(data.contentId, 'Content ID')
-  const source = await getSource(config.sourceCollection, contentId)
-
-  await requireAvailableStudentSource({
-    source,
-    student,
-    contentType: config.contentType,
-    contentId,
-    sourceCollection: config.sourceCollection
-  })
+  // Q2C-2: The attempt-state resume payload can include own old answers.
+  // Enforce the same archived/admin-hidden/studentAccess policy as Q2B review.
+  const source = await requireStudentAttemptSource(student, config, contentId)
 
   const controlRef = db.doc(`${ATTEMPT_CONTROL_COLLECTION}/${attemptControlId(student.uid, config.contentType, contentId)}`)
   const [controlSnap, current] = await Promise.all([
@@ -6705,6 +6701,296 @@ exports.submitMockSecure = onCall(async request => {
     result,
     reviewSources: mockReviewSources(sources)
   }
+})
+
+// Q2C-2: Client reads of raw submissions/scores are being closed. This callable
+// is the only learner-facing current-result reader. The default is a small,
+// answer-free dashboard summary; full OWN submitted work is returned only for
+// one active content ID and only while its retake/review lock is CLOSED.
+const VISIBLE_STUDENT_RESULT_COLLECTIONS = Object.freeze({
+  reading: 'readingSubmissions',
+  listening: 'listeningSubmissions',
+  writing: 'writingSubmissions',
+  vocabulary: 'vocabularySubmissions',
+  mock: 'mockSubmissions',
+  scores: 'scores'
+})
+
+function studentResultMatchesOwner(data, uid, schoolId) {
+  return (data.uid === uid || data.studentId === uid) &&
+    (!data.uid || data.uid === uid) &&
+    (!data.studentId || data.studentId === uid) &&
+    schoolIdOf(data) === schoolId &&
+    data.deleted !== true && data.status !== 'deleted'
+}
+
+function studentScoreContentId(data) {
+  if (data.source !== 'mock_test') return ''
+  return typeof data.mockTestId === 'string' && data.mockTestId
+    ? data.mockTestId : (typeof data.mockId === 'string' ? data.mockId : '')
+}
+
+function studentResultContentIds(config, data) {
+  return uniqueStrings(config.parentFields.map(field => data?.[field]))
+}
+
+// Aggregate values only. Never blindly spread a legacy `result` object: older
+// submissions might contain per-question solutions inside custom result fields.
+function studentSummaryResult(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const raw = value
+  const safe = {}
+  for (const key of [
+    'correct', 'total', 'percentage', 'band', 'estimatedBand', 'overallEstimate',
+    'reviewedOverall', 'finalOverall', 'overall', 'writingBand', 'status',
+    'task1WordCount', 'task2WordCount', 'wordCount', 'writingMode',
+    'task1Enabled', 'task2Enabled', 'enabled', 'gradingSchemaVersion'
+  ]) {
+    if (raw[key] === null || ['string','number','boolean'].includes(typeof raw[key])) {
+      if (Object.prototype.hasOwnProperty.call(raw, key)) safe[key] = raw[key]
+    }
+  }
+  if (raw.enabledSections && typeof raw.enabledSections === 'object') {
+    safe.enabledSections = Object.fromEntries(['reading','listening','writing']
+      .filter(section => typeof raw.enabledSections[section] === 'boolean')
+      .map(section => [section, raw.enabledSections[section]]))
+  }
+  if (raw.gradingBreakdown && typeof raw.gradingBreakdown === 'object') {
+    safe.gradingBreakdown = {}
+    for (const [key, item] of Object.entries(raw.gradingBreakdown).slice(0, 100)) {
+      if (item && typeof item === 'object') {
+        const correct = Number(item.correct)
+        const total = Number(item.total)
+        if (Number.isFinite(correct) && Number.isFinite(total)) {
+          safe.gradingBreakdown[key] = { correct, total }
+        }
+      }
+    }
+  }
+  if (Array.isArray(raw.passages)) {
+    safe.passages = raw.passages.slice(0, 20).map(item => ({
+      readingId: safeString(item?.readingId, 1500),
+      title: safeString(item?.title, 250),
+      correct: Number.isFinite(Number(item?.correct)) ? Number(item.correct) : 0,
+      total: Number.isFinite(Number(item?.total)) ? Number(item.total) : 0,
+      band: Number.isFinite(Number(item?.band)) ? Number(item.band) : null,
+      gradingBreakdown: studentSummaryResult({ gradingBreakdown: item?.gradingBreakdown })?.gradingBreakdown || {}
+    }))
+  }
+  for (const section of ['reading','listening','writing']) {
+    if (raw[section] && typeof raw[section] === 'object' && !Array.isArray(raw[section])) {
+      safe[section] = studentSummaryResult(raw[section])
+      // A review is teacher-written rubric/feedback, not an answer key.
+      if (section === 'writing' && raw[section].review) {
+        safe[section].review = studentSummaryReview(raw[section].review)
+      }
+    }
+  }
+  return safe
+}
+
+function studentSummaryReview(review) {
+  if (!review || typeof review !== 'object' || Array.isArray(review)) return null
+  const safe = {}
+  for (const field of [
+    'overall', 'task1Band', 'task2Band', 'writingOverall',
+    'task1Feedback', 'task2Feedback', 'generalFeedback',
+    'status', 'task1Enabled', 'task2Enabled'
+  ]) {
+    const value = review[field]
+    if (value === null || ['string','number','boolean'].includes(typeof value)) {
+      if (Object.prototype.hasOwnProperty.call(review, field)) {
+        safe[field] = typeof value === 'string' ? safeString(value, 15000) : value
+      }
+    }
+  }
+  if (review.rubric && typeof review.rubric === 'object' && !Array.isArray(review.rubric)) {
+    safe.rubric = {}
+    for (const task of ['task1','task2']) {
+      const rubricTask = review.rubric[task]
+      if (!rubricTask || typeof rubricTask !== 'object' || Array.isArray(rubricTask)) continue
+      safe.rubric[task] = {}
+      for (const criterion of [
+        'taskAchievement', 'taskResponse', 'coherenceCohesion',
+        'lexicalResource', 'grammarRangeAccuracy'
+      ]) {
+        const score = rubricTask[criterion]
+        if (typeof score === 'number' || typeof score === 'string') {
+          safe.rubric[task][criterion] = typeof score === 'string'
+            ? safeString(score, 20) : score
+        }
+      }
+    }
+  }
+  return safe
+}
+
+function studentResultSafeBase(id, data, category) {
+  const safe = { id }
+  if (category !== 'scores') {
+    // Boolean only: preserves legacy head-selection order without sending
+    // the actual answers to a dashboard summary.
+    safe.hasMeaningfulAnswers = submissionHasMeaningfulAnswers(
+      SUBMISSION_CONTENT_CONFIG[category], data
+    )
+  }
+  for (const field of [
+    'uid', 'studentId', 'schoolId', 'readingId', 'listeningId', 'writingId',
+    'vocabularyTestId', 'vocabularyId', 'testId', 'homeworkId', 'mockTestId',
+    'mockId', 'source', 'title', 'readingTitle', 'listeningTitle', 'writingTitle',
+    'vocabularyTitle', 'mockTitle', 'mockType', 'contentType', 'writingMode',
+    'status', 'attemptNumber', 'autoSubmitted', 'finishedLate', 'archived',
+    'excludedFromStats', 'reviewed', 'task1WordCount', 'task2WordCount',
+    'date', 'submittedAt', 'createdAt', 'reviewedAt', 'updatedAt',
+    'overall', 'listening', 'reading', 'writing', 'speaking'
+  ]) {
+    if (Object.prototype.hasOwnProperty.call(data, field)) {
+      const value = data[field]
+      // A legacy score can have ad-hoc nested fields. Only scalar headline
+      // score values may cross the summary boundary.
+      if (['overall','listening','reading','writing','speaking'].includes(field) &&
+          value !== null && typeof value === 'object') continue
+      safe[field] = toPlain(value)
+    }
+  }
+  if (data.enabledSections && typeof data.enabledSections === 'object') {
+    safe.enabledSections = {
+      reading: data.enabledSections.reading === true,
+      listening: data.enabledSections.listening === true,
+      writing: data.enabledSections.writing === true
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(data, 'result')) {
+    safe.result = studentSummaryResult(data.result)
+  }
+  if (data.review) safe.review = studentSummaryReview(data.review)
+  if (data.writingReview) safe.writingReview = studentSummaryReview(data.writingReview)
+  // Keep the original distinction between a returned mock score and its
+  // primary submission, without returning account emails or answer arrays.
+  return safe
+}
+
+function studentResultOwnDetail(id, data, category) {
+  const safe = studentResultSafeBase(id, data, category)
+  for (const field of [
+    'answers', 'flaggedQuestions', 'studentNote', 'highlights',
+    'task1Answer', 'task2Answer', 'readingAnswers', 'listeningAnswers',
+    'writingAnswers', 'matchingViewVersion', 'tabSwitchCount', 'timing',
+    'sectionTimeLimits', 'readingIds', 'listeningIds', 'task1Enabled',
+    'task2Enabled', 'reopenMode'
+  ]) {
+    if (Object.prototype.hasOwnProperty.call(data, field)) safe[field] = toPlain(data[field])
+  }
+  return safe
+}
+
+async function getStudentOwnedResultSnapshots(collectionName, student) {
+  const [byUid, byStudentId] = await Promise.all([
+    db.collection(collectionName).where('uid', '==', student.uid).get(),
+    db.collection(collectionName).where('studentId', '==', student.uid).get()
+  ])
+  const records = new Map()
+  for (const snap of [...byUid.docs, ...byStudentId.docs]) {
+    if (records.has(snap.id)) continue
+    const data = snap.data() || {}
+    if (studentResultMatchesOwner(data, student.uid, student.schoolId)) {
+      records.set(snap.id, { id: snap.id, data })
+    }
+  }
+  return [...records.values()]
+}
+
+async function visibleStudentResultContentIds(student) {
+  const accessSnap = await db.collection('studentAccess')
+    .where('uid', '==', student.uid)
+    .where('schoolId', '==', student.schoolId).get()
+  const pending = new Map()
+  for (const snap of accessSnap.docs) {
+    const access = snap.data() || {}
+    const config = SUBMISSION_CONTENT_CONFIG[access.contentType]
+    if (!config || access.accessType !== 'assignment' || access.uid !== student.uid ||
+        access.status !== 'active' || access.adminHidden === true ||
+        access.sourceCollection !== config.sourceCollection ||
+        schoolIdOf(access) !== student.schoolId ||
+        typeof access.contentId !== 'string' || !access.contentId ||
+        access.contentId.includes('/')) continue
+    const key = `${config.contentType}:${access.contentId}`
+    pending.set(key, {
+      contentType: config.contentType,
+      contentId: access.contentId,
+      sourceCollection: config.sourceCollection
+    })
+  }
+  const visible = Object.fromEntries(
+    Object.keys(SUBMISSION_CONTENT_CONFIG).map(category => [category, new Set()])
+  )
+  const entries = [...pending.values()]
+  for (let start = 0; start < entries.length; start += 150) {
+    const chunk = entries.slice(start, start + 150)
+    const refs = chunk.map(entry => db.doc(`${entry.sourceCollection}/${entry.contentId}`))
+    const snaps = await db.getAll(...refs)
+    snaps.forEach((snap, index) => {
+      const source = snap.data() || {}
+      if (snap.exists && source.archived !== true &&
+          schoolIdOf(source) === student.schoolId) {
+        visible[chunk[index].contentType].add(chunk[index].contentId)
+      }
+    })
+  }
+  return visible
+}
+
+exports.getStudentVisibleResults = onCall(async request => {
+  const student = await requireStudent(request)
+  const data = request.data || {}
+  const detail = data.mode === 'detail'
+  if (data.mode !== undefined && !['summary','detail'].includes(data.mode)) {
+    throw new HttpsError('invalid-argument', 'Invalid result view.')
+  }
+
+  if (detail) {
+    const config = submissionContentConfigFor(data.contentType)
+    const contentId = assertDocumentId(data.contentId, 'Content ID')
+    await requireStudentAttemptSource(student, config, contentId)
+    // Both an ordinary reopened attempt and a stale overlapping browser tab
+    // must not receive prior answers while a retake is open.
+    const control = await getOpenSubmissionAttemptControl(config, student.uid, contentId)
+    if (control) {
+      throw new HttpsError('failed-precondition',
+        'Submit the open retake before reviewing your previous submission.')
+    }
+    const candidates = await getStudentOwnedResultSnapshots(config.submissionCollection, student)
+    const items = candidates
+      .filter(({ data: record }) => submissionMatchesContent(config, record, contentId))
+      .map(({ id, data: record }) => studentResultOwnDetail(id, record, config.contentType))
+    return { ok: true, contentType: config.contentType, contentId, items }
+  }
+
+  if (data.contentType !== undefined || data.contentId !== undefined) {
+    throw new HttpsError('invalid-argument', 'Use detail mode for a specific test.')
+  }
+
+  const visible = await visibleStudentResultContentIds(student)
+  const collections = Object.values(VISIBLE_STUDENT_RESULT_COLLECTIONS)
+  const rows = await Promise.all(collections.map(collectionName =>
+    getStudentOwnedResultSnapshots(collectionName, student)))
+  const byCollection = {}
+  collections.forEach((collectionName, index) => {
+    const category = Object.keys(VISIBLE_STUDENT_RESULT_COLLECTIONS)
+      .find(key => VISIBLE_STUDENT_RESULT_COLLECTIONS[key] === collectionName)
+    const config = SUBMISSION_CONTENT_CONFIG[category]
+    const accepted = rows[index].filter(({ data: record }) => {
+      const ids = category === 'scores'
+        ? [studentScoreContentId(record)].filter(Boolean)
+        : studentResultContentIds(config, record)
+      const allowed = visible[category === 'scores' ? 'mock' : category]
+      return ids.some(id => allowed.has(id))
+    })
+    byCollection[collectionName] = accepted
+      .map(({ id, data: record }) => studentResultSafeBase(id, record, category))
+  })
+
+  return { ok: true, byCollection }
 })
 
 // Q2B: Learner-only historical attempt summaries. The history collection is

@@ -1,21 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { auth, db, functions } from '../firebase'
-import {
-  collection,
-  doc,
-  getDoc,
-  getDocFromServer,
-  setDoc,
-  serverTimestamp,
-  getDocs,
-  query,
-  where,
-  orderBy,
-  limit
-} from 'firebase/firestore'
+import { doc, getDoc, getDocFromServer, setDoc, serverTimestamp } from 'firebase/firestore'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { httpsCallable } from 'firebase/functions'
 import { useNavigate, useParams } from 'react-router-dom'
+import { getStudentVisibleResultSnapshot, getStudentVisibleResultDoc } from '../services/studentResultService'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
@@ -1244,15 +1233,7 @@ export default function DoMockTest() {
         let completedReviewSources = null
 
         if (!retakeOpen) {
-          const existingQuery = query(
-            collection(db, 'mockSubmissions'),
-            where('uid', '==', currentUser.uid),
-            where('mockTestId', '==', id),
-            orderBy('submittedAt', 'desc'),
-            limit(1)
-          )
-
-          const existingSnap = await getDocs(existingQuery)
+          const existingSnap = await getStudentVisibleResultSnapshot('mock', id)
 
           if (!isCurrent()) return
 
@@ -3341,15 +3322,7 @@ export default function DoMockTest() {
 
     try {
       if (!attemptState?.open) {
-        const existingQuery = query(
-          collection(db, 'mockSubmissions'),
-          where('uid', '==', user.uid),
-          where('mockTestId', '==', mock.id),
-          orderBy('submittedAt', 'desc'),
-          limit(1)
-        )
-
-        const existingSnap = await getDocs(existingQuery)
+        const existingSnap = await getStudentVisibleResultSnapshot('mock', mock.id)
 
         if (!existingSnap.empty) {
           const existingSubmission = {
@@ -3439,12 +3412,7 @@ export default function DoMockTest() {
       }
 
       if (payload.alreadySubmitted) {
-        const deterministicRef = doc(
-          db,
-          'mockSubmissions',
-          `${user.uid}_${mock.id}`
-        )
-        const deterministicSnap = await getDoc(deterministicRef)
+        const deterministicSnap = await getStudentVisibleResultDoc('mock', mock.id)
 
         if (deterministicSnap.exists()) {
           submissionForReview = {
@@ -3498,8 +3466,7 @@ export default function DoMockTest() {
       // If another tab won a normal first-attempt race, recover the immutable
       // submission. During an open retake, keep the attempt open on errors.
       if (!attemptState?.open) try {
-        const deterministicRef = doc(db, 'mockSubmissions', `${user.uid}_${mock.id}`)
-        const existingSnap = await getDoc(deterministicRef)
+        const existingSnap = await getStudentVisibleResultDoc('mock', mock.id)
         if (existingSnap.exists()) {
           const existingSubmission = {
             id: existingSnap.id,

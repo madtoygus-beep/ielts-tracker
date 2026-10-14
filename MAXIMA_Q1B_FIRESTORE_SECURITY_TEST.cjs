@@ -108,10 +108,9 @@ async function main() {
         if (!result.exists()) throw new Error('Teacher beklenen test kaydini okumadi: '+col);
       });
       if (col.endsWith('Submissions') || col === 'scores') {
-        expectResult('student / '+col+' / own read ALLOWED', async () => {
-          const result = await assertSucceeds(getDoc(doc(studentDB,col,id)));
-          if (!result.exists()) throw new Error('Student kendi test kaydini okumadi: '+col);
-        });
+        expectResult('student / '+col+' / own direct-read DENIED', () =>
+          assertFails(getDoc(doc(studentDB,col,id)))
+        );
       }
     }
     // Existing safe admin/teacher edits remain available; moderation fields remain protected.

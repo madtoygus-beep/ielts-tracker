@@ -1,18 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { auth, db, functions } from '../firebase'
-import {
-  collection,
-  doc,
-  getDoc,
-  getDocsFromServer,
-  getDocFromServer,
-  query,
-  where,
-  setDoc
-} from 'firebase/firestore'
+import { doc, getDoc, getDocFromServer, setDoc } from 'firebase/firestore'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { httpsCallable } from 'firebase/functions'
 import { useNavigate, useParams } from 'react-router-dom'
+import { getStudentVisibleResultSnapshot } from '../services/studentResultService'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
@@ -466,12 +458,7 @@ export default function DoVocabulary() {
           return
         }
 
-        const existingQuery = query(
-          collection(db, 'vocabularySubmissions'),
-          where('uid', '==', currentUser.uid)
-        )
-
-        const existingSnap = await getDocsFromServer(existingQuery)
+        const existingSnap = await getStudentVisibleResultSnapshot('vocabulary', id)
 
         if (!isCurrent()) return
 
@@ -1009,11 +996,7 @@ export default function DoVocabulary() {
 
       // If another tab submitted first, restore the answers that are actually stored.
       if (secureData.alreadySubmitted === true) {
-        const existingQuery = query(
-          collection(db, 'vocabularySubmissions'),
-          where('uid', '==', user.uid)
-        )
-        const existingSnap = await getDocsFromServer(existingQuery)
+        const existingSnap = await getStudentVisibleResultSnapshot('vocabulary', id)
 
         if (!isCurrent()) return
 

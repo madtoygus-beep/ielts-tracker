@@ -5,6 +5,7 @@
   import { ref as storageRef, getDownloadURL } from 'firebase/storage'
   import { useNavigate } from 'react-router-dom'
   import { httpsCallable } from 'firebase/functions'
+  import { getStudentVisibleResultSnapshot, subscribeStudentVisibleResultSummaries } from '../services/studentResultService'
 
   const getStudentSubmissionAttemptStateCall = httpsCallable(
     functions,
@@ -50,7 +51,8 @@
   }
 
   function submissionHasMeaningfulAnswers(submission) {
-    return hasMeaningfulSubmissionValue(submission?.answers) ||
+    return submission?.hasMeaningfulAnswers === true ||
+      hasMeaningfulSubmissionValue(submission?.answers) ||
       hasMeaningfulSubmissionValue(submission?.task1Answer) ||
       hasMeaningfulSubmissionValue(submission?.task2Answer) ||
       hasMeaningfulSubmissionValue(submission?.listeningAnswers) ||
@@ -206,15 +208,11 @@
   function listenUserCollection(collectionName, uid, onItems, options = {}) {
     if (!uid) return () => {}
 
-    const q = query(
-      collection(db, collectionName),
-      where('uid', '==', uid)
-    )
-
-    return subscribeSharedSnapshot(
-      `uid:${collectionName}:${uid}`,
-      q,
+    return subscribeStudentVisibleResultSummaries(
+      uid,
+      collectionName,
       items => {
+        emitStudentDataError(`uid:${collectionName}:${uid}`)
         // A reopened attempt can carry an archived submission snapshot.
         // Keep this distinction separate from teacher archiving the source test.
         // Q2A result visibility is checked against canonical studentAccess.
@@ -231,6 +229,10 @@
         }
 
         onItems(nextItems)
+      },
+      error => {
+        console.warn(`Student result service failed: ${collectionName}`, error)
+        emitStudentDataError(`uid:${collectionName}:${uid}`, error)
       }
     )
   }
@@ -3468,12 +3470,20 @@
 
                     <div className="flex items-center gap-2">
                       <button
-                        onClick={() =>
-                          setSelectedReview({
-                            writing: w,
-                            submission
-                          })
-                        }
+                        onClick={async () => {
+                          try {
+                            // Full Writing answers are loaded ONLY after the
+                            // secure server rechecks assignment and retake state.
+                            const snapshot = await getStudentVisibleResultSnapshot('writing', w.id)
+                            const records = snapshot.docs.map(item => ({ id: item.id, ...item.data() }))
+                            const selected = chooseCurrentSubmission(records, submission?.id || '')
+                            if (!selected) throw new Error('Your completed submission was not found.')
+                            setSelectedReview({ writing: w, submission: selected })
+                          } catch (error) {
+                            console.warn('Could not open Writing feedback:', error)
+                            window.alert('Writing feedback could not be loaded. Check your assignment or retry.')
+                          }
+                        }}
                         className="text-xs bg-purple-600 text-white px-3 py-2 rounded-xl hover:bg-purple-700"
                       >
                         {reviewed ? 'Review Feedback' : 'View Submission'}
@@ -5092,23 +5102,13 @@
           setUser(currentUser)
           setProfile(profile)
 
-          const q = query(
-            collection(db, 'scores'),
-            where('uid', '==', currentUser.uid)
-          )
-
           setDashboardLoadError('')
 
-          unsubScores = subscribeSharedSnapshot(
-            `uid:scores:${currentUser.uid}`,
-            q,
-            items => {
-              const data = items
-                .filter(item => item.archived !== true)
-                .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0))
-
-              setScores(data)
-            }
+          unsubScores = listenUserCollection(
+            'scores',
+            currentUser.uid,
+            setScores,
+            { sort: (a, b) => new Date(b.date || 0) - new Date(a.date || 0) }
           )
         } catch (error) {
           console.error('Could not load student profile:', error)

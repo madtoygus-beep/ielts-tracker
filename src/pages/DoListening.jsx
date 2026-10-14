@@ -1,17 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
 import { auth, db, functions } from '../firebase'
-import {
-  doc,
-  getDoc,
-  getDocFromServer,
-  collection,
-  query,
-  where,
-  getDocs
-} from 'firebase/firestore'
+import { doc, getDoc, getDocFromServer } from 'firebase/firestore'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { httpsCallable } from 'firebase/functions'
 import { useNavigate, useParams } from 'react-router-dom'
+import { getStudentVisibleResultSnapshot } from '../services/studentResultService'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
@@ -655,13 +648,7 @@ export default function DoListening() {
           return
         }
 
-        const q = query(
-          collection(db, 'listeningSubmissions'),
-          where('uid', '==', currentUser.uid),
-          where('listeningId', '==', id)
-        )
-
-        const existing = await getDocs(q)
+        const existing = await getStudentVisibleResultSnapshot('listening', id)
         if (!isCurrent()) return
 
         if (!existing.empty) {
@@ -1389,12 +1376,7 @@ export default function DoListening() {
 
       // If another tab submitted first, restore the answers that are actually stored.
       if (secureData.alreadySubmitted === true) {
-        const existingQuery = query(
-          collection(db, 'listeningSubmissions'),
-          where('uid', '==', user.uid),
-          where('listeningId', '==', id)
-        )
-        const existing = await getDocs(existingQuery)
+        const existing = await getStudentVisibleResultSnapshot('listening', id)
 
         if (!existing.empty) {
           const stored = selectCurrentListeningSubmission(
