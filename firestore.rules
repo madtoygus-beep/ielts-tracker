@@ -280,6 +280,41 @@ service cloud.firestore {
         );
     }
 
+    // REPAIR MOCK-WRITING-R1: read-only fast path for a linked private Writing.
+    // The generic grant validator above is retained for WRITE validation and
+    // objective resources. Calling it from a Writing GET re-fetches the very
+    // source document being read, causing Firestore's 1000-expression limit.
+    // Here resource.data is already the live Writing document: validate against
+    // it directly while rechecking the active mock assignment and source owner.
+    function mockWritingGrantContext(mockData, mockId, sourceId, sourceData) {
+      return studentHasActiveAccess('mock', mockId)
+        && schoolIdOf(mockData) == currentSchoolId()
+        && mockData.get('archived', false) != true
+        && schoolIdOf(sourceData) == schoolIdOf(mockData)
+        && mockLinksResource(mockData, 'writingHomeworks', sourceId)
+        && mockCreatorCanUseSource(mockData, sourceData);
+    }
+
+    function mockWritingGrantSource(grant, sourceId, sourceData) {
+      let mockId = grant.get('mockTestId', '');
+      let mockPath = /databases/$(database)/documents/mockTests/$(mockId);
+      return grant.get('uid', '') == request.auth.uid
+        && grant.get('sourceCollection', '') == 'writingHomeworks'
+        && grant.get('sourceId', '') == sourceId
+        && grant.get('schemaVersion', 0) == 1
+        && mockId is string && mockId != '' && mockId.matches('^[^/]+$')
+        && exists(mockPath)
+        && mockWritingGrantContext(get(mockPath).data, mockId, sourceId, sourceData);
+    }
+
+    function studentCanGetMockWriting(sourceId, sourceData) {
+      let uid = request.auth != null ? request.auth.uid : '';
+      let grantPath = /databases/$(database)/documents/mockResourceAccess/$(uid)/writingHomeworks/$(sourceId);
+      return isStudent()
+        && exists(grantPath)
+        && mockWritingGrantSource(get(grantPath).data, sourceId, sourceData);
+    }
+
     match /mockResourceAccess/{studentId}/{collectionName}/{sourceId} {
       // DoMockTest creates this only after a denied direct read. Rules validate
       // the active Mock studentAccess entitlement and exact source link first.
@@ -843,10 +878,12 @@ service cloud.firestore {
     // ============================================================
 
     match /writingHomeworks/{id} {
-      allow get: if isAdmin()
+      // R2: validate Mock grant FIRST to avoid exhausting the 1,000-expression budget.
+      // The same admin/teacher/standalone-student checks remain as fallbacks.
+      allow get: if studentCanGetMockWriting(id, resource.data)
+        || isAdmin()
         || teacherCanReadContent(resource.data)
-        || studentHasActiveAccess('writing', id)
-        || studentCanGetMockResource('writingHomeworks', id);
+        || studentHasActiveAccess('writing', id);
 
       // A mock reference permits a single linked document, not library queries.
       allow list: if isAdmin()
