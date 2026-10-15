@@ -204,6 +204,10 @@ function createAiWritingEvaluationService({
           return { kind: 'processing', retryAfterSeconds: Math.max(1,
             Math.ceil((job.leaseUntilMs - time) / 1000)) }
         }
+        // Institution-funded jobs are never taken over by a student credit flow.
+        if (job.billingMode === 'sponsored_auto') {
+          fail('failed-precondition', 'This assignment has an institution-funded AI evaluation. Contact your teacher if it failed.')
+        }
       }
       const { access } = await freshInTx(tx, evidence, { checkPilot: true })
       const ledgerSnap = await tx.get(ledgerRef)
@@ -416,6 +420,11 @@ function createAiWritingEvaluationService({
     const job = snap.data() || {}
     requireMatchingJob(job, evidence)
     if (job.status === 'processing') {
+      // Sponsored jobs do not have a student-credit ledger. Never run the
+      // personal-credit refund/retry path for an institution-funded attempt.
+      if (job.billingMode === 'sponsored_auto' && validInteger(job.leaseUntilMs) <= now()) {
+        return { status: 'failed', canRetry: false, institutionFunded: true }
+      }
       if (validInteger(job.leaseUntilMs) <= now() && job.activeLedgerId && job.month) {
         const ref = db.doc(`aiWritingMonthlyUsage/${student.schoolId}_${job.month}`)
         const refunded = await refund(evidence, job.leaseId, job.activeLedgerId, ref, 'expired_reservation')
@@ -428,9 +437,11 @@ function createAiWritingEvaluationService({
     }
     if (job.status === 'completed') return {
       status: 'completed', context: input.context, contentId: input.contentId,
-      attemptNumber: evidence.attemptNumber, report: job.report, reused: true
+      attemptNumber: evidence.attemptNumber, report: job.report, reused: true,
+      institutionFunded: job.billingMode === 'sponsored_auto'
     }
-    return { status: 'failed', canRetry: true }
+    return { status: 'failed', canRetry: job.billingMode !== 'sponsored_auto',
+      institutionFunded: job.billingMode === 'sponsored_auto' }
   }
 
   return { evaluate, getReport }

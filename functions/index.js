@@ -7393,3 +7393,26 @@ exports.getAiWritingSponsoredPolicy = onCall(request =>
   aiWritingSponsoredPolicy.getPolicy(request))
 exports.setAiWritingSponsoredPolicy = onCall(request =>
   aiWritingSponsoredPolicy.setPolicy(request))
+
+// P5B-3C: two institution-funded AI submission triggers. Each trigger remains
+// DEFAULT OFF until both MAXIMA_AI_WRITING_ENABLED and
+// MAXIMA_AI_WRITING_SPONSORED_AUTO_ENABLED are explicitly set to 'true'.
+// The secret is accessible only in the trigger runtime. There is no student
+// credit path, no client-triggered billing, and no write to teacher final scores.
+const { createAiWritingSponsoredEvaluationService } = require('./lib/aiWritingSponsoredEvaluation')
+const aiWritingSponsoredEvaluation = createAiWritingSponsoredEvaluationService({
+  db, FieldValue, schoolIdOf, getMockEnabledSections, getMockWritingMode,
+  findCurrentSubmissionRecord, submissionContentConfigFor,
+  provider: gradeWithOpenAi,
+  getApiKey: () => maximaOpenAiKey.value(),
+  providerEnabled: () => process.env.MAXIMA_AI_WRITING_ENABLED === 'true' &&
+    process.env.MAXIMA_AI_WRITING_SPONSORED_AUTO_ENABLED === 'true'
+})
+exports.autoEvaluateSponsoredWriting = onDocumentWritten({
+  document: 'writingSubmissions/{id}', secrets: [maximaOpenAiKey],
+  timeoutSeconds: 180, memory: '512MiB'
+}, event => aiWritingSponsoredEvaluation.submit('homework', event))
+exports.autoEvaluateSponsoredMockWriting = onDocumentWritten({
+  document: 'mockSubmissions/{id}', secrets: [maximaOpenAiKey],
+  timeoutSeconds: 180, memory: '512MiB'
+}, event => aiWritingSponsoredEvaluation.submit('mock', event))
