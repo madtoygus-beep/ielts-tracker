@@ -87,6 +87,7 @@ const SCHOOL_CASCADE_COLLECTIONS = [
   'aiWritingCreditOperations',
   'aiWritingEvaluations',
   'aiWritingMonthlyUsage',
+  'aiWritingSponsoredPolicies',
   'messages',
   'materials',
   'schoolSeatLocks',
@@ -334,6 +335,14 @@ async function cleanupStudentAccessOnSourceDelete(event, contentType, sourceColl
     sourceCollection,
     contentId: id
   })
+  // P5B-3A: school-sponsored selections must not outlive their source.
+  const policyRef = db.doc(`aiWritingSponsoredPolicies/${contentType}_${id}`)
+  const policySnap = await policyRef.get()
+  if (policySnap.exists && policySnap.data()?.contentType === contentType &&
+      policySnap.data()?.contentId === id &&
+      policySnap.data()?.sourceCollection === sourceCollection) {
+    await policyRef.delete()
+  }
 }
 
 function toPlain(value) {
@@ -2734,7 +2743,8 @@ const STUDENT_LEGACY_REFERENCE_COLLECTIONS = [
   'listenings',
   'vocabularyTests',
   'writingHomeworks',
-  'mockTests'
+  'mockTests',
+  'aiWritingSponsoredPolicies'
 ]
 
 const STUDENT_LEGACY_REFERENCE_FIELDS = [
@@ -7369,3 +7379,17 @@ exports.evaluateMyAiWriting = onCall({
 }, request => aiWritingEvaluationService.evaluate(request))
 exports.getMyAiWritingReport = onCall(request =>
   aiWritingEvaluationService.getReport(request))
+
+
+// P5B-3A: teacher-selected, school-funded AI assignment policy only.
+// NOT an AI evaluation trigger: no provider requests and no student credit use.
+const { createAiWritingSponsoredPolicyService } = require('./lib/aiWritingSponsoredPolicy')
+const aiWritingSponsoredPolicy = createAiWritingSponsoredPolicyService({
+  db, FieldValue, HttpsError, requireAssignmentManager,
+  managerCanManageSource, schoolIdOf, accountTypeOf, teacherIdsOf,
+  getMockEnabledSections
+})
+exports.getAiWritingSponsoredPolicy = onCall(request =>
+  aiWritingSponsoredPolicy.getPolicy(request))
+exports.setAiWritingSponsoredPolicy = onCall(request =>
+  aiWritingSponsoredPolicy.setPolicy(request))

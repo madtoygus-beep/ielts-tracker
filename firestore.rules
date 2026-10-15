@@ -1130,5 +1130,10 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // P5B-3A: instructor-sponsored AI selections are server-only.
+    match /aiWritingSponsoredPolicies/{policyId} {
+      allow read, write: if false;
+    }
+
   }
 }
