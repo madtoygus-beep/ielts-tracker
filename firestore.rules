@@ -315,6 +315,108 @@ service cloud.firestore {
         && mockWritingGrantSource(get(grantPath).data, sourceId, sourceData);
     }
 
+    // ============================================================
+    // R4: MOCK READING / LISTENING PROJECTION READS
+    //
+    // studentReadings / studentListenings expose answer-key-free copies. A
+    // student may read one through an assigned Mock when ALL of these hold,
+    // each re-checked LIVE on every read:
+    //   - the scoped grant mockResourceAccess/{uid}/{collection}/{sourceId} is
+    //     bound to this uid, this collection and this source;
+    //   - the user is an approved, non-deleted student of an ACTIVE school;
+    //   - studentAccess/{uid}_mock_{mockId} is an active entitlement for this
+    //     uid and school;
+    //   - the Mock is in the student's school, not archived, has the section
+    //     enabled and links exactly this source;
+    //   - the raw source is in the same school and the Mock creator may use it
+    //     (school-library item, own item, or an approved admin's Mock).
+    //
+    // This is the same set of checks as studentCanGetMockResource, evaluated in
+    // ONE pass: each document (grant, user, school, entitlement, Mock, raw
+    // source) is fetched once and kept in a local, instead of being re-fetched
+    // and re-validated by nested helpers (isStudent, studentHasActiveAccess and
+    // currentSchoolId each re-run user/school lookups). Why it matters: one
+    // single-document request may make at most 10 get()/exists() calls and the
+    // nested form needed more than that when exists()+get() on one document are
+    // counted separately (the docs do not say whether they are). R4 needs 8 on
+    // the common path and 10 on the most expensive ownership path.
+    //
+    // The raw source is read by the RULE only; its data never reaches the
+    // student. studentCanGetMockResource / validMockAccessReference stay as-is
+    // for validating client WRITES to mockResourceAccess.
+    // ============================================================
+
+    function studentCanGetMockObjective(collectionName, sourceId) {
+      let uid = request.auth.uid;
+      let grantData = get(/databases/$(database)/documents/mockResourceAccess/$(uid)/$(collectionName)/$(sourceId)).data;
+      return collectionName in ['readings', 'listenings']
+        && mockObjectiveGrantMatches(grantData, uid, collectionName, sourceId)
+        && mockObjectiveLiveContext(uid, grantData.mockTestId, collectionName, sourceId);
+    }
+
+    function mockObjectiveGrantMatches(grantData, uid, collectionName, sourceId) {
+      let mockId = grantData.get('mockTestId', '');
+      return grantData.get('uid', '') == uid
+        && grantData.get('sourceCollection', '') == collectionName
+        && grantData.get('sourceId', '') == sourceId
+        && mockId is string && mockId != '' && mockId.matches('^[^/]+$');
+    }
+
+    function mockObjectiveLiveContext(uid, mockId, collectionName, sourceId) {
+      let userData = get(/databases/$(database)/documents/users/$(uid)).data;
+      let schoolId = schoolIdOf(userData);
+      let accessId = uid + '_mock_' + mockId;
+      return userData.get('status', '') == 'approved'
+        && userData.get('deleted', false) != true
+        && userData.get('role', '') == 'student'
+        && get(/databases/$(database)/documents/schools/$(schoolId)).data.get('status', 'inactive') == 'active'
+        && mockObjectiveEntitled(
+          get(/databases/$(database)/documents/studentAccess/$(accessId)).data,
+          mockId, schoolId)
+        && mockObjectiveLinked(
+          get(/databases/$(database)/documents/mockTests/$(mockId)).data,
+          get(/databases/$(database)/documents/$(collectionName)/$(sourceId)).data,
+          collectionName, sourceId, schoolId);
+    }
+
+    function mockObjectiveEntitled(accessData, mockId, schoolId) {
+      return accessData.get('uid', '') == request.auth.uid
+        && accessData.get('contentType', '') == 'mock'
+        && accessData.get('contentId', '') == mockId
+        && accessData.get('status', '') == 'active'
+        && schoolIdOf(accessData) == schoolId;
+    }
+
+    // R5: For Mock objective reads, preserve the private-library ownership
+    // policy but avoid calling exists() and get() separately for an admin owner.
+    // Called ONLY if source is neither school-shared nor creator-owned.
+    function mockObjectiveCreatorIsApprovedAdmin(ownerId) {
+      let adminData = get(/databases/$(database)/documents/users/$(ownerId)).data;
+      return adminData.get('role', '') == 'admin'
+        && adminData.get('status', '') == 'approved'
+        && adminData.get('deleted', false) != true;
+    }
+
+    function mockObjectiveCreatorCanUseSource(mockData, sourceData) {
+      let createdBy = mockData.get('createdBy', '');
+      let ownerId = createdBy != '' ? createdBy : mockData.get('teacherId', '');
+      return isSchoolLibraryItem(sourceData)
+        || (ownerId is string && ownerId != '' && (
+          sourceData.get('createdBy', '') == ownerId
+          || sourceData.get('teacherId', '') == ownerId
+          || sourceData.get('teacherIds', []).hasAny([ownerId])
+          || mockObjectiveCreatorIsApprovedAdmin(ownerId)
+        ));
+    }
+
+    function mockObjectiveLinked(mockData, sourceData, collectionName, sourceId, schoolId) {
+      return schoolIdOf(mockData) == schoolId
+        && mockData.get('archived', false) != true
+        && schoolIdOf(sourceData) == schoolId
+        && mockLinksResource(mockData, collectionName, sourceId)
+        && mockObjectiveCreatorCanUseSource(mockData, sourceData);
+    }
+
     match /mockResourceAccess/{studentId}/{collectionName}/{sourceId} {
       // DoMockTest creates this only after a denied direct read. Rules validate
       // the active Mock studentAccess entitlement and exact source link first.
@@ -747,12 +849,21 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // R5: A missing standalone assignment cannot authorize a document. Check
+    // existence BEFORE running its expensive user/school validation chain.
+    // This retains standalone-first precedence for stale Mock grants.
+    function mockObjectiveStandaloneIfPresent(contentType, contentId) {
+      let uid = request.auth != null ? request.auth.uid : '';
+      return exists(/databases/$(database)/documents/studentAccess/$(uid + '_' + contentType + '_' + contentId))
+        && studentHasActiveAccess(contentType, contentId);
+    }
+
     match /studentReadings/{id} {
+      // Mock reads avoid unrelated school lookups when there is no standalone
+      // homework assignment. Valid standalone access remains higher priority.
       allow get: if isAdmin()
-        || (isStudent() && (
-          studentHasActiveAccess('reading', id)
-          || studentCanGetMockResource('readings', id)
-        ));
+        || mockObjectiveStandaloneIfPresent('reading', id)
+        || studentCanGetMockObjective('readings', id);
 
       allow list: if isAdmin();
 
@@ -760,11 +871,10 @@ service cloud.firestore {
     }
 
     match /studentListenings/{id} {
+      // R5: same fast standalone check as studentReadings above.
       allow get: if isAdmin()
-        || (isStudent() && (
-          studentHasActiveAccess('listening', id)
-          || studentCanGetMockResource('listenings', id)
-        ));
+        || mockObjectiveStandaloneIfPresent('listening', id)
+        || studentCanGetMockObjective('listenings', id);
 
       allow list: if isAdmin();
 
