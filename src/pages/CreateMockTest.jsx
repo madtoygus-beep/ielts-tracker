@@ -13,11 +13,23 @@ import {
 import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { httpsCallable } from 'firebase/functions'
 import { useNavigate, useParams } from 'react-router-dom'
+import AiWritingSponsoredAssignmentPanel from '../components/AiWritingSponsoredAssignmentPanel'
+import {
+  AI_SPONSORED_SCHOOL_ID,
+  emptyAiSponsoredSelection,
+  normalizeAiSponsoredPolicy,
+  eligibleAiSponsoredStudents,
+  buildAiSponsoredWriteRequest,
+  shouldSaveAiSponsoredPolicy,
+  shouldRetireMockAiSponsoredPolicy
+} from '../services/aiWritingSponsoredAssignmentPolicy'
 
 const DEFAULT_SCHOOL_ID = 'maxima'
 
 const getContentStudentAccessCall = httpsCallable(functions, 'getContentStudentAccess')
 const setContentStudentAccessCall = httpsCallable(functions, 'setContentStudentAccess')
+const getSponsoredPolicyCall = httpsCallable(functions, 'getAiWritingSponsoredPolicy')
+const setSponsoredPolicyCall = httpsCallable(functions, 'setAiWritingSponsoredPolicy')
 
 const FULL_MOCK_TIMES = {
   listening: 35,
@@ -314,6 +326,13 @@ export default function CreateMockTest() {
   const [miniReadingCount, setMiniReadingCount] = useState(1)
   const [fullMockListeningMode, setFullMockListeningMode] = useState('separate')
   const [assignTo, setAssignTo] = useState([])
+  const [sponsoredSelection, setSponsoredSelection] = useState(emptyAiSponsoredSelection)
+  const [sponsoredStatus, setSponsoredStatus] = useState(isEditMode ? 'loading' : 'ready')
+  const sponsoredSchool = Boolean(profile) &&
+    ['teacher', 'admin'].includes(profile.role) &&
+    profile.status === 'approved' &&
+    getProfileSchoolId(profile) === AI_SPONSORED_SCHOOL_ID &&
+    profile.accountType !== 'individual'
 
   const [search, setSearch] = useState('')
   const [saving, setSaving] = useState(false)
@@ -478,6 +497,21 @@ export default function CreateMockTest() {
           : []
 
         setAssignTo(canonicalStudentIds)
+
+        if (getProfileSchoolId(profile) === AI_SPONSORED_SCHOOL_ID &&
+            profile?.accountType !== 'individual' &&
+            getStoredEnabledSections(data, existingMockType).writing && data.writingId) {
+          try {
+            const response = await getSponsoredPolicyCall({ contentType: 'mock', contentId: id })
+            setSponsoredSelection(normalizeAiSponsoredPolicy(response.data, 'mock', id))
+            setSponsoredStatus('ready')
+          } catch (error) {
+            console.warn('Sponsored Mock Writing settings unavailable:', error)
+            setSponsoredStatus('unavailable')
+          }
+        } else {
+          setSponsoredStatus('ready')
+        }
       } catch (error) {
         console.error('Could not load mock test for editing:', error)
         alert(
@@ -807,6 +841,11 @@ export default function CreateMockTest() {
   }
 
   const toggleStudent = studentId => {
+    if (assignTo.includes(studentId)) {
+      setSponsoredSelection(prev => ({
+        ...prev, studentIds: prev.studentIds.filter(id => id !== studentId)
+      }))
+    }
     setAssignTo(prev =>
       prev.includes(studentId)
         ? prev.filter(id => id !== studentId)
@@ -821,6 +860,7 @@ export default function CreateMockTest() {
 
   const clearAssignments = () => {
     setAssignTo([])
+    setSponsoredSelection(prev => ({ ...prev, studentIds: [] }))
   }
 
   const assignClassToMock = classItem => {
@@ -840,6 +880,10 @@ export default function CreateMockTest() {
     setAssignTo(prev =>
       prev.filter(studentId => !classStudentIds.includes(studentId))
     )
+    setSponsoredSelection(prev => ({
+      ...prev,
+      studentIds: prev.studentIds.filter(studentId => !classStudentIds.includes(studentId))
+    }))
   }
 
   const isClassFullyAssigned = classItem => {
@@ -978,6 +1022,31 @@ export default function CreateMockTest() {
       return
     }
 
+    if (sponsoredSchool && sponsoredStatus === 'loading') {
+      alert('Please wait for existing AI settings to finish loading.')
+      return
+    }
+    const changesMockWriting = isEditMode && existingMock &&
+      (existingMock.writingId !== cleanWritingId ||
+       getStoredEnabledSections(existingMock, existingMock.mockType || existingMock.contentType).writing !== activeSections.writing)
+    if (sponsoredSchool && sponsoredStatus === 'unavailable' && changesMockWriting) {
+      alert('The existing AI policy cannot be verified. For safety, changing the Mock Writing section is blocked until the AI settings service is available.')
+      return
+    }
+    if (sponsoredSchool && changesMockWriting && activeSections.writing &&
+        sponsoredSelection.enabled && !window.confirm(
+          'The Mock Writing resource has changed. Apply automatic AI assessment to the NEW Writing resource for the selected students?'
+        )) {
+      return
+    }
+    if (sponsoredSchool && activeSections.writing && sponsoredStatus === 'ready' &&
+        sponsoredSelection.enabled &&
+        !eligibleAiSponsoredStudents(students, assignTo)
+          .some(student => sponsoredSelection.studentIds.includes(student.id))) {
+      alert('Select at least one assigned institution student for automatic AI assessment.')
+      return
+    }
+
     setSaving(true)
 
     const now = new Date().toISOString()
@@ -1019,6 +1088,25 @@ export default function CreateMockTest() {
     }
 
     try {
+      // Retire the old Mock-sponsored policy *before* a Writing resource is
+      // removed/replaced. The P5B-3A server deliberately rejects a policy
+      // write for a Mock without a linked Writing resource.
+      if (sponsoredSchool && shouldRetireMockAiSponsoredPolicy({
+        isEditMode,
+        existingMock,
+        wasWritingEnabled: getStoredEnabledSections(
+          existingMock, existingMock.mockType || existingMock.contentType
+        ).writing,
+        newWritingId: cleanWritingId,
+        newWritingEnabled: activeSections.writing,
+        configured: sponsoredSelection.configured,
+        ready: sponsoredStatus === 'ready'
+      })) {
+        await setSponsoredPolicyCall({
+          contentType: 'mock', contentId: id, enabled: false, studentIds: []
+        })
+      }
+
       let savedMockId = id
 
       if (isEditMode) {
@@ -1070,6 +1158,32 @@ export default function CreateMockTest() {
           `The mock test changes were saved, but student assignments could not be synchronized. ` +
           `Please try saving again. ${assignmentError?.message || ''}`
         )
+        return
+      }
+
+      // The canonical assignment writer has completed. Persist the optional
+      // school-funded AI selection through the server-controlled policy API.
+      try {
+        if (shouldSaveAiSponsoredPolicy({
+          isEditMode,
+          selection: sponsoredSelection,
+          ready: sponsoredStatus === 'ready',
+          schoolId: sponsoredSchool ? AI_SPONSORED_SCHOOL_ID : '',
+          hasWriting: activeSections.writing
+        })) {
+          const eligibleIds = eligibleAiSponsoredStudents(students, assignTo)
+            .map(student => student.id)
+          await setSponsoredPolicyCall(buildAiSponsoredWriteRequest({
+            contentType: 'mock',
+            contentId: savedMockId,
+            selection: sponsoredSelection,
+            assignedStudentIds: eligibleIds
+          }))
+        }
+      } catch (policyError) {
+        console.error('Mock saved, but AI assessment assignment failed:', policyError)
+        alert('Mock test and student assignments were saved, but the automatic AI setting was NOT saved. Open Edit Mock and retry. No automatic AI evaluation was started.')
+        navigate(`/edit-mock/${savedMockId}`, { replace: true })
         return
       }
 
@@ -1718,6 +1832,19 @@ export default function CreateMockTest() {
                 </div>
               )}
             </div>
+
+            {sponsoredSchool && (
+              <AiWritingSponsoredAssignmentPanel
+                contentType="mock"
+                students={students}
+                assignedIds={assignTo}
+                selection={sponsoredSelection}
+                onChange={setSponsoredSelection}
+                status={sponsoredStatus}
+                hasWriting={activeSections.writing && Boolean(writingId)}
+                disabled={saving}
+              />
+            )}
 
             <button
               onClick={handleSave}

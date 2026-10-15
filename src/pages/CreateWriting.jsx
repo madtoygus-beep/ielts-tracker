@@ -13,11 +13,22 @@ import {
 import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { httpsCallable } from 'firebase/functions'
 import { useNavigate, useParams } from 'react-router-dom'
+import AiWritingSponsoredAssignmentPanel from '../components/AiWritingSponsoredAssignmentPanel'
+import {
+  AI_SPONSORED_SCHOOL_ID,
+  emptyAiSponsoredSelection,
+  normalizeAiSponsoredPolicy,
+  eligibleAiSponsoredStudents,
+  buildAiSponsoredWriteRequest,
+  shouldSaveAiSponsoredPolicy
+} from '../services/aiWritingSponsoredAssignmentPolicy'
 
 const DEFAULT_SCHOOL_ID = 'maxima'
 
 const getContentStudentAccessCall = httpsCallable(functions, 'getContentStudentAccess')
 const setContentStudentAccessCall = httpsCallable(functions, 'setContentStudentAccess')
+const getSponsoredPolicyCall = httpsCallable(functions, 'getAiWritingSponsoredPolicy')
+const setSponsoredPolicyCall = httpsCallable(functions, 'setAiWritingSponsoredPolicy')
 
 function getProfileSchoolId(profile) {
   return profile?.schoolId || DEFAULT_SCHOOL_ID
@@ -115,6 +126,13 @@ export default function CreateWriting() {
   const [dueDate, setDueDate] = useState('')
   const [timeLimit, setTimeLimit] = useState(60)
   const [assignTo, setAssignTo] = useState([])
+  const [sponsoredSelection, setSponsoredSelection] = useState(emptyAiSponsoredSelection)
+  const [sponsoredStatus, setSponsoredStatus] = useState(isEditMode ? 'loading' : 'ready')
+  const sponsoredSchool = Boolean(profile) &&
+    ['teacher', 'admin'].includes(profile.role) &&
+    profile.status === 'approved' &&
+    getProfileSchoolId(profile) === AI_SPONSORED_SCHOOL_ID &&
+    profile.accountType !== 'individual'
 
   const [task1Title, setTask1Title] = useState('Writing Task 1')
   const [task1Prompt, setTask1Prompt] = useState(
@@ -267,6 +285,24 @@ export default function CreateWriting() {
 
       setTask2Title(data.task2?.title || 'Writing Task 2')
       setTask2Prompt(data.task2?.prompt || '')
+
+      // Never derive sponsored AI eligibility from an editable content field.
+      // The server validates teacher ownership and the canonical assignments.
+      if (getProfileSchoolId(profile) === AI_SPONSORED_SCHOOL_ID &&
+          profile?.accountType !== 'individual') {
+        try {
+          const response = await getSponsoredPolicyCall({ contentType: 'writing', contentId: id })
+          if (!isActive) return
+          setSponsoredSelection(normalizeAiSponsoredPolicy(response.data, 'writing', id))
+          setSponsoredStatus('ready')
+        } catch (error) {
+          if (!isActive) return
+          console.warn('Sponsored Writing assessment settings unavailable:', error)
+          setSponsoredStatus('unavailable')
+        }
+      } else {
+        setSponsoredStatus('ready')
+      }
     }
 
     loadWriting()
@@ -395,6 +431,11 @@ export default function CreateWriting() {
   })
 
   const toggleStudent = studentId => {
+    if (assignTo.includes(studentId)) {
+      setSponsoredSelection(prev => ({
+        ...prev, studentIds: prev.studentIds.filter(id => id !== studentId)
+      }))
+    }
     setAssignTo(prev =>
       prev.includes(studentId)
         ? prev.filter(id => id !== studentId)
@@ -410,6 +451,7 @@ export default function CreateWriting() {
 
   const clearAssignments = () => {
     setAssignTo([])
+    setSponsoredSelection(prev => ({ ...prev, studentIds: [] }))
   }
 
   const assignClassToWriting = classItem => {
@@ -429,6 +471,10 @@ export default function CreateWriting() {
     setAssignTo(prev =>
       prev.filter(studentId => !classStudentIds.includes(studentId))
     )
+    setSponsoredSelection(prev => ({
+      ...prev,
+      studentIds: prev.studentIds.filter(studentId => !classStudentIds.includes(studentId))
+    }))
   }
 
   const isClassFullyAssigned = classItem => {
@@ -506,6 +552,17 @@ export default function CreateWriting() {
       return
     }
 
+    if (sponsoredSchool && sponsoredStatus === 'loading') {
+      alert('Please wait for existing AI settings to finish loading.')
+      return
+    }
+    if (sponsoredSchool && sponsoredStatus === 'ready' && sponsoredSelection.enabled &&
+        !eligibleAiSponsoredStudents(students, assignTo)
+          .some(student => sponsoredSelection.studentIds.includes(student.id))) {
+      alert('Select at least one assigned institution student for automatic AI assessment.')
+      return
+    }
+
     setSaving(true)
 
     const payload = buildSafePayload()
@@ -555,6 +612,31 @@ export default function CreateWriting() {
           `The writing changes were saved, but student assignments could not be synchronized. ` +
           `Please try saving again. ${assignmentError?.message || ''}`
         )
+        return
+      }
+
+      // Assignment membership is authoritative. Store teacher-funded AI settings
+      // only AFTER the canonical studentAccess assignment writer has succeeded.
+      try {
+        if (shouldSaveAiSponsoredPolicy({
+          isEditMode,
+          selection: sponsoredSelection,
+          ready: sponsoredStatus === 'ready',
+          schoolId: sponsoredSchool ? AI_SPONSORED_SCHOOL_ID : '',
+        })) {
+          const eligibleIds = eligibleAiSponsoredStudents(students, assignTo)
+            .map(student => student.id)
+          await setSponsoredPolicyCall(buildAiSponsoredWriteRequest({
+            contentType: 'writing',
+            contentId: savedWritingId,
+            selection: sponsoredSelection,
+            assignedStudentIds: eligibleIds
+          }))
+        }
+      } catch (policyError) {
+        console.error('Writing saved, but AI assessment assignment failed:', policyError)
+        alert('Writing homework and student assignments were saved, but the automatic AI setting was NOT saved. Open Edit Writing and retry. No automatic AI evaluation was started.')
+        navigate(`/edit-writing/${savedWritingId}`, { replace: true })
         return
       }
 
@@ -988,6 +1070,18 @@ export default function CreateWriting() {
                 </div>
               )}
             </div>
+
+            {sponsoredSchool && (
+              <AiWritingSponsoredAssignmentPanel
+                contentType="writing"
+                students={students}
+                assignedIds={assignTo}
+                selection={sponsoredSelection}
+                onChange={setSponsoredSelection}
+                status={sponsoredStatus}
+                disabled={saving}
+              />
+            )}
 
             <button
               onClick={handleSave}
