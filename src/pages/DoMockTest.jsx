@@ -5,6 +5,8 @@ import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { httpsCallable } from 'firebase/functions'
 import { useNavigate, useParams } from 'react-router-dom'
 import { getStudentVisibleResultSnapshot, getStudentVisibleResultDoc } from '../services/studentResultService'
+import AiWritingStudentPanel from '../components/AiWritingStudentPanel'
+import { isInstitutionWritingStudent } from '../services/aiWritingStudentPolicy'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
@@ -6665,6 +6667,19 @@ ${previousLabel} will be permanently locked and you will not be able to return t
               </details>
             )}
           </div>
+
+          {/* Read-only institution-sponsored AI report for a saved, completed
+              Mock Writing attempt. Teacher grading above remains authoritative. */}
+          {enabledSections.writing && isInstitutionWritingStudent(profile) &&
+            completedSubmission && finalResult && (
+              <AiWritingStudentPanel
+                key={`${user?.uid || ''}:${id}:${completedSubmission.id || 'current'}:${completedSubmission.attemptNumber || attemptState?.currentAttemptNumber || 1}`}
+                context="mock"
+                contentId={id}
+                attemptNumber={Number(completedSubmission.attemptNumber) ||
+                  Number(attemptState?.currentAttemptNumber) || 1}
+              />
+            )}
         </div>
       </div>
     )

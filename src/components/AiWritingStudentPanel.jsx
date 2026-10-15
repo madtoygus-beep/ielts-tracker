@@ -78,9 +78,9 @@ function TaskAiReport({ taskNumber, report }) {
   )
 }
 
-// Mounted ONLY for an approved Maxima institution student's submitted homework.
-// Backend callables own the student identity, source text, attempt and credits.
-export default function AiWritingStudentPanel({ contentId, attemptNumber }) {
+// Mounted only for an approved Maxima institution student's submitted Writing
+// or Mock attempt. Backend callables own identity, submission, access and billing.
+export default function AiWritingStudentPanel({ contentId, attemptNumber, context = 'homework' }) {
   const [access, setAccess] = useState(null)
   const [envelope, setEnvelope] = useState({ status: 'not_started' })
   const [loading, setLoading] = useState(true)
@@ -89,7 +89,9 @@ export default function AiWritingStudentPanel({ contentId, attemptNumber }) {
   const requestSerial = useRef(0)
   const mounted = useRef(false)
 
-  const getPayload = useCallback(() => ({ context: 'homework', contentId }), [contentId])
+  const getPayload = useCallback(() => context === 'mock'
+    ? ({ context: 'mock', contentId })
+    : ({ context: 'homework', contentId }), [context, contentId])
   const refresh = useCallback(async ({ quiet = false } = {}) => {
     const serial = ++requestSerial.current
     if (!quiet) setLoading(true)
@@ -105,7 +107,7 @@ export default function AiWritingStudentPanel({ contentId, attemptNumber }) {
       setAccess(null)
     }
     if (reportResult.status === 'fulfilled') {
-      setEnvelope(safeAiWritingEnvelope(reportResult.value?.data, attemptNumber))
+      setEnvelope(safeAiWritingEnvelope(reportResult.value?.data, attemptNumber, context))
       setErrorMessage('')
     } else {
       // Do not discard a completed report if a temporary refresh failed.
@@ -113,7 +115,7 @@ export default function AiWritingStudentPanel({ contentId, attemptNumber }) {
       setErrorMessage(readableAiWritingError(reportResult.reason))
     }
     if (!quiet) setLoading(false)
-  }, [getPayload, attemptNumber])
+  }, [getPayload, attemptNumber, context])
 
   useEffect(() => {
     mounted.current = true
@@ -122,15 +124,17 @@ export default function AiWritingStudentPanel({ contentId, attemptNumber }) {
   }, [refresh])
 
   useEffect(() => {
-    if (envelope.status !== 'processing') return undefined
+    if (envelope.status !== 'processing' &&
+        !(envelope.institutionFunded === true && envelope.status === 'not_started')) return undefined
     const timer = setInterval(() => {
       if (!requesting) refresh({ quiet: true })
     }, 8000)
     return () => clearInterval(timer)
-  }, [envelope.status, requesting, refresh])
+  }, [envelope.status, envelope.institutionFunded, requesting, refresh])
 
   const startEvaluation = async () => {
-    if (!canRequestAiWriting(access, envelope, requesting || loading)) return
+    if (context !== 'homework' ||
+        !canRequestAiWriting(access, envelope, requesting || loading)) return
     const confirmed = window.confirm(
       'Evaluate this submitted Writing attempt with AI? This uses 1 AI credit only if a result is successfully saved.'
     )
@@ -139,7 +143,7 @@ export default function AiWritingStudentPanel({ contentId, attemptNumber }) {
     setErrorMessage('')
     try {
       const response = await evaluateMyAiWritingCall(getPayload())
-      const next = safeAiWritingEnvelope(response?.data, attemptNumber)
+      const next = safeAiWritingEnvelope(response?.data, attemptNumber, context)
       if (!mounted.current) return
       setEnvelope(next)
       if (next.status === 'unavailable' || next.status === 'stale_attempt') {
@@ -160,7 +164,10 @@ export default function AiWritingStudentPanel({ contentId, attemptNumber }) {
 
   if (loading && !access && envelope.status !== 'completed') return null
   if (!shouldShowAiWritingPanel(access, envelope)) return null
-  const canEvaluate = canRequestAiWriting(access, envelope, requesting || loading)
+  // Mock evaluation is sponsored/read-only. Never offer manual credit spending.
+  if (context === 'mock' && !envelope.institutionFunded && envelope.status !== 'completed') return null
+  const canEvaluate = context === 'homework' &&
+    canRequestAiWriting(access, envelope, requesting || loading)
   const report = envelope.status === 'completed' ? envelope.report : null
 
   return (
@@ -171,7 +178,8 @@ export default function AiWritingStudentPanel({ contentId, attemptNumber }) {
           <p className="text-xs text-gray-600 mt-1">AI estimates for IELTS preparation - not official IELTS scores.</p>
         </div>
         <div className="rounded-full px-3 py-1 text-xs bg-white border border-indigo-100 text-indigo-700 font-semibold">
-          {access ? `${access.creditsRemaining} AI ${access.creditsRemaining === 1 ? 'credit' : 'credits'} remaining` : 'AI report'}
+          {envelope.institutionFunded ? 'Included by your institution' :
+            access ? `${access.creditsRemaining} AI ${access.creditsRemaining === 1 ? 'credit' : 'credits'} remaining` : 'AI report'}
         </div>
       </div>
 
@@ -182,19 +190,29 @@ export default function AiWritingStudentPanel({ contentId, attemptNumber }) {
               <p className="text-xs uppercase tracking-widest opacity-75">Estimated IELTS Writing Band</p>
               <p className="text-4xl font-bold mt-1">{formatAiBand(report.estimatedBand)}</p>
             </div>
-            <p className="text-sm max-w-sm opacity-90">Task 2 counts twice as much as Task 1 when both tasks are present. This report does not replace a teacher's assessment.</p>
+            <p className="text-sm max-w-sm opacity-90">Task 2 counts twice as much as Task 1 when both tasks are present. This report does not replace a teacher's assessment. Official Mock scores remain separate.</p>
           </div>
           <div className="space-y-4">
             <TaskAiReport taskNumber={1} report={report.task1} />
             <TaskAiReport taskNumber={2} report={report.task2} />
           </div>
-          <p className="text-xs text-gray-600 mt-4">Opening this saved report again does not use another AI credit. Your existing teacher feedback is shown separately above.</p>
+          <p className="text-xs text-gray-600 mt-4">{envelope.institutionFunded
+            ? 'Your institution has funded this AI assessment. No personal AI credits were used. Your teacher’s assessment stays separate.'
+            : 'Opening this saved report again does not use another AI credit. Your existing teacher feedback is shown separately above.'}</p>
         </>
       ) : (
         <div className="bg-white rounded-xl border border-gray-100 p-4">
-          {envelope.status === 'processing' ? (
+          {envelope.institutionFunded ? (
+            <p role="status" className="text-sm text-indigo-900">
+              {envelope.status === 'failed'
+                ? 'The institution-funded assessment could not be completed. Your teacher can review this; no student credit was deducted.'
+                : envelope.status === 'processing'
+                  ? 'Your institution-funded AI assessment is being prepared. Your personal credits will not be used.'
+                  : 'Your teacher selected this submitted attempt for institution-funded AI assessment. If enabled, the result will appear here automatically.'}
+            </p>
+          ) : envelope.status === 'processing' ? (
             <p role="status" className="text-sm text-indigo-900">Your AI evaluation is being prepared. The report will appear here when ready.</p>
-          ) : (
+          ) : context === 'homework' ? (
             <>
               <p className="text-sm text-gray-700 mb-3">
                 {envelope.status === 'unavailable' || envelope.status === 'stale_attempt'
@@ -208,7 +226,7 @@ export default function AiWritingStudentPanel({ contentId, attemptNumber }) {
                 {requesting ? 'Evaluating...' : 'Evaluate with AI (1 credit)'}
               </button>
             </>
-          )}
+          ) : null}
         </div>
       )}
       {errorMessage && <p role="alert" className="text-sm text-amber-800 mt-3">{errorMessage}</p>}

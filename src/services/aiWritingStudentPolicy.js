@@ -33,13 +33,15 @@ export function safeAiWritingAccess(value) {
   }
 }
 
-export function safeAiWritingEnvelope(value, currentAttemptNumber) {
+export function safeAiWritingEnvelope(value, currentAttemptNumber, expectedContext = 'homework') {
   if (!value || typeof value !== 'object' || Array.isArray(value) ||
       !AI_REPORT_STATUSES.has(value.status)) {
     return { status: 'unavailable' }
   }
+  const institutionFunded = value.institutionFunded === true
   if (value.status !== 'completed') {
-    return { status: value.status, canRetry: value.canRetry === true }
+    return { status: value.status, canRetry: value.canRetry === true && !institutionFunded,
+      ...(institutionFunded ? { institutionFunded: true } : {}) }
   }
   const attempt = Number(value.attemptNumber)
   if (!Number.isSafeInteger(currentAttemptNumber) || currentAttemptNumber < 1 ||
@@ -50,20 +52,22 @@ export function safeAiWritingEnvelope(value, currentAttemptNumber) {
   if (!report || typeof report !== 'object' || report.isAiEstimate !== true ||
       typeof report.estimatedBand !== 'number' || !Number.isFinite(report.estimatedBand) ||
       report.estimatedBand < 0 || report.estimatedBand > 9 ||
-      report.context !== 'homework' ||
+      report.context !== expectedContext ||
       (!report.task1 && !report.task2)) {
     return { status: 'unavailable' }
   }
-  return { status: 'completed', report, attemptNumber: attempt, reused: value.reused === true }
+  return { status: 'completed', report, attemptNumber: attempt,
+    reused: value.reused === true,
+    ...(institutionFunded ? { institutionFunded: true } : {}) }
 }
 
 export function shouldShowAiWritingPanel(access, envelope) {
-  return Boolean(envelope?.status === 'completed' ||
+  return Boolean(envelope?.status === 'completed' || envelope?.institutionFunded === true ||
     (access?.pilotEnabled === true && access?.studentEnabled === true))
 }
 
 export function canRequestAiWriting(access, envelope, busy) {
-  return Boolean(!busy && access?.canEvaluate === true &&
+  return Boolean(!busy && envelope?.institutionFunded !== true && access?.canEvaluate === true &&
     ['not_started', 'failed'].includes(envelope?.status))
 }
 

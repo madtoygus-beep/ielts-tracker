@@ -119,13 +119,15 @@ function createAiWritingEvaluationService({
       validId(source.writingId) ? source.writingId : ''
     const linkedRef = writingId ? db.doc(`writingHomeworks/${writingId}`) : null
     const linkedSnap = linkedRef ? await linkedRef.get() : null
+    const currentSubmission = dataOf(submissionSnap)
     const { prepared, fingerprint, attemptNumber } = validateFresh({
-      student, context, contentId, source, submission: dataOf(submissionSnap),
+      student, context, contentId, source, submission: currentSubmission,
       linkedWriting: dataOf(linkedSnap), assignment: dataOf(assignmentSnap)
     })
     const jobId = sha(['ai-writing-v1', student.uid, context, contentId, attemptNumber].join('\0'))
     return {
       student, context, contentId, contentType, attemptNumber, fingerprint, prepared,
+      submittedAt: currentSubmission?.submittedAt,
       jobId, jobRef: db.doc(`aiWritingEvaluations/${jobId}`),
       sourceRef, submissionRef, assignmentRef, linkedRef,
       userRef: db.doc(`users/${student.uid}`), schoolRef: db.doc(`schools/${student.schoolId}`),
@@ -411,12 +413,44 @@ function createAiWritingEvaluationService({
     }
   }
 
+  // Read-only indication that the teacher selected THIS submitted attempt for
+  // institution-funded automatic assessment. No credit access is required and
+  // this read never starts a model call. A revoked/late policy stays hidden.
+  async function pendingInstitutionSponsoredReport(evidence) {
+    const submittedMs = typeof evidence.submittedAt === 'string'
+      ? Date.parse(evidence.submittedAt) : NaN
+    if (!Number.isFinite(submittedMs)) return false
+    const contentType = evidence.context === 'mock' ? 'mock' : 'writing'
+    const collection = evidence.context === 'mock' ? 'mockTests' : 'writingHomeworks'
+    const policyRef = db.doc(`aiWritingSponsoredPolicies/${contentType}_${evidence.contentId}`)
+    const [policySnap, settingsSnap] = await Promise.all([
+      policyRef.get(), evidence.settingsRef.get()
+    ])
+    const policy = dataOf(policySnap)
+    const settings = dataOf(settingsSnap)
+    if (settings?.schoolId !== PILOT_SCHOOL_ID || settings.pilotEnabled !== true ||
+        policy?.schoolId !== PILOT_SCHOOL_ID || policy.enabled !== true ||
+        policy.billing !== 'institution' || policy.context !== evidence.context ||
+        policy.contentId !== evidence.contentId || policy.contentType !== contentType ||
+        policy.sourceCollection !== collection ||
+        !Array.isArray(policy.studentIds) || policy.studentIds.length < 1 ||
+        policy.studentIds.length > 60 || new Set(policy.studentIds).size !== policy.studentIds.length ||
+        policy.studentIds.some(id => typeof id !== 'string' || !/^[A-Za-z0-9_-]{6,128}$/.test(id)) ||
+        !policy.studentIds.includes(evidence.student.uid)) return false
+    const updated = policy.updatedAt
+    const updatedMs = typeof updated?.toMillis === 'function' ? updated.toMillis()
+      : updated instanceof Date ? updated.getTime()
+        : typeof updated === 'string' ? Date.parse(updated) : NaN
+    return Number.isFinite(updatedMs) && updatedMs <= submittedMs
+  }
+
   async function getReport(request) {
     const input = parseInput(request)
     const student = await requireStudent(request)
     const evidence = await readEvidence(student, input)
     const snap = await evidence.jobRef.get()
-    if (!snap.exists) return { status: 'not_started', context: input.context, contentId: input.contentId }
+    if (!snap.exists) return { status: 'not_started', context: input.context,
+      contentId: input.contentId, institutionFunded: await pendingInstitutionSponsoredReport(evidence) }
     const job = snap.data() || {}
     requireMatchingJob(job, evidence)
     if (job.status === 'processing') {
@@ -433,7 +467,8 @@ function createAiWritingEvaluationService({
           : { status: 'processing', retryAfterSeconds: 5 }
       }
       return { status: 'processing', retryAfterSeconds: Math.max(1,
-        Math.ceil((job.leaseUntilMs - now()) / 1000)) }
+        Math.ceil((job.leaseUntilMs - now()) / 1000)),
+        institutionFunded: job.billingMode === 'sponsored_auto' }
     }
     if (job.status === 'completed') return {
       status: 'completed', context: input.context, contentId: input.contentId,
