@@ -105,7 +105,7 @@ export default function AiWritingSponsoredAssignmentPanel({
           </div>
         )}
         <p className="mt-3 text-[11px] leading-4 text-gray-600">
-          Setup stage: AI assignment preferences are saved, but automatic model evaluation is not live yet.
+          Automatic AI assessment requires the institution pilot and server-side feature flags to be enabled. Saving these settings alone does not start an AI assessment.
         </p>
       </div>
     </section>

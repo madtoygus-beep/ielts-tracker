@@ -136,7 +136,7 @@ export default function AiWritingStudentPanel({ contentId, attemptNumber, contex
     if (context !== 'homework' ||
         !canRequestAiWriting(access, envelope, requesting || loading)) return
     const confirmed = window.confirm(
-      'Evaluate this submitted Writing attempt with AI? This uses 1 AI credit only if a result is saved. Responses under 150/250 words receive development feedback, not a numeric band.'
+      'Evaluate this submitted Writing attempt with AI? This uses 1 AI credit only if a result is saved. Task 1 needs 50+ words and Task 2 needs 100+ words for AI feedback. Band estimates require 150/250 words respectively.'
     )
     if (!confirmed) return
     setRequesting(true)
