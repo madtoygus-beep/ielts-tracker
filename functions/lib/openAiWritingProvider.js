@@ -5,7 +5,7 @@
 // Never log the request/response body: both may contain student work.
 const { buildOpenAiEvaluationRequest, parseAiWritingJsonOutput } = require('./aiWritingGrading')
 
-const PROVIDER_URL = 'https://api.openai.com/v1/responses'
+const PROVIDER_URL = "https://api.openai.com/v1/responses"
 const PILOT_MODEL = 'gpt-5-mini'
 const MAX_PROVIDER_RESPONSE_BYTES = 350000
 

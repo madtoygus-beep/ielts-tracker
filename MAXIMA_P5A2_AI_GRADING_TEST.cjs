@@ -19,7 +19,7 @@ function test(name, fn) {
 }
 
 const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg=='
-const TASK1_ANSWER = 'Overall, the city developed substantially. The former park became a hospital, whereas the river remained unchanged.'
+const TASK1_ANSWER = 'Overall, the city developed substantially. The former park became a hospital, whereas the river remained unchanged. Additionally, several new residential buildings appeared near the centre, while the main road was extended to connect the surrounding neighbourhoods with the station.'
 const TASK2_ANSWER = 'Some people suggest that schools should teach financial literacy. I agree because basic budgeting skills can prevent debt and help young people make responsible decisions.'
 
 function source(mode = 'full_writing') {
