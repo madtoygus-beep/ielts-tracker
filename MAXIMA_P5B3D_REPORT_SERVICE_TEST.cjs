@@ -11,8 +11,8 @@ const { gradeWithOpenAi, extractOutputJson, PILOT_MODEL, PROVIDER_URL } =
 const grading = require('./functions/lib/aiWritingGrading')
 
 const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg=='
-const t1 = 'Overall, the park was replaced by a hospital, while the river stayed unchanged.'
-const t2 = 'Schools should teach financial literacy because young people need to budget responsibly.'
+const t1 = 'Overall, the park was replaced by a hospital, while the river stayed unchanged. New shops appeared nearby and a new road connected the hospital with residential areas.'
+const t2 = 'Schools should teach financial literacy because young people need to budget responsibly. Such lessons help teenagers save money, understand interest rates and avoid debt in adulthood.'
 const studentUid = 'stu00001'
 const today = Date.parse('2026-10-14T18:00:00Z')
 const schoolId = 'maxima'

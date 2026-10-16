@@ -93,9 +93,9 @@ function fixture({context='homework', selected=[student], pilotEnabled=true,
   }
   const submission=context==='mock'
     ? {...baseSubmission,mockTestId:id,writingId:writingId,status:'submitted',
-      enabledSections:{writing:true},writingAnswers:{task1:'',task2:'Education improves quality of life.'},
+      enabledSections:{writing:true},writingAnswers:{task1:'',task2:'Education improves quality of life. Schools should teach practical money skills, including budgeting, saving, responsible borrowing, and comparing loan costs to prepare students for adulthood.'},
       result:{overallEstimate:6.5}}
-    : {...baseSubmission,writingId:id,task1Answer:'',task2Answer:'Education improves quality of life.'}
+    : {...baseSubmission,writingId:id,task1Answer:'',task2Answer:'Education improves quality of life. Schools should teach practical money skills, including budgeting, saving, responsible borrowing, and comparing loan costs to prepare students for adulthood.'}
   db.put('users/'+student,{role:'student',status:'approved',schoolId:'maxima',accountType:'institution'})
   db.put('users/'+other,{role:'student',status:'approved',schoolId:'maxima',accountType:'institution'})
   db.put('schools/maxima',{status:'active'})
