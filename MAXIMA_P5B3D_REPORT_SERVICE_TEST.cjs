@@ -11,8 +11,8 @@ const { gradeWithOpenAi, extractOutputJson, PILOT_MODEL, PROVIDER_URL } =
 const grading = require('./functions/lib/aiWritingGrading')
 
 const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg=='
-const t1 = 'Overall, the park was replaced by a hospital, while the river stayed unchanged. New shops appeared nearby and a new road connected the hospital with residential areas.'
-const t2 = 'Schools should teach financial literacy because young people need to budget responsibly. Such lessons help teenagers save money, understand interest rates and avoid debt in adulthood.'
+const t1 = 'Overall, the park was replaced by a hospital, while the river stayed unchanged. New shops appeared nearby and a new road connected the hospital with residential areas.' + ' The local transport network expanded substantially, giving residents improved access to services and bringing additional vehicles through previously quiet streets.'.repeat(9)
+const t2 = 'Schools should teach financial literacy because young people need to budget responsibly. Such lessons help teenagers save money, understand interest rates and avoid debt in adulthood.' + ' Teachers could introduce realistic budgeting scenarios and explain interest charges to help students recognise financial risks and prepare for important decisions.'.repeat(13)
 const studentUid = 'stu00001'
 const today = Date.parse('2026-10-14T18:00:00Z')
 const schoolId = 'maxima'
@@ -268,6 +268,19 @@ async function run() {
   await test('Over-limit and invalid selected IDs are rejected', async () => {
     const seed=sponsorSeed();seed['aiWritingSponsoredPolicies/writing_w1'].studentIds = [studentUid, ...Array.from({length:60},(_,i)=>'student'+i)]
     assert.equal((await fixture({seed}).service.getReport({auth:{uid:studentUid},data:{context:'homework',contentId:'w1'}})).institutionFunded,false)
+  })
+  await test('P5C: sponsored short answer reports too_short, never polls forever',async()=>{
+    const seed=sponsorSeed();seed[`writingSubmissions/${studentUid}_w1`].task1Answer=Array(49).fill('word').join(' ')
+    seed[`writingSubmissions/${studentUid}_w1`].task2Answer=Array(99).fill('word').join(' ')
+    const f=fixture({seed});const r=await f.service.getReport(f.homework)
+    assert.equal(r.status,'too_short');assert.equal(r.institutionFunded,true)
+    assert.equal(f.db.snapshot(`aiWritingStudentAccess/${studentUid}`).exists,false)
+  })
+  await test('P5C: blank sponsored submission is still visible as too_short',async()=>{
+    const seed=sponsorSeed();seed[`writingSubmissions/${studentUid}_w1`].task1Answer=''
+    seed[`writingSubmissions/${studentUid}_w1`].task2Answer=''
+    const f=fixture({seed});const r=await f.service.getReport(f.homework)
+    assert.equal(r.status,'too_short');assert.equal(r.institutionFunded,true)
   })
   await test('Completed Writing sponsor report readable with no credit grant', async () => {
     const {seed}=fakeCompletedJob('homework');const f=fixture({seed})

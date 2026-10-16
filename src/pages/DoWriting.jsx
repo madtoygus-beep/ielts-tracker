@@ -648,24 +648,21 @@ export default function DoWriting() {
     const expired = timeLeft <= 0
 
     if (!autoSubmit && !expired) {
-      if (hasTask1 && !task1Answer.trim()) {
-        alert('Please write your Task 1 answer.')
-        setCurrentTask(1)
-        return
-      }
-
-      if (hasTask2 && !task2Answer.trim()) {
-        alert('Please write your Task 2 answer.')
-        setCurrentTask(2)
-        return
-      }
-
+      // A short or blank response never prevents finishing and teacher review.
+      // No paid AI evaluation can occur below the independent backend limits.
       const nextAttemptNumber = Number(attemptState?.nextAttemptNumber) || 0
       const confirmationText = attemptState?.open === true && nextAttemptNumber > 1
         ? `Submit Writing Attempt ${nextAttemptNumber}?`
         : 'Submit your writing homework?'
 
-      const ok = window.confirm(confirmationText)
+      const shortTasks = [
+        hasTask1 && countWords(task1Answer) < 50 ? `Task 1: ${countWords(task1Answer)}/50 words` : null,
+        hasTask2 && countWords(task2Answer) < 100 ? `Task 2: ${countWords(task2Answer)}/100 words` : null
+      ].filter(Boolean)
+      const warning = shortTasks.length
+        ? `\n\nToo short for AI feedback:\n${shortTasks.join('\n')}\n\nYou can still submit for teacher review. Short tasks will not be sent to AI. Choose Cancel to continue writing.`
+        : ''
+      const ok = window.confirm(confirmationText + warning)
       if (!ok) return
     }
 
@@ -940,6 +937,12 @@ export default function DoWriting() {
                 key={`${user?.uid || ''}:${id}:${completedSubmission.id}`}
                 contentId={id}
                 attemptNumber={attemptNumberOfSubmission(completedSubmission)}
+                wordCounts={{
+                  task1Enabled: hasTask1,
+                  task2Enabled: hasTask2,
+                  task1: countWords(completedSubmission.task1Answer || ''),
+                  task2: countWords(completedSubmission.task2Answer || '')
+                }}
               />
             )}
 

@@ -11,8 +11,8 @@ const { gradeWithOpenAi, extractOutputJson, PILOT_MODEL, PROVIDER_URL } =
 const grading = require('./functions/lib/aiWritingGrading')
 
 const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg=='
-const t1 = 'Overall, the park was replaced by a hospital, while the river stayed unchanged. In addition, several apartment blocks were constructed near the central square, and a new road connected the eastern district with the railway station.'
-const t2 = 'Schools should teach financial literacy because young people need to budget responsibly. For example, lessons on saving, planning monthly expenses and understanding interest rates can help teenagers avoid debt and make informed financial decisions as adults.'
+const t1 = 'Overall, the park was replaced by a hospital, while the river stayed unchanged. In addition, several apartment blocks were constructed near the central square, and a new road connected the eastern district with the railway station.' + ' Public transport links were improved, and the previously quiet residential streets became busier as new facilities attracted more visitors each day.'.repeat(8)
+const t2 = 'Schools should teach financial literacy because young people need to budget responsibly. For example, lessons on saving, planning monthly expenses and understanding interest rates can help teenagers avoid debt and make informed financial decisions as adults.' + ' A practical course could include imaginary household budgets, savings goals and comparisons of borrowing costs, helping pupils understand consequences before they manage real money.'.repeat(11)
 const studentUid = 'stu00001'
 const today = Date.parse('2026-10-14T18:00:00Z')
 const schoolId = 'maxima'
@@ -319,6 +319,65 @@ await test('Empty Writing answers never cost a credit', async () => {
   const fx = fixture({ seed })
   await assert.rejects(fx.service.evaluate(fx.homework))
   assert.equal(balance(fx), 5); assert.equal(jobs(fx).length, 0)
+})
+await test('P5C: 49/99 words cost zero credits, quota, and API requests', async () => {
+  const seed = baseSeed()
+  seed[`writingSubmissions/${studentUid}_w1`].task1Answer = Array(49).fill('word').join(' ')
+  seed[`writingSubmissions/${studentUid}_w1`].task2Answer = Array(99).fill('word').join(' ')
+  let calls=0
+  const fx=fixture({seed,provider:async()=>{calls++;throw Error('No call permitted')}})
+  await assert.rejects(fx.service.evaluate(fx.homework),{code:'failed-precondition'})
+  assert.equal((await fx.service.getReport(fx.homework)).status,'too_short')
+  assert.equal(calls,0); assert.equal(jobs(fx).length,0)
+  assert.equal(ledgers(fx).length,0);assert.equal(balance(fx),5)
+  assert.equal(fx.db.snapshot(`aiWritingMonthlyUsage/${schoolId}_${month}`).exists,false)
+})
+await test('P5C: blank Writing remains submittable but has no paid report',async()=>{
+  const seed=baseSeed();seed[`writingSubmissions/${studentUid}_w1`].task1Answer=''
+  seed[`writingSubmissions/${studentUid}_w1`].task2Answer=''
+  const fx=fixture({seed});assert.equal((await fx.service.getReport(fx.homework)).status,'too_short')
+  await assert.rejects(fx.service.evaluate(fx.homework),{code:'failed-precondition'})
+  assert.equal(balance(fx),5);assert.equal(jobs(fx).length,0)
+})
+await test('P5C: 50-word Task1 only earns feedback, one credit, no numeric band',async()=>{
+  const seed=baseSeed();seed[`writingSubmissions/${studentUid}_w1`].task1Answer=Array(50).fill('word').join(' ')
+  seed[`writingSubmissions/${studentUid}_w1`].task2Answer=Array(99).fill('word').join(' ')
+  const fx=fixture({seed});const r=await fx.service.evaluate(fx.homework)
+  assert.equal(r.status,'completed');assert.equal(r.report.estimatedBand,null)
+  assert.equal(r.report.task1.estimatedBand,null);assert.equal(r.report.task2,null)
+  assert.equal(r.report.task1.criteria.lexicalResource.band,null)
+  assert.equal(balance(fx),4);assert.equal(monthly(fx).requestCount,1)
+})
+await test('P5C: 149/249 words earn development feedback, not any bands',async()=>{
+  const seed=baseSeed();const s=seed[`writingSubmissions/${studentUid}_w1`]
+  s.task1Answer=Array(149).fill('word').join(' ')
+  s.task2Answer=Array(249).fill('word').join(' ')
+  const fx=fixture({seed});const r=await fx.service.evaluate(fx.homework)
+  assert.equal(r.status,'completed');assert.equal(r.report.feedbackOnly,true)
+  assert.equal(r.report.task1.estimatedBand,null);assert.equal(r.report.task2.estimatedBand,null)
+  assert.equal(r.report.task2.criteria.grammaticalRangeAndAccuracy.band,null)
+  assert.equal(balance(fx),4)
+})
+await test('P5C: Task1 full and Task2 short cannot create a combined band',async()=>{
+  const seed=baseSeed();const s=seed[`writingSubmissions/${studentUid}_w1`]
+  s.task1Answer=Array(150).fill('word').join(' ')
+  s.task2Answer=Array(99).fill('word').join(' ')
+  const fx=fixture({seed});const r=await fx.service.evaluate(fx.homework)
+  assert.equal(r.status,'completed');assert.equal(r.report.task1.estimatedBand,6.5)
+  assert.equal(r.report.task2,null);assert.equal(r.report.estimatedBand,null)
+})
+await test('P5C: forged numeric band during feedback is rejected and refunded',async()=>{
+  const seed=baseSeed();const s=seed[`writingSubmissions/${studentUid}_w1`]
+  s.task1Answer=Array(50).fill('word').join(' ')
+  s.task2Answer=Array(99).fill('word').join(' ')
+  const fx=fixture({seed,provider:async prep=>{
+    const report=reportFor(prep);report.task1.estimatedBand=6.5
+    return {report,model:PILOT_MODEL}
+  }})
+  await assert.rejects(fx.service.evaluate(fx.homework),{code:'unavailable'})
+  assert.equal(balance(fx),5);assert.equal(used(fx),0)
+  assert.equal(fx.db.snapshot(`aiWritingMonthlyUsage/${schoolId}_${month}`).data().pendingCount,0)
+  assert.equal(jobs(fx)[0][1].status,'failed')
 })
 await test('Foreign student ownership mismatch blocks evaluation', async () => {
   const seed = baseSeed(); seed[`writingSubmissions/${studentUid}_w1`].studentId = 'otherUid'

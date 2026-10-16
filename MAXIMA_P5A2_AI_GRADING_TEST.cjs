@@ -19,8 +19,8 @@ function test(name, fn) {
 }
 
 const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg=='
-const TASK1_ANSWER = 'Overall, the city developed substantially. The former park became a hospital, whereas the river remained unchanged. Additionally, several new residential buildings appeared near the centre, while the main road was extended to connect the surrounding neighbourhoods with the station.'
-const TASK2_ANSWER = 'Some people suggest that schools should teach financial literacy. I agree because basic budgeting skills can prevent debt and help young people make responsible decisions.'
+const TASK1_ANSWER = 'Overall, the city developed substantially. The former park became a hospital, whereas the river remained unchanged. Additionally, several new residential buildings appeared near the centre, while the main road was extended to connect the surrounding neighbourhoods with the station.' + ' The area became more accessible to commuters, though the original green space was reduced and local traffic grew steadily.'.repeat(9)
+const TASK2_ANSWER = 'Some people suggest that schools should teach financial literacy. I agree because basic budgeting skills can prevent debt and help young people make responsible decisions.' + ' For instance, pupils could practise managing a small budget and comparing savings plans so they understand everyday financial choices.'.repeat(21)
 
 function source(mode = 'full_writing') {
   return {
@@ -77,7 +77,12 @@ test('Unknown context rejected', () => assert.throws(() => prepareAiWritingEvalu
 test('Unknown writing mode rejected', () => assert.throws(() => prepareAiWritingEvaluation({ source: source('evil_mode'), submission: submission() }), /mode/))
 test('No source object rejected', () => assert.throws(() => prepareAiWritingEvaluation({ source: null, submission: submission() }), /plain object/))
 test('No submission object rejected', () => assert.throws(() => prepareAiWritingEvaluation({ source: source(), submission: null }), /plain object/))
-test('No answer must never spend credits', () => assert.throws(() => prepareAiWritingEvaluation({ source: source(), submission: { task1Answer: ' ', task2Answer: '' } }), /empty/))
+test('No answer remains submittable but cannot use AI', () => {
+  const prep = prepareAiWritingEvaluation({ source: source(), submission: {task1Answer: ' ', task2Answer: ''} })
+  assert.equal(prep.task1.wordCount, 0)
+  assert.equal(prep.task2.wordCount, 0)
+  assert.throws(() => grading.requireAiEligible(prep), /50 words/)
+})
 test('Unexpected task flags rejected', () => assert.throws(() => prepareAiWritingEvaluation({ source: source(), submission: { ...submission(), task1Enabled: false } }), /disagree/))
 test('Missing task1 image rejected', () => assert.throws(() => prepareAiWritingEvaluation({ source: { ...source(), task1: { prompt: 'hi' } }, submission: submission() }), /Task 1 visual/))
 test('Untrusted remote image URL rejected', () => assert.throws(() => prepareAiWritingEvaluation({ source: { ...source(), task1: { prompt: 'hi', image: 'https://evil.example/map.png' } }, submission: submission() }), /trusted/))
@@ -138,25 +143,34 @@ test('Unverified correction originals are dropped', () => {
   assert.equal(result.task1.corrections.length, 1)
   assert.equal(result.totalUnverifiedEvidence, 1)
 })
-test('Empty Task 1 is scored zero regardless of model invention', () => {
+test('Empty Task 1 is excluded from AI with no combined band', () => {
   const prep = prepareAiWritingEvaluation({ source: source(), submission: { task1Answer: '', task2Answer: TASK2_ANSWER } })
   const report = normalizeAiWritingReport(reports(), prep)
-  assert.equal(report.task1.estimatedBand, 0)
-  assert.equal(report.estimatedBand, 5)
+  assert.equal(report.task1, null)
+  assert.equal(report.estimatedBand, null)
+  assert.equal(report.task2.estimatedBand, 7.5)
 })
-test('Empty Task 2 is scored zero regardless of model invention', () => {
+test('Empty Task 2 is excluded from AI with no combined band', () => {
   const prep = prepareAiWritingEvaluation({ source: source(), submission: { task1Answer: TASK1_ANSWER, task2Answer: '' } })
   const report = normalizeAiWritingReport(reports(), prep)
-  assert.equal(report.task2.estimatedBand, 0)
-  assert.equal(report.estimatedBand, 2)
+  assert.equal(report.task2, null)
+  assert.equal(report.estimatedBand, null)
+  assert.equal(report.task1.estimatedBand, 6.5)
 })
 test('Task1-only report computes only Task1 score', () => assert.equal(normalizeAiWritingReport({ task1: reports().task1, task2: null }, prepared('task1_only')).estimatedBand, 6.5))
 test('Task2-only report computes only Task2 score', () => assert.equal(normalizeAiWritingReport({ task1: null, task2: reports().task2 }, prepared('task2_only')).estimatedBand, 7.5))
-test('Short answers are flagged, not mechanically capped', () => {
-  const report = normalizeAiWritingReport(reports(), prepared())
-  assert.equal(report.task1.belowRecommendedLength, true)
-  assert.equal(report.task2.belowRecommendedLength, true)
-  assert.equal(report.task2.estimatedBand, 7.5)
+test('Eligible short answers get developmental feedback without numeric band', () => {
+  const prep = prepareAiWritingEvaluation({source: source(), submission: {
+    task1Answer: TASK1_ANSWER.split(/\s+/).slice(0,75).join(' '),
+    task2Answer: TASK2_ANSWER.split(/\s+/).slice(0,140).join(' ')
+  }})
+  const report = normalizeAiWritingReport(reports(), prep)
+  assert.equal(report.estimatedBand, null)
+  assert.equal(report.task1.estimatedBand, null)
+  assert.equal(report.task1.criteria.lexicalResource.band, null)
+  assert.equal(report.task2.estimatedBand, null)
+  assert.equal(report.task2.criteria.coherenceAndCohesion.band, null)
+  assert.equal(report.task1.feedbackOnly && report.task2.feedbackOnly, true)
 })
 test('Bogus half-step score rejected', () => {
   const raw = reports()

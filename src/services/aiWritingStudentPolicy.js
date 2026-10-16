@@ -2,7 +2,7 @@
 // ownership, institution membership, credit accounting and report access.
 export const MAXIMA_PILOT_SCHOOL_ID = 'maxima'
 
-const AI_REPORT_STATUSES = new Set(['not_started', 'processing', 'completed', 'failed'])
+const AI_REPORT_STATUSES = new Set(['not_started', 'processing', 'completed', 'failed', 'too_short'])
 const CRITERIA = Object.freeze([
   ['taskAchievementOrResponse', 'Task Achievement / Task Response'],
   ['coherenceAndCohesion', 'Coherence and Cohesion'],
@@ -50,8 +50,9 @@ export function safeAiWritingEnvelope(value, currentAttemptNumber, expectedConte
   }
   const report = value.report
   if (!report || typeof report !== 'object' || report.isAiEstimate !== true ||
-      typeof report.estimatedBand !== 'number' || !Number.isFinite(report.estimatedBand) ||
-      report.estimatedBand < 0 || report.estimatedBand > 9 ||
+      !(report.estimatedBand === null && report.feedbackOnly === true ||
+        typeof report.estimatedBand === 'number' && Number.isFinite(report.estimatedBand) &&
+        report.estimatedBand >= 0 && report.estimatedBand <= 9) ||
       report.context !== expectedContext ||
       (!report.task1 && !report.task2)) {
     return { status: 'unavailable' }

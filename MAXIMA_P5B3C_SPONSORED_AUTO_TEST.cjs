@@ -81,6 +81,8 @@ function makeReport(prepared) {
   },prepared)
 }
 
+const SPONSORED_TEST_ESSAY = 'Education improves quality of life. Schools should teach practical money skills, including budgeting, saving, responsible borrowing, and comparing loan costs to prepare students for adulthood.' + ' Real classroom activities can explain how careful planning, saving goals, and responsible spending help families manage unexpected costs and future opportunities.'.repeat(14)
+
 function fixture({context='homework', selected=[student], pilotEnabled=true,
   autoEnabled=true, secret='sk-test-12345678901234567890', provider, attempt=1}={}) {
   const db=new FakeDb()
@@ -93,9 +95,9 @@ function fixture({context='homework', selected=[student], pilotEnabled=true,
   }
   const submission=context==='mock'
     ? {...baseSubmission,mockTestId:id,writingId:writingId,status:'submitted',
-      enabledSections:{writing:true},writingAnswers:{task1:'',task2:'Education improves quality of life. Schools should teach practical money skills, including budgeting, saving, responsible borrowing, and comparing loan costs to prepare students for adulthood.'},
+      enabledSections:{writing:true},writingAnswers:{task1:'',task2:SPONSORED_TEST_ESSAY},
       result:{overallEstimate:6.5}}
-    : {...baseSubmission,writingId:id,task1Answer:'',task2Answer:'Education improves quality of life. Schools should teach practical money skills, including budgeting, saving, responsible borrowing, and comparing loan costs to prepare students for adulthood.'}
+    : {...baseSubmission,writingId:id,task1Answer:'',task2Answer:SPONSORED_TEST_ESSAY}
   db.put('users/'+student,{role:'student',status:'approved',schoolId:'maxima',accountType:'institution'})
   db.put('users/'+other,{role:'student',status:'approved',schoolId:'maxima',accountType:'institution'})
   db.put('schools/maxima',{status:'active'})
@@ -200,6 +202,50 @@ await test('Concurrent duplicate events reserve only one model call',async()=>{
   assert.equal(f.calls(),1)
   assert.equal(f.db.docs.get(monthPath).requestCount,1)
 })
+await test('P5C: Sponsored 99-word Task2 makes no API call or budget reservation',async()=>{
+  const f=fixture();const after={...f.submission,task2Answer:Array(99).fill('word').join(' ')}
+  f.db.put(f.subPath,after)
+  assert.equal((await f.evaluate(null,after)).status,'too_short')
+  assert.equal(f.calls(),0);assert.equal(f.db.writes.length,0)
+  assert.equal(f.db.docs.has(monthPath),false)
+})
+await test('P5C: Sponsored blank Task2 makes no API call or budget reservation',async()=>{
+  const f=fixture();const after={...f.submission,task2Answer:''}
+  f.db.put(f.subPath,after)
+  assert.equal((await f.evaluate(null,after)).status,'too_short')
+  assert.equal(f.calls(),0);assert.equal(f.db.writes.length,0)
+})
+await test('P5C: Sponsored 100-word Task2 produces feedback without a score',async()=>{
+  const f=fixture();const after={...f.submission,task2Answer:Array(100).fill('word').join(' ')}
+  f.db.put(f.subPath,after);assert.equal((await f.evaluate(null,after)).status,'completed')
+  const r=f.db.docs.get(jobPath('homework',student,writingId)).report
+  assert.equal(r.estimatedBand,null);assert.equal(r.feedbackOnly,true)
+  assert.equal(r.task2.estimatedBand,null);assert.equal(r.task2.criteria.lexicalResource.band,null)
+  assert.equal(f.calls(),1);assert.equal(f.db.docs.get(monthPath).sponsoredRequestCount,1)
+  assert.equal(f.db.writes.some(x=>x.p.startsWith('aiWritingStudentAccess/')||x.p.startsWith('aiWritingCreditOperations/')),false)
+})
+await test('P5C: Sponsored 249-word Task2 still cannot publish band',async()=>{
+  const f=fixture();const after={...f.submission,task2Answer:Array(249).fill('word').join(' ')}
+  f.db.put(f.subPath,after);assert.equal((await f.evaluate(null,after)).status,'completed')
+  const r=f.db.docs.get(jobPath('homework',student,writingId)).report
+  assert.equal(r.task2.estimatedBand,null);assert.equal(r.estimatedBand,null)
+})
+await test('P5C: Sponsored 250-word Task2 produces full IELTS band',async()=>{
+  const f=fixture();const after={...f.submission,task2Answer:Array(250).fill('word').join(' ')}
+  f.db.put(f.subPath,after);assert.equal((await f.evaluate(null,after)).status,'completed')
+  const r=f.db.docs.get(jobPath('homework',student,writingId)).report
+  assert.equal(r.task2.estimatedBand,6.5);assert.equal(r.estimatedBand,6.5)
+})
+await test('P5C: Sponsored forged numeric feedback score fails safely',async()=>{
+  const f=fixture({provider:async prep=>{
+    const report=makeReport(prep);report.task2.estimatedBand=9
+    return {report,model:'gpt-5-mini'}
+  }})
+  const after={...f.submission,task2Answer:Array(100).fill('word').join(' ')}
+  f.db.put(f.subPath,after);assert.equal((await f.evaluate(null,after)).status,'failed')
+  assert.equal(f.db.docs.get(jobPath('homework',student,writingId)).report,undefined)
+  assert.equal(f.db.writes.some(x=>x.p.startsWith('aiWritingStudentAccess/')),false)
+})
 await test('Teacher review edit does not trigger paid AI',async()=>{
   const f=fixture();const before=f.submission
   const after={...before,reviewed:true,review:{band:7.5}}
@@ -279,7 +325,7 @@ await test('Open retake is excluded',async()=>{
 })
 await test('Writing without task answer cannot spend monthly request',async()=>{
   const f=fixture();f.submission.task2Answer='';f.db.put(f.subPath,f.submission)
-  assert.equal((await f.evaluate()).status,'ineligible');assert.equal(f.db.docs.has(monthPath),false)
+  assert.equal((await f.evaluate()).status,'too_short');assert.equal(f.db.docs.has(monthPath),false)
 })
 await test('Event does not match stored answers: no model request',async()=>{
   const f=fixture();f.submission.task2Answer='Edited by other actor'

@@ -3306,7 +3306,7 @@ export default function DoMockTest() {
           .join('\n')
 
         const continueAnyway = window.confirm(
-          `Your writing answer looks very short.\n\n${warningLines}\n\nSubmit anyway?`
+          `Your Writing is below the AI feedback minimum.\n\n${warningLines}\n\nYou may still submit your exam for teacher review. Short tasks will not be sent for AI evaluation. Continue?`
         )
 
         if (!continueAnyway) return
@@ -6678,6 +6678,12 @@ ${previousLabel} will be permanently locked and you will not be able to return t
                 contentId={id}
                 attemptNumber={Number(completedSubmission.attemptNumber) ||
                   Number(attemptState?.currentAttemptNumber) || 1}
+                wordCounts={{
+                  task1Enabled: hasWritingTask1,
+                  task2Enabled: hasWritingTask2,
+                  task1: countWords(completedSubmission.writingAnswers?.task1 || ''),
+                  task2: countWords(completedSubmission.writingAnswers?.task2 || '')
+                }}
               />
             )}
         </div>

@@ -4,7 +4,7 @@
 // This module must never accept prompt text, images, or student answers from a callable request.
 // Only source and submitted attempts read from Firestore are model input.
 const { createHash, randomBytes } = require('crypto')
-const { prepareAiWritingEvaluation } = require('./aiWritingGrading')
+const { prepareAiWritingEvaluation, requireAiEligible, eligibleTasks, validAiWritingReport } = require('./aiWritingGrading')
 
 const PILOT_SCHOOL_ID = 'maxima'
 const MAX_MONTHLY_SCHOOL_EVALUATIONS = 60
@@ -280,9 +280,8 @@ function createAiWritingEvaluationService({
   }
 
   async function settle(evidence, reservation, providerResult) {
-    if (!providerResult?.report || providerResult.report.isAiEstimate !== true ||
-        providerResult.report.context !== evidence.context ||
-        typeof providerResult.model !== 'string') {
+    if (!validAiWritingReport(providerResult?.report, evidence.prepared) ||
+        typeof providerResult.model !== 'string' || !providerResult.model.trim()) {
       throw new Error('AI provider report did not pass grading validation.')
     }
     return db.runTransaction(async tx => {
@@ -388,6 +387,10 @@ function createAiWritingEvaluationService({
       fail('failed-precondition', 'AI Writing provider secret is not configured.')
     }
     const evidence = await readEvidence(student, input)
+    // Server-side gate before ANY credit hold or monthly request reservation.
+    try { requireAiEligible(evidence.prepared) } catch (error) {
+      fail('failed-precondition', error.message)
+    }
     const reservation = await reserve(evidence)
     if (reservation.kind === 'completed') {
       return { status: 'completed', context: evidence.context, contentId: evidence.contentId,
@@ -449,8 +452,15 @@ function createAiWritingEvaluationService({
     const student = await requireStudent(request)
     const evidence = await readEvidence(student, input)
     const snap = await evidence.jobRef.get()
-    if (!snap.exists) return { status: 'not_started', context: input.context,
-      contentId: input.contentId, institutionFunded: await pendingInstitutionSponsoredReport(evidence) }
+    if (!snap.exists) {
+      const sponsored = await pendingInstitutionSponsoredReport(evidence)
+      if (!eligibleTasks(evidence.prepared).length) return {
+        status: 'too_short', context: input.context,
+        contentId: input.contentId, institutionFunded: sponsored
+      }
+      return { status: 'not_started', context: input.context,
+        contentId: input.contentId, institutionFunded: sponsored }
+    }
     const job = snap.data() || {}
     requireMatchingJob(job, evidence)
     if (job.status === 'processing') {

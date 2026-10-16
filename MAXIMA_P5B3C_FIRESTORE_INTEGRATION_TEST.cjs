@@ -79,6 +79,8 @@ function providerReport(prepared) {
   }, prepared)
 }
 
+const EMULATOR_ESSAY = 'Education improves quality of life.' + ' A financial education programme can help pupils understand budgeting, saving, borrowing, and long term plans before facing their first independent financial responsibilities.'.repeat(15)
+
 async function fixture({ context = 'homework', selected = true, pilotEnabled = true,
   autoEnabled = true, userType = 'institution', onProvider = null } = {}) {
   const id = suffix()
@@ -103,11 +105,11 @@ async function fixture({ context = 'homework', selected = true, pilotEnabled = t
     ...(context === 'mock' ? {
       mockTestId: contentId, writingId: linkedWritingId,
       enabledSections: { writing: true }, status: 'submitted',
-      writingAnswers: { task1: '', task2: 'Education improves quality of life.' },
+      writingAnswers: { task1: '', task2: EMULATOR_ESSAY },
       teacherFinalScore: 7.0, teacherNotes: 'Original human review.'
     } : {
       writingId: contentId, task1Answer: '',
-      task2Answer: 'Education improves quality of life.'
+      task2Answer: EMULATOR_ESSAY
     })
   }
   const writingSource = {
@@ -263,6 +265,30 @@ async function main() {
     assert.equal((await monthly()).requestCount, 1)
   })
 
+  await check('P5C: 99-word Task2 cannot spend sponsored budget or invoke model', async () => {
+    const f = await fixture()
+    await f.subRef.update({task2Answer: Array(99).fill('word').join(' ')})
+    const updated = await f.subRef.get()
+    assert.equal((await f.evaluate(updated)).status, 'too_short')
+    assert.equal(f.calls(),0)
+    assert.equal(await monthly(),null)
+    assert.equal(await hasDoc(f.jobRef),false)
+  })
+
+  await check('P5C: 100-word Task2 is feedback-only and never touches student credits', async () => {
+    const f = await fixture()
+    const beforeCredits = (await f.creditRef.get()).data()
+    await f.subRef.update({task2Answer: Array(100).fill('word').join(' ')})
+    const updated = await f.subRef.get()
+    assert.equal((await f.evaluate(updated)).status,'completed')
+    const job=(await f.jobRef.get()).data()
+    assert.equal(job.report.estimatedBand,null)
+    assert.equal(job.report.task2.criteria.lexicalResource.band,null)
+    assert.equal(f.calls(),1)
+    assert.equal((await monthly()).sponsoredRequestCount,1)
+    assert.deepEqual((await f.creditRef.get()).data(),beforeCredits)
+  })
+
   await check('Teacher feedback update never triggers an AI request', async () => {
     const f = await fixture()
     const before = f.initial
@@ -401,7 +427,7 @@ async function main() {
     await f.subRef.update({
       attemptNumber: 2,
       submittedAt: '2026-10-15T10:30:00.000Z',
-      task2Answer: 'A second valid, completed Writing attempt.'
+      task2Answer: EMULATOR_ESSAY + ' A new submitted attempt.'
     })
     const second = await f.subRef.get()
     assert.equal((await f.evaluate(second, original)).status, 'completed')

@@ -4,7 +4,7 @@
 // a genuinely submitted/current Writing or Mock attempt. Never use student credits.
 // No raw submitted essays/images, API secret, or provider response bodies are logged.
 const { createHash, randomBytes } = require('crypto')
-const { prepareAiWritingEvaluation } = require('./aiWritingGrading')
+const { prepareAiWritingEvaluation, eligibleTasks, validAiWritingReport } = require('./aiWritingGrading')
 const { MAX_MONTHLY_SCHOOL_EVALUATIONS, LEASE_MS } = require('./aiWritingEvaluation')
 const { MAX_STUDENTS_PER_POLICY } = require('./aiWritingSponsoredPolicy')
 
@@ -179,6 +179,7 @@ function createAiWritingSponsoredEvaluationService({
 
     const first = await getAuthorizedState({ get: ref => ref.get() }, refs)
     if (!first) return { status: 'ineligible' }
+    if (!eligibleTasks(first.prepared).length) return { status: 'too_short' }
 
     const time = now()
     const month = new Date(time).toISOString().slice(0, 7).replace('-', '')
@@ -257,22 +258,8 @@ function createAiWritingSponsoredEvaluationService({
     try {
       const response = await provider(first.prepared, key)
       const report = response?.report
-      const hasTask = task => task && typeof task === 'object' &&
-        Number.isFinite(task.estimatedBand) && task.estimatedBand >= 0 && task.estimatedBand <= 9 &&
-        task.criteria && typeof task.criteria === 'object' &&
-        ['taskAchievementOrResponse', 'coherenceAndCohesion', 'lexicalResource',
-          'grammaticalRangeAndAccuracy'].every(key =>
-          Number.isFinite(task.criteria[key]?.band) &&
-          typeof task.criteria[key]?.explanation === 'string')
-      if (!report || report.isAiEstimate !== true || report.context !== context ||
-          report.teacherFinalScore !== null ||
-          !Number.isFinite(report.estimatedBand) || report.estimatedBand < 0 ||
-          report.estimatedBand > 9 ||
-          !['full_writing','task1_only','task2_only'].includes(report.writingMode) ||
-          (first.prepared.task1 && !hasTask(report.task1)) ||
-          (first.prepared.task2 && !hasTask(report.task2)) ||
-          (context === 'mock' && report.isProvisionalMockEstimate !== true) ||
-          typeof response.model !== 'string' || !response.model.trim()) {
+      if (!validAiWritingReport(report, first.prepared) ||
+          typeof response?.model !== 'string' || !response.model.trim()) {
         throw new Error('Provider report validation failed.')
       }
       const settled = await db.runTransaction(async tx => {

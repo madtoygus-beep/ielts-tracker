@@ -23,7 +23,7 @@ function TaskAiReport({ taskNumber, report }) {
     <section className="border border-indigo-100 rounded-xl p-4 text-left bg-white">
       <div className="flex items-center justify-between gap-3 mb-2">
         <h4 className="text-base font-semibold text-gray-900">Writing Task {taskNumber}</h4>
-        <span className="font-semibold text-indigo-700">Estimated Band {formatAiBand(report.estimatedBand)}</span>
+        <span className="font-semibold text-indigo-700">{report.feedbackOnly ? 'Development feedback - no band' : `Estimated Band ${formatAiBand(report.estimatedBand)}`}</span>
       </div>
       <div className="text-xs text-gray-500 mb-3">
         {Number.isInteger(report.wordCount) ? `${report.wordCount} words` : ''}
@@ -37,7 +37,7 @@ function TaskAiReport({ taskNumber, report }) {
           <article key={row.key} className="rounded-lg bg-gray-50 border border-gray-100 p-3">
             <div className="flex items-center justify-between gap-2 mb-2">
               <h5 className="text-xs font-semibold text-gray-800">{row.label}</h5>
-              <span className="text-sm font-bold text-indigo-700">{formatAiBand(row.band)}</span>
+              {row.band !== null && <span className="text-sm font-bold text-indigo-700">{formatAiBand(row.band)}</span>}
             </div>
             <p className="text-sm text-gray-700 leading-5 whitespace-pre-wrap">{row.explanation}</p>
             {row.evidence && <p className="mt-2 text-xs text-gray-500">Evidence: "{row.evidence}"</p>}
@@ -80,7 +80,7 @@ function TaskAiReport({ taskNumber, report }) {
 
 // Mounted only for an approved Maxima institution student's submitted Writing
 // or Mock attempt. Backend callables own identity, submission, access and billing.
-export default function AiWritingStudentPanel({ contentId, attemptNumber, context = 'homework' }) {
+export default function AiWritingStudentPanel({ contentId, attemptNumber, context = 'homework', wordCounts = {} }) {
   const [access, setAccess] = useState(null)
   const [envelope, setEnvelope] = useState({ status: 'not_started' })
   const [loading, setLoading] = useState(true)
@@ -136,7 +136,7 @@ export default function AiWritingStudentPanel({ contentId, attemptNumber, contex
     if (context !== 'homework' ||
         !canRequestAiWriting(access, envelope, requesting || loading)) return
     const confirmed = window.confirm(
-      'Evaluate this submitted Writing attempt with AI? This uses 1 AI credit only if a result is successfully saved.'
+      'Evaluate this submitted Writing attempt with AI? This uses 1 AI credit only if a result is saved. Responses under 150/250 words receive development feedback, not a numeric band.'
     )
     if (!confirmed) return
     setRequesting(true)
@@ -169,6 +169,10 @@ export default function AiWritingStudentPanel({ contentId, attemptNumber, contex
   const canEvaluate = context === 'homework' &&
     canRequestAiWriting(access, envelope, requesting || loading)
   const report = envelope.status === 'completed' ? envelope.report : null
+  const shortTasks = [
+    { label: 'Task 1', actual: wordCounts.task1, minimum: 50, active: wordCounts.task1Enabled },
+    { label: 'Task 2', actual: wordCounts.task2, minimum: 100, active: wordCounts.task2Enabled }
+  ].filter(t => t.active && Number.isInteger(t.actual) && t.actual < t.minimum)
 
   return (
     <section className="mt-7 border border-indigo-200 rounded-2xl p-5 md:p-6 bg-indigo-50/50 text-left" aria-label="AI Writing feedback">
@@ -187,14 +191,23 @@ export default function AiWritingStudentPanel({ contentId, attemptNumber, contex
         <>
           <div className="rounded-xl bg-indigo-900 text-white p-5 mb-4 flex flex-wrap justify-between gap-3 items-center">
             <div>
-              <p className="text-xs uppercase tracking-widest opacity-75">Estimated IELTS Writing Band</p>
-              <p className="text-4xl font-bold mt-1">{formatAiBand(report.estimatedBand)}</p>
+              <p className="text-xs uppercase tracking-widest opacity-75">{report.estimatedBand === null ? 'Writing development report - band withheld' : 'Estimated IELTS Writing Band'}</p>
+              <p className="text-4xl font-bold mt-1">{report.estimatedBand === null ? 'Development feedback only' : formatAiBand(report.estimatedBand)}</p>
             </div>
             <p className="text-sm max-w-sm opacity-90">Task 2 counts twice as much as Task 1 when both tasks are present. This report does not replace a teacher's assessment. Official Mock scores remain separate.</p>
           </div>
+          {report.feedbackOnly && (
+            <p role="status" className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4">
+              At least one Writing task is too short for a full IELTS band estimate.
+              Eligible tasks may still receive development feedback. Your teacher can review the full submission.
+            </p>
+          )}
           <div className="space-y-4">
             <TaskAiReport taskNumber={1} report={report.task1} />
             <TaskAiReport taskNumber={2} report={report.task2} />
+            {shortTasks.map(task => <p key={task.label} role="status" className="text-sm text-amber-900 bg-amber-50 p-3 rounded-lg">
+              {task.label}: {task.actual} words (minimum {task.minimum} for AI feedback). This task was not sent for AI evaluation.
+            </p>)}
           </div>
           <p className="text-xs text-gray-600 mt-4">{envelope.institutionFunded
             ? 'Your institution has funded this AI assessment. No personal AI credits were used. Your teacher’s assessment stays separate.'
@@ -202,7 +215,13 @@ export default function AiWritingStudentPanel({ contentId, attemptNumber, contex
         </>
       ) : (
         <div className="bg-white rounded-xl border border-gray-100 p-4">
-          {envelope.institutionFunded ? (
+          {envelope.status === 'too_short' ? (
+            <p role="status" className="text-sm text-amber-900">
+              Your Writing answer is below the AI feedback minimum (Task 1: 50 words; Task 2: 100 words).
+              No AI model was called, and no student credit or institution quota was used.
+              Your exam submission remains complete and your teacher can review it.
+            </p>
+          ) : envelope.institutionFunded ? (
             <p role="status" className="text-sm text-indigo-900">
               {envelope.status === 'failed'
                 ? 'The institution-funded assessment could not be completed. Your teacher can review this; no student credit was deducted.'
@@ -218,7 +237,7 @@ export default function AiWritingStudentPanel({ contentId, attemptNumber, contex
                 {envelope.status === 'unavailable' || envelope.status === 'stale_attempt'
                   ? 'The AI report service cannot confirm this attempt right now. Refresh the report before requesting another evaluation.'
                   : access?.creditsRemaining > 0
-                    ? 'Your submitted Writing can be evaluated using one AI credit. The report will include estimated band scores, four IELTS criteria and detailed corrections.'
+                    ? 'AI feedback needs at least 50 words in Task 1 or 100 in Task 2. A band estimate requires 150 / 250 words respectively. Very short answers cannot use an AI credit.'
                     : 'You have no AI credits left. Contact your school administrator if you need additional evaluations.'}
               </p>
               <button type="button" disabled={!canEvaluate} onClick={startEvaluation}
