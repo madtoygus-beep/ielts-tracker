@@ -11,6 +11,17 @@ class TestHttpsError extends Error {
 
 class FakeDb {
   constructor() { this.docs = new Map(); this.writes = [] }
+  collection(name) {
+    const db = this
+    return { where(field, op, value) {
+      if (name !== 'classes' || field !== 'teacherId' || op !== '==') {
+        throw Error('Unexpected fixture query')
+      }
+      return { get: async () => ({ docs: [...db.docs.entries()]
+        .filter(([p, data]) => p.startsWith('classes/') && data.teacherId === value)
+        .map(([p]) => db.snapshot(p)) }) }
+    } }
+  }
   doc(path) {
     const db = this
     return {
@@ -67,6 +78,7 @@ function createFixture() {
   db.docs.set(`users/${managerUid}`, structuredClone(teacher))
   db.docs.set(`users/${adminUid}`, structuredClone(admin))
   db.docs.set('schools/maxima', { status:'active' })
+  db.docs.set('classes/teacherGroup001', { schoolId:'maxima', name:'IELTS 12', teacherId:managerUid, studentIds:[s1,s2,s3], archived:false })
   db.docs.set(writingSourcePath, {
     title:'Unit 1 Writing',schoolId:'maxima',teacherId:managerUid,
     teacherIds:[managerUid],createdBy:managerUid,contentType:'task2_only'
@@ -226,7 +238,7 @@ async function denied(promise, code) {
     await denied(f.write(mockPolicy()),'permission-denied')
   })
   await test('Teacher cannot select students no longer assigned to teacher',async()=>{
-    const f=createFixture();f.db.docs.set(`users/${s1}`,{...f.db.docs.get(`users/${s1}`),teacherIds:[]})
+    const f=createFixture();f.db.docs.set('classes/teacherGroup001',{...f.db.docs.get('classes/teacherGroup001'),studentIds:[s2,s3]})
     await denied(f.write(policy()),'permission-denied')
   })
   await test('Archived source rejected',async()=>{
@@ -309,6 +321,63 @@ async function denied(promise, code) {
     assert.match(text,/exports\.setAiWritingSponsoredPolicy\s*=\s*onCall/)
     const moduleText=fs.readFileSync(path.join(__dirname,'functions/lib/aiWritingSponsoredPolicy.js'),'utf8')
     assert.doesNotMatch(moduleText,/fetch\(|https:\/\/api\.openai\.com|creditsRemaining\s*:/)
+  })
+  // P6-A2 authoritative current-class security cases.
+  await test('P6-A2: stale teacherIds without any current class cannot authorize spending',async()=>{
+    const f=createFixture();f.db.docs.delete('classes/teacherGroup001')
+    assert.ok(f.db.docs.get(`users/${s1}`).teacherIds.includes(managerUid))
+    await denied(f.write(policy()),'permission-denied')
+    assert.equal(f.db.writes.length,0)
+  })
+  await test('P6-A2: revoked class membership disables existing policy for teacher and admin',async()=>{
+    const f=createFixture();await f.write(policy())
+    const cls=f.db.docs.get('classes/teacherGroup001');cls.studentIds=[s2,s3]
+    f.db.docs.set('classes/teacherGroup001',cls)
+    const teacherView=await f.read({contentType:'writing',contentId:sourceId})
+    const adminView=await f.read({contentType:'writing',contentId:sourceId},adminUid)
+    assert.equal(teacherView.enabled,false);assert.deepEqual(teacherView.studentIds,[])
+    assert.equal(adminView.enabled,false);assert.deepEqual(adminView.studentIds,[])
+    await denied(f.write(policy()),'permission-denied')
+    assert.equal(f.db.writes.length,1)
+  })
+  await test('P6-A2: archived, system or foreign-school classes cannot grant a teacher AI',async()=>{
+    for(const patch of [{archived:true},{system:true},{name:'ALL'},{schoolId:'elsewhere'},{deleted:true}]) {
+      const f=createFixture()
+      f.db.docs.set('classes/teacherGroup001',{
+        ...f.db.docs.get('classes/teacherGroup001'),...patch
+      })
+      await denied(f.write(policy()),'permission-denied')
+      assert.equal(f.db.writes.length,0)
+    }
+  })
+  await test('P6-A2: student may have two currently active teachers on different classes',async()=>{
+    const f=createFixture();const nextTeacher='teacher999'
+    f.db.docs.set(`users/${nextTeacher}`,{
+      role:'teacher',status:'approved',schoolId:'maxima',accountType:'institution'
+    })
+    const src=f.db.docs.get(writingSourcePath)
+    f.db.docs.set(writingSourcePath,{...src,teacherId:'',teacherIds:[managerUid,nextTeacher]})
+    f.db.docs.set('classes/otherGroup',{name:'Other',schoolId:'maxima',teacherId:nextTeacher,
+      studentIds:[s1],archived:false})
+    // Profile has no fresh teacher link for teacher999. Current class is authoritative.
+    const res=await f.write(policy(),nextTeacher)
+    assert.equal(res.enabled,true)
+  })
+  await test('P6-A2: source primary teacher overrules stale source teacherIds',async()=>{
+    const f=createFixture();const src=f.db.docs.get(writingSourcePath)
+    f.db.docs.set(writingSourcePath,{...src,teacherId:'teacher999',teacherIds:[managerUid,'teacher999']})
+    await denied(f.write(policy()),'permission-denied')
+  })
+  await test('P6-A2: admin can select an assigned student even without an active class',async()=>{
+    const f=createFixture();f.db.docs.delete('classes/teacherGroup001')
+    assert.equal((await f.write(policy(),adminUid)).enabled,true)
+    const res=await f.read({contentType:'writing',contentId:sourceId},adminUid)
+    assert.equal(res.enabled,true);assert.deepEqual(res.studentIds,[s1])
+  })
+  await test('P6-A2: historical creator alone cannot authorize, even with a current class',async()=>{
+    const f=createFixture();const src=f.db.docs.get(writingSourcePath)
+    f.db.docs.set(writingSourcePath,{...src,teacherId:'',teacherIds:[],createdBy:managerUid})
+    await denied(f.write(policy()),'permission-denied')
   })
   console.log(`\nP5B-3A sponsored policy: ${total-failed}/${total} PASS; ${failed} FAIL`)
   process.exitCode=failed?1:0

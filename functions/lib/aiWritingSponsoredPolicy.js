@@ -6,6 +6,8 @@
 // P5B-3C must additionally verify the current policy, student assignment and
 // school-funded budget BEFORE any provider request is started.
 
+const { teacherClassQuery, currentTeacherStudents, teacherOwnsSource } = require('./aiWritingTeacherRelationship')
+
 const PILOT_SCHOOL_ID = 'maxima'
 const MAX_STUDENTS_PER_POLICY = 60
 const SCHEMA_VERSION = 1
@@ -76,7 +78,8 @@ function createAiWritingSponsoredPolicyService({
     if (!source || source.deleted === true || source.archived === true ||
         schoolIdOf(source) !== PILOT_SCHOOL_ID ||
         !validStaff(manager.profile, PILOT_SCHOOL_ID) ||
-        !managerCanManageSource(manager, source)) {
+        !managerCanManageSource(manager, source) ||
+        (manager.profile.role === 'teacher' && !teacherOwnsSource(source, manager.uid))) {
       fail('permission-denied', 'You cannot configure AI assessment for this assignment.')
     }
     if (config.contentType === 'mock' &&
@@ -95,7 +98,7 @@ function createAiWritingSponsoredPolicyService({
     }
   }
 
-  function checkedStudent(profile, access, studentId, manager, config) {
+  function checkedStudent(profile, access, studentId, manager, config, currentStudents) {
     if (!profile || profile.role !== 'student' || profile.status !== 'approved' ||
         profile.deleted === true || profile.archived === true ||
         profile.permanentDeleteInProgress === true ||
@@ -110,19 +113,10 @@ function createAiWritingSponsoredPolicyService({
         access.adminHidden === true) {
       return false
     }
-    // An audit creator is NOT a current teacher grant. An explicit primary
-    // teacher takes precedence over the legacy additive teacherIds array.
-    // Where only teacherIds exists, it remains a compatibility fallback; this
-    // array can contain historical links and must be reconciled before pilot.
-    if (manager.profile.role === 'teacher') {
-      const primary = typeof profile.teacherId === 'string' ? profile.teacherId.trim() : ''
-      if (primary) {
-        if (primary !== manager.uid) return false
-      } else if (!Array.isArray(profile.teacherIds) ||
-                 !profile.teacherIds.includes(manager.uid)) {
-        return false
-      }
-    }
+    // Legacy user.teacherIds / user.createdBy / studentAccess.assignedBy can be stale.
+    // A teacher must own an active real class containing the student; school
+    // admins may fund valid institutional assignments without a class.
+    if (manager.profile.role === 'teacher' && !currentStudents?.has(studentId)) return false
     return true
   }
 
@@ -159,6 +153,27 @@ function createAiWritingSponsoredPolicyService({
     }
     const policy = dataOf(policySnap)
     checkedStoredPolicy(policy, config)
+    const classes = currentManager.profile?.role === 'teacher'
+      ? await teacherClassQuery(db, currentManager.uid).get() : null
+    const currentStudents = currentTeacherStudents(classes, currentManager.uid)
+    // Display effective policy, not a stale stored toggle. A revoked teacher
+    // cannot leave the UI saying that an automatic paid report is enabled.
+    let authorRole = ''
+    let authorStudents = new Set()
+    if (policy?.enabled === true && typeof policy.updatedBy === 'string' &&
+        VALID_STUDENT_ID.test(policy.updatedBy)) {
+      const author = dataOf(await db.doc(`users/${policy.updatedBy}`).get())
+      if (validStaff(author, PILOT_SCHOOL_ID)) {
+        if (author.role === 'admin') {
+          authorRole = 'admin'
+        } else if (teacherOwnsSource(source, policy.updatedBy)) {
+          const authorClasses = policy.updatedBy === currentManager.uid && classes
+            ? classes : await teacherClassQuery(db, policy.updatedBy).get()
+          authorRole = 'teacher'
+          authorStudents = currentTeacherStudents(authorClasses, policy.updatedBy)
+        }
+      }
+    }
     const ids = policy?.studentIds || []
     const studentIds = []
     if (ids.length) {
@@ -169,7 +184,9 @@ function createAiWritingSponsoredPolicyService({
       const snaps = await db.getAll(...refs)
       for (let i = 0; i < ids.length; i++) {
         if (checkedStudent(dataOf(snaps[2 * i]), dataOf(snaps[2 * i + 1]),
-          ids[i], currentManager, config)) studentIds.push(ids[i])
+          ids[i], currentManager, config, currentStudents) &&
+          (policy?.enabled !== true || authorRole === 'admin' ||
+           (authorRole === 'teacher' && authorStudents.has(ids[i])))) studentIds.push(ids[i])
       }
     }
     return {
@@ -198,8 +215,11 @@ function createAiWritingSponsoredPolicyService({
       checkedSource(manager, source, config)
       const linkedRef = config.contentType === 'mock'
         ? db.doc(`writingHomeworks/${source.writingId}`) : null
+      const classQuery = manager.profile.role === 'teacher'
+        ? teacherClassQuery(db, manager.uid) : null
       const refs = [managerRef, schoolRef, config.policyRef,
-        ...(linkedRef ? [linkedRef] : []), ...userRefs, ...accessRefs]
+        ...(linkedRef ? [linkedRef] : []), ...userRefs, ...accessRefs,
+        ...(classQuery ? [classQuery] : [])]
       const snaps = await Promise.all(refs.map(ref => tx.get(ref)))
       const freshManager = { uid: manager.uid, profile: dataOf(snaps[0]) }
       if (dataOf(snaps[1])?.status !== 'active') {
@@ -209,10 +229,12 @@ function createAiWritingSponsoredPolicyService({
       checkedStoredPolicy(dataOf(snaps[2]), config)
       const offset = linkedRef ? 4 : 3
       if (linkedRef) checkedLinkedWriting(dataOf(snaps[3]), source, config)
+      const classes = classQuery ? snaps[snaps.length - 1] : null
+      const currentStudents = currentTeacherStudents(classes, freshManager.uid)
       for (let i = 0; i < config.studentIds.length; i++) {
         const profile = dataOf(snaps[offset + i])
         const access = dataOf(snaps[offset + userRefs.length + i])
-        if (!checkedStudent(profile, access, config.studentIds[i], freshManager, config)) {
+        if (!checkedStudent(profile, access, config.studentIds[i], freshManager, config, currentStudents)) {
           fail('permission-denied', 'Only currently assigned institution students may be selected.')
         }
       }

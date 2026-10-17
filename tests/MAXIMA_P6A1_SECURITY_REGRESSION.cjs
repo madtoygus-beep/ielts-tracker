@@ -23,11 +23,17 @@ function fakeDb(initial) {
     get: async () => { stat.reads++; return snap(p) } })
   const db = {
     doc: ref,
+    collection: name => ({where: (field, op, value) => {
+      if (name !== 'classes' || field !== 'teacherId' || op !== '==') throw Error('Unexpected query')
+      return { _query: true, get: async () => ({ docs: [...records.entries()]
+        .filter(([p, data]) => p.startsWith('classes/') && data.teacherId === value)
+        .map(([p]) => snap(p)) }) }
+    }}),
     getAll: async (...refs) => refs.map(r => snap(r.path)),
     runTransaction: async fn => {
       const writes = []
       const tx = {
-        get: async r => { stat.reads++; return snap(r.path) },
+        get: async r => { stat.reads++; return r._query ? r.get() : snap(r.path) },
         set: (r, data, opts) => writes.push(['set', r.path, copy(data), opts]),
         update: (r, data) => writes.push(['update', r.path, copy(data)]),
         create: (r, data) => writes.push(['create', r.path, copy(data)])
@@ -59,11 +65,12 @@ function policySetup(studentOverrides={}, { policy=true }={}) {
     'users/student01': {...liveStudent, ...studentOverrides},
     'users/teacherOld': liveTeacher, 'users/teacherNew': liveTeacher, 'users/admin0001': liveAdmin,
     'writingHomeworks/essay01': {schoolId: 'maxima', teacherIds: ['teacherOld','teacherNew'], archived: false},
+    'classes/teacherNewClass': {schoolId:'maxima', teacherId:'teacherNew', name:'Class 10', studentIds:['student01'], archived:false},
     'studentAccess/student01_writing_essay01': activeAssignment,
     ...(policy ? {'aiWritingSponsoredPolicies/writing_essay01': {
       schoolId: 'maxima', contentType: 'writing', contentId: 'essay01',
       sourceCollection: 'writingHomeworks', context: 'homework', studentIds: ['student01'],
-      enabled: true, billing: 'institution'
+      enabled: true, billing: 'institution', updatedBy: 'teacherNew'
     }} : {})
   }
   const store = fakeDb(records)
@@ -109,8 +116,10 @@ test('historical createdBy alone is not a teacher authorization', async () => {
   await assert.rejects(s.service('teacherOld').setPolicy(s.setReq), e => e.code === 'permission-denied')
 })
 
-test('legacy array-only teacher link is still allowed (requires separate stale-link reconciliation)', async () => {
+test('legacy array-only teacher link still works with independently proven active class membership', async () => {
   const s = policySetup({teacherId: '', teacherIds: ['teacherOld'], createdBy: 'admin0001'})
+  // Compatibility works only with a current class, NOT from an old additive array alone.
+  s.records.set('classes/teacherOldClass', {schoolId:'maxima',teacherId:'teacherOld', name:'Active IELTS', studentIds:['student01'], archived:false})
   assert.equal((await s.service('teacherOld').getPolicy(s.getReq)).enabled, true)
 })
 

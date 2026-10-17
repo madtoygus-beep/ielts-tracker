@@ -7,6 +7,7 @@ const { createHash, randomBytes } = require('crypto')
 const { prepareAiWritingEvaluation, eligibleTasks, validAiWritingReport } = require('./aiWritingGrading')
 const { MAX_MONTHLY_SCHOOL_EVALUATIONS, LEASE_MS } = require('./aiWritingEvaluation')
 const { MAX_STUDENTS_PER_POLICY } = require('./aiWritingSponsoredPolicy')
+const { teacherClassQuery, currentTeacherStudents, teacherOwnsSource } = require('./aiWritingTeacherRelationship')
 
 const PILOT_SCHOOL_ID = 'maxima'
 const ID_PATTERN = /^[A-Za-z0-9_-]{1,150}$/
@@ -156,6 +157,24 @@ function createAiWritingSponsoredEvaluationService({
     const linkedSnap = linkedRef ? await reader.get(linkedRef) : null
     const checked = checkedState(refs.context, [...baseSnaps, linkedSnap], refs)
     if (!checked) return null
+
+    // A saved policy is not a permanent entitlement. Revalidate its writer at
+    // initial delivery, within the cost reservation, AND before report settlement.
+    // An unknown legacy writer cannot authorize an automatic paid model call.
+    const policy = dataOf(baseSnaps[4])
+    const actorId = policy?.updatedBy
+    if (typeof actorId !== 'string' || !STUDENT_ID_PATTERN.test(actorId)) return null
+    const actor = dataOf(await reader.get(db.doc(`users/${actorId}`)))
+    if (!active(actor) || actor.status !== 'approved' ||
+        !['teacher', 'admin'].includes(actor.role) ||
+        !['', 'institution'].includes(typeof actor.accountType === 'string'
+          ? actor.accountType.trim().toLowerCase() : '') ||
+        schoolIdOf(actor) !== PILOT_SCHOOL_ID) return null
+    if (actor.role === 'teacher') {
+      if (!teacherOwnsSource(source, actorId)) return null
+      const classes = await reader.get(teacherClassQuery(db, actorId))
+      if (!currentTeacherStudents(classes, actorId).has(refs.uid)) return null
+    }
     return { ...checked, fingerprint: sha(JSON.stringify(checked.prepared)), linkedRef }
   }
 

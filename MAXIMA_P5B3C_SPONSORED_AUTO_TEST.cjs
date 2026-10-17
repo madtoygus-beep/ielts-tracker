@@ -33,6 +33,17 @@ const clone = v => v === undefined ? undefined : JSON.parse(JSON.stringify(v))
 class FakeDb {
   constructor() { this.docs = new Map(); this.writes = []; this._tail = Promise.resolve() }
   doc(p) { return { path:p, id:p.split('/').at(-1), get:()=>this.snapshot(p) } }
+  collection(name) {
+    const db = this
+    return { where(field, op, value) {
+      if (name !== 'classes' || field !== 'teacherId' || op !== '==') {
+        throw Error('Unexpected fixture query')
+      }
+      return { _query: true, get: async () => ({ docs: [...db.docs.entries()]
+        .filter(([p, data]) => p.startsWith('classes/') && data.teacherId === value)
+        .map(([p]) => db.snapshot(p)) }) }
+    } }
+  }
   snapshot(p) {
     const exists = this.docs.has(p)
     const data = clone(this.docs.get(p))
@@ -47,7 +58,7 @@ class FakeDb {
     const staged=[]
     let wrote=false
     const tx={
-      get: async ref=>{if(wrote)throw Error('Firestore: read after write');return this.snapshot(ref.path)},
+      get: async ref=>{if(wrote)throw Error('Firestore: read after write');return ref._query ? ref.get() : this.snapshot(ref.path)},
       set:(ref, data, opts)=>{wrote=true;staged.push({kind:'set',p:ref.path,data:clone(data),opts})},
       create:(ref,data)=>{wrote=true;staged.push({kind:'create',p:ref.path,data:clone(data)})},
       update:(ref,data)=>{wrote=true;staged.push({kind:'update',p:ref.path,data:clone(data)})}
@@ -101,6 +112,8 @@ function fixture({context='homework', selected=[student], pilotEnabled=true,
   db.put('users/'+student,{role:'student',status:'approved',schoolId:'maxima',accountType:'institution'})
   db.put('users/'+other,{role:'student',status:'approved',schoolId:'maxima',accountType:'institution'})
   db.put('schools/maxima',{status:'active'})
+  db.put('users/'+teacher,{role:'teacher',status:'approved',schoolId:'maxima',accountType:'institution'})
+  db.put('classes/teacherClass100',{schoolId:'maxima',name:'IELTS',teacherId:teacher,studentIds:[student],archived:false})
   db.put('aiWritingSchoolSettings/maxima',{schoolId:'maxima',pilotEnabled})
   db.put('writingHomeworks/'+writingId,{schoolId:'maxima',contentType:'task2_only',
     teacherId:teacher, task2:{title:'Task 2',prompt:'Discuss the importance of education.'}})
@@ -109,7 +122,7 @@ function fixture({context='homework', selected=[student], pilotEnabled=true,
   db.put(policyPath(context,id),{schoolId:'maxima',enabled:true,
     contentId:id,contentType:context==='mock'?'mock':'writing',context,
     sourceCollection:context==='mock'?'mockTests':'writingHomeworks',
-    studentIds:selected,billing:'institution',updatedAt:POLICY_UPDATED})
+    studentIds:selected,billing:'institution',updatedBy:teacher,updatedAt:POLICY_UPDATED})
   db.put(assignmentPath(context,student,id),{uid:student,contentId:id,
     contentType:context==='mock'?'mock':'writing',schoolId:'maxima',
     sourceCollection:context==='mock'?'mockTests':'writingHomeworks',
@@ -556,6 +569,87 @@ await test('Failed institution-sponsored report cannot request student credit re
   assert.deepEqual(report,{status:'failed',canRetry:false,institutionFunded:true})
 })
 
+// P6-A2: saved teacher policy must be authorized at first read, cost reserve,
+// AND before report settlement. No historical array-based authorization.
+await test('P6-A2: legacy sponsored policy without updatedBy cannot spend',async()=>{
+  const f=fixture();delete f.db.docs.get(policyPath('homework',writingId)).updatedBy
+  assert.equal((await f.evaluate()).status,'ineligible')
+  assert.equal(f.calls(),0);assert.equal(f.db.docs.has(monthPath),false)
+})
+await test('P6-A2: inactive or removed teacher class denies stored policy',async()=>{
+  for(const patch of [{archived:true},{studentIds:[other]},{schoolId:'other'},{system:true}]) {
+    const f=fixture();Object.assign(f.db.docs.get('classes/teacherClass100'),patch)
+    assert.equal((await f.evaluate()).status,'ineligible')
+    assert.equal(f.calls(),0);assert.equal(f.db.docs.has(monthPath),false)
+  }
+})
+await test('P6-A2: historical teacherIds cannot survive transfer to a new teacher',async()=>{
+  const f=fixture()
+  const source=f.db.docs.get('writingHomeworks/'+writingId)
+  source.teacherIds=[teacher,'teacher0002']
+  f.db.docs.get('classes/teacherClass100').teacherId='teacher0002'
+  f.db.docs.get('users/'+student).teacherIds=[teacher,'teacher0002']
+  assert.equal((await f.evaluate()).status,'ineligible')
+  assert.equal(f.calls(),0)
+})
+await test('P6-A2: source primary owner switch revokes old teacher, even when class exists',async()=>{
+  const f=fixture();const src=f.db.docs.get('writingHomeworks/'+writingId)
+  src.teacherId='teacher0002';src.teacherIds=[teacher,'teacher0002']
+  assert.equal((await f.evaluate()).status,'ineligible')
+})
+await test('P6-A2: removed, unapproved or foreign-school sponsor cannot spend',async()=>{
+  for(const patch of [{status:'pending'},{deleted:true},{archived:true},
+    {schoolId:'other'},{accountType:'individual'}]) {
+    const f=fixture();Object.assign(f.db.docs.get('users/'+teacher),patch)
+    assert.equal((await f.evaluate()).status,'ineligible')
+    assert.equal(f.calls(),0)
+  }
+})
+await test('P6-A2: admin-created sponsored policy may fund assigned student without class',async()=>{
+  const f=fixture();f.db.docs.delete('classes/teacherClass100')
+  f.db.put('users/admin001',{role:'admin',status:'approved',schoolId:'maxima',accountType:'institution'})
+  f.db.docs.get(policyPath('homework',writingId)).updatedBy='admin001'
+  assert.equal((await f.evaluate()).status,'completed')
+  assert.equal(f.calls(),1)
+})
+await test('P6-A2: transfer during model call blocks stale paid report settlement',async()=>{
+  const f=fixture({provider:async (prepared,apiKey,db)=>{
+    const c=db.docs.get('classes/teacherClass100')
+    c.studentIds=[]
+    return {report:makeReport(prepared),model:'gpt-5-mini'}
+  }})
+  assert.equal((await f.evaluate()).status,'failed')
+  assert.equal(f.calls(),1)
+  const job=f.db.docs.get(jobPath('homework',student,writingId))
+  assert.equal(job.status,'failed');assert.equal(job.report,undefined)
+  assert.equal(f.db.docs.get(monthPath).pendingCount,0)
+})
+await test('P6-A2: revocation between precheck and reserve prevents any provider spend',async()=>{
+  const f=fixture()
+  const original=f.db.runTransaction.bind(f.db)
+  let first=true
+  f.db.runTransaction=async callback=>{
+    if(first){first=false;f.db.docs.get('classes/teacherClass100').studentIds=[]}
+    return original(callback)
+  }
+  assert.equal((await f.evaluate()).status,'ineligible')
+  assert.equal(f.calls(),0)
+  assert.equal(f.db.docs.has(monthPath),false)
+})
+await test('P6-A2: deactivated policy author during model call blocks report',async()=>{
+  const f=fixture({provider:async (prepared,apiKey,db)=>{
+    db.docs.get('users/'+teacher).status='inactive'
+    return {report:makeReport(prepared),model:'gpt-5-mini'}
+  }})
+  assert.equal((await f.evaluate()).status,'failed')
+  assert.equal(f.db.docs.get(jobPath('homework',student,writingId)).report,undefined)
+})
+await test('P6-A2: saved Mock Writing policy is subject to same current-teacher checks',async()=>{
+  const f=fixture({context:'mock'});
+  f.db.docs.get('classes/teacherClass100').archived=true
+  assert.equal((await f.evaluate()).status,'ineligible')
+  assert.equal(f.calls(),0)
+})
 console.log(`\nP5B-3C sponsored submission evaluation: ${passed}/${passed+failed} PASS; ${failed} FAIL`)
 if(failed)process.exitCode=1
 })().catch(error=>{console.error('TEST HARNESS ERROR',error?.stack||error);process.exitCode=1})
