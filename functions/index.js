@@ -3924,26 +3924,26 @@ async function mirrorWrite(event, config) {
   await writeProjection(config, id, after.data() || {})
 }
 
-exports.mirrorReadingForStudents = onDocumentWritten('readings/{id}', event =>
+exports.mirrorReadingForStudents = onDocumentWritten({ document: 'readings/{id}', region: 'europe-west1' }, event =>
   mirrorWrite(event, OBJECTIVE_CONFIG.reading)
 )
 
-exports.mirrorListeningForStudents = onDocumentWritten('listenings/{id}', event =>
+exports.mirrorListeningForStudents = onDocumentWritten({ document: 'listenings/{id}', region: 'europe-west1' }, event =>
   mirrorWrite(event, OBJECTIVE_CONFIG.listening)
 )
 
-exports.mirrorVocabularyForStudents = onDocumentWritten('vocabularyTests/{id}', event =>
+exports.mirrorVocabularyForStudents = onDocumentWritten({ document: 'vocabularyTests/{id}', region: 'europe-west1' }, event =>
   mirrorWrite(event, OBJECTIVE_CONFIG.vocabulary)
 )
 
 // Stage 16G-I3: keep these deployed trigger names during the transition, but
 // retire legacy assignment-array syncing. They now clean canonical access only
 // when the source content is physically deleted.
-exports.syncWritingStudentAccess = onDocumentWritten('writingHomeworks/{id}', event =>
+exports.syncWritingStudentAccess = onDocumentWritten({ document: 'writingHomeworks/{id}', region: 'europe-west1' }, event =>
   cleanupStudentAccessOnSourceDelete(event, 'writing', 'writingHomeworks')
 )
 
-exports.syncMockStudentAccess = onDocumentWritten('mockTests/{id}', event =>
+exports.syncMockStudentAccess = onDocumentWritten({ document: 'mockTests/{id}', region: 'europe-west1' }, event =>
   cleanupStudentAccessOnSourceDelete(event, 'mock', 'mockTests')
 )
 
@@ -7422,10 +7422,12 @@ const aiWritingSponsoredEvaluation = createAiWritingSponsoredEvaluationService({
     process.env.MAXIMA_AI_WRITING_SPONSORED_AUTO_ENABLED === 'true'
 })
 exports.autoEvaluateSponsoredWriting = onDocumentWritten({
+  region: 'europe-west1',
   document: 'writingSubmissions/{id}', secrets: [maximaOpenAiKey],
   timeoutSeconds: 180, memory: '512MiB'
 }, event => aiWritingSponsoredEvaluation.submit('homework', event))
 exports.autoEvaluateSponsoredMockWriting = onDocumentWritten({
+  region: 'europe-west1',
   document: 'mockSubmissions/{id}', secrets: [maximaOpenAiKey],
   timeoutSeconds: 180, memory: '512MiB'
 }, event => aiWritingSponsoredEvaluation.submit('mock', event))
@@ -7441,5 +7443,6 @@ const aiMockOverallSync = createAiMockOverallSyncService({
   schoolIdOf
 })
 exports.syncMockOverallAfterAiWriting = onDocumentWritten({
+  region: 'europe-west1',
   document: 'aiWritingEvaluations/{id}'
 }, event => aiMockOverallSync.onAiReport(event))
