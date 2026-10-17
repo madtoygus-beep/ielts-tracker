@@ -16,7 +16,9 @@ const sha = value => createHash('sha256').update(value, 'utf8').digest('hex')
 const validInteger = (value, fallback = 0) => Number.isSafeInteger(value) && value >= 0 ? value : fallback
 const dataOf = snap => snap?.exists ? (snap.data() || {}) : null
 const isActiveStudent = user => user?.role === 'student' && user.status === 'approved' &&
-  user.deleted !== true && user.accountType !== 'individual' && user.schoolId !== '__individual__'
+  user.deleted !== true && user.archived !== true &&
+  user.permanentDeleteInProgress !== true &&
+  user.accountType !== 'individual' && user.schoolId !== '__individual__'
 
 function createAiWritingEvaluationService({
   db, FieldValue, HttpsError, requireStudent, requireStudentAttemptSource,
@@ -98,7 +100,10 @@ function createAiWritingEvaluationService({
   }
 
   async function readEvidence(student, { context, contentType, contentId }) {
-    if (student.schoolId !== PILOT_SCHOOL_ID || student.profile?.accountType === 'individual') {
+    if (student.schoolId !== PILOT_SCHOOL_ID ||
+        student.profile?.accountType === 'individual' ||
+        student.profile?.archived === true ||
+        student.profile?.permanentDeleteInProgress === true) {
       fail('permission-denied', 'The AI Writing pilot is restricted to Maxima institution accounts.')
     }
     const config = submissionContentConfigFor(contentType)

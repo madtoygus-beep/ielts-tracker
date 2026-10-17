@@ -48,12 +48,16 @@ function createAiWritingAccessService({
 
   function approvedAdmin(profile) {
     return profile?.role === 'admin' && profile.status === 'approved' &&
-      profile.deleted !== true && accountTypeOf(profile) === 'institution'
+      profile.deleted !== true && profile.archived !== true &&
+      profile.permanentDeleteInProgress !== true &&
+      accountTypeOf(profile) === 'institution'
   }
 
   function approvedInstitutionStudent(profile) {
     return profile?.role === 'student' && profile.status === 'approved' &&
-      profile.deleted !== true && accountTypeOf(profile) === 'institution'
+      profile.deleted !== true && profile.archived !== true &&
+      profile.permanentDeleteInProgress !== true &&
+      accountTypeOf(profile) === 'institution'
   }
 
   function requireSameSchool(admin, profile) {

@@ -65,8 +65,14 @@ function createAiWritingManagedReportService({
     }
     // Also verifies the student's current approved institutional profile and
     // an active, non-hidden, school-matching studentAccess assignment.
-    await requireManagedStudentAssignment(manager, config, source,
+    const studentAssignment = await requireManagedStudentAssignment(manager, config, source,
       input.studentId, input.contentId)
+    // Archived/deleting student profiles must not expose saved AI reports,
+    // even when an old active studentAccess record still exists.
+    if (studentAssignment?.profile?.archived === true ||
+        studentAssignment?.profile?.permanentDeleteInProgress === true) {
+      fail('permission-denied', 'AI report access is unavailable for this student.')
+    }
 
     const current = await findCurrentSubmissionRecord(config, input.studentId, input.contentId)
     if (!current?.ref) {

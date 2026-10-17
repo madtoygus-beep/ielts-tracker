@@ -41,7 +41,8 @@ function createAiWritingSponsoredPolicyService({
       fail('invalid-argument', 'Unexpected AI policy fields.')
     }
     const { contentType, contentId } = input
-    const config = VALID_CONTENT_TYPES[contentType]
+    const config = typeof contentType === 'string' && own(VALID_CONTENT_TYPES, contentType)
+      ? VALID_CONTENT_TYPES[contentType] : null
     if (!config || typeof contentId !== 'string' || !VALID_ID.test(contentId)) {
       fail('invalid-argument', 'Choose a valid Writing or Mock assignment.')
     }
@@ -109,11 +110,18 @@ function createAiWritingSponsoredPolicyService({
         access.adminHidden === true) {
       return false
     }
-    // A teacher may select only institution students assigned to that teacher.
-    if (manager.profile.role === 'teacher' &&
-        !(profile.teacherId === manager.uid || profile.createdBy === manager.uid ||
-          (Array.isArray(profile.teacherIds) && profile.teacherIds.includes(manager.uid)))) {
-      return false
+    // An audit creator is NOT a current teacher grant. An explicit primary
+    // teacher takes precedence over the legacy additive teacherIds array.
+    // Where only teacherIds exists, it remains a compatibility fallback; this
+    // array can contain historical links and must be reconciled before pilot.
+    if (manager.profile.role === 'teacher') {
+      const primary = typeof profile.teacherId === 'string' ? profile.teacherId.trim() : ''
+      if (primary) {
+        if (primary !== manager.uid) return false
+      } else if (!Array.isArray(profile.teacherIds) ||
+                 !profile.teacherIds.includes(manager.uid)) {
+        return false
+      }
     }
     return true
   }
