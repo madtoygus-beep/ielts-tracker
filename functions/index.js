@@ -7380,6 +7380,18 @@ exports.evaluateMyAiWriting = onCall({
 exports.getMyAiWritingReport = onCall(request =>
   aiWritingEvaluationService.getReport(request))
 
+// P5D: separate staff-only, read-only saved report retrieval.
+// Does not call the model and never changes AI credits or teacher grading.
+const { createAiWritingManagedReportService } = require('./lib/aiWritingManagedReport')
+const aiWritingManagedReport = createAiWritingManagedReportService({
+  db, HttpsError, requireAssignmentManager, managerCanManageSource,
+  requireManagedStudentAssignment, submissionContentConfigFor,
+  findCurrentSubmissionRecord, getOpenSubmissionAttemptControl,
+  schoolIdOf, getMockEnabledSections, getMockWritingMode
+})
+exports.getManagedAiWritingReport = onCall(request =>
+  aiWritingManagedReport.getReport(request))
+
 
 // P5B-3A: teacher-selected, school-funded AI assignment policy only.
 // NOT an AI evaluation trigger: no provider requests and no student credit use.

@@ -966,6 +966,7 @@ export default function DoMockTest() {
   const navigate = useNavigate()
 
   const [user, setUser] = useState(null)
+  const [studentProfile, setStudentProfile] = useState(null)
   const [mock, setMock] = useState(null)
   const [listenings, setListenings] = useState([])
   const [readings, setReadings] = useState([])
@@ -1058,6 +1059,7 @@ export default function DoMockTest() {
       const isCurrent = () => isActive && version === loadVersion
 
       setLoading(true)
+      setStudentProfile(null)
       setLoadError('')
       setAttemptState(null)
       setAlreadySubmitted(false)
@@ -1114,6 +1116,7 @@ export default function DoMockTest() {
           return
         }
 
+        setStudentProfile(profile)
         setUser(currentUser)
 
         // Stage 16F-G: studentAccess is the canonical Mock entitlement.
@@ -6402,8 +6405,8 @@ ${previousLabel} will be permanently locked and you will not be able to return t
       ? writingReviewed
         ? 'Final overall after teacher Writing review'
         : enabledSections.listening || enabledSections.reading
-          ? 'Current estimate from objective sections · Writing pending review'
-          : 'Writing will be reviewed by your teacher'
+          ? 'Current estimate from objective sections · Teacher grade optional'
+          : 'Teacher Writing grade not added (optional)'
       : 'Overall from included objective sections'
 
     return (
@@ -6485,7 +6488,7 @@ ${previousLabel} will be permanently locked and you will not be able to return t
 
             {enabledSections.writing && (
               <div className="bg-white border border-gray-100 rounded-2xl p-5">
-                <p className="text-xs text-gray-400 mb-1">Writing</p>
+                <p className="text-xs text-gray-400 mb-1">Teacher Writing</p>
                 <p className={`text-xl font-bold ${
                   writingReviewed
                     ? 'text-green-600'
@@ -6519,11 +6522,13 @@ ${previousLabel} will be permanently locked and you will not be able to return t
             )}
           </div>
 
-          <div className="bg-blue-50 border border-blue-100 rounded-2xl p-5 mb-6">
-            <p className="text-sm text-blue-700 leading-6">
-              Your incorrect answers are listed below. Correct answers are shown only after the mock has been submitted.
-            </p>
-          </div>
+          {(enabledSections.listening || enabledSections.reading) && (
+            <div className="bg-blue-50 border border-blue-100 rounded-2xl p-5 mb-6">
+              <p className="text-sm text-blue-700 leading-6">
+                Your incorrect answers are listed below. Correct answers are shown only after the mock has been submitted.
+              </p>
+            </div>
+          )}
 
           <div className="space-y-5">
             {enabledSections.listening && (
@@ -6660,7 +6665,7 @@ ${previousLabel} will be permanently locked and you will not be able to return t
                   </div>
                 ) : (
                   <div className="bg-amber-50 border border-amber-100 rounded-xl p-4 text-sm text-amber-700">
-                    Writing feedback will appear here after your teacher completes the review.
+                    Teacher feedback is optional and has not been added. Any completed AI report appears separately.
                   </div>
                 )}
               </div>
@@ -6670,7 +6675,7 @@ ${previousLabel} will be permanently locked and you will not be able to return t
 
           {/* Read-only institution-sponsored AI report for a saved, completed
               Mock Writing attempt. Teacher grading above remains authoritative. */}
-          {enabledSections.writing && isInstitutionWritingStudent(profile) &&
+          {enabledSections.writing && studentProfile && isInstitutionWritingStudent(studentProfile) &&
             completedSubmission && finalResult && (
               <AiWritingStudentPanel
                 key={`${user?.uid || ''}:${id}:${completedSubmission.id || 'current'}:${completedSubmission.attemptNumber || attemptState?.currentAttemptNumber || 1}`}

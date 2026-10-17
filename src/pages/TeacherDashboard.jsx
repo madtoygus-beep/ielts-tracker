@@ -17,8 +17,32 @@ import { signOut, onAuthStateChanged, updatePassword } from 'firebase/auth'
 import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage'
 import { useNavigate } from 'react-router-dom'
 import { httpsCallable } from 'firebase/functions'
+import AiWritingTeacherPanel from '../components/AiWritingTeacherPanel'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
+
+// Read-only AI report summary stays visible even when no teacher grade exists.
+// The callable independently authorizes the staff member, student and attempt.
+function ReviewAiSummary({ item, context, teacherBand = null }) {
+  const submission = item?.submission || {}
+  const studentId = submission.uid || submission.studentId
+  const contentId = context === 'mock'
+    ? (item?.mock?.id || submission.mockTestId)
+    : (item?.writing?.id || submission.writingId)
+  const attemptNumber = Number.isSafeInteger(submission.attemptNumber) && submission.attemptNumber > 0
+    ? submission.attemptNumber : 1
+  if (!studentId || !contentId) return null
+  return (
+    <AiWritingTeacherPanel
+      compact
+      studentId={studentId}
+      context={context}
+      contentId={contentId}
+      attemptNumber={attemptNumber}
+      teacherBand={teacherBand}
+    />
+  )
+}
 
 const DEFAULT_SCHOOL_ID = 'maxima'
 
@@ -7299,9 +7323,9 @@ export default function TeacherDashboard() {
                   Reviewed <span className="ml-1 opacity-80">({allReviewCount})</span>
                 </button>
               </nav>
-              <p className="text-xs text-slate-500">Task 1 / Task 2 rubrics and Mock Writing grading are unchanged.</p>
+              <p className="text-xs text-slate-500">Teacher grading is optional. Saved AI reports are independent and never require teacher approval.</p>
             </div>
-            {reviewView === 'pending' && (<>)
+            {reviewView === 'pending' && (<>
 <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
           <div className="flex items-center justify-between gap-4 mb-4">
             <div>
@@ -7310,7 +7334,7 @@ export default function TeacherDashboard() {
               </h2>
 
               <p className="text-xs text-gray-400 mt-1">
-                Essays submitted by students but not graded yet. Click Grade Now to open the review screen directly.
+                Writing submissions without a teacher grade. Teacher grading is optional; AI feedback is separate.
               </p>
             </div>
 
@@ -7334,28 +7358,30 @@ export default function TeacherDashboard() {
               {pendingWritingReviews.slice(0, 6).map(item => (
                 <div
                   key={item.submission.id}
-                  className="border border-amber-100 bg-amber-50/40 rounded-xl p-4 flex items-center justify-between gap-4"
+                  className="border border-amber-100 bg-amber-50/40 rounded-xl p-4"
                 >
-                  <div>
-                    <p className="text-sm font-medium text-gray-800">
-                      {item.student.name}
-                    </p>
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-gray-800">
+                        {item.student.name}
+                      </p>
 
-                    <p className="text-xs text-gray-500 mt-0.5">
-                      {item.writing.title} · Submitted {formatDateShort(item.submission.submittedAt)}
-                    </p>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        {item.writing.title} · Submitted {formatDateShort(item.submission.submittedAt)}
+                      </p>
 
-                    <p className="text-xs text-gray-400 mt-1">
-                      {getWritingSubmissionWordSummary(item.writing, item.submission)}
-                    </p>
+                      <p className="text-xs text-gray-400 mt-1">
+                        {getWritingSubmissionWordSummary(item.writing, item.submission)}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => openWritingReview(item)}
+                      className="shrink-0 text-xs bg-purple-600 text-white px-4 py-2 rounded-xl hover:bg-purple-700"
+                    >
+                      Add Teacher Grade (optional)
+                    </button>
                   </div>
-
-                  <button
-                    onClick={() => openWritingReview(item)}
-                    className="text-xs bg-purple-600 text-white px-4 py-2 rounded-xl hover:bg-purple-700"
-                  >
-                    Grade Now
-                  </button>
+                  <ReviewAiSummary item={item} context="homework" teacherBand={null} />
                 </div>
               ))}
 
@@ -7376,7 +7402,7 @@ export default function TeacherDashboard() {
               </h2>
 
               <p className="text-xs text-gray-400 mt-1">
-                Writing sections submitted inside full mock tests.
+                Mock Writing submissions without a teacher grade. AI feedback can already be available.
               </p>
             </div>
 
@@ -7400,28 +7426,30 @@ export default function TeacherDashboard() {
               {pendingMockWritingReviews.slice(0, 8).map(item => (
                 <div
                   key={item.submission.id}
-                  className="border border-purple-100 bg-purple-50/40 rounded-xl p-4 flex items-center justify-between gap-4"
+                  className="border border-purple-100 bg-purple-50/40 rounded-xl p-4"
                 >
-                  <div>
-                    <p className="text-sm font-medium text-gray-800">
-                      {item.student.name}
-                    </p>
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-gray-800">
+                        {item.student.name}
+                      </p>
 
-                    <p className="text-xs text-gray-500 mt-0.5">
-                      {item.mock?.title || item.submission.mockTitle || 'Mock Test'} · Submitted {formatDateShort(item.submission.submittedAt)}
-                    </p>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        {item.mock?.title || item.submission.mockTitle || 'Mock Test'} · Submitted {formatDateShort(item.submission.submittedAt)}
+                      </p>
 
-                    <p className="text-xs text-gray-400 mt-1">
-                      Task 1: {getMockTask1WordCount(item.submission) || 0} words · Task 2: {getMockTask2WordCount(item.submission) || 0} words
-                    </p>
+                      <p className="text-xs text-gray-400 mt-1">
+                        Task 1: {getMockTask1WordCount(item.submission) || 0} words · Task 2: {getMockTask2WordCount(item.submission) || 0} words
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => openMockWritingReview(item)}
+                      className="shrink-0 text-xs bg-purple-600 text-white px-4 py-2 rounded-xl hover:bg-purple-700"
+                    >
+                      Add Teacher Grade (optional)
+                    </button>
                   </div>
-
-                  <button
-                    onClick={() => openMockWritingReview(item)}
-                    className="text-xs bg-purple-600 text-white px-4 py-2 rounded-xl hover:bg-purple-700"
-                  >
-                    Grade Mock
-                  </button>
+                  <ReviewAiSummary item={item} context="mock" teacherBand={null} />
                 </div>
               ))}
             </div>
@@ -7429,7 +7457,7 @@ export default function TeacherDashboard() {
         </div>
 
             </>)}
-            {reviewView === 'reviewed' && (<>)
+            {reviewView === 'reviewed' && (<>
         <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
           <div className="flex items-center justify-between gap-4 mb-4">
             <div>
@@ -7438,7 +7466,7 @@ export default function TeacherDashboard() {
               </h2>
 
               <p className="text-xs text-gray-400 mt-1">
-                Previously graded writing homework. Click Edit Review to update scores, rubric or feedback.
+                Teacher-graded Writing submissions. The AI estimate is independent of the teacher band.
               </p>
             </div>
 
@@ -7456,28 +7484,30 @@ export default function TeacherDashboard() {
               {reviewedWritingReviews.slice(0, 10).map(item => (
                 <div
                   key={item.submission.id}
-                  className="border border-green-100 bg-green-50/40 rounded-xl p-4 flex items-center justify-between gap-4"
+                  className="border border-green-100 bg-green-50/40 rounded-xl p-4"
                 >
-                  <div>
-                    <p className="text-sm font-medium text-gray-800">
-                      {item.student.name}
-                    </p>
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-gray-800">
+                        {item.student.name}
+                      </p>
 
-                    <p className="text-xs text-gray-500 mt-0.5">
-                      {item.writing.title} · Reviewed {formatDateShort(item.submission.reviewedAt || item.submission.submittedAt)}
-                    </p>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        {item.writing.title} · Reviewed {formatDateShort(item.submission.reviewedAt || item.submission.submittedAt)}
+                      </p>
 
-                    <p className="text-xs text-gray-400 mt-1">
-                      {getWritingTaskLabel(item.writing, item.submission)} · Overall Band {item.submission.review?.overall || '-'}
-                    </p>
+                      <p className="text-xs text-gray-400 mt-1">
+                        {getWritingTaskLabel(item.writing, item.submission)}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => openWritingReview(item)}
+                      className="shrink-0 text-xs bg-green-600 text-white px-4 py-2 rounded-xl hover:bg-green-700"
+                    >
+                      Edit Review
+                    </button>
                   </div>
-
-                  <button
-                    onClick={() => openWritingReview(item)}
-                    className="text-xs bg-green-600 text-white px-4 py-2 rounded-xl hover:bg-green-700"
-                  >
-                    Edit Review
-                  </button>
+                  <ReviewAiSummary item={item} context="homework" teacherBand={item.submission.review?.overall ?? null} />
                 </div>
               ))}
 
@@ -7498,7 +7528,7 @@ export default function TeacherDashboard() {
               </h2>
 
               <p className="text-xs text-gray-400 mt-1">
-                Previously graded mock writing sections. Click Edit Mock Review to update the writing band and final mock overall.
+                Teacher-graded Mock Writing submissions. AI estimates remain independent of teacher grading.
               </p>
             </div>
 
@@ -7516,28 +7546,30 @@ export default function TeacherDashboard() {
               {reviewedMockWritingReviews.slice(0, 10).map(item => (
                 <div
                   key={item.submission.id}
-                  className="border border-purple-100 bg-purple-50/40 rounded-xl p-4 flex items-center justify-between gap-4"
+                  className="border border-purple-100 bg-purple-50/40 rounded-xl p-4"
                 >
-                  <div>
-                    <p className="text-sm font-medium text-gray-800">
-                      {item.student.name}
-                    </p>
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-gray-800">
+                        {item.student.name}
+                      </p>
 
-                    <p className="text-xs text-gray-500 mt-0.5">
-                      {item.mock?.title || item.submission.mockTitle || 'Mock Test'} · Reviewed {formatDateShort(item.submission.reviewedAt || item.submission.submittedAt)}
-                    </p>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        {item.mock?.title || item.submission.mockTitle || 'Mock Test'} · Reviewed {formatDateShort(item.submission.reviewedAt || item.submission.submittedAt)}
+                      </p>
 
-                    <p className="text-xs text-gray-400 mt-1">
-                      Writing Band {item.submission.result?.writing?.band || item.submission.writingReview?.overall || '-'} · Overall {item.submission.result?.overall || item.submission.result?.overallEstimate || '-'}
-                    </p>
+                      <p className="text-xs text-gray-400 mt-1">
+                        Mock Overall {item.submission.result?.overall ?? item.submission.result?.overallEstimate ?? '-'}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => openMockWritingReview(item)}
+                      className="shrink-0 text-xs bg-purple-600 text-white px-4 py-2 rounded-xl hover:bg-purple-700"
+                    >
+                      Edit Mock Review
+                    </button>
                   </div>
-
-                  <button
-                    onClick={() => openMockWritingReview(item)}
-                    className="text-xs bg-purple-600 text-white px-4 py-2 rounded-xl hover:bg-purple-700"
-                  >
-                    Edit Mock Review
-                  </button>
+                  <ReviewAiSummary item={item} context="mock" teacherBand={item.submission.result?.writing?.band ?? item.submission.writingReview?.overall ?? null} />
                 </div>
               ))}
 
@@ -10482,6 +10514,18 @@ export default function TeacherDashboard() {
                 </button>
               </div>
             </div>
+            {/* Saved AI assessment is separate from the editable teacher rubric. */}
+            {reviewTarget.submission?.uid &&
+              (isMockReview ? (reviewTarget.mock?.id || reviewTarget.submission.mockTestId)
+                : reviewTarget.writing?.id) && (
+              <AiWritingTeacherPanel
+                key={`${reviewTarget.submission.uid}:${isMockReview ? 'mock' : 'homework'}:${isMockReview ? (reviewTarget.mock?.id || reviewTarget.submission.mockTestId) : reviewTarget.writing.id}:${reviewTarget.submission.attemptNumber || 1}`}
+                studentId={reviewTarget.submission.uid}
+                context={isMockReview ? 'mock' : 'homework'}
+                contentId={isMockReview ? (reviewTarget.mock?.id || reviewTarget.submission.mockTestId) : reviewTarget.writing.id}
+                attemptNumber={Number.isSafeInteger(reviewTarget.submission.attemptNumber) ? reviewTarget.submission.attemptNumber : 1}
+              />
+            )}
           </div>
         </div>
         )

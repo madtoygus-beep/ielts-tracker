@@ -2164,7 +2164,7 @@
         return `Reviewed · Band ${formatBand(writingBand)}`
       }
 
-      return 'Pending teacher review'
+      return 'Teacher grade not added (optional)'
     }
 
     const currentMockSubmissions = dedupeSubmissionHeads(
@@ -2944,8 +2944,8 @@
                             }`}
                           >
                             {writingBand
-                              ? `Writing Band ${formatBand(writingBand)}`
-                              : 'Writing pending review'}
+                              ? `Teacher Writing Band ${formatBand(writingBand)}`
+                              : 'Teacher grade not added (optional)'}
                           </span>
                         )}
                       </div>
@@ -3465,7 +3465,7 @@
                         </p>
                       ) : (
                         <p className="text-xs text-amber-600 mt-1 font-medium">
-                          ✓ Submitted — Waiting for teacher review
+                          ✓ Submitted — Teacher grading optional
                         </p>
                       )}
                     </div>
@@ -3498,7 +3498,7 @@
                             : 'bg-amber-50 text-amber-600'
                         }`}
                       >
-                        {reviewed ? 'Reviewed' : 'Pending review'}
+                        {reviewed ? 'Teacher graded' : 'Teacher grade optional'}
                       </span>
                     </div>
                   </div>
@@ -3532,8 +3532,8 @@
 
                     <p className="text-sm text-purple-600 font-semibold mt-1">
                       {reviewed
-                        ? `Overall Band ${review.overall || '-'}`
-                        : 'Waiting for teacher review'}
+                        ? `Teacher Writing Band ${review.overall || '-'}`
+                        : 'Teacher grade not added (optional)'}
                     </p>
                   </div>
 
@@ -3566,7 +3566,7 @@
                     )}
 
                     <div className="bg-green-50 rounded-xl p-4 text-center">
-                      <p className="text-xs text-gray-500 mb-1">Overall</p>
+                      <p className="text-xs text-gray-500 mb-1">Teacher Overall</p>
                       <p className="text-2xl font-bold text-green-600">
                         {review.overall || '-'}
                       </p>
@@ -3650,7 +3650,7 @@
                   <p className="text-sm text-purple-800 leading-7 whitespace-pre-wrap">
                     {reviewed
                       ? review.generalFeedback || 'No general feedback.'
-                      : 'Your teacher has not reviewed this submission yet.'}
+                      : 'Teacher feedback has not been added (optional). Your AI report is separate.'}
                   </p>
                 </div>
 
@@ -4453,7 +4453,7 @@
   function historySummary(record, category) {
     const result = record?.result || {}
     if (category === 'writing') {
-      if (!record?.reviewed) return 'Submitted · Teacher review pending'
+      if (!record?.reviewed) return 'Submitted · Teacher grade optional'
       return `Teacher reviewed · Band ${formatBand(record?.review?.overall ?? record?.reviewOverall)}`
     }
     if (category === 'mock') {
@@ -4698,9 +4698,9 @@
               <p className="whitespace-pre-wrap break-words rounded-lg bg-blue-50 p-3 text-sm text-blue-900">General feedback: {review.generalFeedback}</p>
             )}
             {reviewed && review?.overall !== undefined && review?.overall !== null && (
-              <p className="text-sm font-semibold text-indigo-900">Overall Writing band: {review.overall}</p>
+              <p className="text-sm font-semibold text-indigo-900">Teacher-assessed Writing band: {review.overall}</p>
             )}
-            {!reviewed && <p className="text-xs text-amber-800">Awaiting teacher review.</p>}
+            {!reviewed && <p className="text-xs text-amber-800">Teacher assessment is optional and has not been added.</p>}
           </div>
         )}
       </div>
@@ -4892,7 +4892,7 @@
                           )}
                           {category === 'writing' && (
                             <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${record.reviewed ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'}`}>
-                              {record.reviewed ? 'Reviewed' : 'Awaiting teacher review'}
+                              {record.reviewed ? 'Teacher graded' : 'Teacher grade optional'}
                             </span>
                           )}
                           {record.archived === true && (
