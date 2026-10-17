@@ -80,7 +80,7 @@ function TaskAiReport({ taskNumber, report }) {
 
 // Mounted only for an approved Maxima institution student's submitted Writing
 // or Mock attempt. Backend callables own identity, submission, access and billing.
-export default function AiWritingStudentPanel({ contentId, attemptNumber, context = 'homework', wordCounts = {} }) {
+export default function AiWritingStudentPanel({ contentId, attemptNumber, context = 'homework', wordCounts = {}, teacherBand = null }) {
   const [access, setAccess] = useState(null)
   const [envelope, setEnvelope] = useState({ status: 'not_started' })
   const [loading, setLoading] = useState(true)
@@ -169,6 +169,9 @@ export default function AiWritingStudentPanel({ contentId, attemptNumber, contex
   const canEvaluate = context === 'homework' &&
     canRequestAiWriting(access, envelope, requesting || loading)
   const report = envelope.status === 'completed' ? envelope.report : null
+  const validTeacherBand = context === 'mock' && typeof teacherBand === 'number' &&
+    Number.isFinite(teacherBand) && teacherBand >= 1 && teacherBand <= 9
+    ? teacherBand : null
   const shortTasks = [
     { label: 'Task 1', actual: wordCounts.task1, minimum: 50, active: wordCounts.task1Enabled },
     { label: 'Task 2', actual: wordCounts.task2, minimum: 100, active: wordCounts.task2Enabled }
@@ -194,7 +197,23 @@ export default function AiWritingStudentPanel({ contentId, attemptNumber, contex
               <p className="text-xs uppercase tracking-widest opacity-75">{report.estimatedBand === null ? 'Writing development report - band withheld' : 'Estimated IELTS Writing Band'}</p>
               <p className="text-4xl font-bold mt-1">{report.estimatedBand === null ? 'Development feedback only' : formatAiBand(report.estimatedBand)}</p>
             </div>
-            <p className="text-sm max-w-sm opacity-90">Task 2 counts twice as much as Task 1 when both tasks are present. This report does not replace a teacher's assessment. Official Mock scores remain separate.</p>
+            {context === 'mock' ? (
+              <div className="sm:text-right text-left sm:ml-auto sm:border-l sm:border-white/25 sm:pl-4">
+                {validTeacherBand !== null ? (
+                  <>
+                    <p className="text-xs text-indigo-200">Teacher score</p>
+                    <p className="text-sm font-semibold mt-1">Band {formatAiBand(validTeacherBand)}</p>
+                    <p className="text-xs text-indigo-200 mt-1">Priority for Mock Overall</p>
+                  </>
+                ) : (
+                  <p className="text-xs text-indigo-100 max-w-xs leading-5">
+                    Teacher grading is optional. A valid numeric AI estimate contributes to Mock Overall until a teacher band is provided.
+                  </p>
+                )}
+              </div>
+            ) : (
+              <p className="text-sm max-w-sm opacity-90">Task 2 counts twice as much as Task 1 when both tasks are present. This report does not replace a teacher's assessment.</p>
+            )}
           </div>
           {report.feedbackOnly && (
             <p role="status" className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4">
@@ -209,9 +228,11 @@ export default function AiWritingStudentPanel({ contentId, attemptNumber, contex
               {task.label}: {task.actual} words (minimum {task.minimum} for AI feedback). This task was not sent for AI evaluation.
             </p>)}
           </div>
-          <p className="text-xs text-gray-600 mt-4">{envelope.institutionFunded
-            ? 'Your institution has funded this AI assessment. No personal AI credits were used. Your teacher’s assessment stays separate.'
-            : 'Opening this saved report again does not use another AI credit. Your existing teacher feedback is shown separately above.'}</p>
+          <p className="text-xs text-gray-600 mt-4">{context === 'mock'
+            ? 'Your institution funded this AI report. A teacher band, when available, takes priority for Mock Overall. Teacher feedback, if available, appears below.'
+            : envelope.institutionFunded
+              ? 'Your institution has funded this AI assessment. No personal AI credits were used. Your teacher’s assessment stays separate.'
+              : 'Opening this saved report again does not use another AI credit. Teacher feedback is available separately.'}</p>
         </>
       ) : (
         <div className="bg-white rounded-xl border border-gray-100 p-4">

@@ -6810,7 +6810,8 @@ function studentSummaryResult(value) {
     'correct', 'total', 'percentage', 'band', 'estimatedBand', 'overallEstimate',
     'reviewedOverall', 'finalOverall', 'overall', 'writingBand', 'status',
     'task1WordCount', 'task2WordCount', 'wordCount', 'writingMode',
-    'task1Enabled', 'task2Enabled', 'enabled', 'gradingSchemaVersion'
+    'task1Enabled', 'task2Enabled', 'enabled', 'gradingSchemaVersion',
+    'aiEstimatedBand', 'aiFeedbackOnly', 'effectiveBand', 'effectiveBandSource'
   ]) {
     if (raw[key] === null || ['string','number','boolean'].includes(typeof raw[key])) {
       if (Object.prototype.hasOwnProperty.call(raw, key)) safe[key] = raw[key]
@@ -7428,3 +7429,17 @@ exports.autoEvaluateSponsoredMockWriting = onDocumentWritten({
   document: 'mockSubmissions/{id}', secrets: [maximaOpenAiKey],
   timeoutSeconds: 180, memory: '512MiB'
 }, event => aiWritingSponsoredEvaluation.submit('mock', event))
+
+// P5D: the completed saved Mock AI report may contribute to the Mock overall
+// and canonical score. This is a READ/WRITE materialization trigger ONLY:
+// never starts an AI request, changes credits, overrides teacher band, or
+// touches historical attempts. It handles both funded billing paths.
+const { createAiMockOverallSyncService } = require('./lib/aiMockOverallSync')
+const aiMockOverallSync = createAiMockOverallSyncService({
+  db, findCurrentSubmissionRecord, submissionContentConfigFor,
+  matchingCurrentMockScoreForStats, getMockEnabledSections, getMockWritingMode,
+  schoolIdOf
+})
+exports.syncMockOverallAfterAiWriting = onDocumentWritten({
+  document: 'aiWritingEvaluations/{id}'
+}, event => aiMockOverallSync.onAiReport(event))

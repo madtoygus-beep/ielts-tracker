@@ -6395,6 +6395,18 @@ ${previousLabel} will be permanently locked and you will not be able to return t
       'pending_review'
 
     const writingReviewed = writingStatus === 'reviewed'
+    const teacherBandValue = writingReviewed
+      ? (writingReview?.overall ?? finalResult?.writing?.band)
+      : null
+    const teacherBandNumber = teacherBandValue === null || teacherBandValue === undefined || teacherBandValue === ''
+      ? null : Number(teacherBandValue)
+    const teacherWritingBand = Number.isFinite(teacherBandNumber) &&
+      teacherBandNumber >= 1 && teacherBandNumber <= 9
+      ? teacherBandNumber : null
+    const aiBandValue = finalResult?.writing?.aiEstimatedBand
+    const aiBand = aiBandValue === null || aiBandValue === undefined || aiBandValue === ''
+      ? null : Number(aiBandValue)
+    const hasAiBand = Number.isFinite(aiBand) && aiBand > 0
     const displayedOverall =
       finalResult?.finalOverall ||
       finalResult?.overall ||
@@ -6403,10 +6415,12 @@ ${previousLabel} will be permanently locked and you will not be able to return t
 
     const overallLabel = enabledSections.writing
       ? writingReviewed
-        ? 'Final overall after teacher Writing review'
-        : enabledSections.listening || enabledSections.reading
-          ? 'Current estimate from objective sections · Teacher grade optional'
-          : 'Teacher Writing grade not added (optional)'
+        ? 'Overall uses teacher Writing band (priority over AI)'
+        : hasAiBand
+          ? 'Overall includes AI Writing estimate · Teacher grade optional'
+          : enabledSections.listening || enabledSections.reading
+            ? 'Current estimate from objective sections · Teacher grade optional'
+            : 'Writing band not yet available · Teacher grade optional'
       : 'Overall from included objective sections'
 
     return (
@@ -6423,7 +6437,7 @@ ${previousLabel} will be permanently locked and you will not be able to return t
         </nav>
 
         <div className="max-w-5xl mx-auto px-4 sm:px-6 py-8 sm:py-10">
-          <div className="bg-white border border-gray-100 rounded-2xl p-6 sm:p-8 text-center mb-6">
+          <div className="bg-white border border-gray-100 rounded-2xl p-5 sm:p-6 text-center mb-5">
             <p className="text-sm text-gray-400 mb-2">
               Mock Test Submitted
             </p>
@@ -6455,73 +6469,33 @@ ${previousLabel} will be permanently locked and you will not be able to return t
             </p>
           </div>
 
-          <div className={`grid grid-cols-1 ${
-            Object.values(enabledSections).filter(Boolean).length >= 3
-              ? 'md:grid-cols-3'
-              : Object.values(enabledSections).filter(Boolean).length === 2
-                ? 'md:grid-cols-2'
-                : 'max-w-md mx-auto'
-          } gap-4 mb-6`}>
-            {enabledSections.listening && (
-              <div className="bg-white border border-gray-100 rounded-2xl p-5">
-                <p className="text-xs text-gray-400 mb-1">Listening</p>
-                <p className="text-3xl font-bold text-purple-600">
-                  {finalResult.listening.band ?? '-'}
-                </p>
-                <p className="text-xs text-gray-400 mt-1">
-                  {finalResult.listening.correct}/{finalResult.listening.total}
-                </p>
-              </div>
-            )}
-
-            {enabledSections.reading && (
-              <div className="bg-white border border-gray-100 rounded-2xl p-5">
-                <p className="text-xs text-gray-400 mb-1">Reading</p>
-                <p className="text-3xl font-bold text-blue-600">
-                  {finalResult.reading.band ?? '-'}
-                </p>
-                <p className="text-xs text-gray-400 mt-1">
-                  {finalResult.reading.correct}/{finalResult.reading.total}
-                </p>
-              </div>
-            )}
-
-            {enabledSections.writing && (
-              <div className="bg-white border border-gray-100 rounded-2xl p-5">
-                <p className="text-xs text-gray-400 mb-1">Teacher Writing</p>
-                <p className={`text-xl font-bold ${
-                  writingReviewed
-                    ? 'text-green-600'
-                    : 'text-amber-600'
-                }`}>
-                  {writingReviewed
-                    ? writingReview?.overall || finalResult?.writing?.band || 'Reviewed'
-                    : 'Pending'}
-                </p>
-                <p className="text-xs text-gray-400 mt-1">
-                  {writingReviewed
-                    ? 'Teacher feedback available'
-                    : 'Teacher review required'}
-                </p>
-
-                {writingReviewed && (
-                  <div className="flex flex-wrap gap-2 mt-3">
-                    {hasWritingTask1 && (
-                      <span className="text-[11px] bg-purple-50 text-purple-700 px-2.5 py-1 rounded-full">
-                        Task 1 {writingReview?.task1Band || '-'}
-                      </span>
-                    )}
-                    {hasWritingTask2 && (
-                      <span className="text-[11px] bg-indigo-50 text-indigo-700 px-2.5 py-1 rounded-full">
-                        Task 2 {writingReview?.task2Band || '-'}
-                      </span>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
+          {(enabledSections.listening || enabledSections.reading) && (
+            <div className={`grid grid-cols-1 ${enabledSections.listening && enabledSections.reading
+              ? 'md:grid-cols-2' : 'max-w-md mx-auto'} gap-4 mb-6`}>
+              {enabledSections.listening && (
+                <div className="bg-white border border-gray-100 rounded-2xl p-5">
+                  <p className="text-xs text-gray-400 mb-1">Listening</p>
+                  <p className="text-3xl font-bold text-purple-600">
+                    {finalResult.listening.band ?? '-'}
+                  </p>
+                  <p className="text-xs text-gray-400 mt-1">
+                    {finalResult.listening.correct}/{finalResult.listening.total}
+                  </p>
+                </div>
+              )}
+              {enabledSections.reading && (
+                <div className="bg-white border border-gray-100 rounded-2xl p-5">
+                  <p className="text-xs text-gray-400 mb-1">Reading</p>
+                  <p className="text-3xl font-bold text-blue-600">
+                    {finalResult.reading.band ?? '-'}
+                  </p>
+                  <p className="text-xs text-gray-400 mt-1">
+                    {finalResult.reading.correct}/{finalResult.reading.total}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
           {(enabledSections.listening || enabledSections.reading) && (
             <div className="bg-blue-50 border border-blue-100 rounded-2xl p-5 mb-6">
               <p className="text-sm text-blue-700 leading-6">
@@ -6573,114 +6547,17 @@ ${previousLabel} will be permanently locked and you will not be able to return t
               </details>
             )}
 
-            {enabledSections.writing && (
-              <details className="bg-white border border-gray-100 rounded-2xl overflow-hidden">
-              <summary className="cursor-pointer px-6 py-5 font-semibold text-gray-900">
-                Writing Submission & Feedback
-              </summary>
-
-              <div className="border-t border-gray-100 p-5 space-y-5">
-                {hasWritingTask1 && (
-                  <div>
-                    <div className="flex items-center justify-between gap-3 mb-2">
-                      <h3 className="font-semibold text-gray-900">
-                        Writing Task 1
-                      </h3>
-                    <div className="flex items-center gap-2">
-                      {writingReviewed && (
-                        <span className="text-xs bg-purple-50 text-purple-700 px-2.5 py-1 rounded-full">
-                          Band {writingReview?.task1Band || '-'}
-                        </span>
-                      )}
-                      <span className="text-xs text-gray-400">
-                        {countWords(writingAnswers.task1 || '')} words
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="bg-gray-50 border border-gray-100 rounded-xl p-4 text-sm text-gray-700 whitespace-pre-wrap min-h-[90px]">
-                    {writingAnswers.task1 || 'No Task 1 answer submitted.'}
-                  </div>
-
-                  {writingReview?.task1Feedback && (
-                    <div className="bg-purple-50 border border-purple-100 rounded-xl p-4 mt-3">
-                      <p className="text-xs font-semibold text-purple-600 mb-1">
-                        Teacher feedback
-                      </p>
-                      <p className="text-sm text-purple-800 whitespace-pre-wrap">
-                        {writingReview.task1Feedback}
-                      </p>
-                    </div>
-                    )}
-                  </div>
-                )}
-
-                {hasWritingTask2 && (
-                  <div>
-                    <div className="flex items-center justify-between gap-3 mb-2">
-                      <h3 className="font-semibold text-gray-900">
-                        Writing Task 2
-                      </h3>
-                    <div className="flex items-center gap-2">
-                      {writingReviewed && (
-                        <span className="text-xs bg-indigo-50 text-indigo-700 px-2.5 py-1 rounded-full">
-                          Band {writingReview?.task2Band || '-'}
-                        </span>
-                      )}
-                      <span className="text-xs text-gray-400">
-                        {countWords(writingAnswers.task2 || '')} words
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="bg-gray-50 border border-gray-100 rounded-xl p-4 text-sm text-gray-700 whitespace-pre-wrap min-h-[90px]">
-                    {writingAnswers.task2 || 'No Task 2 answer submitted.'}
-                  </div>
-
-                  {writingReview?.task2Feedback && (
-                    <div className="bg-purple-50 border border-purple-100 rounded-xl p-4 mt-3">
-                      <p className="text-xs font-semibold text-purple-600 mb-1">
-                        Teacher feedback
-                      </p>
-                      <p className="text-sm text-purple-800 whitespace-pre-wrap">
-                        {writingReview.task2Feedback}
-                      </p>
-                    </div>
-                    )}
-                  </div>
-                )}
-
-                {writingReview?.generalFeedback ? (
-                  <div className="bg-blue-50 border border-blue-100 rounded-xl p-4">
-                    <p className="text-xs font-semibold text-blue-600 mb-1">
-                      General feedback
-                    </p>
-                    <p className="text-sm text-blue-800 whitespace-pre-wrap">
-                      {writingReview.generalFeedback}
-                    </p>
-                  </div>
-                ) : writingReviewed ? (
-                  <div className="bg-gray-50 border border-gray-100 rounded-xl p-4 text-sm text-gray-600">
-                    Review completed. No general feedback was added.
-                  </div>
-                ) : (
-                  <div className="bg-amber-50 border border-amber-100 rounded-xl p-4 text-sm text-amber-700">
-                    Teacher feedback is optional and has not been added. Any completed AI report appears separately.
-                  </div>
-                )}
-              </div>
-              </details>
-            )}
           </div>
 
           {/* Read-only institution-sponsored AI report for a saved, completed
-              Mock Writing attempt. Teacher grading above remains authoritative. */}
+              Mock Writing attempt. Teacher band is authoritative when present. */}
           {enabledSections.writing && studentProfile && isInstitutionWritingStudent(studentProfile) &&
             completedSubmission && finalResult && (
               <AiWritingStudentPanel
                 key={`${user?.uid || ''}:${id}:${completedSubmission.id || 'current'}:${completedSubmission.attemptNumber || attemptState?.currentAttemptNumber || 1}`}
                 context="mock"
                 contentId={id}
+                teacherBand={teacherWritingBand}
                 attemptNumber={Number(completedSubmission.attemptNumber) ||
                   Number(attemptState?.currentAttemptNumber) || 1}
                 wordCounts={{
@@ -6691,6 +6568,69 @@ ${previousLabel} will be permanently locked and you will not be able to return t
                 }}
               />
             )}
+
+          {/* Keep submitted text available without repeating the large Writing score card. */}
+          {enabledSections.writing && (
+            <details className="mt-5 bg-white border border-gray-100 rounded-2xl overflow-hidden">
+              <summary className="cursor-pointer px-5 py-4 font-semibold text-gray-900">
+                View submitted Writing
+              </summary>
+              <div className="border-t border-gray-100 p-5 space-y-5">
+                {hasWritingTask1 && (
+                  <section>
+                    <div className="flex items-center justify-between gap-3 mb-2">
+                      <h3 className="text-sm font-semibold text-gray-900">Writing Task 1</h3>
+                      <span className="text-xs text-gray-500">{countWords(writingAnswers.task1 || '')} words</span>
+                    </div>
+                    <div className="bg-gray-50 border border-gray-100 rounded-xl p-4 text-sm text-gray-700 whitespace-pre-wrap">
+                      {writingAnswers.task1 || 'No Task 1 answer submitted.'}
+                    </div>
+                  </section>
+                )}
+                {hasWritingTask2 && (
+                  <section>
+                    <div className="flex items-center justify-between gap-3 mb-2">
+                      <h3 className="text-sm font-semibold text-gray-900">Writing Task 2</h3>
+                      <span className="text-xs text-gray-500">{countWords(writingAnswers.task2 || '')} words</span>
+                    </div>
+                    <div className="bg-gray-50 border border-gray-100 rounded-xl p-4 text-sm text-gray-700 whitespace-pre-wrap">
+                      {writingAnswers.task2 || 'No Task 2 answer submitted.'}
+                    </div>
+                  </section>
+                )}
+              </div>
+            </details>
+          )}
+
+          {/* Teacher comments are distinct from AI feedback and sit beneath it. */}
+          {enabledSections.writing && writingReviewed && (
+            <section className="mt-5 bg-white border border-gray-200 rounded-2xl p-5 sm:p-6" aria-label="Teacher Writing feedback">
+              <h3 className="text-base font-semibold text-gray-900 mb-3">Teacher feedback</h3>
+              <div className="space-y-3">
+                {hasWritingTask1 && writingReview?.task1Feedback && (
+                  <div className="rounded-xl bg-gray-50 border border-gray-100 p-4">
+                    <p className="text-xs font-semibold text-gray-500 mb-2">Task 1</p>
+                    <p className="text-sm text-gray-800 whitespace-pre-wrap">{writingReview.task1Feedback}</p>
+                  </div>
+                )}
+                {hasWritingTask2 && writingReview?.task2Feedback && (
+                  <div className="rounded-xl bg-gray-50 border border-gray-100 p-4">
+                    <p className="text-xs font-semibold text-gray-500 mb-2">Task 2</p>
+                    <p className="text-sm text-gray-800 whitespace-pre-wrap">{writingReview.task2Feedback}</p>
+                  </div>
+                )}
+                {writingReview?.generalFeedback && (
+                  <div className="rounded-xl bg-gray-50 border border-gray-100 p-4">
+                    <p className="text-xs font-semibold text-gray-500 mb-2">General feedback</p>
+                    <p className="text-sm text-gray-800 whitespace-pre-wrap">{writingReview.generalFeedback}</p>
+                  </div>
+                )}
+                {!writingReview?.task1Feedback && !writingReview?.task2Feedback && !writingReview?.generalFeedback && (
+                  <p className="text-sm text-gray-500">Your teacher has graded this Writing without adding written comments.</p>
+                )}
+              </div>
+            </section>
+          )}
         </div>
       </div>
     )

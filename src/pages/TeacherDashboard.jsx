@@ -5450,9 +5450,14 @@ export default function TeacherDashboard() {
 
     const band = getMockWritingBand(submission)
 
-    if (band) return `Reviewed · Band ${formatBand(band)}`
+    if (band) return `Teacher reviewed · Band ${formatBand(band)}`
 
-    return 'Pending teacher review'
+    const aiBand = Number(submission?.result?.writing?.aiEstimatedBand)
+    if (Number.isFinite(aiBand) && aiBand > 0) {
+      return `AI estimate · Band ${formatBand(aiBand)} · Teacher grade optional`
+    }
+
+    return 'Teacher grade not added (optional)'
   }
 
   const getMockTitle = submission => {
@@ -5541,7 +5546,13 @@ export default function TeacherDashboard() {
       appendCell(row, getMockTypeLabelForSubmission(submission))
       appendCell(row, formatBand(result.listening?.band))
       appendCell(row, formatBand(result.reading?.band))
-      appendCell(row, getMockWritingBand(submission) ? formatBand(getMockWritingBand(submission)) : 'Pending')
+      const teacherWritingBand = getMockWritingBand(submission)
+      const aiWritingBand = Number(result.writing?.aiEstimatedBand)
+      appendCell(row, teacherWritingBand
+        ? `${formatBand(teacherWritingBand)} (Teacher)`
+        : Number.isFinite(aiWritingBand) && aiWritingBand > 0
+          ? `${formatBand(aiWritingBand)} (AI estimate)`
+          : 'Not graded')
       appendCell(row, formatBand(getMockOverall(submission)), 'overall')
 
       tbody.appendChild(row)
@@ -5853,8 +5864,11 @@ export default function TeacherDashboard() {
     const review = buildWritingReviewPayload()
     const now = new Date().toISOString()
 
-    const listeningBand = Number(result.listening?.band)
-    const readingBand = Number(result.reading?.band)
+    const includedSections = submission.enabledSections || result.enabledSections || {}
+    const listeningBand = includedSections.listening === false || result.listening?.enabled === false
+      ? NaN : Number(result.listening?.band)
+    const readingBand = includedSections.reading === false || result.reading?.enabled === false
+      ? NaN : Number(result.reading?.band)
     const writingBand = Number(writingReviewForm.overall)
 
     const overallInputs = [listeningBand, readingBand, writingBand].filter(
@@ -5884,11 +5898,14 @@ export default function TeacherDashboard() {
             ...(result.writing || {}),
             status: 'reviewed',
             band: writingReviewForm.overall,
+            effectiveBand: writingBand,
+            effectiveBandSource: 'teacher',
             task1Band: review.task1Band,
             task2Band: review.task2Band,
             review
           },
           finalOverall,
+          reviewedOverall: finalOverall,
           overallEstimate: finalOverall,
           overall: finalOverall
         }
@@ -5910,6 +5927,8 @@ export default function TeacherDashboard() {
       date: (submission.submittedAt || now).slice(0, 10),
       source: 'mock_test',
       mockTestId: submission.mockTestId || '',
+      attemptNumber: Number.isSafeInteger(submission.attemptNumber) && submission.attemptNumber > 0
+        ? submission.attemptNumber : 1,
       listening: !Number.isNaN(listeningBand) && listeningBand > 0
         ? roundToHalf(listeningBand)
         : result.listening?.band || '',
@@ -5917,6 +5936,8 @@ export default function TeacherDashboard() {
         ? roundToHalf(readingBand)
         : result.reading?.band || '',
       writing: writingReviewForm.overall,
+      writingSource: 'teacher',
+      aiEstimatedWritingBand: result.writing?.aiEstimatedBand ?? null,
       speaking: '',
       overall: finalOverall,
       updatedAt: now,
@@ -5941,10 +5962,13 @@ export default function TeacherDashboard() {
     )
 
     const matchingScoreItems = uniqueCandidateScores.filter(score => {
-      return (
-        score.mockTestId === submission.mockTestId ||
+      const sameMock = score.mockTestId === submission.mockTestId ||
         score.mockId === submission.mockTestId
-      )
+      const sameAttempt = Number(score.attemptNumber || 1) ===
+        Number(submission.attemptNumber || 1)
+      const sameSubmissionTime = !score.createdAt || !submission.submittedAt ||
+        score.createdAt === submission.submittedAt
+      return sameMock && sameAttempt && sameSubmissionTime
     })
 
     if (matchingScoreItems.length > 0) {
@@ -5954,7 +5978,7 @@ export default function TeacherDashboard() {
     } else {
       await addDoc(collection(db, 'scores'), {
         ...mockScorePayload,
-        createdAt: now
+        createdAt: submission.submittedAt || now
       })
     }
 

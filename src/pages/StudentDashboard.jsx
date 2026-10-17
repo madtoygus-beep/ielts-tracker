@@ -2161,7 +2161,12 @@
       const writingBand = getWritingBand(submission)
 
       if (writingBand !== null) {
-        return `Reviewed · Band ${formatBand(writingBand)}`
+        return `Teacher reviewed · Band ${formatBand(writingBand)}`
+      }
+
+      const aiBand = getValidBand(submission?.result?.writing?.aiEstimatedBand)
+      if (aiBand !== null) {
+        return `AI estimated · Band ${formatBand(aiBand)} · Teacher optional`
       }
 
       return 'Teacher grade not added (optional)'
@@ -2896,6 +2901,10 @@
                 const result = submission?.result
                 const overall = getMockOverall(submission)
                 const writingBand = getMockWritingBand(submission)
+                const aiBandValue = submission?.result?.writing?.aiEstimatedBand
+                const aiBand = aiBandValue === null || aiBandValue === undefined || aiBandValue === ''
+                  ? null : Number(aiBandValue)
+                const hasAiBand = Number.isFinite(aiBand) && aiBand > 0
 
                 return (
                   <div
@@ -2945,7 +2954,9 @@
                           >
                             {writingBand
                               ? `Teacher Writing Band ${formatBand(writingBand)}`
-                              : 'Teacher grade not added (optional)'}
+                              : hasAiBand
+                                ? `AI Estimated Writing Band ${formatBand(aiBand)} · Teacher optional`
+                                : 'Teacher grade not added (optional)'}
                           </span>
                         )}
                       </div>
