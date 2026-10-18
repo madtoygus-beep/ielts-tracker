@@ -19,6 +19,7 @@ import { useNavigate } from 'react-router-dom'
 import { httpsCallable } from 'firebase/functions'
 import AiWritingTeacherPanel from '../components/AiWritingTeacherPanel'
 import AiWritingSponsoredAssignmentPanel from '../components/AiWritingSponsoredAssignmentPanel'
+import { buildMissingWritingReviewSources } from '../services/teacherWritingReviewFallbacks'
 import {
   AI_SPONSORED_SCHOOL_ID,
   activeTeacherAiClassStudentIds,
@@ -567,6 +568,7 @@ export default function TeacherDashboard() {
 
   const [selected, setSelected] = useState(null)
   const [selectedStudentSection, setSelectedStudentSection] = useState('mock')
+  const [studentHomeworkTypeView, setStudentHomeworkTypeView] = useState('all')
   const [selectedReview, setSelectedReview] = useState(null)
   const [selectedVocabularyReview, setSelectedVocabularyReview] = useState(null)
 
@@ -1474,7 +1476,19 @@ export default function TeacherDashboard() {
       submittedWritingIds.has(normalizeAssignmentId(writing.id))
     )
 
-    return mergeUniqueById(assignedWritings, submittedWritings)
+    // A teacher may be allowed to read a saved Writing submission even when
+    // the original source no longer appears in their library (legacy/private
+    // or archived content). Do not hide the student's submitted answer.
+    // This creates DISPLAY-ONLY metadata from submissions already authorized
+    // by Firestore rules; it never creates or modifies an assignment.
+    const savedAnswerFallbacks = buildMissingWritingReviewSources({
+      submissions: currentWritingSubmissions,
+      writings,
+      student,
+      belongsToStudent: submissionBelongsToStudent
+    })
+
+    return mergeUniqueById(assignedWritings, submittedWritings, savedAnswerFallbacks)
   }
 
   const getStudentListenings = studentId => {
@@ -8226,6 +8240,7 @@ export default function TeacherDashboard() {
                     const isOpen = selected?.id === student.id
                     setSelected(isOpen ? null : student)
                     setSelectedStudentSection('mock')
+                    setStudentHomeworkTypeView('all')
                   }}
                 >
                   <div className="flex items-center gap-3">
@@ -8426,6 +8441,20 @@ export default function TeacherDashboard() {
                                         <p className="text-sm font-bold text-amber-700">
                                           {getMockWritingStatusLabel(submission)}
                                         </p>
+                                        {getMockWritingStatus(submission) !== 'not_included' &&
+                                          Boolean(getMockTask1Answer(submission) ||
+                                            getMockTask2Answer(submission) ||
+                                            getMockWritingStatus(submission) === 'reviewed') && (
+                                          <button
+                                            type="button"
+                                            onClick={() => openMockWritingReview({ student, mock, submission })}
+                                            className="mt-2 rounded-lg bg-purple-600 px-3 py-2 text-xs font-medium text-white hover:bg-purple-700"
+                                          >
+                                            {getMockWritingStatus(submission) === 'reviewed'
+                                              ? 'Open Writing Review'
+                                              : 'Grade Writing'}
+                                          </button>
+                                        )}
                                       </div>
 
                                       <div className="bg-white rounded-xl p-3">
@@ -8450,7 +8479,31 @@ export default function TeacherDashboard() {
 
                     {selectedStudentSection === 'homework' && (
                       <>
-                    <details className="group mb-4 rounded-2xl border border-slate-200 bg-white overflow-hidden">
+                    <div className="mb-4 flex flex-wrap gap-2" role="group" aria-label="Homework type">
+                      {[
+                        ['all', 'All types', null],
+                        ['reading', '📖 Reading', studentReadings.length],
+                        ['writing', '✍️ Writing', studentWritings.length],
+                        ['listening', '🎧 Listening', studentListenings.length],
+                        ['vocabulary', '📚 Vocabulary', studentVocabularyTests.length]
+                      ].map(([key, label, count]) => (
+                        <button
+                          key={key}
+                          type="button"
+                          onClick={() => setStudentHomeworkTypeView(key)}
+                          aria-pressed={studentHomeworkTypeView === key}
+                          className={`rounded-xl border px-4 py-2 text-xs font-semibold transition-colors ${
+                            studentHomeworkTypeView === key
+                              ? 'border-purple-600 bg-purple-600 text-white'
+                              : 'border-slate-200 bg-white text-slate-600 hover:bg-purple-50'
+                          }`}
+                        >
+                          {label}{count !== null ? ` (${count})` : ''}
+                        </button>
+                      ))}
+                    </div>
+                    {(studentHomeworkTypeView === 'all' || studentHomeworkTypeView === 'reading') && (
+                    <details open={studentHomeworkTypeView === 'reading'} className="group mb-4 rounded-2xl border border-slate-200 bg-white overflow-hidden">
                       <summary className="flex cursor-pointer select-none items-center justify-between gap-3 p-4 font-semibold text-slate-800 hover:bg-slate-50 [&::-webkit-details-marker]:hidden">
                         <span>📖 Reading</span>
                         <span className="flex items-center gap-3 text-xs font-normal text-slate-500">
@@ -8628,8 +8681,10 @@ export default function TeacherDashboard() {
                     </div>
                       </div>
                     </details>
+                    )}
 
-                    <details className="group mb-4 rounded-2xl border border-slate-200 bg-white overflow-hidden">
+                    {(studentHomeworkTypeView === 'all' || studentHomeworkTypeView === 'writing') && (
+                    <details open={studentHomeworkTypeView === 'writing'} className="group mb-4 rounded-2xl border border-slate-200 bg-white overflow-hidden">
                       <summary className="flex cursor-pointer select-none items-center justify-between gap-3 p-4 font-semibold text-slate-800 hover:bg-slate-50 [&::-webkit-details-marker]:hidden">
                         <span>✍️ Writing</span>
                         <span className="flex items-center gap-3 text-xs font-normal text-slate-500">
@@ -8649,11 +8704,17 @@ export default function TeacherDashboard() {
                                   <div>
                                     <p className="font-medium text-sm text-slate-800">{writing.title}</p>
                                     <p className="text-xs text-slate-500 mt-1">{submission ? (submission.reviewed ? 'Teacher reviewed' : 'Submitted · Waiting for review') : 'Not done'}</p>
+                                    {writing.missingContent === true && (
+                                      <p className="mt-1 text-xs text-amber-700">Saved submission · Original assignment not in teacher library</p>
+                                    )}
                                   </div>
                                   <div className="flex flex-wrap gap-2">
                                     {submission && (
-                                      <button type="button" onClick={() => setSelectedStudentSection('reviews')}
-                                        className="rounded-lg bg-purple-600 px-3 py-2 text-xs text-white hover:bg-purple-700">Open review</button>
+                                      <button type="button"
+                                        onClick={() => openWritingReview({ student, writing, submission })}
+                                        className="rounded-lg bg-purple-600 px-3 py-2 text-xs text-white hover:bg-purple-700">
+                                        {submission.reviewed ? 'Open review' : 'Grade Writing'}
+                                      </button>
                                     )}
                                     {isHomeworkAssignedToStudent(writing, student, 'writing') && (
                                       <button type="button" onClick={() => removeHomeworkFromStudent(writing, 'writing', student)}
@@ -8667,8 +8728,10 @@ export default function TeacherDashboard() {
                         )}
                       </div>
                     </details>
+                    )}
 
-                    <details className="group mb-4 rounded-2xl border border-slate-200 bg-white overflow-hidden">
+                    {(studentHomeworkTypeView === 'all' || studentHomeworkTypeView === 'listening') && (
+                    <details open={studentHomeworkTypeView === 'listening'} className="group mb-4 rounded-2xl border border-slate-200 bg-white overflow-hidden">
                       <summary className="flex cursor-pointer select-none items-center justify-between gap-3 p-4 font-semibold text-slate-800 hover:bg-slate-50 [&::-webkit-details-marker]:hidden">
                         <span>🎧 Listening</span>
                         <span className="flex items-center gap-3 text-xs font-normal text-slate-500">
@@ -8790,7 +8853,9 @@ export default function TeacherDashboard() {
                     </div>
                       </div>
                     </details>
-                    <details className="group mb-4 rounded-2xl border border-slate-200 bg-white overflow-hidden">
+                    )}
+                    {(studentHomeworkTypeView === 'all' || studentHomeworkTypeView === 'vocabulary') && (
+                    <details open={studentHomeworkTypeView === 'vocabulary'} className="group mb-4 rounded-2xl border border-slate-200 bg-white overflow-hidden">
                       <summary className="flex cursor-pointer select-none items-center justify-between gap-3 p-4 font-semibold text-slate-800 hover:bg-slate-50 [&::-webkit-details-marker]:hidden">
                         <span>📚 Vocabulary</span>
                         <span className="flex items-center gap-3 text-xs font-normal text-slate-500">
@@ -8925,6 +8990,7 @@ export default function TeacherDashboard() {
                     </div>
                       </div>
                     </details>
+                    )}
 
                       </>
                     )}
@@ -8962,6 +9028,12 @@ export default function TeacherDashboard() {
                                     <p className="text-xs text-gray-400">
                                       {getWritingTaskLabel(writing, submission || {})} · {writing.timeLimit || 60} min
                                     </p>
+
+                                    {writing.missingContent === true && (
+                                      <p className="mt-1 text-xs text-amber-700">
+                                        Saved answer available. Original Writing assignment is not visible in this teacher library.
+                                      </p>
+                                    )}
 
                                     {submission && (
                                       <p
@@ -9021,6 +9093,7 @@ export default function TeacherDashboard() {
                                         {submission.reviewed ? 'Edit Review' : 'Grade'}
                                       </button>
 
+                                      {writing.missingContent !== true && (
                                       <button
                                         type="button"
                                         onClick={() =>
@@ -9035,6 +9108,7 @@ export default function TeacherDashboard() {
                                       >
                                         Retake Options
                                       </button>
+                                      )}
 
                                       {isHomeworkAssignedToStudent(writing, student, 'writing') && (
                                         <button
