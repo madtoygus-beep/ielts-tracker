@@ -20,6 +20,7 @@ import { httpsCallable } from 'firebase/functions'
 import AiWritingTeacherPanel from '../components/AiWritingTeacherPanel'
 import AiWritingSponsoredAssignmentPanel from '../components/AiWritingSponsoredAssignmentPanel'
 import { buildMissingWritingReviewSources } from '../services/teacherWritingReviewFallbacks'
+import { mockWritingDisplayStatus } from '../services/p7uiReviewPresentation'
 import {
   AI_SPONSORED_SCHOOL_ID,
   activeTeacherAiClassStudentIds,
@@ -2258,22 +2259,8 @@ export default function TeacherDashboard() {
       new Date(a.submission.reviewedAt || a.submission.submittedAt || 0)
     )
 
-  const getMockWritingStatus = submission => {
-    if (
-      submission?.result?.enabledSections?.writing === false ||
-      submission?.enabledSections?.writing === false ||
-      submission?.result?.writing?.enabled === false
-    ) {
-      return 'not_included'
-    }
-
-    return (
-      submission.result?.writing?.status ||
-      submission.writingReview?.status ||
-      submission.review?.writingStatus ||
-      'pending_review'
-    )
-  }
+  // Presentation only: do not mutate the stored Mock or its review state.
+  const getMockWritingStatus = submission => mockWritingDisplayStatus(submission)
 
   const getMockTask1Answer = submission => {
     return (
@@ -5639,7 +5626,10 @@ export default function TeacherDashboard() {
   }
 
   const getMockWritingStatusLabel = submission => {
-    if (getMockWritingStatus(submission) === 'not_included') return 'Not included'
+    const writingStatus = getMockWritingStatus(submission)
+    if (writingStatus === 'not_included') return 'Not included'
+    if (writingStatus === 'not_submitted') return 'Writing answer not submitted'
+    if (writingStatus === 'answer_unavailable') return 'Writing answer unavailable for review'
 
     const band = getMockWritingBand(submission)
 
@@ -8462,9 +8452,13 @@ export default function TeacherDashboard() {
                                         <p className="text-sm font-semibold text-gray-700">
                                           {getMockWritingStatus(submission) === 'not_included'
                                             ? 'No Writing'
-                                            : getMockWritingStatus(submission) === 'reviewed'
-                                              ? 'Reviewed'
-                                              : 'Waiting for writing review'}
+                                            : getMockWritingStatus(submission) === 'not_submitted'
+                                              ? 'Writing answer not submitted'
+                                              : getMockWritingStatus(submission) === 'answer_unavailable'
+                                                ? 'Writing answer unavailable'
+                                                : getMockWritingStatus(submission) === 'reviewed'
+                                                  ? 'Reviewed'
+                                                  : 'Waiting for writing review'}
                                         </p>
                                       </div>
                                     </div>

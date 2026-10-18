@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { httpsCallable } from 'firebase/functions'
 import { functions } from '../firebase'
+import { isCurrentSavedAttemptMismatch } from '../services/p7uiReviewPresentation'
 import {
   aiWritingCriterionRows,
   formatAiBand,
@@ -90,8 +91,16 @@ export default function AiWritingTeacherPanel({ studentId, contentId, context, a
       }
     } catch (error) {
       if (mounted.current && serial === requestSerial.current) {
-        setEnvelope({ status: 'unavailable' })
-        setErrorMessage(readableAiWritingError(error))
+        if (isCurrentSavedAttemptMismatch(error)) {
+          // The backend must continue to reject an unverified or old attempt.
+          // Explain the unavailable AI report without presenting it as a failed
+          // teacher review. No alternative lookup or paid evaluation is made.
+          setEnvelope({ status: 'attempt_mismatch' })
+          setErrorMessage('')
+        } else {
+          setEnvelope({ status: 'unavailable' })
+          setErrorMessage(readableAiWritingError(error))
+        }
       }
     } finally {
       if (mounted.current && serial === requestSerial.current) setLoading(false)
@@ -119,6 +128,7 @@ export default function AiWritingTeacherPanel({ studentId, contentId, context, a
           : envelope.status === 'too_short' ? 'Answer too short for AI feedback'
             : envelope.status === 'not_started' ? 'No saved AI report'
               : envelope.status === 'failed' ? 'AI assessment not completed'
+              : envelope.status === 'attempt_mismatch' ? 'No verified AI report for this attempt'
                 : 'AI report unavailable'
 
     return (
@@ -155,6 +165,11 @@ export default function AiWritingTeacherPanel({ studentId, contentId, context, a
           </div>
         </div>
         {errorMessage && <p role="alert" className="mt-2 text-xs text-rose-700">{errorMessage}</p>}
+        {envelope.status === 'attempt_mismatch' && (
+          <p className="mt-2 text-xs text-slate-600">
+            This older or unmatched submission cannot be verified as the current saved attempt for an AI report. The teacher review remains unchanged.
+          </p>
+        )}
         {showDetails && report && (
           <div className="mt-3 space-y-3" aria-label="Saved AI Writing feedback details">
             <TaskReport taskNumber={1} report={report.task1} />
@@ -211,7 +226,9 @@ export default function AiWritingTeacherPanel({ studentId, contentId, context, a
                 ? 'AI assessment is still processing; refresh to check its saved status.'
                 : envelope.status === 'failed'
                   ? 'The AI assessment was not completed.'
-                  : 'The AI report is not available for this attempt.'}
+                  : envelope.status === 'attempt_mismatch'
+                    ? 'No verified AI report can be shown for this older or unmatched attempt. The teacher review is preserved.'
+                    : 'The AI report is not available for this attempt.'}
         </p>
       ) : null}
     </section>
