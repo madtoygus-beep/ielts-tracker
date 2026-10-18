@@ -1028,12 +1028,40 @@ service cloud.firestore {
       // submitWritingSecure. Cloud Functions use the Admin SDK and bypass rules.
       allow create: if isAdmin();
 
+      // P8-A: a teacher browser may only write the teacher review. Identity,
+      // answers, attempt number, submittedAt and AI choice/billing stay
+      // server-owned (submitWritingSecure), so a client edit can never look
+      // like a new paid attempt to autoEvaluateSponsoredWriting.
       allow update: if statsModerationFieldsUnchanged() && (
         isAdmin()
-        || teacherListedOn(resource.data)
-        || teacherOwnsWritingParent(resource.data)
+        || (
+          (teacherListedOn(resource.data) || teacherOwnsWritingParent(resource.data))
+          && teacherWritingReviewOnly()
+        )
       );
       allow delete: if false; // Q1B-B audited server deletion only
+    }
+
+    function teacherWritingReviewOnly() {
+      return request.resource.data.diff(resource.data).affectedKeys()
+        .hasOnly(['reviewed', 'reviewedAt', 'reviewedBy', 'review']);
+    }
+
+    // Mock teacher review writes result/writingReview; the attempt identity
+    // must stay unchanged (it drives autoEvaluateSponsoredMockWriting).
+    function teacherMockReviewOnly() {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      // Only the Writing band and its derived overall can be updated by a
+      // teacher. Reading/Listening/objective scores remain immutable here.
+      return changed.hasOnly(['reviewedAt', 'reviewedBy', 'writingReview', 'result'])
+        && (!changed.hasAny(['result']) || (
+          request.resource.data.get('result', null) is map
+          && resource.data.get('result', {}) is map
+          && request.resource.data.get('result', {}).diff(resource.data.get('result', {}))
+            .affectedKeys().hasOnly([
+              'writing', 'finalOverall', 'reviewedOverall', 'overallEstimate', 'overall'
+            ])
+        ));
     }
 
     // ============================================================
@@ -1085,8 +1113,10 @@ service cloud.firestore {
 
       allow update: if statsModerationFieldsUnchanged() && (
         isAdmin()
-        || teacherListedOn(resource.data)
-        || teacherOwnsMockParent(resource.data)
+        || (
+          (teacherListedOn(resource.data) || teacherOwnsMockParent(resource.data))
+          && teacherMockReviewOnly()
+        )
       );
       allow delete: if false; // Q1B-B audited server deletion only
     }

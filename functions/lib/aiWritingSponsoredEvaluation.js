@@ -128,6 +128,11 @@ function createAiWritingSponsoredEvaluationService({
         assignment.sourceCollection !== refs.config.sourceCollection ||
         assignment.accessType !== 'assignment' || assignment.status !== 'active' ||
         assignment.adminHidden === true || control?.status === 'open' ||
+        // P8-A: attempt N>1 is legitimate only if the server consumed a
+        // teacher-opened retake for exactly that attempt. Browsers cannot
+        // write submissionAttemptControls (no rules match => deny).
+        (refs.attemptNumber > 1 && (control?.status !== 'consumed' ||
+          control.completedAttemptNumber !== refs.attemptNumber)) ||
         submission[refs.config.sourceField] !== refs.contentId) return null
     try {
       if (context === 'homework') {
