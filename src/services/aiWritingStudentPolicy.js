@@ -67,8 +67,16 @@ export function shouldShowAiWritingPanel(access, envelope) {
     (access?.pilotEnabled === true && access?.studentEnabled === true))
 }
 
+// A manual retry is only for a submitted personal-credit Writing choice.
+// Teacher review, institution-funded work, and Mock are never credit retries.
+export function isPersonalCreditAiSelection(context, submittedChoice, submittedBillingMode) {
+  return context === 'homework' && submittedChoice === 'ai' &&
+    submittedBillingMode === 'student_credit'
+}
+
 export function canRequestAiWriting(access, envelope, busy) {
-  return Boolean(!busy && envelope?.institutionFunded !== true && access?.canEvaluate === true &&
+  return Boolean(!busy && envelope?.institutionFunded !== true &&
+    envelope?.canRetry === true && access?.canEvaluate === true &&
     ['not_started', 'failed'].includes(envelope?.status))
 }
 

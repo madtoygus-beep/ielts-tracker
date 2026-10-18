@@ -1042,8 +1042,8 @@ export default function DoWriting() {
               <AiWritingStudentPanel
                 key={`${user?.uid || ''}:${id}:${completedSubmission.id}`}
                 contentId={id}
-                allowManualRequest={false}
                 submittedChoice={completedSubmission.aiReviewChoice || 'teacher'}
+                submittedBillingMode={completedSubmission.aiBillingMode || 'none'}
                 attemptNumber={attemptNumberOfSubmission(completedSubmission)}
                 wordCounts={{
                   task1Enabled: hasTask1,

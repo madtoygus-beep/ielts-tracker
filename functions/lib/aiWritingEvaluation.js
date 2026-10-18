@@ -282,6 +282,7 @@ function createAiWritingEvaluationService({
         contentId: evidence.contentId, contentType: evidence.contentType,
         attemptNumber: evidence.attemptNumber, fingerprint: evidence.fingerprint,
         submissionId: evidence.submissionRef.id, status: 'processing',
+        billingMode: 'student_credit',
         leaseId, leaseUntilMs: time + LEASE_MS, month,
         activeLedgerId: reuseExistingHold ? job.activeLedgerId : ledgerId,
         createdAt: job?.createdAt || FieldValue.serverTimestamp(),
@@ -473,6 +474,10 @@ function createAiWritingEvaluationService({
     const input = parseInput(request)
     const student = await requireStudent(request)
     const evidence = await readEvidence(student, input)
+    // Never advertise a payable retry for teacher review, institution-funded
+    // submissions, or Mock attempts. The initial choice is server-owned.
+    const personalCreditSelected = evidence.context === 'homework' &&
+      evidence.aiReviewChoice === 'ai' && evidence.aiBillingMode === 'student_credit'
     const snap = await evidence.jobRef.get()
     if (!snap.exists) {
       const sponsored = await pendingInstitutionSponsoredReport(evidence)
@@ -481,7 +486,8 @@ function createAiWritingEvaluationService({
         contentId: input.contentId, institutionFunded: sponsored
       }
       return { status: 'not_started', context: input.context,
-        contentId: input.contentId, institutionFunded: sponsored }
+        contentId: input.contentId, institutionFunded: sponsored,
+        canRetry: personalCreditSelected && !sponsored }
     }
     const job = snap.data() || {}
     requireMatchingJob(job, evidence)
@@ -495,7 +501,7 @@ function createAiWritingEvaluationService({
         const ref = db.doc(`aiWritingMonthlyUsage/${student.schoolId}_${job.month}`)
         const refunded = await refund(evidence, job.leaseId, job.activeLedgerId, ref, 'expired_reservation')
         return refunded
-          ? { status: 'failed', canRetry: true, creditReconciled: true }
+          ? { status: 'failed', canRetry: personalCreditSelected, creditReconciled: true }
           : { status: 'processing', retryAfterSeconds: 5 }
       }
       return { status: 'processing', retryAfterSeconds: Math.max(1,
@@ -507,7 +513,9 @@ function createAiWritingEvaluationService({
       attemptNumber: evidence.attemptNumber, report: job.report, reused: true,
       institutionFunded: job.billingMode === 'sponsored_auto'
     }
-    return { status: 'failed', canRetry: job.billingMode !== 'sponsored_auto',
+    return { status: 'failed',
+      canRetry: job.status === 'failed' && personalCreditSelected &&
+        (job.billingMode === 'student_credit' || job.billingMode == null),
       institutionFunded: job.billingMode === 'sponsored_auto' }
   }
 
