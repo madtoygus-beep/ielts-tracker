@@ -18,6 +18,16 @@ import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from 'fi
 import { useNavigate } from 'react-router-dom'
 import { httpsCallable } from 'firebase/functions'
 import AiWritingTeacherPanel from '../components/AiWritingTeacherPanel'
+import AiWritingSponsoredAssignmentPanel from '../components/AiWritingSponsoredAssignmentPanel'
+import {
+  AI_SPONSORED_SCHOOL_ID,
+  activeTeacherAiClassStudentIds,
+  eligibleAiSponsoredStudents,
+  emptyAiSponsoredSelection,
+  normalizeAiSponsoredPolicy,
+  buildAiSponsoredWriteRequest,
+  shouldSaveAiSponsoredPolicy
+} from '../services/aiWritingSponsoredAssignmentPolicy'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
@@ -52,6 +62,8 @@ const getManagedContentStudentAccessSnapshotCall = httpsCallable(
   'getManagedContentStudentAccessSnapshot'
 )
 const setContentStudentAccessCall = httpsCallable(functions, 'setContentStudentAccess')
+const getSponsoredPolicyCall = httpsCallable(functions, 'getAiWritingSponsoredPolicy')
+const setSponsoredPolicyCall = httpsCallable(functions, 'setAiWritingSponsoredPolicy')
 const setContentArchivedStateCall = httpsCallable(functions, 'setContentArchivedState')
 const getManagedSubmissionAttemptStateCall = httpsCallable(
   functions,
@@ -561,6 +573,11 @@ export default function TeacherDashboard() {
   const [selectedHomework, setSelectedHomework] = useState(null)
   const [selectedHomeworkType, setSelectedHomeworkType] = useState(null)
   const [assignmentDraft, setAssignmentDraft] = useState([])
+  const [assignmentUnknownStudentIds, setAssignmentUnknownStudentIds] = useState([])
+  const [assignmentSaving, setAssignmentSaving] = useState(false)
+  const [assignmentAiDraft, setAssignmentAiDraft] = useState(emptyAiSponsoredSelection)
+  const [assignmentAiStatus, setAssignmentAiStatus] = useState('unavailable')
+  const [assignmentAiError, setAssignmentAiError] = useState('')
 
   const [selectedWritingReview, setSelectedWritingReview] = useState(null)
   const [selectedMockWritingReview, setSelectedMockWritingReview] = useState(null)
@@ -2494,7 +2511,33 @@ export default function TeacherDashboard() {
     'full_mock'
   )
 
+  const aiSupportedAssignmentType = type => type === 'writing' || type === 'mock'
+
+  // A teacher can fund only their students in real, active teacher-owned
+  // classes. The callable remains the final authority; the UI is advisory.
+  const activeAiClassStudents = () =>
+    profile?.role === 'teacher'
+      ? activeTeacherAiClassStudentIds(classes, user?.uid)
+      : null
+
+  const assignmentAiEnabledForSchool = () =>
+    Boolean(profile && ['teacher', 'admin'].includes(profile.role) &&
+      profile.status === 'approved' && getSchoolId(profile) === AI_SPONSORED_SCHOOL_ID &&
+      !['individual', 'platform'].includes(profile.accountType))
+
+  const closeAssignmentManager = () => {
+    if (assignmentSaving) return
+    setSelectedHomework(null)
+    setSelectedHomeworkType(null)
+    setAssignmentDraft([])
+    setAssignmentUnknownStudentIds([])
+    setAssignmentAiDraft(emptyAiSponsoredSelection())
+    setAssignmentAiStatus('unavailable')
+    setAssignmentAiError('')
+  }
+
   const openAssignmentManager = async (homework, type) => {
+    if (assignmentSaving) return
     if (!isOwnedByCurrentTeacher(homework)) {
       alert(
         'This is a School Library item. Duplicate it into My Library before assigning it to students.'
@@ -2508,17 +2551,56 @@ export default function TeacherDashboard() {
         contentId: homework.id
       })
 
+      if (assignmentResult.data?.ok !== true) {
+        throw new Error('The current student assignment list could not be verified.')
+      }
+
       const canonicalStudentIds = Array.isArray(assignmentResult.data?.studentIds)
-        ? assignmentResult.data.studentIds.filter(Boolean)
+        ? Array.from(new Set(assignmentResult.data.studentIds.filter(Boolean)))
         : []
 
       const draftStudentIds = canonicalStudentIds
         .map(studentUid => getStudentByAnyId(studentUid)?.id)
         .filter(Boolean)
 
+      // Check the original canonical UIDs, not a legacy student.uid alias.
+      const unknownIds = canonicalStudentIds.filter(uid => !getStudentByAnyId(uid))
+
       setSelectedHomework(homework)
       setSelectedHomeworkType(type)
       setAssignmentDraft(Array.from(new Set(draftStudentIds)))
+      setAssignmentUnknownStudentIds(unknownIds)
+      setAssignmentAiDraft(emptyAiSponsoredSelection())
+      setAssignmentAiError('')
+
+      if (!aiSupportedAssignmentType(type) || !assignmentAiEnabledForSchool()) {
+        setAssignmentAiStatus('unavailable')
+        return
+      }
+      const hasMockWriting = type !== 'mock' ||
+        (getMockEnabledSections(homework).writing && Boolean(homework.writingId))
+      if (!hasMockWriting) {
+        setAssignmentAiStatus('unavailable')
+        return
+      }
+
+      setAssignmentAiStatus('loading')
+      try {
+        const result = await getSponsoredPolicyCall({
+          contentType: type,
+          contentId: homework.id
+        })
+        const nextPolicy = normalizeAiSponsoredPolicy(result.data, type, homework.id)
+        setAssignmentAiDraft(nextPolicy)
+        setAssignmentAiStatus('ready')
+      } catch (error) {
+        console.error('Could not load funded AI assignment settings:', error)
+        setAssignmentAiStatus('unavailable')
+        setAssignmentAiError(
+          `AI settings could not be loaded: ${getCallableErrorMessage(error, 'The AI service is unavailable.')}. ` +
+          'Normal assignments may still be changed, but existing AI settings will NOT be overwritten.'
+        )
+      }
     } catch (error) {
       console.error('Could not load canonical homework assignments:', error)
       alert('Could not load student assignments. Please try again.')
@@ -2526,6 +2608,7 @@ export default function TeacherDashboard() {
   }
 
   const toggleAssignment = studentId => {
+    if (assignmentSaving) return
     setAssignmentDraft(prev =>
       prev.includes(studentId)
         ? prev.filter(id => id !== studentId)
@@ -2534,10 +2617,14 @@ export default function TeacherDashboard() {
   }
 
   const assignClassToHomework = classItem => {
-    const classStudentIds = classItem.studentIds || []
+    if (assignmentSaving) return
+    // Do not silently introduce students whose profiles are not visible/verified.
+    const visibleStudentIds = new Set(students.map(student => student.id))
+    const classStudentIds = (classItem.studentIds || [])
+      .filter(studentId => visibleStudentIds.has(studentId))
 
     if (classStudentIds.length === 0) {
-      alert('This class has no students yet.')
+      alert('This class has no currently available students in your student list.')
       return
     }
 
@@ -2547,6 +2634,7 @@ export default function TeacherDashboard() {
   }
 
   const removeClassFromHomework = classItem => {
+    if (assignmentSaving) return
     const classStudentIds = classItem.studentIds || []
 
     setAssignmentDraft(prev =>
@@ -2555,13 +2643,17 @@ export default function TeacherDashboard() {
   }
 
   const isClassFullyAssignedToDraft = classItem => {
-    const classStudentIds = classItem.studentIds || []
+    const visibleStudentIds = new Set(students.map(student => student.id))
+    const classStudentIds = (classItem.studentIds || [])
+      .filter(studentId => visibleStudentIds.has(studentId))
     if (classStudentIds.length === 0) return false
     return classStudentIds.every(studentId => assignmentDraft.includes(studentId))
   }
 
   const isClassPartlyAssignedToDraft = classItem => {
-    const classStudentIds = classItem.studentIds || []
+    const visibleStudentIds = new Set(students.map(student => student.id))
+    const classStudentIds = (classItem.studentIds || [])
+      .filter(studentId => visibleStudentIds.has(studentId))
     if (classStudentIds.length === 0) return false
     return classStudentIds.some(studentId => assignmentDraft.includes(studentId))
   }
@@ -2572,14 +2664,21 @@ export default function TeacherDashboard() {
   }
 
   const saveAssignments = async () => {
-    if (!selectedHomework || !selectedHomeworkType) return
+    if (!selectedHomework || !selectedHomeworkType || assignmentSaving ||
+        assignmentAiStatus === 'loading') return
 
-    const allowedStudentIds = new Set(students.map(student => student.id))
-    const allowedDraftIds = profile?.role === 'admin'
-      ? assignmentDraft
-      : assignmentDraft.filter(studentId => allowedStudentIds.has(studentId))
+    if (assignmentUnknownStudentIds.length > 0) {
+      alert(
+        'Some existing students are not available in this teacher account. ' +
+        'Assignments were NOT saved. Ask the school admin to verify the class and student links, ' +
+        'so no existing assignment is silently removed.'
+      )
+      return
+    }
 
-    const selectedStudents = allowedDraftIds
+    const visibleStudentIds = new Set(students.map(student => student.id))
+    const selectedStudents = assignmentDraft
+      .filter(studentId => visibleStudentIds.has(studentId))
       .map(studentId => students.find(student => student.id === studentId))
       .filter(Boolean)
 
@@ -2587,21 +2686,101 @@ export default function TeacherDashboard() {
       selectedStudents.map(student => getStudentPrimaryAssignmentId(student))
     )
 
+    const aiSupported = aiSupportedAssignmentType(selectedHomeworkType) &&
+      assignmentAiEnabledForSchool()
+    const aiReady = aiSupported && assignmentAiStatus === 'ready'
+    const aiAllowedIds = aiReady ? eligibleAiSponsoredStudents(
+      students, assignmentDraft, activeAiClassStudents()
+    ).map(student => student.id) : []
+    const validAiIds = new Set(aiAllowedIds)
+    const nextAiStudentIds = (assignmentAiDraft.studentIds || [])
+      .filter(studentId => validAiIds.has(studentId))
+
+    // Validate BEFORE saving normal assignments, avoiding partial writes for
+    // empty selections and newly unauthorized students.
+    if (aiReady && assignmentAiDraft.enabled && nextAiStudentIds.length === 0) {
+      alert('Choose at least one currently assigned eligible student for institution-funded AI, or turn AI off.')
+      return
+    }
+
+    const nextAiSelection = {
+      ...assignmentAiDraft,
+      studentIds: nextAiStudentIds
+    }
+    const writeAi = aiReady && shouldSaveAiSponsoredPolicy({
+      selection: nextAiSelection,
+      ready: true,
+      schoolId: AI_SPONSORED_SCHOOL_ID,
+      hasWriting: selectedHomeworkType === 'writing' ||
+        (getMockEnabledSections(selectedHomework).writing && Boolean(selectedHomework.writingId))
+    })
+
+    setAssignmentSaving(true)
+    setAssignmentAiError('')
     try {
-      await setContentStudentAccessCall({
+      const response = await setContentStudentAccessCall({
         contentType: selectedHomeworkType,
         contentId: selectedHomework.id,
         studentIds: finalAssignment
       })
+      if (response.data?.ok !== true) {
+        throw new Error('The assignment writer did not confirm success.')
+      }
       await refreshCanonicalAssignmentSnapshot()
 
-      setSelectedHomework(null)
-      setSelectedHomeworkType(null)
-      setAssignmentDraft([])
+      if (writeAi) {
+        try {
+          const aiResponse = await setSponsoredPolicyCall(buildAiSponsoredWriteRequest({
+            contentType: selectedHomeworkType,
+            contentId: selectedHomework.id,
+            selection: nextAiSelection,
+            assignedStudentIds: aiAllowedIds
+          }))
+          if (aiResponse.data?.ok !== true) {
+            throw new Error('The AI policy writer did not confirm success.')
+          }
+          // A second read verifies durable, effective rights (not just the call).
+          const checked = await getSponsoredPolicyCall({
+            contentType: selectedHomeworkType,
+            contentId: selectedHomework.id
+          })
+          const savedPolicy = normalizeAiSponsoredPolicy(
+            checked.data, selectedHomeworkType, selectedHomework.id
+          )
+          if (nextAiSelection.enabled && !savedPolicy.enabled) {
+            throw new Error('AI settings were written but no longer authorize the selected students.')
+          }
+        } catch (aiError) {
+          console.error('Homework assigned, but funded AI configuration failed:', aiError)
+          setAssignmentAiError(
+            `Student assignments WERE saved, but AI assessment permissions were NOT confirmed: ` +
+            `${getCallableErrorMessage(aiError, 'Please retry.')}. ` +
+            'No additional AI assessment was manually started.'
+          )
+          // Keep the modal open for a transparent, retryable partial failure.
+          return
+        }
+      }
+
+      closeAssignmentManagerAfterSave()
     } catch (error) {
       console.error('Could not save canonical homework assignments:', error)
-      alert('Could not save student assignments. Please check permissions and try again.')
+      alert(`Student assignments were NOT saved. ${getCallableErrorMessage(error, 'Please check permissions and retry.')}`)
+    } finally {
+      setAssignmentSaving(false)
     }
+  }
+
+  // Deliberately separate from closeAssignmentManager: state is reset only
+  // after BOTH writes succeeded, avoiding a false success for paid AI settings.
+  const closeAssignmentManagerAfterSave = () => {
+    setSelectedHomework(null)
+    setSelectedHomeworkType(null)
+    setAssignmentDraft([])
+    setAssignmentUnknownStudentIds([])
+    setAssignmentAiDraft(emptyAiSponsoredSelection())
+    setAssignmentAiStatus('unavailable')
+    setAssignmentAiError('')
   }
 
   const getCallableErrorMessage = (error, fallback) => {
@@ -8021,12 +8200,16 @@ export default function TeacherDashboard() {
 
           {filteredTeacherStudents.map(student => {
             // The collapsed rows must not recalculate full homework/analytics.
-            const detailsOpen = selected?.id === student.id && selectedStudentSection === 'homework'
-            const studentReadings = detailsOpen ? getStudentReadings(student.id) : []
-            const studentWritings = detailsOpen ? getStudentWritings(student.id) : []
-            const studentListenings = detailsOpen ? getStudentListenings(student.id) : []
-            const studentVocabularyTests = detailsOpen ? getStudentVocabularyTests(student.id) : []
-            const analytics = detailsOpen ? getStudentAnalytics(student.id) : null
+            // Reviews previously always appeared empty: the Writing list was only
+            // populated when the Homework sub-tab was active.
+            const sameStudentOpen = selected?.id === student.id
+            const homeworkOpen = sameStudentOpen && selectedStudentSection === 'homework'
+            const writingOpen = sameStudentOpen && ['homework', 'reviews'].includes(selectedStudentSection)
+            const studentReadings = homeworkOpen ? getStudentReadings(student.id) : []
+            const studentWritings = writingOpen ? getStudentWritings(student.id) : []
+            const studentListenings = homeworkOpen ? getStudentListenings(student.id) : []
+            const studentVocabularyTests = homeworkOpen ? getStudentVocabularyTests(student.id) : []
+            const analytics = homeworkOpen ? getStudentAnalytics(student.id) : null
             const homeworkProgress = homeworkProgressById.get(student.id) || {
               assigned: 0, completed: 0, notCompleted: 0, overdue: 0, rate: 0, types: {}
             }
@@ -8267,6 +8450,15 @@ export default function TeacherDashboard() {
 
                     {selectedStudentSection === 'homework' && (
                       <>
+                    <details className="group mb-4 rounded-2xl border border-slate-200 bg-white overflow-hidden">
+                      <summary className="flex cursor-pointer select-none items-center justify-between gap-3 p-4 font-semibold text-slate-800 hover:bg-slate-50 [&::-webkit-details-marker]:hidden">
+                        <span>📖 Reading</span>
+                        <span className="flex items-center gap-3 text-xs font-normal text-slate-500">
+                          <span>{studentReadings.length} assignments</span>
+                          <span aria-hidden="true" className="transition-transform group-open:rotate-180">⌄</span>
+                        </span>
+                      </summary>
+                      <div className="border-t border-slate-100 px-3 pt-4 md:px-4">
                     {analytics.weakest && (
                       <div className="mb-8">
                         <h3 className="text-sm font-semibold text-gray-700 mb-3">
@@ -8434,7 +8626,57 @@ export default function TeacherDashboard() {
                         </div>
                       )}
                     </div>
+                      </div>
+                    </details>
 
+                    <details className="group mb-4 rounded-2xl border border-slate-200 bg-white overflow-hidden">
+                      <summary className="flex cursor-pointer select-none items-center justify-between gap-3 p-4 font-semibold text-slate-800 hover:bg-slate-50 [&::-webkit-details-marker]:hidden">
+                        <span>✍️ Writing</span>
+                        <span className="flex items-center gap-3 text-xs font-normal text-slate-500">
+                          <span>{studentWritings.length} assignments</span>
+                          <span aria-hidden="true" className="transition-transform group-open:rotate-180">⌄</span>
+                        </span>
+                      </summary>
+                      <div className="border-t border-slate-100 p-4">
+                        {studentWritings.length === 0 ? (
+                          <p className="text-sm text-slate-500">No active or submitted Writing homework found for this student.</p>
+                        ) : (
+                          <div className="flex flex-col gap-3">
+                            {studentWritings.map(writing => {
+                              const submission = getWritingSubmission(student.id, writing.id)
+                              return (
+                                <div key={writing.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50 p-3">
+                                  <div>
+                                    <p className="font-medium text-sm text-slate-800">{writing.title}</p>
+                                    <p className="text-xs text-slate-500 mt-1">{submission ? (submission.reviewed ? 'Teacher reviewed' : 'Submitted · Waiting for review') : 'Not done'}</p>
+                                  </div>
+                                  <div className="flex flex-wrap gap-2">
+                                    {submission && (
+                                      <button type="button" onClick={() => setSelectedStudentSection('reviews')}
+                                        className="rounded-lg bg-purple-600 px-3 py-2 text-xs text-white hover:bg-purple-700">Open review</button>
+                                    )}
+                                    {isHomeworkAssignedToStudent(writing, student, 'writing') && (
+                                      <button type="button" onClick={() => removeHomeworkFromStudent(writing, 'writing', student)}
+                                        className="rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700 hover:bg-rose-100">Remove</button>
+                                    )}
+                                  </div>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </details>
+
+                    <details className="group mb-4 rounded-2xl border border-slate-200 bg-white overflow-hidden">
+                      <summary className="flex cursor-pointer select-none items-center justify-between gap-3 p-4 font-semibold text-slate-800 hover:bg-slate-50 [&::-webkit-details-marker]:hidden">
+                        <span>🎧 Listening</span>
+                        <span className="flex items-center gap-3 text-xs font-normal text-slate-500">
+                          <span>{studentListenings.length} assignments</span>
+                          <span aria-hidden="true" className="transition-transform group-open:rotate-180">⌄</span>
+                        </span>
+                      </summary>
+                      <div className="border-t border-slate-100 px-3 pt-4 md:px-4">
                     <div className="mb-8">
                       <h3 className="text-sm font-semibold text-gray-700 mb-3">
                         Listening homework results
@@ -8546,7 +8788,17 @@ export default function TeacherDashboard() {
                         </div>
                       )}
                     </div>
-
+                      </div>
+                    </details>
+                    <details className="group mb-4 rounded-2xl border border-slate-200 bg-white overflow-hidden">
+                      <summary className="flex cursor-pointer select-none items-center justify-between gap-3 p-4 font-semibold text-slate-800 hover:bg-slate-50 [&::-webkit-details-marker]:hidden">
+                        <span>📚 Vocabulary</span>
+                        <span className="flex items-center gap-3 text-xs font-normal text-slate-500">
+                          <span>{studentVocabularyTests.length} assignments</span>
+                          <span aria-hidden="true" className="transition-transform group-open:rotate-180">⌄</span>
+                        </span>
+                      </summary>
+                      <div className="border-t border-slate-100 px-3 pt-4 md:px-4">
                     <div className="mb-8">
                       <h3 className="text-sm font-semibold text-gray-700 mb-3">
                         Vocabulary test results
@@ -8671,6 +8923,8 @@ export default function TeacherDashboard() {
                         </div>
                       )}
                     </div>
+                      </div>
+                    </details>
 
                       </>
                     )}
@@ -9100,16 +9354,26 @@ export default function TeacherDashboard() {
               </div>
 
               <button
-                onClick={() => {
-                  setSelectedHomework(null)
-                  setSelectedHomeworkType(null)
-                  setAssignmentDraft([])
-                }}
-                className="text-sm text-gray-400 hover:text-gray-600"
+                onClick={closeAssignmentManager}
+                disabled={assignmentSaving}
+                className="text-sm text-gray-400 hover:text-gray-600 disabled:opacity-40"
               >
                 Close
               </button>
             </div>
+
+            <p className="text-xs text-slate-500 mb-4">
+              Assign homework to any permitted student below. For Writing and Writing-enabled Mock Tests,
+              you may independently fund AI assessment for a selected subset at any time.
+              Unassign removes access immediately; previous submitted answers are preserved on the server.
+            </p>
+
+            {assignmentUnknownStudentIds.length > 0 && (
+              <p role="alert" className="rounded-xl bg-amber-50 border border-amber-200 p-3 text-xs text-amber-900 mb-4">
+                {assignmentUnknownStudentIds.length} existing assignment(s) are not visible to your account.
+                Saving is blocked to prevent silently removing these learners. Ask the school administrator to check class/teacher links.
+              </p>
+            )}
 
             {classes.length > 0 && (
               <div className="bg-purple-50 border border-purple-100 rounded-2xl p-4 mb-6">
@@ -9131,7 +9395,9 @@ export default function TeacherDashboard() {
 
                 <div className="flex flex-col gap-2">
                   {classes.map(classItem => {
-                    const classStudentIds = classItem.studentIds || []
+                    const visibleStudentIds = new Set(students.map(student => student.id))
+                    const classStudentIds = (classItem.studentIds || [])
+                      .filter(studentId => visibleStudentIds.has(studentId))
                     const fullyAssigned = isClassFullyAssignedToDraft(classItem)
                     const partlyAssigned = isClassPartlyAssignedToDraft(classItem)
 
@@ -9202,7 +9468,8 @@ export default function TeacherDashboard() {
                 <button
                   type="button"
                   onClick={() => setAssignmentDraft([])}
-                  className="text-xs bg-gray-100 text-gray-500 px-3 py-1.5 rounded-lg hover:bg-gray-200"
+                  disabled={assignmentSaving}
+                  className="text-xs bg-gray-100 text-gray-500 px-3 py-1.5 rounded-lg hover:bg-gray-200 disabled:opacity-40"
                 >
                   Clear all
                 </button>
@@ -9232,7 +9499,8 @@ export default function TeacherDashboard() {
                         type="checkbox"
                         checked={assignmentDraft.includes(student.id)}
                         onChange={() => toggleAssignment(student.id)}
-                        className="accent-purple-600"
+                        disabled={assignmentSaving}
+                        className="accent-purple-600 disabled:opacity-40"
                       />
 
                       <div>
@@ -9264,11 +9532,47 @@ export default function TeacherDashboard() {
               })}
             </div>
 
+            {aiSupportedAssignmentType(selectedHomeworkType) && assignmentAiEnabledForSchool() && (
+              (selectedHomeworkType === 'writing' ||
+                (getMockEnabledSections(selectedHomework).writing && Boolean(selectedHomework.writingId))) ? (
+              <div className="mb-5">
+                <AiWritingSponsoredAssignmentPanel
+                  contentType={selectedHomeworkType}
+                  students={students}
+                  assignedIds={assignmentDraft}
+                  selection={assignmentAiDraft}
+                  onChange={setAssignmentAiDraft}
+                  activeClassStudentIds={activeAiClassStudents()}
+                  managerRole={profile?.role || 'teacher'}
+                  status={assignmentAiStatus}
+                  hasWriting={selectedHomeworkType === 'writing' ||
+                    (getMockEnabledSections(selectedHomework).writing && Boolean(selectedHomework.writingId))}
+                  disabled={assignmentSaving}
+                />
+                {assignmentAiError && (
+                  <p role="alert" className="mt-3 rounded-xl bg-red-50 border border-red-200 p-3 text-xs text-red-800">
+                    {assignmentAiError}
+                  </p>
+                )}
+                <p className="mt-2 text-xs leading-5 text-slate-500">
+                  AI permission is independent of normal assignment. Only students ticked for AI
+                  will be eligible for institution-paid feedback once the school pilot is enabled.
+                  Previously submitted work is never sent to a paid model just by changing this setting.
+                </p>
+              </div>
+              ) : (
+                <p className="mb-5 rounded-xl bg-slate-50 p-3 text-xs text-slate-600">
+                  Institution-funded AI is available only for Mock Tests with an active linked Writing section.
+                </p>
+              )
+            )}
+
             <button
               onClick={saveAssignments}
-              className="w-full bg-purple-600 text-white rounded-xl py-3 text-sm font-medium hover:bg-purple-700"
+              disabled={assignmentSaving || assignmentAiStatus === 'loading' || assignmentUnknownStudentIds.length > 0}
+              className="w-full bg-purple-600 text-white rounded-xl py-3 text-sm font-medium hover:bg-purple-700 disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              Save assignments
+              {assignmentSaving ? 'Saving assignments...' : 'Save assignments'}
             </button>
           </div>
         </div>

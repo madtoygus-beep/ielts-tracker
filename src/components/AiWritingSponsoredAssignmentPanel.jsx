@@ -6,9 +6,10 @@ import {
 // Display only. The server-side P5B-3A policy callable is the authorization boundary.
 export default function AiWritingSponsoredAssignmentPanel({
   contentType, students, assignedIds, selection, onChange,
+  activeClassStudentIds = null, managerRole = 'admin',
   status = 'ready', hasWriting = true, disabled = false
 }) {
-  const availableStudents = eligibleAiSponsoredStudents(students, assignedIds)
+  const availableStudents = eligibleAiSponsoredStudents(students, assignedIds, activeClassStudentIds)
   const eligibleIds = new Set(availableStudents.map(student => student.id))
   const selectedIds = (selection?.studentIds || []).filter(id => eligibleIds.has(id))
   const enabled = selection?.enabled === true
@@ -41,13 +42,13 @@ export default function AiWritingSponsoredAssignmentPanel({
           <div>
             <p className="font-semibold text-sm text-indigo-950">Institution-Sponsored AI Writing</p>
             <p className="mt-1 text-xs leading-5 text-indigo-800">
-              Selected institution students receive IELTS Writing AI feedback as part of their course.
-              No student credits are deducted; costs count against the school quota.
+              Selected institution students may choose Check with AI when they submit Writing.
+              No student credits are deducted; school quota is used only if they choose AI.
             </p>
           </div>
           <input
             type="checkbox"
-            aria-label="Enable automatic AI assessment"
+            aria-label="Allow institution-funded AI choice for selected students"
             checked={enabled && hasWriting}
             onChange={event => changeEnabled(event.target.checked)}
             disabled={locked}
@@ -70,7 +71,7 @@ export default function AiWritingSponsoredAssignmentPanel({
           <div className="mt-4 border-t border-indigo-200 pt-3">
             <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
               <p className="text-xs font-semibold text-indigo-950">
-                Students receiving AI assessment ({selectedIds.length}/{availableStudents.length})
+                Students eligible for funded AI ({selectedIds.length}/{availableStudents.length})
               </p>
               <div className="flex gap-2">
                 <button type="button" onClick={selectAll} disabled={locked || availableStudents.length === 0}
@@ -84,7 +85,11 @@ export default function AiWritingSponsoredAssignmentPanel({
               </div>
             </div>
             {availableStudents.length === 0 ? (
-              <p className="text-xs text-amber-800">Assign institution students to this test above first.</p>
+              <p className="text-xs text-amber-800">
+                {managerRole === 'teacher'
+                  ? 'No eligible students in your active assigned classes. Ask the school admin to verify that you are the class teacher (teacherId) and that the student belongs to that active class. Turn off AI to save normal homework without enabling funded assessment.'
+                  : 'Assign institution students to this test above first.'}
+              </p>
             ) : (
               <div className="max-h-44 overflow-y-auto space-y-2 pr-1">
                 {availableStudents.map(student => (
@@ -100,12 +105,12 @@ export default function AiWritingSponsoredAssignmentPanel({
               </div>
             )}
             <p className="mt-2 text-[11px] text-indigo-800">
-              Maximum {MAX_AI_SPONSORED_STUDENTS} students. Only currently assigned students are eligible.
+              Maximum {MAX_AI_SPONSORED_STUDENTS} students. AI is available only for current institution assignments{managerRole === 'teacher' ? ' in your active teacher-owned classes' : ''}.
             </p>
           </div>
         )}
         <p className="mt-3 text-[11px] leading-4 text-gray-600">
-          Automatic AI assessment requires the institution pilot and server-side feature flags to be enabled. Saving these settings alone does not start an AI assessment.
+          Students choose Check with AI or Send to Teacher when submitting. Permission alone never starts a paid AI assessment. The institution pilot and server feature flags must be enabled.
         </p>
       </div>
     </section>

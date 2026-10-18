@@ -3676,6 +3676,8 @@
                       key={`${user?.uid || ''}:${selectedReview.writing.id}:${selectedReview.submission.id}`}
                       contentId={selectedReview.writing.id}
                       attemptNumber={submissionAttemptNumber(selectedReview.submission)}
+                      allowManualRequest={false}
+                      submittedChoice={selectedReview.submission.aiReviewChoice || 'teacher'}
                     />
                   )}
               </div>

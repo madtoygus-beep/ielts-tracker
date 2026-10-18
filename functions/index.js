@@ -6193,6 +6193,14 @@ exports.submitWritingSecure = onCall(async request => {
   const rawTask2Answer = typeof data.task2Answer === 'string' ? data.task2Answer : ''
   const autoSubmitted = data.autoSubmitted === true
   const finishedLate = data.finishedLate === true
+  // Choice is made by the student AT submission, not later. Automatic timer
+  // submissions always go to the teacher and never spend an AI credit.
+  if (data.aiReviewChoice !== undefined &&
+      !['teacher', 'ai'].includes(data.aiReviewChoice)) {
+    throw new HttpsError('invalid-argument', 'Choose Check with AI or Send to Teacher.')
+  }
+  const aiReviewChoice = autoSubmitted || finishedLate ? 'teacher'
+    : data.aiReviewChoice === 'ai' ? 'ai' : 'teacher'
 
   assertJsonSize(
     { task1Answer: rawTask1Answer, task2Answer: rawTask2Answer },
@@ -6209,6 +6217,17 @@ exports.submitWritingSecure = onCall(async request => {
     contentId: writingId,
     sourceCollection: config.sourceCollection
   })
+
+  // Fails CLOSED before the submission record is written if entitlement was
+  // removed since the student opened the page. Server owns the billing route.
+  const aiChoiceOptions = aiReviewChoice === 'ai'
+    ? await aiWritingSubmissionChoice.getOptionsForStudent(student, writingId)
+    : null
+  if (aiChoiceOptions && aiChoiceOptions.canChooseAi !== true) {
+    throw new HttpsError('failed-precondition',
+      'AI evaluation is unavailable for this assignment. Choose Send to Teacher.')
+  }
+  const aiBillingMode = aiChoiceOptions?.billingMode || 'none'
 
   const writingMode = source.contentType || source.writingMode || 'full_writing'
   const task1Enabled = writingMode !== 'task2_only'
@@ -6250,6 +6269,8 @@ exports.submitWritingSecure = onCall(async request => {
     task2WordCount: task2Enabled ? countSubmissionWords(task2Answer) : 0,
     finishedLate,
     autoSubmitted,
+    aiReviewChoice,
+    aiBillingMode,
     reviewed: false,
     review: null,
     archived: false
@@ -7360,6 +7381,16 @@ exports.setAiWritingSchoolPilot = onCall(request =>
 exports.setAiWritingStudentAccess = onCall(request =>
   aiWritingAccess.setAiWritingStudentAccess(request))
 
+// P7: independent, read-only pre-submission entitlement check, including
+// teacher-selected institution-funded rights. No model calls or spending.
+const { createAiWritingSubmissionChoiceService } = require('./lib/aiWritingSubmissionChoice')
+const aiWritingSubmissionChoice = createAiWritingSubmissionChoiceService({
+  db, HttpsError, requireStudent, schoolIdOf, accountTypeOf,
+  providerEnabled: () => process.env.MAXIMA_AI_WRITING_ENABLED === 'true',
+  sponsoredEnabled: () => process.env.MAXIMA_AI_WRITING_SPONSORED_AUTO_ENABLED === 'true'
+})
+exports.getMyAiWritingSubmissionOptions = onCall(request =>
+  aiWritingSubmissionChoice.getMyOptions(request))
 
 // P5A-2B: do not deploy evaluateMyAiWriting until the pilot has been
 // explicitly approved, OPENAI secret installed and MAXIMA_AI_WRITING_ENABLED=true.

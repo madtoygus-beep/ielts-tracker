@@ -18,6 +18,37 @@ function countWords(text) {
 
 const submitWritingSecureCall = httpsCallable(functions, 'submitWritingSecure')
 const getStudentSubmissionAttemptStateCall = httpsCallable(functions, 'getStudentSubmissionAttemptState')
+const getMyAiWritingSubmissionOptionsCall = httpsCallable(functions, 'getMyAiWritingSubmissionOptions')
+const evaluateMyAiWritingCall = httpsCallable(functions, 'evaluateMyAiWriting', { timeout: 180000 })
+
+function WritingSubmitActions({ submitting, canChooseAi, aiLoading, institutionFunded, creditsRemaining, onChoice }) {
+  return (
+    <div className="mt-5 space-y-2" aria-label="Writing submission choices">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <button type="button" onClick={() => onChoice('ai')}
+          disabled={submitting || aiLoading || !canChooseAi}
+          title={!canChooseAi ? 'No active AI assessment credit or institution-funded right is available.' : undefined}
+          className="rounded-xl bg-indigo-700 px-4 py-4 text-sm font-semibold text-white hover:bg-indigo-800 disabled:bg-slate-200 disabled:text-slate-500 disabled:cursor-not-allowed">
+          ✨ Check with AI
+        </button>
+        <button type="button" onClick={() => onChoice('teacher')}
+          disabled={submitting}
+          className="rounded-xl bg-purple-600 px-4 py-4 text-sm font-semibold text-white hover:bg-purple-700 disabled:opacity-60">
+          ✉ Send to Teacher
+        </button>
+      </div>
+      <p className="text-xs text-slate-500 leading-5">
+        {submitting ? 'Submitting your Writing...' : aiLoading
+          ? 'Checking AI access… Send to Teacher is available now.'
+          : canChooseAi
+            ? institutionFunded
+              ? 'AI is funded by your institution. Choosing AI does not use a personal credit.'
+              : `You have ${creditsRemaining} AI credit(s). Check with AI uses one credit only if a report is saved.`
+            : 'Check with AI is unavailable without an active AI credit or an institution-funded right. Send to Teacher remains available.'}
+      </p>
+    </div>
+  )
+}
 
 function attemptNumberOfSubmission(submission) {
   const value = Number(submission?.attemptNumber)
@@ -90,6 +121,8 @@ export default function DoWriting() {
 
   const [user, setUser] = useState(null)
   const [isInstitutionStudent, setIsInstitutionStudent] = useState(false)
+  const [aiOptions, setAiOptions] = useState({ loading: true, canChooseAi: false, creditsRemaining: 0, institutionFunded: false })
+  const [aiSubmitMessage, setAiSubmitMessage] = useState('')
   const [writing, setWriting] = useState(null)
   const [currentTask, setCurrentTask] = useState(1)
   const [task1Answer, setTask1Answer] = useState('')
@@ -119,6 +152,33 @@ export default function DoWriting() {
     : hasTask2 && !hasTask1
       ? 'Task 2'
       : `Task ${currentTask}`
+
+  // The backend authorizes the CURRENT assignment, sponsored funding and
+  // credit balance. Client-side values only control presentation; the secure
+  // submission callable re-checks everything before saving the AI choice.
+  useEffect(() => {
+    if (!user?.uid || !writing?.id || writing.id !== id ||
+        !isInstitutionStudent || submitted) {
+      setAiOptions({ loading: false, canChooseAi: false, creditsRemaining: 0, institutionFunded: false })
+      return undefined
+    }
+    let active = true
+    setAiOptions({ loading: true, canChooseAi: false, creditsRemaining: 0, institutionFunded: false })
+    getMyAiWritingSubmissionOptionsCall({ contentId: id })
+      .then(result => {
+        if (!active) return
+        const value = result?.data || {}
+        setAiOptions({ loading: false, canChooseAi: value.canChooseAi === true,
+          creditsRemaining: Number.isSafeInteger(value.creditsRemaining) ? value.creditsRemaining : 0,
+          institutionFunded: value.institutionFunded === true })
+      })
+      .catch(error => {
+        if (!active) return
+        console.warn('AI eligibility could not be loaded; teacher submission remains available.', error?.code || '')
+        setAiOptions({ loading: false, canChooseAi: false, creditsRemaining: 0, institutionFunded: false })
+      })
+    return () => { active = false }
+  }, [user?.uid, writing?.id, id, isInstitutionStudent, submitted])
 
   useEffect(() => {
     mountedRef.current = true
@@ -247,6 +307,7 @@ export default function DoWriting() {
       setAttemptState(null)
       setCompletedSubmission(null)
       setIsInstitutionStudent(false)
+      setAiSubmitMessage('')
 
       if (!currentUser) {
         setUser(null)
@@ -638,7 +699,7 @@ export default function DoWriting() {
     }
   }
 
-  const handleSubmit = async (autoSubmit = false) => {
+  const handleSubmit = async (autoSubmit = false, selectedChoice = 'teacher') => {
     if (
       submittingRef.current || submitted || alreadyDone || loading ||
       !draftLoaded || !user || !writing || writing.id !== id ||
@@ -646,21 +707,33 @@ export default function DoWriting() {
     ) return
 
     const expired = timeLeft <= 0
+    const aiRequested = !autoSubmit && !expired && selectedChoice === 'ai'
+    if (aiRequested && (!isInstitutionStudent || aiOptions.loading || !aiOptions.canChooseAi)) {
+      alert('AI access is not available. Please choose Send to Teacher.')
+      return
+    }
+    if (aiRequested && !(
+      (hasTask1 && countWords(task1Answer) >= 50) ||
+      (hasTask2 && countWords(task2Answer) >= 100)
+    )) {
+      alert('AI feedback needs at least 50 words for Task 1 or 100 words for Task 2. Continue writing, or choose Send to Teacher without AI.')
+      return
+    }
 
     if (!autoSubmit && !expired) {
       // A short or blank response never prevents finishing and teacher review.
       // No paid AI evaluation can occur below the independent backend limits.
       const nextAttemptNumber = Number(attemptState?.nextAttemptNumber) || 0
       const confirmationText = attemptState?.open === true && nextAttemptNumber > 1
-        ? `Submit Writing Attempt ${nextAttemptNumber}?`
-        : 'Submit your writing homework?'
+        ? `Submit Writing Attempt ${nextAttemptNumber} to ${aiRequested ? 'AI' : 'your teacher'}?`
+        : aiRequested ? 'Submit this Writing for AI evaluation?' : 'Send this Writing to your teacher?'
 
       const shortTasks = [
         hasTask1 && countWords(task1Answer) < 50 ? `Task 1: ${countWords(task1Answer)}/50 words` : null,
         hasTask2 && countWords(task2Answer) < 100 ? `Task 2: ${countWords(task2Answer)}/100 words` : null
       ].filter(Boolean)
-      const warning = shortTasks.length
-        ? `\n\nToo short for AI feedback:\n${shortTasks.join('\n')}\n\nYou can still submit for teacher review. Short tasks will not be sent to AI. Choose Cancel to continue writing.`
+      const warning = aiRequested && shortTasks.length
+        ? `\n\nToo short for AI feedback:\n${shortTasks.join('\n')}\n\nOnly eligible tasks will be evaluated. Choose Cancel to continue writing or Send to Teacher to submit without AI.`
         : ''
       const ok = window.confirm(confirmationText + warning)
       if (!ok) return
@@ -682,7 +755,8 @@ export default function DoWriting() {
         task1Answer,
         task2Answer,
         finishedLate: expired,
-        autoSubmitted: autoSubmit || expired
+        autoSubmitted: autoSubmit || expired,
+        aiReviewChoice: aiRequested ? 'ai' : 'teacher'
       })
 
       const secureData = response?.data || {}
@@ -711,6 +785,26 @@ export default function DoWriting() {
         setSubmitted(true)
         submittingRef.current = false
         setSubmitting(false)
+      }
+      // A single Check with AI click submits first, then starts the existing
+      // idempotent credit evaluator. Institution-funded submissions are handled
+      // by the guarded trigger; NEVER call the personal-credit API for them.
+      if (!secureData.alreadySubmitted &&
+          storedSubmission.aiReviewChoice === 'ai' &&
+          storedSubmission.aiBillingMode === 'student_credit') {
+        setAiSubmitMessage('AI evaluation requested. Your submission is saved.')
+        void evaluateMyAiWritingCall({ context: 'homework', contentId: id })
+          .then(() => { if (mountedRef.current) setAiSubmitMessage('AI report is ready. Refresh AI status below.') })
+          .catch(error => {
+            console.warn('Writing saved, but AI evaluation could not be completed:', error?.code || '')
+            if (mountedRef.current) setAiSubmitMessage(
+              'Writing saved. AI evaluation was not confirmed. Your teacher can still review it; please contact the school if necessary.'
+            )
+          })
+      } else if (storedSubmission.aiReviewChoice === 'ai') {
+        setAiSubmitMessage('Writing saved. Institution-funded AI assessment will run if the pilot is active.')
+      } else {
+        setAiSubmitMessage('Writing saved for teacher review. No AI credit was requested.')
       }
     } catch (error) {
       console.error('Secure Writing submission failed:', error)
@@ -743,6 +837,16 @@ export default function DoWriting() {
             setSubmitted(true)
             submittingRef.current = false
             setSubmitting(false)
+          }
+          if (durableSubmission.aiReviewChoice === 'ai' &&
+              durableSubmission.aiBillingMode === 'student_credit') {
+            // The submission is already durable; retry the idempotent credit
+            // evaluator rather than attempting a second submission.
+            void evaluateMyAiWritingCall({ context: 'homework', contentId: id })
+              .catch(error => {
+                console.warn('Recovered submission, AI request could not be confirmed:', error?.code || '')
+                if (mountedRef.current) setAiSubmitMessage('Writing saved, but AI evaluation was not confirmed. Please contact your school.')
+              })
           }
           return
         }
@@ -932,10 +1036,14 @@ export default function DoWriting() {
               </div>
             )}
 
+            {aiSubmitMessage && <p role="status" className="mb-4 rounded-xl bg-indigo-50 p-3 text-sm text-indigo-800">{aiSubmitMessage}</p>}
+
             {isInstitutionStudent && completedSubmission?.id && (
               <AiWritingStudentPanel
                 key={`${user?.uid || ''}:${id}:${completedSubmission.id}`}
                 contentId={id}
+                allowManualRequest={false}
+                submittedChoice={completedSubmission.aiReviewChoice || 'teacher'}
                 attemptNumber={attemptNumberOfSubmission(completedSubmission)}
                 wordCounts={{
                   task1Enabled: hasTask1,
@@ -1143,13 +1251,14 @@ export default function DoWriting() {
                   Next → Task 2
                 </button>
               ) : (
-                <button
-                  onClick={() => handleSubmit(false)}
-                  disabled={submitting}
-                  className="w-full bg-purple-600 text-white rounded-xl py-4 text-sm font-medium hover:bg-purple-700 mt-5 disabled:opacity-60"
-                >
-                  {submitting ? 'Submitting...' : 'Submit Task 1'}
-                </button>
+                <WritingSubmitActions
+                  submitting={submitting}
+                  aiLoading={aiOptions.loading}
+                  canChooseAi={aiOptions.canChooseAi && timeLeft > 0}
+                  institutionFunded={aiOptions.institutionFunded}
+                  creditsRemaining={aiOptions.creditsRemaining}
+                  onChoice={choice => handleSubmit(false, choice)}
+                />
               )}
             </div>
           </div>
@@ -1212,13 +1321,14 @@ export default function DoWriting() {
                   </button>
                 )}
 
-                <button
-                  onClick={() => handleSubmit(false)}
-                  disabled={submitting}
-                  className="w-full bg-purple-600 text-white rounded-xl py-4 text-sm font-medium hover:bg-purple-700 disabled:opacity-60"
-                >
-                  {submitting ? 'Submitting...' : hasTask1 ? 'Submit Writing' : 'Submit Task 2'}
-                </button>
+                <WritingSubmitActions
+                  submitting={submitting}
+                  aiLoading={aiOptions.loading}
+                  canChooseAi={aiOptions.canChooseAi && timeLeft > 0}
+                  institutionFunded={aiOptions.institutionFunded}
+                  creditsRemaining={aiOptions.creditsRemaining}
+                  onChoice={choice => handleSubmit(false, choice)}
+                />
               </div>
             </div>
           </div>

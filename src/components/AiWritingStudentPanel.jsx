@@ -80,7 +80,7 @@ function TaskAiReport({ taskNumber, report }) {
 
 // Mounted only for an approved Maxima institution student's submitted Writing
 // or Mock attempt. Backend callables own identity, submission, access and billing.
-export default function AiWritingStudentPanel({ contentId, attemptNumber, context = 'homework', wordCounts = {}, teacherBand = null }) {
+export default function AiWritingStudentPanel({ contentId, attemptNumber, context = 'homework', wordCounts = {}, teacherBand = null, allowManualRequest = false, submittedChoice = 'teacher' }) {
   const [access, setAccess] = useState(null)
   const [envelope, setEnvelope] = useState({ status: 'not_started' })
   const [loading, setLoading] = useState(true)
@@ -125,12 +125,13 @@ export default function AiWritingStudentPanel({ contentId, attemptNumber, contex
 
   useEffect(() => {
     if (envelope.status !== 'processing' &&
-        !(envelope.institutionFunded === true && envelope.status === 'not_started')) return undefined
+        !(envelope.institutionFunded === true && envelope.status === 'not_started') &&
+        !(submittedChoice === 'ai' && envelope.status === 'not_started')) return undefined
     const timer = setInterval(() => {
       if (!requesting) refresh({ quiet: true })
     }, 8000)
     return () => clearInterval(timer)
-  }, [envelope.status, envelope.institutionFunded, requesting, refresh])
+  }, [envelope.status, envelope.institutionFunded, requesting, refresh, submittedChoice])
 
   const startEvaluation = async () => {
     if (context !== 'homework' ||
@@ -163,10 +164,14 @@ export default function AiWritingStudentPanel({ contentId, attemptNumber, contex
   }
 
   if (loading && !access && envelope.status !== 'completed') return null
-  if (!shouldShowAiWritingPanel(access, envelope)) return null
+  if (!shouldShowAiWritingPanel(access, envelope) && submittedChoice !== 'ai') return null
+  // A teacher-submitted Writing with no saved AI result is not an invitation
+  // to buy a later AI check; the decision belongs in the original submit UI.
+  if (!allowManualRequest && submittedChoice !== 'ai' &&
+      envelope.status !== 'completed' && envelope.institutionFunded !== true) return null
   // Mock evaluation is sponsored/read-only. Never offer manual credit spending.
   if (context === 'mock' && !envelope.institutionFunded && envelope.status !== 'completed') return null
-  const canEvaluate = context === 'homework' &&
+  const canEvaluate = allowManualRequest && context === 'homework' &&
     canRequestAiWriting(access, envelope, requesting || loading)
   const report = envelope.status === 'completed' ? envelope.report : null
   const validTeacherBand = context === 'mock' && typeof teacherBand === 'number' &&
@@ -261,10 +266,14 @@ export default function AiWritingStudentPanel({ contentId, attemptNumber, contex
                     ? 'AI feedback needs at least 50 words in Task 1 or 100 in Task 2. A band estimate requires 150 / 250 words respectively. Very short answers cannot use an AI credit.'
                     : 'You have no AI credits left. Contact your school administrator if you need additional evaluations.'}
               </p>
-              <button type="button" disabled={!canEvaluate} onClick={startEvaluation}
-                className="bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-lg px-4 py-2 text-sm font-semibold hover:bg-indigo-800">
-                {requesting ? 'Evaluating...' : 'Evaluate with AI (1 credit)'}
-              </button>
+              {allowManualRequest ? (
+                <button type="button" disabled={!canEvaluate} onClick={startEvaluation}
+                  className="bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-lg px-4 py-2 text-sm font-semibold hover:bg-indigo-800">
+                  {requesting ? 'Evaluating...' : 'Evaluate with AI (1 credit)'}
+                </button>
+              ) : submittedChoice === 'ai' ? (
+                <p role="status" className="text-sm text-indigo-800">AI was selected when submitting. Refresh the report status to check the result. No additional paid request can be started here.</p>
+              ) : null}
             </>
           ) : null}
         </div>

@@ -19,6 +19,7 @@ import {
   emptyAiSponsoredSelection,
   normalizeAiSponsoredPolicy,
   eligibleAiSponsoredStudents,
+  activeTeacherAiClassStudentIds,
   buildAiSponsoredWriteRequest,
   shouldSaveAiSponsoredPolicy
 } from '../services/aiWritingSponsoredAssignmentPolicy'
@@ -109,6 +110,35 @@ function filterClassStudentIds(classItem, visibleStudents) {
   )
 }
 
+// A client-side filter is not a Firestore authorization boundary. Subscribe
+// only to server-authorized query slices, as the Mock editor already does.
+function listenMergedQueries(queryList, onItems, label) {
+  let active = true
+  const buckets = new Map()
+  const emit = () => {
+    if (!active) return
+    const merged = new Map()
+    buckets.forEach(items => items.forEach(item => merged.set(item.id, item)))
+    onItems(Array.from(merged.values()))
+  }
+  const unsubscribers = queryList.map((queryRef, index) => onSnapshot(
+    queryRef,
+    snap => {
+      buckets.set(index, snap.docs.map(item => ({ id: item.id, ...item.data() })))
+      emit()
+    },
+    error => {
+      console.warn(`${label} query failed:`, error)
+      buckets.set(index, [])
+      emit()
+    }
+  ))
+  return () => {
+    active = false
+    unsubscribers.forEach(unsubscribe => unsubscribe())
+  }
+}
+
 export default function CreateWriting() {
   const { id } = useParams()
   const isEditMode = Boolean(id)
@@ -118,6 +148,13 @@ export default function CreateWriting() {
   const [profile, setProfile] = useState(null)
   const [students, setStudents] = useState([])
   const [classes, setClasses] = useState([])
+  // The server requires an active, real class with teacherId === teacher UID.
+  // For teachers an empty Set fails closed while class data is still loading.
+  const aiActiveClassStudentIds = useMemo(() =>
+    profile?.role === 'teacher'
+      ? activeTeacherAiClassStudentIds(classes, user?.uid)
+      : null,
+  [classes, profile?.role, user?.uid])
   const [search, setSearch] = useState('')
 
   const [title, setTitle] = useState('')
@@ -202,45 +239,53 @@ export default function CreateWriting() {
   useEffect(() => {
     if (!user || !profile) return
 
-    const q = query(collection(db, 'users'), where('role', '==', 'student'))
+    const q = isAdminProfile(profile)
+      ? query(collection(db, 'users'), where('role', '==', 'student'))
+      : query(collection(db, 'users'), where('teacherIds', 'array-contains', user.uid))
 
     return onSnapshot(q, snap => {
       const list = snap.docs
         .map(d => ({ id: d.id, ...d.data() }))
-        .filter(student => student.status === 'approved' && student.deleted !== true)
+        .filter(student => student.role === 'student' &&
+          student.status === 'approved' && student.deleted !== true)
 
-      const visibleStudents = filterStudentsByProfile(
-        list,
-        profile,
-        user.uid
-      )
-
+      const visibleStudents = filterStudentsByProfile(list, profile, user.uid)
       visibleStudents.sort((a, b) =>
         (a.name || a.email || '').localeCompare(b.name || b.email || '')
       )
-
       setStudents(visibleStudents)
+    }, error => {
+      console.warn('Writing student query failed:', error)
+      setStudents([])
     })
   }, [user, profile])
 
   useEffect(() => {
     if (!user || !profile) return
 
-    const q = query(collection(db, 'classes'))
+    const classCollection = collection(db, 'classes')
+    const classQueries = isAdminProfile(profile)
+      ? [query(classCollection)]
+      : [
+          query(classCollection,
+            where('schoolId', '==', getProfileSchoolId(profile)),
+            where('teacherId', '==', user.uid)),
+          query(classCollection,
+            where('schoolId', '==', getProfileSchoolId(profile)),
+            where('createdBy', '==', user.uid)),
+          query(classCollection,
+            where('schoolId', '==', getProfileSchoolId(profile)),
+            where('teacherIds', 'array-contains', user.uid))
+        ]
 
-    return onSnapshot(q, snap => {
-      const list = snap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
-        .filter(classItem => classItem.archived !== true)
-
+    return listenMergedQueries(classQueries, items => {
       const visibleClasses = filterClassesByProfile(
-        list,
+        items.filter(classItem => classItem.archived !== true),
         profile,
         user.uid
       ).sort((a, b) => (a.name || '').localeCompare(b.name || ''))
-
       setClasses(visibleClasses)
-    })
+    }, 'Writing class')
   }, [user, profile])
 
   useEffect(() => {
@@ -328,6 +373,7 @@ export default function CreateWriting() {
   const selectedStudents = students.filter(student =>
     assignTo.includes(student.id)
   )
+  const outOfViewAssignmentCount = assignTo.length - selectedStudents.length
 
   const hasTask1 = contentType !== 'task2_only'
   const hasTask2 = contentType !== 'task1_only'
@@ -347,15 +393,8 @@ export default function CreateWriting() {
     )
   }
 
-  useEffect(() => {
-    if (!user || !profile || isAdminProfile(profile) || students.length === 0) return
-
-    const visibleStudentIds = new Set(students.map(student => student.id))
-
-    setAssignTo(prev =>
-      prev.filter(studentId => visibleStudentIds.has(studentId))
-    )
-  }, [user, profile, students])
+  // Do not silently remove canonical assignments when the teacher's browser
+  // cannot list an existing student; only an explicit unassign should do that.
 
   const cleanString = value => {
     if (typeof value === 'string') return value
@@ -557,7 +596,7 @@ export default function CreateWriting() {
       return
     }
     if (sponsoredSchool && sponsoredStatus === 'ready' && sponsoredSelection.enabled &&
-        !eligibleAiSponsoredStudents(students, assignTo)
+        !eligibleAiSponsoredStudents(students, assignTo, aiActiveClassStudentIds)
           .some(student => sponsoredSelection.studentIds.includes(student.id))) {
       alert('Select at least one assigned institution student for automatic AI assessment.')
       return
@@ -624,7 +663,7 @@ export default function CreateWriting() {
           ready: sponsoredStatus === 'ready',
           schoolId: sponsoredSchool ? AI_SPONSORED_SCHOOL_ID : '',
         })) {
-          const eligibleIds = eligibleAiSponsoredStudents(students, assignTo)
+          const eligibleIds = eligibleAiSponsoredStudents(students, assignTo, aiActiveClassStudentIds)
             .map(student => student.id)
           await setSponsoredPolicyCall(buildAiSponsoredWriteRequest({
             contentType: 'writing',
@@ -635,7 +674,9 @@ export default function CreateWriting() {
         }
       } catch (policyError) {
         console.error('Writing saved, but AI assessment assignment failed:', policyError)
-        alert('Writing homework and student assignments were saved, but the automatic AI setting was NOT saved. Open Edit Writing and retry. No automatic AI evaluation was started.')
+        alert('Writing homework and student assignments were saved, but the automatic AI setting was NOT saved. ' +
+          `${policyError?.message || 'Check current class membership and assignment access.'} ` +
+          'Open Edit Writing to review the AI selection. No automatic AI evaluation was started.')
         navigate(`/edit-writing/${savedWritingId}`, { replace: true })
         return
       }
@@ -1052,6 +1093,12 @@ export default function CreateWriting() {
               <p className="text-xs text-gray-400 mb-2">
                 Selected students
               </p>
+              {outOfViewAssignmentCount > 0 && (
+                <p className="text-xs text-amber-800 mb-2" role="status">
+                  {outOfViewAssignmentCount} existing student assignment(s) are outside your current visible student list.
+                  They will be preserved unless you explicitly remove them. Ask a school admin to check access.
+                </p>
+              )}
 
               {selectedStudents.length === 0 ? (
                 <p className="text-sm text-gray-400">
@@ -1076,6 +1123,8 @@ export default function CreateWriting() {
                 contentType="writing"
                 students={students}
                 assignedIds={assignTo}
+                activeClassStudentIds={aiActiveClassStudentIds}
+                managerRole={profile?.role}
                 selection={sponsoredSelection}
                 onChange={setSponsoredSelection}
                 status={sponsoredStatus}

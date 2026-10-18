@@ -19,6 +19,7 @@ import {
   emptyAiSponsoredSelection,
   normalizeAiSponsoredPolicy,
   eligibleAiSponsoredStudents,
+  activeTeacherAiClassStudentIds,
   buildAiSponsoredWriteRequest,
   shouldSaveAiSponsoredPolicy,
   shouldRetireMockAiSponsoredPolicy
@@ -315,6 +316,11 @@ export default function CreateMockTest() {
   const [writings, setWritings] = useState([])
   const [students, setStudents] = useState([])
   const [classes, setClasses] = useState([])
+  const aiActiveClassStudentIds = useMemo(() =>
+    profile?.role === 'teacher'
+      ? activeTeacherAiClassStudentIds(classes, user?.uid)
+      : null,
+  [classes, profile?.role, user?.uid])
 
   const [listeningIds, setListeningIds] = useState(['', '', '', ''])
   const [readingIds, setReadingIds] = useState(['', '', ''])
@@ -616,9 +622,22 @@ export default function CreateMockTest() {
       'Mock student query'
     )
 
+    // Class reads additionally require sameSchool in Firestore rules. A
+    // teacher-owned query without schoolId is not safe/authorized for lists.
+    const classCollection = collection(db, 'classes')
     const classQueries = isAdmin
-      ? [query(collection(db, 'classes'))]
-      : buildTeacherOwnedQueries('classes', user.uid)
+      ? [query(classCollection)]
+      : [
+          query(classCollection,
+            where('schoolId', '==', schoolId),
+            where('teacherId', '==', user.uid)),
+          query(classCollection,
+            where('schoolId', '==', schoolId),
+            where('createdBy', '==', user.uid)),
+          query(classCollection,
+            where('schoolId', '==', schoolId),
+            where('teacherIds', 'array-contains', user.uid))
+        ]
 
     const unsubClasses = listenMergedQueries(
       classQueries,
@@ -661,17 +680,11 @@ export default function CreateMockTest() {
   const selectedStudents = useMemo(() => {
     return students.filter(student => assignTo.includes(student.id))
   }, [students, assignTo])
+  const outOfViewAssignmentCount = assignTo.length - selectedStudents.length
 
 
-  useEffect(() => {
-    if (!user || !profile || isAdminProfile(profile) || students.length === 0) return
-
-    const visibleStudentIds = new Set(students.map(student => student.id))
-
-    setAssignTo(prev =>
-      prev.filter(studentId => visibleStudentIds.has(studentId))
-    )
-  }, [user, profile, students])
+  // Keep server-authoritative existing student assignments even if browser
+  // queries no longer expose every student to this teacher.
 
   const isMiniMock = contentType === 'mini_mock'
   const mockTypeLabel = isMiniMock ? 'Mini Mock' : 'Full Mock'
@@ -1041,7 +1054,7 @@ export default function CreateMockTest() {
     }
     if (sponsoredSchool && activeSections.writing && sponsoredStatus === 'ready' &&
         sponsoredSelection.enabled &&
-        !eligibleAiSponsoredStudents(students, assignTo)
+        !eligibleAiSponsoredStudents(students, assignTo, aiActiveClassStudentIds)
           .some(student => sponsoredSelection.studentIds.includes(student.id))) {
       alert('Select at least one assigned institution student for automatic AI assessment.')
       return
@@ -1171,7 +1184,7 @@ export default function CreateMockTest() {
           schoolId: sponsoredSchool ? AI_SPONSORED_SCHOOL_ID : '',
           hasWriting: activeSections.writing
         })) {
-          const eligibleIds = eligibleAiSponsoredStudents(students, assignTo)
+          const eligibleIds = eligibleAiSponsoredStudents(students, assignTo, aiActiveClassStudentIds)
             .map(student => student.id)
           await setSponsoredPolicyCall(buildAiSponsoredWriteRequest({
             contentType: 'mock',
@@ -1182,7 +1195,9 @@ export default function CreateMockTest() {
         }
       } catch (policyError) {
         console.error('Mock saved, but AI assessment assignment failed:', policyError)
-        alert('Mock test and student assignments were saved, but the automatic AI setting was NOT saved. Open Edit Mock and retry. No automatic AI evaluation was started.')
+        alert('Mock test and student assignments were saved, but the automatic AI setting was NOT saved. ' +
+          `${policyError?.message || 'Check current class membership and assignment access.'} ` +
+          'Open Edit Mock to review the AI selection. No automatic AI evaluation was started.')
         navigate(`/edit-mock/${savedMockId}`, { replace: true })
         return
       }
@@ -1814,6 +1829,12 @@ export default function CreateMockTest() {
               <p className="text-xs text-gray-400 mb-2">
                 Selected students
               </p>
+              {outOfViewAssignmentCount > 0 && (
+                <p className="text-xs text-amber-800 mb-2" role="status">
+                  {outOfViewAssignmentCount} existing student assignment(s) are outside your current visible student list.
+                  They will be preserved unless you explicitly remove them. Ask a school admin to check access.
+                </p>
+              )}
 
               {selectedStudents.length === 0 ? (
                 <p className="text-sm text-gray-400">
@@ -1838,6 +1859,8 @@ export default function CreateMockTest() {
                 contentType="mock"
                 students={students}
                 assignedIds={assignTo}
+                activeClassStudentIds={aiActiveClassStudentIds}
+                managerRole={profile?.role}
                 selection={sponsoredSelection}
                 onChange={setSponsoredSelection}
                 status={sponsoredStatus}

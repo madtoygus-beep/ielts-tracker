@@ -133,6 +133,8 @@ function createAiWritingEvaluationService({
     return {
       student, context, contentId, contentType, attemptNumber, fingerprint, prepared,
       submittedAt: currentSubmission?.submittedAt,
+      aiReviewChoice: currentSubmission?.aiReviewChoice,
+      aiBillingMode: currentSubmission?.aiBillingMode,
       jobId, jobRef: db.doc(`aiWritingEvaluations/${jobId}`),
       sourceRef, submissionRef, assignmentRef, linkedRef,
       userRef: db.doc(`users/${student.uid}`), schoolRef: db.doc(`schools/${student.schoolId}`),
@@ -170,6 +172,11 @@ function createAiWritingEvaluationService({
     })
     if (fresh.fingerprint !== evidence.fingerprint || fresh.attemptNumber !== evidence.attemptNumber) {
       fail('failed-precondition', 'This submitted attempt changed; reload the assignment.')
+    }
+    if (evidence.context === 'homework' &&
+        (dataOf(submissionSnap)?.aiReviewChoice !== 'ai' ||
+         dataOf(submissionSnap)?.aiBillingMode !== 'student_credit')) {
+      fail('permission-denied', 'This Writing was not submitted for student-credit AI assessment.')
     }
     if (checkPilot) {
       const validAccess = access?.studentId === evidence.student.uid &&
@@ -392,6 +399,10 @@ function createAiWritingEvaluationService({
       fail('failed-precondition', 'AI Writing provider secret is not configured.')
     }
     const evidence = await readEvidence(student, input)
+    if (evidence.context === 'homework' &&
+        (evidence.aiReviewChoice !== 'ai' || evidence.aiBillingMode !== 'student_credit')) {
+      fail('permission-denied', 'Check with AI must be chosen when submitting this Writing.')
+    }
     // Server-side gate before ANY credit hold or monthly request reservation.
     try { requireAiEligible(evidence.prepared) } catch (error) {
       fail('failed-precondition', error.message)
@@ -425,6 +436,9 @@ function createAiWritingEvaluationService({
   // institution-funded automatic assessment. No credit access is required and
   // this read never starts a model call. A revoked/late policy stays hidden.
   async function pendingInstitutionSponsoredReport(evidence) {
+    // Do not label a teacher-directed submission as a pending paid AI job.
+    if (evidence.context === 'homework' &&
+        (evidence.aiReviewChoice !== 'ai' || evidence.aiBillingMode !== 'institution')) return false
     const submittedMs = typeof evidence.submittedAt === 'string'
       ? Date.parse(evidence.submittedAt) : NaN
     if (!Number.isFinite(submittedMs)) return false

@@ -28,15 +28,46 @@ export function normalizeAiSponsoredPolicy(response, expectedContentType, expect
   }
 }
 
-export function eligibleAiSponsoredStudents(students, assignedIds) {
+// Mirror P6's server-side rule: only real, active teacher-owned classes
+// authorize institution-sponsored AI. Legacy user.teacherIds/createdBy alone
+// are not sufficient to establish current class membership.
+export function activeTeacherAiClassStudentIds(classes, teacherId) {
+  const result = new Set()
+  if (typeof teacherId !== 'string' || !teacherId || !Array.isArray(classes)) return result
+
+  for (const classItem of classes) {
+    if (!classItem || classItem.teacherId !== teacherId ||
+        classItem.schoolId !== AI_SPONSORED_SCHOOL_ID ||
+        classItem.archived === true || classItem.deleted === true ||
+        classItem.permanentDeleteInProgress === true ||
+        (typeof classItem.status === 'string' && classItem.status !== 'active') ||
+        classItem.system === true || classItem.isSystem === true ||
+        (typeof classItem.name === 'string' && classItem.name.trim().toLowerCase() === 'all') ||
+        !Array.isArray(classItem.studentIds)) continue
+
+    for (const id of classItem.studentIds) {
+      if (typeof id === 'string') result.add(id)
+    }
+  }
+  return result
+}
+
+// allowedClassStudentIds=null is for school admins; teachers MUST pass an
+// actual Set (including an empty Set before the class query has completed).
+// Server validation remains the final authority for all callers.
+export function eligibleAiSponsoredStudents(students, assignedIds, allowedClassStudentIds = null) {
   const assigned = new Set(Array.isArray(assignedIds) ? assignedIds : [])
+  const activeClass = allowedClassStudentIds === null ? null :
+    allowedClassStudentIds instanceof Set ? allowedClassStudentIds : new Set()
   return (Array.isArray(students) ? students : []).filter(student =>
     student && assigned.has(student.id) &&
+    (activeClass === null || activeClass.has(student.id)) &&
     typeof student.id === 'string' && STUDENT_UID.test(student.id) &&
     student.role === 'student' && student.status === 'approved' &&
     student.deleted !== true && student.archived !== true &&
     student.permanentDeleteInProgress !== true &&
-    student.accountType !== 'individual' &&
+    !(typeof student.accountType === 'string' &&
+      ['individual', 'platform'].includes(student.accountType.trim().toLowerCase())) &&
     student.schoolId !== '__individual__' &&
     (student.schoolId || AI_SPONSORED_SCHOOL_ID) === AI_SPONSORED_SCHOOL_ID
   )

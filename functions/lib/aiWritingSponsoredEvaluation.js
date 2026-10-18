@@ -46,7 +46,8 @@ function submissionSignature(context, value) {
           writingEnabled: value.enabledSections?.writing,
           task1Answer: value.writingAnswers?.task1,
           task2Answer: value.writingAnswers?.task2 }
-      : { task1Answer: value.task1Answer, task2Answer: value.task2Answer })
+      : { task1Answer: value.task1Answer, task2Answer: value.task2Answer,
+          aiReviewChoice: value.aiReviewChoice, aiBillingMode: value.aiBillingMode })
   }))
 }
 
@@ -101,6 +102,8 @@ function createAiWritingSponsoredEvaluationService({
     if (!submission || !active(submission) || submission.uid !== refs.uid ||
         submission.studentId !== refs.uid || submission.attemptNumber !== refs.attemptNumber ||
         submissionSignature(context, submission) !== refs.eventSignature ||
+        (context === 'homework' &&
+          (submission.aiReviewChoice !== 'ai' || submission.aiBillingMode !== 'institution')) ||
         schoolIdOf(submission) !== PILOT_SCHOOL_ID ||
         !active(user) || user.role !== 'student' || user.status !== 'approved' ||
         !['', 'institution'].includes(typeof user.accountType === 'string'
@@ -157,23 +160,22 @@ function createAiWritingSponsoredEvaluationService({
     const linkedSnap = linkedRef ? await reader.get(linkedRef) : null
     const checked = checkedState(refs.context, [...baseSnaps, linkedSnap], refs)
     if (!checked) return null
-
-    // A saved policy is not a permanent entitlement. Revalidate its writer at
-    // initial delivery, within the cost reservation, AND before report settlement.
-    // An unknown legacy writer cannot authorize an automatic paid model call.
+    // P6 ownership and ACTIVE class membership must remain valid at the actual
+    // paid reservation/settlement, not only when the policy was configured.
+    // A revoked teacher or removed student must not spend school AI quota.
     const policy = dataOf(baseSnaps[4])
-    const actorId = policy?.updatedBy
-    if (typeof actorId !== 'string' || !STUDENT_ID_PATTERN.test(actorId)) return null
-    const actor = dataOf(await reader.get(db.doc(`users/${actorId}`)))
-    if (!active(actor) || actor.status !== 'approved' ||
-        !['teacher', 'admin'].includes(actor.role) ||
-        !['', 'institution'].includes(typeof actor.accountType === 'string'
-          ? actor.accountType.trim().toLowerCase() : '') ||
-        schoolIdOf(actor) !== PILOT_SCHOOL_ID) return null
-    if (actor.role === 'teacher') {
-      if (!teacherOwnsSource(source, actorId)) return null
-      const classes = await reader.get(teacherClassQuery(db, actorId))
-      if (!currentTeacherStudents(classes, actorId).has(refs.uid)) return null
+    const updatedBy = policy?.updatedBy
+    if (typeof updatedBy !== 'string' || !STUDENT_ID_PATTERN.test(updatedBy)) return null
+    const authorSnap = await reader.get(db.doc(`users/${updatedBy}`))
+    const author = dataOf(authorSnap)
+    if (!author || !['teacher','admin'].includes(author.role) ||
+        author.status !== 'approved' || author.deleted === true ||
+        author.archived === true || author.permanentDeleteInProgress === true ||
+        schoolIdOf(author) !== PILOT_SCHOOL_ID || author.accountType === 'individual') return null
+    if (author.role === 'teacher') {
+      if (!teacherOwnsSource(source, updatedBy)) return null
+      const classes = await reader.get(teacherClassQuery(db, updatedBy))
+      if (!currentTeacherStudents(classes, updatedBy).has(refs.uid)) return null
     }
     return { ...checked, fingerprint: sha(JSON.stringify(checked.prepared)), linkedRef }
   }
@@ -183,6 +185,13 @@ function createAiWritingSponsoredEvaluationService({
     const afterSnap = event?.data?.after
     const after = dataOf(afterSnap)
     if (!isNewSubmittedAttempt(context, before, after)) return { status: 'ignored' }
+    // New homework evaluations require a direct student submission choice.
+    // 'Send to Teacher', automatic timeout and legacy no-choice submissions
+    // MUST NOT start a paid sponsored model request. Mock remains unchanged.
+    if (context === 'homework' &&
+        (after.aiReviewChoice !== 'ai' || after.aiBillingMode !== 'institution')) {
+      return { status: 'ignored' }
+    }
     // IMPORTANT: The trigger must be separately, explicitly enabled by an operator.
     if (providerEnabled() !== true) return { status: 'disabled' }
     const key = getApiKey()
