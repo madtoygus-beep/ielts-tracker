@@ -329,7 +329,7 @@
             return
           }
 
-          Promise.all(
+          Promise.allSettled(
             matchingAccess.map(async access => {
               const contentSnap = await getDoc(
                 doc(db, config.contentCollection, access.contentId)
@@ -356,12 +356,33 @@
               }
             })
           )
-            .then(items => {
+            .then(results => {
               if (entry.loadVersion !== loadVersion) return
 
-              const loadedItems = items.filter(Boolean)
+              const loadedItems = []
+              const failedAccessIds = []
+
+              results.forEach((result, index) => {
+                if (result.status === 'fulfilled') {
+                  if (result.value) loadedItems.push(result.value)
+                  return
+                }
+
+                const access = matchingAccess[index]
+                failedAccessIds.push(access.contentId)
+                console.warn(
+                  `Student dashboard content load failed: ${config.contentCollection}/${access.contentId}`,
+                  result.reason
+                )
+              })
+
               entry.lastItems = loadedItems
-              emitStudentDataError(registryKey)
+              emitStudentDataError(
+                registryKey,
+                failedAccessIds.length
+                  ? new Error(`${failedAccessIds.length} of ${matchingAccess.length} ${config.contentType} assignment(s) failed to load`)
+                  : null
+              )
 
               entry.subscribers.forEach(subscriber => {
                 subscriber(loadedItems)
