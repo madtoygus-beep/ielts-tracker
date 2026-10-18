@@ -5,6 +5,7 @@
 // Only source and submitted attempts read from Firestore are model input.
 const { createHash, randomBytes } = require('crypto')
 const { prepareAiWritingEvaluation, requireAiEligible, eligibleTasks, validAiWritingReport } = require('./aiWritingGrading')
+const { grantForStudent, timestampMs } = require('./aiWritingSponsoredGrants')
 
 const PILOT_SCHOOL_ID = 'maxima'
 const MAX_MONTHLY_SCHOOL_EVALUATIONS = 60
@@ -459,11 +460,13 @@ function createAiWritingEvaluationService({
         policy.studentIds.length > 60 || new Set(policy.studentIds).size !== policy.studentIds.length ||
         policy.studentIds.some(id => typeof id !== 'string' || !/^[A-Za-z0-9_-]{6,128}$/.test(id)) ||
         !policy.studentIds.includes(evidence.student.uid)) return false
-    const updated = policy.updatedAt
-    const updatedMs = typeof updated?.toMillis === 'function' ? updated.toMillis()
-      : updated instanceof Date ? updated.getTime()
-        : typeof updated === 'string' ? Date.parse(updated) : NaN
-    return Number.isFinite(updatedMs) && updatedMs <= submittedMs
+    const grant = grantForStudent(policy, evidence.student.uid)
+    if (!grant) return false
+    // Secure homework submission records the institution billing choice
+    // at submit time. Mock has no such choice; its grant must predate attempt.
+    if (evidence.context === 'homework') return true
+    const grantMs = timestampMs(grant.grantedAtMs)
+    return grantMs !== null && grantMs <= submittedMs
   }
 
   async function getReport(request) {

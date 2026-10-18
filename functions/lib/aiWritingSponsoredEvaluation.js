@@ -8,6 +8,7 @@ const { prepareAiWritingEvaluation, eligibleTasks, validAiWritingReport } = requ
 const { MAX_MONTHLY_SCHOOL_EVALUATIONS, LEASE_MS } = require('./aiWritingEvaluation')
 const { MAX_STUDENTS_PER_POLICY } = require('./aiWritingSponsoredPolicy')
 const { teacherClassQuery, currentTeacherStudents, teacherOwnsSource } = require('./aiWritingTeacherRelationship')
+const { grantForStudent, timestampMs } = require('./aiWritingSponsoredGrants')
 
 const PILOT_SCHOOL_ID = 'maxima'
 const ID_PATTERN = /^[A-Za-z0-9_-]{1,150}$/
@@ -51,14 +52,15 @@ function submissionSignature(context, value) {
   }))
 }
 
-function policyUpdatedAfterSubmission(policy, submission) {
-  const updated = policy?.updatedAt
-  const updatedMs = typeof updated?.toMillis === 'function' ? updated.toMillis()
-    : (updated instanceof Date ? updated.getTime() :
-      (typeof updated === 'string' ? Date.parse(updated) : NaN))
-  const submittedMs = Date.parse(submission.submittedAt)
-  // Legacy records without a verifiable timestamp must not authorize automatic spending.
-  return !Number.isFinite(updatedMs) || !Number.isFinite(submittedMs) || updatedMs > submittedMs
+// Mock automatic AI has no explicit student's institution billing choice,
+// so the individual grant MUST predate the submitted attempt. Homework is
+// authorized by the secure, server-written choice at submission time.
+function policyUpdatedAfterSubmission(policy, submission, uid, context = 'mock') {
+  if (context === 'homework') return false
+  const grant = grantForStudent(policy, uid)
+  const grantedMs = timestampMs(grant?.grantedAtMs)
+  const submittedMs = Date.parse(submission?.submittedAt)
+  return grantedMs === null || !Number.isFinite(submittedMs) || grantedMs > submittedMs
 }
 
 function createAiWritingSponsoredEvaluationService({
@@ -120,7 +122,8 @@ function createAiWritingSponsoredEvaluationService({
         policy.studentIds.some(id => typeof id !== 'string' || !STUDENT_ID_PATTERN.test(id)) ||
         new Set(policy.studentIds).size !== policy.studentIds.length ||
         !policy.studentIds.includes(refs.uid) ||
-        policyUpdatedAfterSubmission(policy, submission) ||
+        !grantForStudent(policy, refs.uid) ||
+        policyUpdatedAfterSubmission(policy, submission, refs.uid, context) ||
         !active(source) || schoolIdOf(source) !== PILOT_SCHOOL_ID ||
         !assignment || assignment.uid !== refs.uid || assignment.schoolId !== PILOT_SCHOOL_ID ||
         assignment.contentId !== refs.contentId ||
@@ -169,7 +172,7 @@ function createAiWritingSponsoredEvaluationService({
     // paid reservation/settlement, not only when the policy was configured.
     // A revoked teacher or removed student must not spend school AI quota.
     const policy = dataOf(baseSnaps[4])
-    const updatedBy = policy?.updatedBy
+    const updatedBy = grantForStudent(policy, refs.uid)?.grantedBy
     if (typeof updatedBy !== 'string' || !STUDENT_ID_PATTERN.test(updatedBy)) return null
     const authorSnap = await reader.get(db.doc(`users/${updatedBy}`))
     const author = dataOf(authorSnap)

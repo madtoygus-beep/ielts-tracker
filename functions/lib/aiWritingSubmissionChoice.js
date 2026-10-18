@@ -3,6 +3,7 @@
 // Read-only, server-authoritative AI option for the CURRENT institutional
 // Writing assignment. Never starts a model call or spends any quota/credit.
 const { teacherClassQuery, currentTeacherStudents, teacherOwnsSource } = require('./aiWritingTeacherRelationship')
+const { grantForStudent } = require('./aiWritingSponsoredGrants')
 
 const SCHOOL_ID = 'maxima'
 const ID = /^[A-Za-z0-9_-]{1,150}$/
@@ -77,6 +78,7 @@ function createAiWritingSubmissionChoiceService({
       ? credit.creditsRemaining : 0
 
     let funded = false
+    const grant = grantForStudent(policy, uid)
     if (sponsoredEnabled() === true &&
         policy?.schoolId === SCHOOL_ID && policy.enabled === true &&
         policy.contentType === 'writing' && policy.contentId === contentId &&
@@ -86,9 +88,8 @@ function createAiWritingSubmissionChoiceService({
         policy.studentIds.length <= 60 &&
         policy.studentIds.every(id => typeof id === 'string' && UID.test(id)) &&
         new Set(policy.studentIds).size === policy.studentIds.length &&
-        policy.studentIds.includes(uid) && typeof policy.updatedBy === 'string' &&
-        UID.test(policy.updatedBy)) {
-      const managerId = policy.updatedBy
+        policy.studentIds.includes(uid) && grant) {
+      const managerId = grant.grantedBy
       const managerSnap = await db.doc(`users/${managerId}`).get()
       const manager = dataOf(managerSnap)
       if (validStaff(manager, schoolIdOf, accountTypeOf)) {

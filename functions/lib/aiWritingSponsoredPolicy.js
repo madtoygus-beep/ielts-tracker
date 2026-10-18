@@ -7,10 +7,11 @@
 // school-funded budget BEFORE any provider request is started.
 
 const { teacherClassQuery, currentTeacherStudents, teacherOwnsSource } = require('./aiWritingTeacherRelationship')
+const { validUid, grantMapIsConsistent, grantForStudent, grantsForPolicy } = require('./aiWritingSponsoredGrants')
 
 const PILOT_SCHOOL_ID = 'maxima'
 const MAX_STUDENTS_PER_POLICY = 60
-const SCHEMA_VERSION = 1
+const SCHEMA_VERSION = 2
 const VALID_ID = /^[A-Za-z0-9_-]{1,150}$/
 const VALID_STUDENT_ID = /^[A-Za-z0-9_-]{6,128}$/
 const VALID_CONTENT_TYPES = Object.freeze({
@@ -59,7 +60,7 @@ function createAiWritingSponsoredPolicyService({
       fail('invalid-argument', 'A boolean enabled and a limited student selection are required.')
     }
     const normalized = input.studentIds.slice().sort()
-    if (normalized.some(id => typeof id !== 'string' || !VALID_STUDENT_ID.test(id)) ||
+    if (normalized.some(id => !validUid(id)) ||
         new Set(normalized).size !== normalized.length ||
         (input.enabled && normalized.length === 0)) {
       fail('invalid-argument', 'Select unique, valid students before enabling automatic AI.')
@@ -129,7 +130,8 @@ function createAiWritingSponsoredPolicyService({
         policy.context !== config.context ||
         !Array.isArray(policy.studentIds) ||
         policy.studentIds.length > MAX_STUDENTS_PER_POLICY ||
-        policy.studentIds.some(uid => typeof uid !== 'string' || !VALID_STUDENT_ID.test(uid))) {
+        policy.studentIds.some(uid => !validUid(uid)) ||
+        !grantMapIsConsistent(policy)) {
       fail('failed-precondition', 'Existing sponsored AI policy is inconsistent.')
     }
   }
@@ -156,25 +158,9 @@ function createAiWritingSponsoredPolicyService({
     const classes = currentManager.profile?.role === 'teacher'
       ? await teacherClassQuery(db, currentManager.uid).get() : null
     const currentStudents = currentTeacherStudents(classes, currentManager.uid)
-    // Display effective policy, not a stale stored toggle. A revoked teacher
-    // cannot leave the UI saying that an automatic paid report is enabled.
-    let authorRole = ''
-    let authorStudents = new Set()
-    if (policy?.enabled === true && typeof policy.updatedBy === 'string' &&
-        VALID_STUDENT_ID.test(policy.updatedBy)) {
-      const author = dataOf(await db.doc(`users/${policy.updatedBy}`).get())
-      if (validStaff(author, PILOT_SCHOOL_ID)) {
-        if (author.role === 'admin') {
-          authorRole = 'admin'
-        } else if (teacherOwnsSource(source, policy.updatedBy)) {
-          const authorClasses = policy.updatedBy === currentManager.uid && classes
-            ? classes : await teacherClassQuery(db, policy.updatedBy).get()
-          authorRole = 'teacher'
-          authorStudents = currentTeacherStudents(authorClasses, policy.updatedBy)
-        }
-      }
-    }
-    const ids = policy?.studentIds || []
+    // Authorization belongs to each student's ORIGINAL issuer, never the
+    // latest person who edited the policy. Validate live staff + classes.
+    const ids = policy?.enabled === true ? (policy.studentIds || []) : []
     const studentIds = []
     if (ids.length) {
       const refs = ids.flatMap(uid => [
@@ -182,11 +168,29 @@ function createAiWritingSponsoredPolicyService({
         db.doc(`studentAccess/${uid}_${config.contentType}_${config.contentId}`)
       ])
       const snaps = await db.getAll(...refs)
+      const authorCache = new Map()
       for (let i = 0; i < ids.length; i++) {
-        if (checkedStudent(dataOf(snaps[2 * i]), dataOf(snaps[2 * i + 1]),
-          ids[i], currentManager, config, currentStudents) &&
-          (policy?.enabled !== true || authorRole === 'admin' ||
-           (authorRole === 'teacher' && authorStudents.has(ids[i])))) studentIds.push(ids[i])
+        const grant = grantForStudent(policy, ids[i])
+        if (!grant || !checkedStudent(dataOf(snaps[2 * i]), dataOf(snaps[2 * i + 1]),
+          ids[i], currentManager, config, currentStudents)) continue
+        if (!authorCache.has(grant.grantedBy)) {
+          const author = dataOf(await db.doc(`users/${grant.grantedBy}`).get())
+          let canFund = validStaff(author, PILOT_SCHOOL_ID)
+          let students = new Set()
+          if (canFund && author.role === 'teacher') {
+            canFund = teacherOwnsSource(source, grant.grantedBy)
+            if (canFund) {
+              const authorClasses = grant.grantedBy === currentManager.uid && classes
+                ? classes : await teacherClassQuery(db, grant.grantedBy).get()
+              students = currentTeacherStudents(authorClasses, grant.grantedBy)
+            }
+          }
+          authorCache.set(grant.grantedBy, { canFund, role: author?.role, students })
+        }
+        const auth = authorCache.get(grant.grantedBy)
+        if (auth.canFund && (auth.role === 'admin' || auth.students.has(ids[i]))) {
+          studentIds.push(ids[i])
+        }
       }
     }
     return {
@@ -238,24 +242,61 @@ function createAiWritingSponsoredPolicyService({
           fail('permission-denied', 'Only currently assigned institution students may be selected.')
         }
       }
-      // Policy set happens after all Firestore reads, atomically and without credits.
-      tx.set(config.policyRef, {
-        schemaVersion: SCHEMA_VERSION,
-        schoolId: PILOT_SCHOOL_ID,
-        contentType: config.contentType,
-        contentId: config.contentId,
-        context: config.context,
-        sourceCollection: config.collection,
-        enabled: config.enabled,
-        studentIds: config.studentIds,
-        billing: 'institution',
-        updatedBy: manager.uid,
-        updatedAt: FieldValue.serverTimestamp(),
-        ...(!snaps[2].exists ? { createdAt: FieldValue.serverTimestamp() } : {})
-      }, { merge: true })
+      // Teacher edits only grants for students in the teacher's CURRENT
+      // active classes. Grants outside that scope (including admin grants)
+      // must survive the write, even though they are hidden from this UI.
+      const oldPolicy = dataOf(snaps[2])
+      const previous = grantsForPolicy(oldPolicy)
+      const next = { ...previous }
+      const selected = new Set(config.enabled ? config.studentIds : [])
+      const canEdit = uid => freshManager.profile.role === 'admin' || currentStudents.has(uid)
+      for (const uid of Object.keys(next)) {
+        if (canEdit(uid) && !selected.has(uid)) delete next[uid]
+      }
+      for (const uid of selected) {
+        if (!Object.prototype.hasOwnProperty.call(next, uid)) {
+          next[uid] = { grantedBy: manager.uid, grantedAtMs: Date.now() }
+        }
+      }
+      const allStudentIds = Object.keys(next).sort()
+      if (allStudentIds.length > MAX_STUDENTS_PER_POLICY) {
+        fail('resource-exhausted', 'Institution-funded AI has a 60-student limit across all managers.')
+      }
+      const enabled = allStudentIds.length > 0
+      const prevIds = oldPolicy?.studentIds || []
+      const hadNewFormat = oldPolicy?.schemaVersion === SCHEMA_VERSION &&
+        Object.prototype.hasOwnProperty.call(oldPolicy, 'grants')
+      const grantsSignature = map => JSON.stringify(Object.keys(map).sort()
+        .map(uid => [uid, map[uid].grantedBy, map[uid].grantedAtMs]))
+      const same = hadNewFormat && oldPolicy.enabled === enabled &&
+        JSON.stringify([...prevIds].sort()) === JSON.stringify(allStudentIds) &&
+        grantsSignature(grantsForPolicy(oldPolicy)) === grantsSignature(next)
+      if (!same && (oldPolicy || enabled)) {
+        const payload = {
+          schemaVersion: SCHEMA_VERSION,
+          schoolId: PILOT_SCHOOL_ID,
+          contentType: config.contentType,
+          contentId: config.contentId,
+          context: config.context,
+          sourceCollection: config.collection,
+          enabled, studentIds: allStudentIds,
+          grants: next, billing: 'institution',
+          updatedBy: manager.uid, updatedAt: FieldValue.serverTimestamp()
+        }
+        if (oldPolicy) {
+          // update() replaces the WHOLE grants map; set({merge:true}) would
+          // recursively preserve removed student keys in Firestore.
+          tx.update(config.policyRef, payload)
+        } else {
+          tx.create(config.policyRef, { ...payload, createdAt: FieldValue.serverTimestamp() })
+        }
+      }
       return {
         ok: true, contentType: config.contentType, contentId: config.contentId,
-        enabled: config.enabled, selectedCount: config.studentIds.length,
+        enabled: config.studentIds.length > 0 && config.enabled,
+        selectedCount: config.studentIds.length,
+        totalFundedCount: allStudentIds.length,
+        unchanged: same || (!oldPolicy && !enabled),
         billing: 'institution', autoEvaluationLive: false
       }
     })
