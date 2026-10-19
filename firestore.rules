@@ -167,6 +167,7 @@ service cloud.firestore {
         && get(accessPath).data.get('uid', '') == request.auth.uid
         && get(accessPath).data.get('contentType', '') == contentType
         && get(accessPath).data.get('contentId', '') == contentId
+        && get(accessPath).data.get('accessType', '') == 'assignment'
         && get(accessPath).data.get('status', '') == 'active'
         && schoolIdOf(get(accessPath).data) == currentSchoolId();
     }

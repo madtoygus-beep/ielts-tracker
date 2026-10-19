@@ -12,6 +12,7 @@ import {
 } from 'firebase/firestore'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { httpsCallable } from 'firebase/functions'
+import { buildP8CAssignmentDelta } from '../services/p8cAssignmentDelta'
 import { useNavigate, useParams } from 'react-router-dom'
 import AiWritingSponsoredAssignmentPanel from '../components/AiWritingSponsoredAssignmentPanel'
 import {
@@ -333,6 +334,7 @@ export default function CreateMockTest() {
   const [miniReadingCount, setMiniReadingCount] = useState(1)
   const [fullMockListeningMode, setFullMockListeningMode] = useState('separate')
   const [assignTo, setAssignTo] = useState([])
+  const [assignmentBaseline, setAssignmentBaseline] = useState([])
   const [sponsoredSelection, setSponsoredSelection] = useState(emptyAiSponsoredSelection)
   const [sponsoredStatus, setSponsoredStatus] = useState(isEditMode ? 'loading' : 'ready')
   const [sponsoredError, setSponsoredError] = useState('')
@@ -505,6 +507,7 @@ export default function CreateMockTest() {
           : []
 
         setAssignTo(canonicalStudentIds)
+        setAssignmentBaseline(canonicalStudentIds)
 
         if (getProfileSchoolId(profile) === AI_SPONSORED_SCHOOL_ID &&
             profile?.accountType !== 'individual' &&
@@ -1156,11 +1159,14 @@ export default function CreateMockTest() {
       }
 
       try {
-        await setContentStudentAccessCall({
-          contentType: 'mock',
-          contentId: savedMockId,
-          studentIds: assignTo
-        })
+        const scopedAssignment = buildP8CAssignmentDelta(
+          'mock', savedMockId, assignmentBaseline, assignTo
+        )
+        if (scopedAssignment.changes.length > 0) {
+          const changeResult = await setContentStudentAccessCall(scopedAssignment)
+          if (changeResult.data?.ok !== true) throw new Error('The assignment update was not confirmed.')
+        }
+        setAssignmentBaseline([...assignTo])
       } catch (assignmentError) {
         console.error('Could not synchronize mock assignments:', assignmentError)
 

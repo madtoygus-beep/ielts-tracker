@@ -323,7 +323,7 @@ async function cleanupStudentAccessForDeletedContent({
   const operations = snap.docs
     .map(docSnap => ({ docSnap, access: docSnap.data() || {} }))
     .filter(({ access }) =>
-      access.accessType === 'assignment' &&
+      (access.accessType === 'assignment' || access.accessType === 'unassigned_archive') &&
       access.contentType === contentType &&
       access.sourceCollection === sourceCollection
     )
@@ -4084,98 +4084,15 @@ exports.getManagedContentStudentAccessSnapshot = onCall(async request => {
   }
 })
 
-// Stage 16G-I4C: canonical assignment writer. studentAccess is authoritative;
-// legacy source assignment arrays are no longer read or written here.
-exports.setContentStudentAccess = onCall(async request => {
-  const manager = await requireAssignmentManager(request)
-  const data = request.data || {}
-  const config = accessContentConfigFor(data.contentType)
-  const contentId = assertDocumentId(data.contentId, 'Content ID')
-  const studentIds = assertStudentUidList(data.studentIds)
-  const source = await getSource(config.sourceCollection, contentId)
-
-  if (!managerCanManageSource(manager, source)) {
-    throw new HttpsError('permission-denied', 'You cannot manage assignments for this content.')
-  }
-
-  const sourceSchoolId = schoolIdOf(source)
-  await loadAssignableStudents(studentIds, sourceSchoolId)
-
-  const currentSnap = await db.collection('studentAccess')
-    .where('contentId', '==', contentId)
-    .get()
-
-  const currentAssignments = new Map()
-  for (const docSnap of currentSnap.docs) {
-    const access = docSnap.data() || {}
-    if (
-      access.contentType === config.contentType &&
-      access.sourceCollection === config.sourceCollection &&
-      schoolIdOf(access) === sourceSchoolId &&
-      access.accessType === 'assignment' &&
-      typeof access.uid === 'string' &&
-      access.uid
-    ) {
-      currentAssignments.set(access.uid, { ref: docSnap.ref, access })
-    }
-  }
-
-  const targetSet = new Set(studentIds)
-  const operations = []
-  let created = 0
-  let updated = 0
-  let removed = 0
-  let inactive = 0
-
-  for (const uid of studentIds) {
-    const existing = currentAssignments.get(uid)
-    const adminHidden = existing?.access?.adminHidden === true
-    const ref = db.doc(`studentAccess/${studentAccessId(uid, config.contentType, contentId)}`)
-    const payload = studentAccessPayload(
-      config.contentType,
-      config.sourceCollection,
-      contentId,
-      source,
-      uid
-    )
-
-    if (adminHidden) {
-      payload.status = 'inactive'
-      payload.adminHidden = true
-    }
-
-    if (!existing) {
-      payload.assignedAt = FieldValue.serverTimestamp()
-      created++
-    } else {
-      updated++
-    }
-    if (payload.status !== 'active') inactive++
-
-    operations.push({ type: 'set', ref, data: payload })
-  }
-
-  for (const [uid, existing] of currentAssignments.entries()) {
-    if (targetSet.has(uid)) continue
-    operations.push({ type: 'delete', ref: existing.ref })
-    removed++
-  }
-
-  await commitAccessOperations(operations)
-
-
-  return {
-    ok: true,
-    contentType: config.contentType,
-    contentId,
-    assigned: studentIds.length,
-    created,
-    updated,
-    removed,
-    inactive,
-    legacyBridgeUpdated: false
-  }
+// P8-C: replace whole-roster writes with scoped optimistic transactions.
+// Legacy browsers that still POST {studentIds} now fail CLOSED rather than
+// silently removing assignments saved by another staff member.
+const { createP8CAssignmentService } = require('./lib/p8cAssignmentService')
+const p8cAssignmentService = createP8CAssignmentService({
+  db, FieldValue, HttpsError, requireAssignmentManager, managerCanManageSource,
+  schoolIdOf, accountTypeOf, studentAccessPayload, studentAccessId
 })
+exports.setContentStudentAccess = onCall(request => p8cAssignmentService.write(request))
 
 // Stage 16G-I4C: canonical archive/restore writer. Archive state remains source
 // metadata, while assignment availability is updated directly in studentAccess.
@@ -4292,7 +4209,7 @@ exports.setStudentAssignmentVisibility = onCall(async request => {
   const candidates = accessSnap.docs
     .map(docSnap => ({ docSnap, access: docSnap.data() || {} }))
     .filter(({ access }) =>
-      access.accessType === 'assignment' &&
+      (access.accessType === 'assignment' || access.accessType === 'unassigned_archive') &&
       allowedTypes.has(access.contentType) &&
       schoolIdOf(access) === studentSchoolId &&
       typeof access.contentId === 'string' &&
@@ -4319,7 +4236,7 @@ exports.setStudentAssignmentVisibility = onCall(async request => {
     const sourceExists = Boolean(sourceSnap?.exists)
     const source = sourceExists ? (sourceSnap.data() || {}) : {}
     const sourceArchived = !sourceExists || source.archived === true
-    const status = hidden || !studentIsActive || sourceArchived
+    const status = access.accessType === 'unassigned_archive' || hidden || !studentIsActive || sourceArchived
       ? 'inactive'
       : 'active'
 
@@ -7093,6 +7010,17 @@ exports.getStudentVisibleResults = onCall(async request => {
 
   return { ok: true, byCollection }
 })
+
+// P8-C: removed assignments remain reviewable only as safe read-only result
+// summaries. All existing detail/answer-key callables still require ACTIVE access.
+const { createP8CArchiveService } = require('./lib/p8cArchiveService')
+const p8cArchiveService = createP8CArchiveService({
+  db, HttpsError, requireStudent, schoolIdOf, getStudentOwnedResultSnapshots,
+  studentResultSafeBase, studentResultMatchesOwner,
+  studentAttemptHistoryMatches, studentScoreContentId,
+  readSavedWritingAi: options => studentWritingHistoryAi.readSavedReport(options)
+})
+exports.getMyUnassignedArchive = onCall(request => p8cArchiveService.list(request))
 
 // Q2B: Learner-only historical attempt summaries. The history collection is
 // intentionally NOT readable by browser Firestore rules; never return the raw

@@ -17,6 +17,7 @@ import { signOut, onAuthStateChanged, updatePassword } from 'firebase/auth'
 import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage'
 import { useNavigate } from 'react-router-dom'
 import { httpsCallable } from 'firebase/functions'
+import { buildP8CAssignmentDelta } from '../services/p8cAssignmentDelta'
 import AiWritingTeacherPanel from '../components/AiWritingTeacherPanel'
 import AiWritingSponsoredAssignmentPanel from '../components/AiWritingSponsoredAssignmentPanel'
 import { buildMissingWritingReviewSources } from '../services/teacherWritingReviewFallbacks'
@@ -577,6 +578,7 @@ export default function TeacherDashboard() {
   const [selectedHomework, setSelectedHomework] = useState(null)
   const [selectedHomeworkType, setSelectedHomeworkType] = useState(null)
   const [assignmentDraft, setAssignmentDraft] = useState([])
+  const [assignmentBaseline, setAssignmentBaseline] = useState([])
   const [assignmentUnknownStudentIds, setAssignmentUnknownStudentIds] = useState([])
   const [assignmentSaving, setAssignmentSaving] = useState(false)
   const [assignmentAiDraft, setAssignmentAiDraft] = useState(emptyAiSponsoredSelection)
@@ -2532,6 +2534,7 @@ export default function TeacherDashboard() {
     setSelectedHomework(null)
     setSelectedHomeworkType(null)
     setAssignmentDraft([])
+    setAssignmentBaseline([])
     setAssignmentUnknownStudentIds([])
     setAssignmentAiDraft(emptyAiSponsoredSelection())
     setAssignmentAiStatus('unavailable')
@@ -2571,6 +2574,7 @@ export default function TeacherDashboard() {
       setSelectedHomework(homework)
       setSelectedHomeworkType(type)
       setAssignmentDraft(Array.from(new Set(draftStudentIds)))
+      setAssignmentBaseline(canonicalStudentIds)
       setAssignmentUnknownStudentIds(unknownIds)
       setAssignmentAiDraft(emptyAiSponsoredSelection())
       setAssignmentAiError('')
@@ -2721,14 +2725,16 @@ export default function TeacherDashboard() {
     setAssignmentSaving(true)
     setAssignmentAiError('')
     try {
-      const response = await setContentStudentAccessCall({
-        contentType: selectedHomeworkType,
-        contentId: selectedHomework.id,
-        studentIds: finalAssignment
-      })
-      if (response.data?.ok !== true) {
-        throw new Error('The assignment writer did not confirm success.')
+      const scopedAssignment = buildP8CAssignmentDelta(
+        selectedHomeworkType, selectedHomework.id, assignmentBaseline, finalAssignment
+      )
+      if (scopedAssignment.changes.length > 0) {
+        const response = await setContentStudentAccessCall(scopedAssignment)
+        if (response.data?.ok !== true) {
+          throw new Error('The assignment writer did not confirm success.')
+        }
       }
+      setAssignmentBaseline([...finalAssignment])
       await refreshCanonicalAssignmentSnapshot()
 
       if (writeAi) {
@@ -2780,6 +2786,7 @@ export default function TeacherDashboard() {
     setSelectedHomework(null)
     setSelectedHomeworkType(null)
     setAssignmentDraft([])
+    setAssignmentBaseline([])
     setAssignmentUnknownStudentIds([])
     setAssignmentAiDraft(emptyAiSponsoredSelection())
     setAssignmentAiStatus('unavailable')
@@ -3282,26 +3289,13 @@ export default function TeacherDashboard() {
 
     try {
       await queueAssignmentRemoval(assignmentKey, async () => {
-        const assignmentResult = await getContentStudentAccessCall({
-          contentType: type,
-          contentId: homework.id
-        })
-
-        const currentStudentIds = Array.isArray(assignmentResult.data?.studentIds)
-          ? assignmentResult.data.studentIds.filter(Boolean)
-          : []
-
-        const remainingStudentIds = currentStudentIds.filter(
-          uid => normalizeAssignmentId(uid) !== targetUid
-        )
-
-        if (remainingStudentIds.length === currentStudentIds.length) return
-
-        await setContentStudentAccessCall({
+        // A single-student transaction cannot erase another teacher's edits.
+        const response = await setContentStudentAccessCall({
           contentType: type,
           contentId: homework.id,
-          studentIds: remainingStudentIds
+          changes: [{ studentId: targetUid, assigned: false, expectedAssigned: true }]
         })
+        if (response.data?.ok !== true) throw new Error('Removal was not confirmed.')
       })
     } catch (error) {
       console.error('Could not remove homework from student:', error)

@@ -12,6 +12,7 @@ import {
 } from 'firebase/firestore'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { httpsCallable } from 'firebase/functions'
+import { buildP8CAssignmentDelta } from '../services/p8cAssignmentDelta'
 import { useNavigate, useParams } from 'react-router-dom'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
@@ -199,6 +200,7 @@ export default function CreateVocabulary() {
     emptyQuestion('grammar_form')
   ])
   const [assignTo, setAssignTo] = useState([])
+  const [assignmentBaseline, setAssignmentBaseline] = useState([])
   const [studentSearch, setStudentSearch] = useState('')
   const [bulkPaste, setBulkPaste] = useState({
     type: '',
@@ -342,6 +344,7 @@ export default function CreateVocabulary() {
             : []
 
           setAssignTo(canonicalStudentIds)
+        setAssignmentBaseline(canonicalStudentIds)
         }
 
         setLoading(false)
@@ -1287,11 +1290,14 @@ export default function CreateVocabulary() {
       }
 
       try {
-        await setContentStudentAccessCall({
-          contentType: 'vocabulary',
-          contentId: savedVocabularyId,
-          studentIds: assignTo
-        })
+        const scopedAssignment = buildP8CAssignmentDelta(
+          'vocabulary', savedVocabularyId, assignmentBaseline, assignTo
+        )
+        if (scopedAssignment.changes.length > 0) {
+          const changeResult = await setContentStudentAccessCall(scopedAssignment)
+          if (changeResult.data?.ok !== true) throw new Error('The assignment update was not confirmed.')
+        }
+        setAssignmentBaseline([...assignTo])
       } catch (assignmentError) {
         console.error('Could not synchronize vocabulary assignments:', assignmentError)
 

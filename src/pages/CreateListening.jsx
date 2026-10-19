@@ -12,6 +12,7 @@ import {
 } from 'firebase/firestore'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { httpsCallable } from 'firebase/functions'
+import { buildP8CAssignmentDelta } from '../services/p8cAssignmentDelta'
 import {
   getDownloadURL,
   ref,
@@ -297,6 +298,7 @@ export default function CreateListening() {
   const [dueDate, setDueDate] = useState('')
   const [timeLimit, setTimeLimit] = useState(30)
   const [assignTo, setAssignTo] = useState([])
+  const [assignmentBaseline, setAssignmentBaseline] = useState([])
   const [parts, setParts] = useState([
     emptyPart(1),
     emptyPart(2),
@@ -456,6 +458,7 @@ export default function CreateListening() {
           : []
 
         setAssignTo(canonicalStudentIds)
+        setAssignmentBaseline(canonicalStudentIds)
 
         const loadedParts = normalizeParts(data)
         setParts(loadedParts)
@@ -2001,11 +2004,14 @@ export default function CreateListening() {
       }
 
       try {
-        await setContentStudentAccessCall({
-          contentType: 'listening',
-          contentId: savedListeningId,
-          studentIds: assignTo
-        })
+        const scopedAssignment = buildP8CAssignmentDelta(
+          'listening', savedListeningId, assignmentBaseline, assignTo
+        )
+        if (scopedAssignment.changes.length > 0) {
+          const changeResult = await setContentStudentAccessCall(scopedAssignment)
+          if (changeResult.data?.ok !== true) throw new Error('The assignment update was not confirmed.')
+        }
+        setAssignmentBaseline([...assignTo])
       } catch (assignmentError) {
         console.error('Could not synchronize listening assignments:', assignmentError)
 

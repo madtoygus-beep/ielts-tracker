@@ -7,6 +7,7 @@
   import { httpsCallable } from 'firebase/functions'
   import { getStudentVisibleResultSnapshot, subscribeStudentVisibleResultSummaries } from '../services/studentResultService'
   import AiWritingStudentPanel, { AiWritingSavedReport } from '../components/AiWritingStudentPanel'
+  import StudentArchivePanel from '../components/StudentArchivePanel'
   import { isInstitutionWritingStudent } from '../services/aiWritingStudentPolicy'
 
   const getStudentSubmissionAttemptStateCall = httpsCallable(
@@ -5527,7 +5528,7 @@
               {activeTab === 'results' && (
                 <>
                   <div className="mb-5 rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3 text-sm text-indigo-800">
-                    All Attempts lists saved results from tests you can currently access. Archived tests and their results are hidden until a teacher restores them; earlier retake attempts remain available. Use Current Assignment Reviews for existing review screens.
+                    All Attempts shows work you can currently access. School-archived or hidden tests remain unavailable; completed work from assignments explicitly removed by a teacher may appear separately in Read-only History. Current Assignment Reviews are unchanged.
                   </div>
                   <nav aria-label="Completed work categories" className="mb-5 flex gap-2 overflow-x-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-sm">
                     {STUDENT_RESULT_CATEGORIES.map(item => (
@@ -5551,6 +5552,11 @@
                       className={`rounded-xl border px-4 py-2 text-sm font-medium ${resultsView === 'active' ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`}>
                       Current Assignment Reviews
                     </button>
+                    <button type="button" onClick={() => setResultsView('archive')}
+                      aria-pressed={resultsView === 'archive'}
+                      className={`rounded-xl border px-4 py-2 text-sm font-medium ${resultsView === 'archive' ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`}>
+                      Removed Assignments · Read-only
+                    </button>
                   </div>
                 </>
               )}
@@ -5572,6 +5578,7 @@
               {activeTab === 'results' && (
                 <div>
                   {resultsView === 'history' && <StudentResultsHistory user={user} category={resultsCategory} resultsVisibility={resultsVisibility} />}
+                  {resultsView === 'archive' && <StudentArchivePanel studentId={user?.uid} category={resultsCategory} />}
                   {resultsView === 'active' && (
                     <>
                       {resultsCategory === 'reading' && <ReadingHomeworkSection user={user} profile={profile} mode="completed" />}

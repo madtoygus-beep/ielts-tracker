@@ -12,6 +12,7 @@ import {
 } from 'firebase/firestore'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { httpsCallable } from 'firebase/functions'
+import { buildP8CAssignmentDelta } from '../services/p8cAssignmentDelta'
 import { useNavigate, useParams } from 'react-router-dom'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
@@ -150,6 +151,7 @@ export default function CreateReading() {
   const [timeLimit, setTimeLimit] = useState(60)
   const [dueDate, setDueDate] = useState('')
   const [assignTo, setAssignTo] = useState([])
+  const [assignmentBaseline, setAssignmentBaseline] = useState([])
   const [studentSearch, setStudentSearch] = useState('')
 
   const [passageMode, setPassageMode] = useState('standard')
@@ -472,6 +474,7 @@ export default function CreateReading() {
       setTimeLimit(data.timeLimit || 60)
       setDueDate(data.dueDate || '')
       setAssignTo(canonicalStudentIds)
+        setAssignmentBaseline(canonicalStudentIds)
       setPassageMode(
         data.passageMode || (data.paragraphs ? 'sections' : 'standard')
       )
@@ -2288,11 +2291,14 @@ export default function CreateReading() {
       }
 
       try {
-        await setContentStudentAccessCall({
-          contentType: 'reading',
-          contentId: savedReadingId,
-          studentIds: assignTo
-        })
+        const scopedAssignment = buildP8CAssignmentDelta(
+          'reading', savedReadingId, assignmentBaseline, assignTo
+        )
+        if (scopedAssignment.changes.length > 0) {
+          const changeResult = await setContentStudentAccessCall(scopedAssignment)
+          if (changeResult.data?.ok !== true) throw new Error('The assignment update was not confirmed.')
+        }
+        setAssignmentBaseline([...assignTo])
       } catch (assignmentError) {
         console.error('Could not synchronize reading assignments:', assignmentError)
 

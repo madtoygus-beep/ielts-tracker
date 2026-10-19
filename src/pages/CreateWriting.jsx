@@ -12,6 +12,7 @@ import {
 } from 'firebase/firestore'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { httpsCallable } from 'firebase/functions'
+import { buildP8CAssignmentDelta } from '../services/p8cAssignmentDelta'
 import { useNavigate, useParams } from 'react-router-dom'
 import AiWritingSponsoredAssignmentPanel from '../components/AiWritingSponsoredAssignmentPanel'
 import {
@@ -164,6 +165,7 @@ export default function CreateWriting() {
   const [dueDate, setDueDate] = useState('')
   const [timeLimit, setTimeLimit] = useState(60)
   const [assignTo, setAssignTo] = useState([])
+  const [assignmentBaseline, setAssignmentBaseline] = useState([])
   const [sponsoredSelection, setSponsoredSelection] = useState(emptyAiSponsoredSelection)
   const [sponsoredStatus, setSponsoredStatus] = useState(isEditMode ? 'loading' : 'ready')
   const [sponsoredError, setSponsoredError] = useState('')
@@ -324,6 +326,7 @@ export default function CreateWriting() {
       setDueDate(data.dueDate || '')
       setTimeLimit(Number(data.timeLimit) || getDefaultWritingTimeLimit(loadedContentType))
       setAssignTo(canonicalStudentIds)
+        setAssignmentBaseline(canonicalStudentIds)
 
       setTask1Title(data.task1?.title || 'Writing Task 1')
       setTask1Prompt(data.task1?.prompt || '')
@@ -634,11 +637,14 @@ export default function CreateWriting() {
       }
 
       try {
-        await setContentStudentAccessCall({
-          contentType: 'writing',
-          contentId: savedWritingId,
-          studentIds: assignTo
-        })
+        const scopedAssignment = buildP8CAssignmentDelta(
+          'writing', savedWritingId, assignmentBaseline, assignTo
+        )
+        if (scopedAssignment.changes.length > 0) {
+          const changeResult = await setContentStudentAccessCall(scopedAssignment)
+          if (changeResult.data?.ok !== true) throw new Error('The assignment update was not confirmed.')
+        }
+        setAssignmentBaseline([...assignTo])
       } catch (assignmentError) {
         console.error('Could not synchronize writing assignments:', assignmentError)
 
