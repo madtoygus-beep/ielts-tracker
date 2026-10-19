@@ -1107,9 +1107,11 @@ export default function CreateMockTest() {
       if (sponsoredSchool && shouldRetireMockAiSponsoredPolicy({
         isEditMode,
         existingMock,
-        wasWritingEnabled: getStoredEnabledSections(
-          existingMock, existingMock.mockType || existingMock.contentType
-        ).writing,
+        wasWritingEnabled: isEditMode && existingMock
+          ? getStoredEnabledSections(
+              existingMock, existingMock.mockType || existingMock.contentType
+            ).writing
+          : false,
         newWritingId: cleanWritingId,
         newWritingEnabled: activeSections.writing,
         configured: sponsoredSelection.configured,
