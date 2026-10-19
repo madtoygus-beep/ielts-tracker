@@ -5720,12 +5720,11 @@ ${previousLabel} will be permanently locked and you will not be able to return t
           </div>
         )}
 
-        <button
-          onClick={() => handleSubmitMock()}
-          disabled={submitting}
-          className="w-full bg-purple-600 text-white rounded-xl py-4 text-sm font-medium hover:bg-purple-700 disabled:opacity-60"
+        <button type="button" onClick={() => handleSubmitMock()}
+          disabled={submitting} aria-busy={submitting}
+          className="w-full min-h-12 rounded-xl bg-purple-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-purple-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600"
         >
-          {submitting ? 'Submitting...' : `Submit ${mockTypeLabel}`}
+          {submitting ? 'Submitting securely…' : `Submit ${mockTypeLabel}`}
         </button>
       </div>
     )

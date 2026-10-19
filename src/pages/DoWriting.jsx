@@ -15,38 +15,88 @@ function countWords(text) {
     .filter(Boolean).length
 }
 
+// Teacher submission is available to approved institutional students across
+// schools. The narrower isInstitutionWritingStudent policy is ONLY for the
+// Maxima AI pilot, not for normal teacher submissions in other schools.
+function canSendWritingToTeacher(profile) {
+  return Boolean(profile?.role === 'student' && profile.status === 'approved' &&
+    profile.deleted !== true && profile.archived !== true &&
+    typeof profile.schoolId === 'string' && profile.schoolId.trim() &&
+    profile.schoolId !== 'individual' &&
+    (profile.accountType === 'institution' || profile.accountType == null))
+}
+
 
 const submitWritingSecureCall = httpsCallable(functions, 'submitWritingSecure')
 const getStudentSubmissionAttemptStateCall = httpsCallable(functions, 'getStudentSubmissionAttemptState')
 const getMyAiWritingSubmissionOptionsCall = httpsCallable(functions, 'getMyAiWritingSubmissionOptions')
 const evaluateMyAiWritingCall = httpsCallable(functions, 'evaluateMyAiWriting', { timeout: 180000 })
 
-function WritingSubmitActions({ submitting, canChooseAi, aiLoading, institutionFunded, creditsRemaining, onChoice }) {
+// UI states are advisory. submitWritingSecure remains the authoritative
+// source for assignment, AI entitlement and credit/billing decisions.
+function getWritingAiActionMessage({ submitting, aiLoading, aiError, expired, canChooseAi,
+  aiReason, feedbackEligible, institutionFunded, creditsRemaining, submittingChoice }) {
+  if (submitting) {
+    return submittingChoice === 'ai'
+      ? 'Saving your Writing and requesting AI feedback. Please wait.'
+      : 'Saving your Writing for teacher review. Please wait.'
+  }
+  if (expired) return 'Time is up. Your Writing is being submitted to your teacher; no AI credit will be used.'
+  if (aiLoading) return 'Checking AI availability… Send to Teacher is available now.'
+  if (aiError) return 'AI availability could not be checked. You can still Send to Teacher.'
+  if (!canChooseAi) {
+    if (['pilot_off', 'provider_off', 'school_disabled', 'school_off', 'disabled'].includes(aiReason)) {
+      return 'AI assessment is not enabled right now. Send to Teacher remains available.'
+    }
+    return 'No active AI credit or institution-funded assessment is available for this assignment. Send to Teacher remains available.'
+  }
+  if (!feedbackEligible) {
+    return 'AI feedback requires at least 50 words in Task 1 or 100 in Task 2. Continue writing, or Send to Teacher now.'
+  }
+  if (institutionFunded) {
+    return 'AI assessment is funded by your institution. Your personal AI credits will not be used.'
+  }
+  return `${creditsRemaining} personal AI credit${creditsRemaining === 1 ? '' : 's'} available. One credit is used only if a new AI report is saved.`
+}
+
+function WritingSubmitActions({ submitting, submittingChoice, canChooseAi, aiLoading, aiError,
+  aiReason, feedbackEligible, expired, institutionFunded, creditsRemaining,
+  institutionStudent, onChoice }) {
+  // B2C/Self-Study integration is deferred. Do not surface a teacher submission
+  // or an AI purchase path to an individually enrolled account.
+  if (!institutionStudent) {
+    return (
+      <p role="status" className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+        Individual Self-Study Writing submissions are not available in this phase. Please contact your institution.
+      </p>
+    )
+  }
+
+  const aiEnabled = !submitting && !aiLoading && !expired && !aiError &&
+    canChooseAi && feedbackEligible
+  const message = getWritingAiActionMessage({ submitting, submittingChoice, aiLoading,
+    aiError, expired, canChooseAi, aiReason, feedbackEligible, institutionFunded,
+    creditsRemaining })
+
   return (
-    <div className="mt-5 space-y-2" aria-label="Writing submission choices">
+    <section className="mt-5 space-y-3 min-w-0" aria-label="Writing submission choices" aria-busy={submitting}>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <button type="button" onClick={() => onChoice('ai')}
-          disabled={submitting || aiLoading || !canChooseAi}
-          title={!canChooseAi ? 'No active AI assessment credit or institution-funded right is available.' : undefined}
-          className="rounded-xl bg-indigo-700 px-4 py-4 text-sm font-semibold text-white hover:bg-indigo-800 disabled:bg-slate-200 disabled:text-slate-500 disabled:cursor-not-allowed">
-          ✨ Check with AI
+          disabled={!aiEnabled}
+          title={!aiEnabled ? message : undefined}
+          className="min-h-12 w-full rounded-xl bg-indigo-700 px-4 py-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-indigo-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 disabled:bg-slate-200 disabled:text-slate-500 disabled:shadow-none disabled:cursor-not-allowed">
+          {submitting && submittingChoice === 'ai' ? 'Submitting for AI…' : '✨ Check with AI'}
         </button>
         <button type="button" onClick={() => onChoice('teacher')}
           disabled={submitting}
-          className="rounded-xl bg-purple-600 px-4 py-4 text-sm font-semibold text-white hover:bg-purple-700 disabled:opacity-60">
-          ✉ Send to Teacher
+          className="min-h-12 w-full rounded-xl bg-purple-600 px-4 py-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-purple-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 focus-visible:ring-offset-2 disabled:bg-slate-200 disabled:text-slate-500 disabled:shadow-none disabled:cursor-not-allowed">
+          {submitting && submittingChoice !== 'ai' ? 'Sending to Teacher…' : '✉ Send to Teacher'}
         </button>
       </div>
-      <p className="text-xs text-slate-500 leading-5">
-        {submitting ? 'Submitting your Writing...' : aiLoading
-          ? 'Checking AI access… Send to Teacher is available now.'
-          : canChooseAi
-            ? institutionFunded
-              ? 'AI is funded by your institution. Choosing AI does not use a personal credit.'
-              : `You have ${creditsRemaining} AI credit(s). Check with AI uses one credit only if a report is saved.`
-            : 'Check with AI is unavailable without an active AI credit or an institution-funded right. Send to Teacher remains available.'}
+      <p role="status" aria-live="polite" className="text-xs leading-5 text-slate-600">
+        {message}
       </p>
-    </div>
+    </section>
   )
 }
 
@@ -121,7 +171,8 @@ export default function DoWriting() {
 
   const [user, setUser] = useState(null)
   const [isInstitutionStudent, setIsInstitutionStudent] = useState(false)
-  const [aiOptions, setAiOptions] = useState({ loading: true, canChooseAi: false, creditsRemaining: 0, institutionFunded: false })
+  const [canSendToTeacher, setCanSendToTeacher] = useState(false)
+  const [aiOptions, setAiOptions] = useState({ loading: true, canChooseAi: false, creditsRemaining: 0, institutionFunded: false, reason: '', error: false })
   const [aiSubmitMessage, setAiSubmitMessage] = useState('')
   const [writing, setWriting] = useState(null)
   const [currentTask, setCurrentTask] = useState(1)
@@ -131,6 +182,7 @@ export default function DoWriting() {
   const [submitted, setSubmitted] = useState(false)
   const [completedSubmission, setCompletedSubmission] = useState(null)
   const [submitting, setSubmitting] = useState(false)
+  const [submittingChoice, setSubmittingChoice] = useState(null)
   const [alreadyDone, setAlreadyDone] = useState(false)
   const [loading, setLoading] = useState(true)
   const [imageZoomOpen, setImageZoomOpen] = useState(false)
@@ -159,23 +211,24 @@ export default function DoWriting() {
   useEffect(() => {
     if (!user?.uid || !writing?.id || writing.id !== id ||
         !isInstitutionStudent || submitted) {
-      setAiOptions({ loading: false, canChooseAi: false, creditsRemaining: 0, institutionFunded: false })
+      setAiOptions({ loading: false, canChooseAi: false, creditsRemaining: 0, institutionFunded: false, reason: 'not_institution', error: false })
       return undefined
     }
     let active = true
-    setAiOptions({ loading: true, canChooseAi: false, creditsRemaining: 0, institutionFunded: false })
+    setAiOptions({ loading: true, canChooseAi: false, creditsRemaining: 0, institutionFunded: false, reason: '', error: false })
     getMyAiWritingSubmissionOptionsCall({ contentId: id })
       .then(result => {
         if (!active) return
         const value = result?.data || {}
         setAiOptions({ loading: false, canChooseAi: value.canChooseAi === true,
           creditsRemaining: Number.isSafeInteger(value.creditsRemaining) ? value.creditsRemaining : 0,
-          institutionFunded: value.institutionFunded === true })
+          institutionFunded: value.institutionFunded === true,
+          reason: typeof value.reason === 'string' ? value.reason : '', error: false })
       })
       .catch(error => {
         if (!active) return
         console.warn('AI eligibility could not be loaded; teacher submission remains available.', error?.code || '')
-        setAiOptions({ loading: false, canChooseAi: false, creditsRemaining: 0, institutionFunded: false })
+        setAiOptions({ loading: false, canChooseAi: false, creditsRemaining: 0, institutionFunded: false, reason: '', error: true })
       })
     return () => { active = false }
   }, [user?.uid, writing?.id, id, isInstitutionStudent, submitted])
@@ -296,6 +349,7 @@ export default function DoWriting() {
       setDraftLoaded(false)
       setSubmitted(false)
       setSubmitting(false)
+      setSubmittingChoice(null)
       setAlreadyDone(false)
       setTask1Answer('')
       setTask2Answer('')
@@ -307,6 +361,7 @@ export default function DoWriting() {
       setAttemptState(null)
       setCompletedSubmission(null)
       setIsInstitutionStudent(false)
+      setCanSendToTeacher(false)
       setAiSubmitMessage('')
 
       if (!currentUser) {
@@ -339,6 +394,7 @@ export default function DoWriting() {
 
       setUser(currentUser)
       setIsInstitutionStudent(isInstitutionWritingStudent(profile))
+      setCanSendToTeacher(canSendWritingToTeacher(profile))
 
       // Stage 16F-F: studentAccess is the canonical standalone entitlement.
       const accessId = `${currentUser.uid}_writing_${id}`
@@ -703,7 +759,7 @@ export default function DoWriting() {
     if (
       submittingRef.current || submitted || alreadyDone || loading ||
       !draftLoaded || !user || !writing || writing.id !== id ||
-      auth.currentUser?.uid !== user.uid
+      !canSendToTeacher || auth.currentUser?.uid !== user.uid
     ) return
 
     const expired = timeLeft <= 0
@@ -745,6 +801,7 @@ export default function DoWriting() {
     const submissionVersion = loadVersionRef.current
     submittingRef.current = true
     setSubmitting(true)
+    setSubmittingChoice(aiRequested ? 'ai' : 'teacher')
     const expectedAttemptNumber = attemptState?.open === true
       ? (Number(attemptState.nextAttemptNumber) || 2)
       : 1
@@ -785,6 +842,7 @@ export default function DoWriting() {
         setSubmitted(true)
         submittingRef.current = false
         setSubmitting(false)
+        setSubmittingChoice(null)
       }
       // A single Check with AI click submits first, then starts the existing
       // idempotent credit evaluator. Institution-funded submissions are handled
@@ -837,6 +895,7 @@ export default function DoWriting() {
             setSubmitted(true)
             submittingRef.current = false
             setSubmitting(false)
+            setSubmittingChoice(null)
           }
           if (durableSubmission.aiReviewChoice === 'ai' &&
               durableSubmission.aiBillingMode === 'student_credit') {
@@ -858,6 +917,7 @@ export default function DoWriting() {
         alert('Could not submit your writing. Please try again.')
         submittingRef.current = false
         setSubmitting(false)
+        setSubmittingChoice(null)
         // Submitting=false restarts autosave and, if time remains, the timer.
         // At zero the retry is manual, avoiding repeated automatic requests.
       }
@@ -1073,11 +1133,11 @@ export default function DoWriting() {
 
   return (
     <div className="min-h-screen bg-[#faf9f6] flex flex-col">
-      <nav className="flex justify-between items-center px-8 py-4 bg-white border-b border-gray-100 sticky top-0 z-20">
+      <nav className="flex flex-wrap justify-between items-center gap-2 px-3 sm:px-8 py-3 sm:py-4 bg-white border-b border-gray-100 sm:sticky sm:top-0 z-20">
         <img src="/1.png" alt="Maxima" className="h-10 object-contain" />
 
-        <div className="flex items-center gap-4">
-          <span className="text-sm font-medium text-gray-700 uppercase tracking-wide">
+        <div className="flex min-w-0 items-center gap-2 sm:gap-4">
+          <span className="hidden lg:block max-w-64 truncate text-sm font-medium text-gray-700 uppercase tracking-wide">
             {writing.title}
           </span>
 
@@ -1132,7 +1192,7 @@ export default function DoWriting() {
       )}
 
       {isFullWriting ? (
-        <div className="flex border-b border-gray-100 bg-white sticky top-[73px] z-10">
+        <div className="flex border-b border-gray-100 bg-white sm:sticky sm:top-[73px] z-10">
           <button
             onClick={() => setCurrentTask(1)}
             className={`flex-1 py-4 text-sm font-semibold ${
@@ -1162,7 +1222,7 @@ export default function DoWriting() {
           </button>
         </div>
       ) : (
-        <div className="border-b border-gray-100 bg-white sticky top-[73px] z-10 px-8 py-3">
+        <div className="border-b border-gray-100 bg-white sm:sticky sm:top-[73px] z-10 px-4 sm:px-8 py-3">
           <span className="inline-flex items-center gap-2 text-sm font-semibold text-purple-600 bg-purple-50 px-4 py-2 rounded-xl">
             {activeTaskLabel} only · {hasTask1 ? task1Words : task2Words} words
           </span>
@@ -1170,9 +1230,9 @@ export default function DoWriting() {
       )}
 
       {hasTask1 && currentTask === 1 && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 flex-1 overflow-hidden">
-          <div className="overflow-y-auto p-8 border-r border-gray-100">
-            <div className="bg-white border border-gray-100 rounded-2xl p-6">
+        <div className="grid min-w-0 grid-cols-1 lg:grid-cols-2 flex-1 lg:overflow-hidden">
+          <div className="min-w-0 p-4 sm:p-6 lg:p-8 lg:overflow-y-auto lg:border-r border-gray-100">
+            <div className="min-w-0 rounded-2xl border border-gray-100 bg-white p-4 sm:p-6">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-xl font-bold text-gray-900">
                   {writing.task1?.title || 'Writing Task 1'}
@@ -1219,8 +1279,8 @@ export default function DoWriting() {
             </div>
           </div>
 
-          <div className="overflow-y-auto p-8">
-            <div className="bg-white border border-gray-100 rounded-2xl p-6">
+          <div className="min-w-0 p-4 sm:p-6 lg:p-8 lg:overflow-y-auto">
+            <div className="min-w-0 rounded-2xl border border-gray-100 bg-white p-4 sm:p-6">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="font-semibold text-gray-800">
                   Your Task 1 Answer
@@ -1242,23 +1302,28 @@ export default function DoWriting() {
                 disabled={!draftLoaded || submitting || timeLeft <= 0}
                 onChange={e => setTask1Answer(e.target.value)}
                 placeholder="Write your Task 1 response here..."
-                className="w-full min-h-[520px] border border-gray-200 rounded-xl px-4 py-4 text-sm leading-7 outline-none focus:border-purple-400 resize-none"
+                className="w-full min-h-[360px] sm:min-h-[520px] border border-gray-200 rounded-xl px-4 py-4 text-sm leading-7 outline-none focus:border-purple-400 resize-y"
               />
 
               {hasTask2 ? (
-                <button
-                  onClick={() => setCurrentTask(2)}
-                  className="w-full bg-purple-600 text-white rounded-xl py-4 text-sm font-medium hover:bg-purple-700 mt-5"
+                <button type="button" onClick={() => setCurrentTask(2)} disabled={submitting}
+                  className="mt-5 w-full rounded-xl bg-purple-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-purple-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Next → Task 2
                 </button>
               ) : (
                 <WritingSubmitActions
                   submitting={submitting}
+                  submittingChoice={submittingChoice}
                   aiLoading={aiOptions.loading}
-                  canChooseAi={aiOptions.canChooseAi && timeLeft > 0}
+                  aiError={aiOptions.error}
+                  aiReason={aiOptions.reason}
+                  canChooseAi={aiOptions.canChooseAi}
+                  feedbackEligible={(hasTask1 && task1Words >= 50) || (hasTask2 && task2Words >= 100)}
+                  expired={timeLeft <= 0}
                   institutionFunded={aiOptions.institutionFunded}
                   creditsRemaining={aiOptions.creditsRemaining}
+                  institutionStudent={canSendToTeacher}
                   onChoice={choice => handleSubmit(false, choice)}
                 />
               )}
@@ -1268,9 +1333,9 @@ export default function DoWriting() {
       )}
 
       {hasTask2 && currentTask === 2 && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 flex-1 overflow-hidden">
-          <div className="overflow-y-auto p-8 border-r border-gray-100">
-            <div className="bg-white border border-gray-100 rounded-2xl p-6">
+        <div className="grid min-w-0 grid-cols-1 lg:grid-cols-2 flex-1 lg:overflow-hidden">
+          <div className="min-w-0 p-4 sm:p-6 lg:p-8 lg:overflow-y-auto lg:border-r border-gray-100">
+            <div className="min-w-0 rounded-2xl border border-gray-100 bg-white p-4 sm:p-6">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-xl font-bold text-gray-900">
                   {writing.task2?.title || 'Writing Task 2'}
@@ -1287,8 +1352,8 @@ export default function DoWriting() {
             </div>
           </div>
 
-          <div className="overflow-y-auto p-8">
-            <div className="bg-white border border-gray-100 rounded-2xl p-6">
+          <div className="min-w-0 p-4 sm:p-6 lg:p-8 lg:overflow-y-auto">
+            <div className="min-w-0 rounded-2xl border border-gray-100 bg-white p-4 sm:p-6">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="font-semibold text-gray-800">
                   Your Task 2 Answer
@@ -1310,28 +1375,31 @@ export default function DoWriting() {
                 disabled={!draftLoaded || submitting || timeLeft <= 0}
                 onChange={e => setTask2Answer(e.target.value)}
                 placeholder="Write your Task 2 essay here..."
-                className="w-full min-h-[520px] border border-gray-200 rounded-xl px-4 py-4 text-sm leading-7 outline-none focus:border-purple-400 resize-none"
+                className="w-full min-h-[360px] sm:min-h-[520px] border border-gray-200 rounded-xl px-4 py-4 text-sm leading-7 outline-none focus:border-purple-400 resize-y"
               />
 
-              <div className={`${hasTask1 ? 'grid grid-cols-2' : 'grid grid-cols-1'} gap-3 mt-5`}>
-                {hasTask1 && (
-                  <button
-                    onClick={() => setCurrentTask(1)}
-                    className="w-full bg-gray-100 text-gray-600 rounded-xl py-4 text-sm font-medium hover:bg-gray-200"
-                  >
+              {hasTask1 && (
+                <div className="mt-5 flex justify-start">
+                  <button type="button" onClick={() => setCurrentTask(1)} disabled={submitting}
+                    className="inline-flex min-h-10 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50">
                     ← Back to Task 1
                   </button>
-                )}
-
-                <WritingSubmitActions
+                </div>
+              )}
+              <WritingSubmitActions
                   submitting={submitting}
+                  submittingChoice={submittingChoice}
                   aiLoading={aiOptions.loading}
-                  canChooseAi={aiOptions.canChooseAi && timeLeft > 0}
+                  aiError={aiOptions.error}
+                  aiReason={aiOptions.reason}
+                  canChooseAi={aiOptions.canChooseAi}
+                  feedbackEligible={(hasTask1 && task1Words >= 50) || (hasTask2 && task2Words >= 100)}
+                  expired={timeLeft <= 0}
                   institutionFunded={aiOptions.institutionFunded}
                   creditsRemaining={aiOptions.creditsRemaining}
+                  institutionStudent={canSendToTeacher}
                   onChoice={choice => handleSubmit(false, choice)}
-                />
-              </div>
+              />
             </div>
           </div>
         </div>

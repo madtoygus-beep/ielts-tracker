@@ -128,6 +128,7 @@ export default function AiWritingStudentPanel({ contentId, attemptNumber, contex
   const [requesting, setRequesting] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
   const requestSerial = useRef(0)
+  const requestingRef = useRef(false)
   const mounted = useRef(false)
   const personalCreditSelected = isPersonalCreditAiSelection(context, submittedChoice, submittedBillingMode)
 
@@ -180,12 +181,14 @@ export default function AiWritingStudentPanel({ contentId, attemptNumber, contex
   }, [envelope.status, envelope.institutionFunded, requesting, refresh, submittedChoice])
 
   const startEvaluation = async () => {
-    if (!personalCreditSelected ||
+    if (requestingRef.current || !personalCreditSelected ||
         !canRequestAiWriting(access, envelope, requesting || loading)) return
     const confirmed = window.confirm(
       'Check this submitted Writing attempt with AI? One personal AI credit is used only if a new result is saved. A completed report is reused without extra credit. Task 1 needs 50+ words and Task 2 needs 100+ words for feedback; bands require 150/250 words.'
     )
     if (!confirmed) return
+    // An immediate ref lock prevents a second click before React re-renders.
+    requestingRef.current = true
     setRequesting(true)
     setErrorMessage('')
     try {
@@ -205,6 +208,7 @@ export default function AiWritingStudentPanel({ contentId, attemptNumber, contex
       await refresh({ quiet: true })
       if (mounted.current) setErrorMessage(message)
     } finally {
+      requestingRef.current = false
       if (mounted.current) setRequesting(false)
     }
   }
@@ -313,8 +317,8 @@ export default function AiWritingStudentPanel({ contentId, attemptNumber, contex
                     : 'You have no AI credits left. Contact your school administrator if you need additional evaluations.'}
               </p>
               {personalCreditSelected && envelope.canRetry === true && access?.canEvaluate === true ? (
-                <button type="button" disabled={!canEvaluate} onClick={startEvaluation}
-                  className="bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-lg px-4 py-2 text-sm font-semibold hover:bg-indigo-800">
+                <button type="button" disabled={!canEvaluate} aria-busy={requesting} onClick={startEvaluation}
+                  className="rounded-lg bg-indigo-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">
                   {requesting ? 'Evaluating...' : envelope.status === 'failed'
                     ? 'Retry AI check for this attempt (1 credit if saved)'
                     : 'Start AI check for this attempt (1 credit if saved)'}
@@ -334,9 +338,9 @@ export default function AiWritingStudentPanel({ contentId, attemptNumber, contex
       )}
       {errorMessage && <p role="alert" className="text-sm text-amber-800 mt-3">{errorMessage}</p>}
       <div className="flex justify-end mt-3">
-        <button type="button" disabled={loading || requesting} onClick={() => refresh()}
-          className="text-sm font-medium text-indigo-700 disabled:text-gray-400 hover:underline">
-          Refresh AI status
+        <button type="button" disabled={loading || requesting} aria-busy={loading} onClick={() => refresh()}
+          className="text-sm font-medium text-indigo-700 disabled:cursor-not-allowed disabled:text-gray-400 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2">
+          {loading ? 'Refreshing AI status…' : 'Refresh AI status'}
         </button>
       </div>
     </section>
