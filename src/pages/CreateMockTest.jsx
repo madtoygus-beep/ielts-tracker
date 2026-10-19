@@ -18,6 +18,7 @@ import {
   AI_SPONSORED_SCHOOL_ID,
   emptyAiSponsoredSelection,
   normalizeAiSponsoredPolicy,
+  aiSponsoredPolicyErrorHint,
   eligibleAiSponsoredStudents,
   activeTeacherAiClassStudentIds,
   buildAiSponsoredWriteRequest,
@@ -334,6 +335,7 @@ export default function CreateMockTest() {
   const [assignTo, setAssignTo] = useState([])
   const [sponsoredSelection, setSponsoredSelection] = useState(emptyAiSponsoredSelection)
   const [sponsoredStatus, setSponsoredStatus] = useState(isEditMode ? 'loading' : 'ready')
+  const [sponsoredError, setSponsoredError] = useState('')
   const sponsoredSchool = Boolean(profile) &&
     ['teacher', 'admin'].includes(profile.role) &&
     profile.status === 'approved' &&
@@ -510,9 +512,11 @@ export default function CreateMockTest() {
           try {
             const response = await getSponsoredPolicyCall({ contentType: 'mock', contentId: id })
             setSponsoredSelection(normalizeAiSponsoredPolicy(response.data, 'mock', id))
+            setSponsoredError('')
             setSponsoredStatus('ready')
           } catch (error) {
             console.warn('Sponsored Mock Writing settings unavailable:', error)
+            setSponsoredError(aiSponsoredPolicyErrorHint(error))
             setSponsoredStatus('unavailable')
           }
         } else {
@@ -1866,6 +1870,7 @@ export default function CreateMockTest() {
                 selection={sponsoredSelection}
                 onChange={setSponsoredSelection}
                 status={sponsoredStatus}
+                errorMessage={sponsoredError}
                 hasWriting={activeSections.writing && Boolean(writingId)}
                 disabled={saving}
               />

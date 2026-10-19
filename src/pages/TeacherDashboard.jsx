@@ -25,6 +25,7 @@ import {
   AI_SPONSORED_SCHOOL_ID,
   activeTeacherAiClassStudentIds,
   eligibleAiSponsoredStudents,
+  aiSponsoredPolicyErrorHint,
   emptyAiSponsoredSelection,
   normalizeAiSponsoredPolicy,
   buildAiSponsoredWriteRequest,
@@ -2599,6 +2600,7 @@ export default function TeacherDashboard() {
         setAssignmentAiStatus('unavailable')
         setAssignmentAiError(
           `AI settings could not be loaded: ${getCallableErrorMessage(error, 'The AI service is unavailable.')}. ` +
+          `${aiSponsoredPolicyErrorHint(error)} ` +
           'Normal assignments may still be changed, but existing AI settings will NOT be overwritten.'
         )
       }
@@ -9560,7 +9562,7 @@ export default function TeacherDashboard() {
                 return (
                   <label
                     key={student.id}
-                    className="flex items-center justify-between gap-4 border border-gray-100 rounded-xl p-4 cursor-pointer hover:bg-gray-50"
+                    className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border border-gray-100 rounded-xl p-4 cursor-pointer hover:bg-gray-50"
                   >
                     <div className="flex items-center gap-3">
                       <input
@@ -9582,19 +9584,34 @@ export default function TeacherDashboard() {
                       </div>
                     </div>
 
-                    {completed ? (
-                      <span className="text-xs bg-green-50 text-green-600 px-3 py-1.5 rounded-full">
-                        Completed
-                      </span>
-                    ) : assignmentDraft.includes(student.id) ? (
-                      <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1.5 rounded-full">
-                        Assigned
-                      </span>
-                    ) : (
-                      <span className="text-xs bg-gray-100 text-gray-500 px-3 py-1.5 rounded-full">
-                        Not assigned
-                      </span>
-                    )}
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                      {completed ? (
+                        <span className="text-xs bg-green-50 text-green-600 px-3 py-1.5 rounded-full">
+                          Completed
+                        </span>
+                      ) : assignmentDraft.includes(student.id) ? (
+                        <span className="text-xs bg-purple-50 text-purple-600 px-3 py-1.5 rounded-full">
+                          Assigned
+                        </span>
+                      ) : (
+                        <span className="text-xs bg-gray-100 text-gray-500 px-3 py-1.5 rounded-full">
+                          Not assigned
+                        </span>
+                      )}
+                      {assignmentAiStatus === 'ready' &&
+                        assignmentAiEnabledForSchool() &&
+                        aiSupportedAssignmentType(selectedHomeworkType) &&
+                        assignmentDraft.includes(student.id) && (
+                          <span className={`text-[11px] px-2 py-1 rounded-full ${
+                            assignmentAiDraft.enabled && assignmentAiDraft.studentIds.includes(student.id)
+                              ? 'bg-indigo-50 text-indigo-800'
+                              : 'bg-gray-100 text-gray-500'
+                          }`} title="Draft selection - save assignments to apply changes">
+                            {assignmentAiDraft.enabled && assignmentAiDraft.studentIds.includes(student.id)
+                              ? 'School AI selected' : 'School AI not selected'}
+                          </span>
+                        )}
+                    </div>
                   </label>
                 )
               })}

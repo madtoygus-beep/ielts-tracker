@@ -18,6 +18,7 @@ import {
   AI_SPONSORED_SCHOOL_ID,
   emptyAiSponsoredSelection,
   normalizeAiSponsoredPolicy,
+  aiSponsoredPolicyErrorHint,
   eligibleAiSponsoredStudents,
   activeTeacherAiClassStudentIds,
   buildAiSponsoredWriteRequest,
@@ -165,6 +166,7 @@ export default function CreateWriting() {
   const [assignTo, setAssignTo] = useState([])
   const [sponsoredSelection, setSponsoredSelection] = useState(emptyAiSponsoredSelection)
   const [sponsoredStatus, setSponsoredStatus] = useState(isEditMode ? 'loading' : 'ready')
+  const [sponsoredError, setSponsoredError] = useState('')
   const sponsoredSchool = Boolean(profile) &&
     ['teacher', 'admin'].includes(profile.role) &&
     profile.status === 'approved' &&
@@ -339,10 +341,12 @@ export default function CreateWriting() {
           const response = await getSponsoredPolicyCall({ contentType: 'writing', contentId: id })
           if (!isActive) return
           setSponsoredSelection(normalizeAiSponsoredPolicy(response.data, 'writing', id))
+          setSponsoredError('')
           setSponsoredStatus('ready')
         } catch (error) {
           if (!isActive) return
           console.warn('Sponsored Writing assessment settings unavailable:', error)
+          setSponsoredError(aiSponsoredPolicyErrorHint(error))
           setSponsoredStatus('unavailable')
         }
       } else {
@@ -1128,6 +1132,7 @@ export default function CreateWriting() {
                 selection={sponsoredSelection}
                 onChange={setSponsoredSelection}
                 status={sponsoredStatus}
+                errorMessage={sponsoredError}
                 disabled={saving}
               />
             )}

@@ -73,6 +73,52 @@ export function eligibleAiSponsoredStudents(students, assignedIds, allowedClassS
   )
 }
 
+// UI advice only: this mirrors eligibleAiSponsoredStudents above. The
+// authenticated server policy callable always makes the final decision.
+export function aiSponsoredStudentIneligibilityReason(
+  student, assignedIds, allowedClassStudentIds = null
+) {
+  if (!student || typeof student.id !== 'string' || !STUDENT_UID.test(student.id)) {
+    return 'Student account could not be verified.'
+  }
+  if (!Array.isArray(assignedIds) || !assignedIds.includes(student.id)) {
+    return 'Assign this student to the Writing or Mock first.'
+  }
+  if (student.role !== 'student') return 'This account is not a student.'
+  if (student.status !== 'approved') return 'The student account is not approved and active.'
+  if (student.deleted === true || student.archived === true ||
+      student.permanentDeleteInProgress === true) {
+    return 'This student account is archived or being removed.'
+  }
+  if (typeof student.accountType === 'string' &&
+      ['individual', 'platform'].includes(student.accountType.trim().toLowerCase())) {
+    return 'Self-Study and platform accounts cannot use school-funded AI.'
+  }
+  if (student.schoolId === '__individual__' ||
+      (student.schoolId || AI_SPONSORED_SCHOOL_ID) !== AI_SPONSORED_SCHOOL_ID) {
+    return 'This student does not belong to the Maxima institution.'
+  }
+  if (allowedClassStudentIds !== null &&
+      !(allowedClassStudentIds instanceof Set && allowedClassStudentIds.has(student.id))) {
+    return 'Not in your current active class. The primary class teacher or school admin must check membership.'
+  }
+  return ''
+}
+
+export function aiSponsoredPolicyErrorHint(error) {
+  const code = typeof error?.code === 'string' ? error.code.toLowerCase() : ''
+  if (code.endsWith('permission-denied')) {
+    return 'Your account cannot manage AI for this source. Teachers must own the source (normally its primary teacherId) and manage a current active class; the school admin can review ownership.'
+  }
+  if (code.endsWith('failed-precondition')) {
+    return 'The school, linked Writing resource, or stored AI policy is not currently eligible. Ask the school admin to verify the content and settings.'
+  }
+  if (code.endsWith('unauthenticated')) {
+    return 'Your session has expired. Sign in again before changing AI rights.'
+  }
+  return 'AI rights could not be verified. Regular assignments can still be saved, but existing AI settings will not be overwritten.'
+}
+
 export function buildAiSponsoredWriteRequest({
   contentType, contentId, selection, assignedStudentIds
 }) {
