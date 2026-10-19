@@ -76,7 +76,11 @@ function svc(db) {
   return createP8CAssignmentService({db,
     FieldValue:{serverTimestamp:()=> '2026-10-20T00:00:00Z'},HttpsError:TestError,
     requireAssignmentManager:async req=>({uid:req.auth.uid,profile:db.get(`users/${req.auth.uid}`).data()}),
-    managerCanManageSource:(manager,source)=>manager.profile.role==='admin'||source.teacherId===manager.uid,
+    // Match the existing legacy server helper: historical teacherIds wins.
+    // This makes the stale-list regression test realistic rather than stricter.
+    managerCanManageSource:(manager,source)=>manager.profile.role==='admin' ||
+      (Array.isArray(source.teacherIds) && source.teacherIds.length > 0
+        ? source.teacherIds : [source.teacherId,source.createdBy]).includes(manager.uid),
     schoolIdOf:doc=>doc?.schoolId||SCHOOL,
     accountTypeOf:doc=>doc?.accountType || 'institution',
     studentAccessPayload:(type,col,id,source,uid)=>({uid,schoolId:source.schoolId,contentType:type,contentId:id,
@@ -187,7 +191,8 @@ function archiveSvc(db,results={},history=[],aiReader=null) {
   }
   return createP8CArchiveService({
     db,HttpsError:TestError,
-    requireStudent:async req=>({uid:req.auth.uid,schoolId:SCHOOL}),
+    requireStudent:async req=>({uid:req.auth.uid,schoolId:SCHOOL,
+      profile:db.get(`users/${req.auth.uid}`).data()}),
     schoolIdOf:obj=>obj?.schoolId||SCHOOL,
     getStudentOwnedResultSnapshots:async collection=>(results[collection]||[]).map((data,i)=>({id:`submission_${i}`,data})),
     studentResultSafeBase:(id,data)=>({submittedAt:data.submittedAt, result:data.result||null,
@@ -271,4 +276,48 @@ test('P8C-25 saved verified AI headline is read-only and contains no report text
   assert.equal(reads,1)
   assert.equal(out.items[0].aiEstimatedBand,7.5)
   assert.equal(JSON.stringify(out).includes('HIDDEN'),false)
+})
+
+// P8-C security hotfix: ensure the real source owner takes priority over
+// stale teacherIds, and inactive-but-approved student accounts cannot read history.
+test('P8C-26 stale teacherIds cannot override current teacherId for assignment writes', async () => {
+  const newTeacher = 'Teacher0002'
+  const db = fixture({[SOURCE]:{...sourceDoc,teacherId:newTeacher,teacherIds:[MANAGER,newTeacher]}})
+  await assert.rejects(svc(db).write(managerReq([add(STUDENT1)])), {code:'permission-denied'})
+  assert.equal(db.get(accessPath(STUDENT1)).exists,false)
+})
+
+test('P8C-27 legitimate current teacher can write despite stale teacherIds', async () => {
+  const newTeacher = 'Teacher0002'
+  const db = fixture({
+    [SOURCE]:{...sourceDoc,teacherId:newTeacher,teacherIds:[MANAGER]},
+    [`users/${newTeacher}`]:{role:'teacher',status:'approved',schoolId:SCHOOL,accountType:'institution'}
+  })
+  await svc(db).write(managerReq([add(STUDENT1)],newTeacher))
+  assert.equal(db.get(accessPath(STUDENT1)).data().accessType,'assignment')
+})
+
+test('P8C-28 an approved but archived student cannot read old results', async () => {
+  const db = fixture({
+    [accessPath(STUDENT1)]:archivedAccess,
+    [`users/${STUDENT1}`]:{...student(STUDENT1),archived:true}
+  })
+  await assert.rejects(archiveSvc(db,{writingSubmissions:[submitted]}).list(archiveReq),
+    {code:'permission-denied'})
+})
+
+test('P8C-29 a student in permanent-delete workflow cannot read old results', async () => {
+  const db = fixture({
+    [accessPath(STUDENT1)]:archivedAccess,
+    [`users/${STUDENT1}`]:{...student(STUDENT1),permanentDeleteInProgress:true}
+  })
+  await assert.rejects(archiveSvc(db,{writingSubmissions:[submitted]}).list(archiveReq),
+    {code:'permission-denied'})
+})
+
+
+test('P8C-30 legacy array-only teacher link still authorizes assignment management', async () => {
+  const db = fixture({[SOURCE]:{schoolId:SCHOOL,teacherIds:[MANAGER],archived:false}})
+  await svc(db).write(managerReq([add(STUDENT1)]))
+  assert.equal(db.get(accessPath(STUDENT1)).data().accessType,'assignment')
 })

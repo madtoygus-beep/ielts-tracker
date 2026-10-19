@@ -20,6 +20,13 @@ function createP8CArchiveService({
 }) {
   async function list(request) {
     const student = await requireStudent(request)
+    // requireStudent validates role/school, but older approved profiles can
+    // separately be archived or be in a permanent-delete workflow.
+    if (!student?.profile || student.profile.status !== 'approved' ||
+        student.profile.deleted === true || student.profile.archived === true ||
+        student.profile.permanentDeleteInProgress === true) {
+      throw new HttpsError('permission-denied', 'This student account cannot view archived results.')
+    }
     const input = request?.data || {}
     if (!input || typeof input !== 'object' || Array.isArray(input) ||
         Object.keys(input).some(key => key !== 'contentType') ||

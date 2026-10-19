@@ -63,7 +63,7 @@ test('P8C-E1 real Firestore transactions: concurrent assignments, sponsor prune,
         submittedAt:'2026-10-20T01:00:00Z',task2Answer:'PRIVATE STUDENT TEXT',result:{band:7}}
       await db.doc(`writingSubmissions/${student1}_${contentId}`).set(submission)
       const archive=createP8CArchiveService({db,HttpsError:TestError,
-        requireStudent:async req=>({uid:req.auth.uid,schoolId:school}),
+        requireStudent:async req=>({uid:req.auth.uid,schoolId:school,profile:(await db.doc('users/'+req.auth.uid).get()).data()}),
         schoolIdOf:doc=>doc?.schoolId||'maxima',
         getStudentOwnedResultSnapshots:async (collection,who)=>{
           const snap=await db.collection(collection).where('uid','==',who.uid).get()

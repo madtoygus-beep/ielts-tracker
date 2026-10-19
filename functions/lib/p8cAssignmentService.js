@@ -3,6 +3,7 @@
 // P8-C: Student-by-student, optimistic assignment mutations. Never replace a
 // whole assignment roster from a potentially stale browser snapshot.
 const { grantMapIsConsistent, grantsForPolicy } = require('./aiWritingSponsoredGrants')
+const { teacherOwnsSource } = require('./aiWritingTeacherRelationship')
 const ALLOWED_TYPES = Object.freeze({
   reading: 'readings', listening: 'listenings', writing: 'writingHomeworks',
   vocabulary: 'vocabularyTests', mock: 'mockTests'
@@ -82,7 +83,10 @@ function createP8CAssignmentService({
           (freshManagerProfile.role === 'teacher' &&
             (schoolIdOf(freshManagerProfile) !== schoolId ||
              accountTypeOf(freshManagerProfile) !== 'institution')) ||
-          !managerCanManageSource({ uid: manager.uid, profile: freshManagerProfile }, source)) {
+          // Current teacherId wins; legacy array-only sources remain supported.
+          !(freshManagerProfile.role === 'teacher'
+            ? teacherOwnsSource(source, manager.uid)
+            : managerCanManageSource({ uid: manager.uid, profile: freshManagerProfile }, source))) {
         fail('permission-denied', 'You can no longer manage this assignment.')
       }
       if (dataOf(reads[1])?.status !== 'active') {
