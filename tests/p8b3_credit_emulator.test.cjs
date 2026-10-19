@@ -9,7 +9,8 @@ const { createAiWritingEvaluationService } = require('../functions/lib/aiWriting
 const safeHost = /^(127\.0\.0\.1|localhost|\[::1\]):[0-9]{2,5}$/.test(process.env.FIRESTORE_EMULATOR_HOST || '') &&
   process.env.GCLOUD_PROJECT !== 'maxima-tracker' &&
   process.env.GOOGLE_CLOUD_PROJECT !== 'maxima-tracker'
-const PROJECT = 'demo-maxima-p8b'
+// Each emulator run gets a fresh synthetic namespace: never reuse a completed AI job.
+const PROJECT = 'demo-maxima-p8b3-' + require('node:crypto').randomBytes(6).toString('hex')
 const NOW = Date.parse('2026-10-18T21:00:00Z')
 const USER = 'p8b3EmulatorStudent', WRITING = 'p8b3EmulatorWriting'
 const essay = Array.from({length:300},(_,i)=>`word${i}`).join(' ')

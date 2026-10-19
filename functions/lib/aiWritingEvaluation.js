@@ -212,16 +212,18 @@ function createAiWritingEvaluationService({
       const job = dataOf(jobSnap)
       if (job) {
         requireMatchingJob(job, evidence)
+        // Only personal-credit jobs may be reused or retried through this
+        // callable. Fail closed for sponsored, teacher-request and unknown
+        // future billing modes; missing billingMode is legacy student credit.
+        if (job.billingMode != null && job.billingMode !== 'student_credit') {
+          fail('failed-precondition', 'This AI evaluation uses a different billing route. Contact your teacher if it failed.')
+        }
         if (job.status === 'completed') {
           return { kind: 'completed', report: job.report }
         }
         if (job.status === 'processing' && validInteger(job.leaseUntilMs) > time) {
           return { kind: 'processing', retryAfterSeconds: Math.max(1,
             Math.ceil((job.leaseUntilMs - time) / 1000)) }
-        }
-        // Institution-funded jobs are never taken over by a student credit flow.
-        if (job.billingMode === 'sponsored_auto') {
-          fail('failed-precondition', 'This assignment has an institution-funded AI evaluation. Contact your teacher if it failed.')
         }
       }
       const { access } = await freshInTx(tx, evidence, { checkPilot: true })
@@ -392,6 +394,12 @@ function createAiWritingEvaluationService({
   async function evaluate(request) {
     const input = parseInput(request)
     const student = await requireStudent(request)
+    // Mock Writing may only receive automatic institution-funded assessment.
+    // Its reports remain readable via getReport; this student-credit callable
+    // must never reserve a credit for a Mock, even when invoked outside the UI.
+    if (input.context !== 'homework') {
+      fail('permission-denied', 'Mock Writing does not support personal-credit AI evaluation.')
+    }
     // Deploy remains fail-closed until the operator explicitly enables the provider.
     if (providerEnabled() !== true) {
       fail('failed-precondition', 'AI Writing is not connected yet. No credits were used.')
