@@ -79,6 +79,46 @@ function TaskAiReport({ taskNumber, report }) {
   )
 }
 
+// Read-only rendering for the server-authorized EXACT historical attempt.
+// The calling history service matches the original submission fingerprint and
+// job identity; this component performs NO callable, retry or credit action.
+export function AiWritingSavedReport({ aiResult }) {
+  const report = aiResult?.status === 'completed' ? aiResult.report : null
+  if (!report || report.isAiEstimate !== true || report.context !== 'homework') return null
+  return (
+    <section className="rounded-2xl border border-indigo-200 bg-indigo-50/50 p-4 sm:p-5 text-left"
+      aria-label="Saved AI Writing feedback">
+      <div className="flex flex-wrap items-start justify-between gap-2 mb-4">
+        <div>
+          <h3 className="text-lg font-bold text-gray-900">AI Writing Feedback</h3>
+          <p className="mt-1 text-xs text-gray-600">Saved estimate for this attempt, not an official IELTS score or a teacher grade.</p>
+        </div>
+        {aiResult.institutionFunded === true && (
+          <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-indigo-700">Institution funded</span>
+        )}
+      </div>
+      <div className="mb-4 rounded-xl bg-indigo-900 p-4 text-white">
+        <p className="text-xs uppercase tracking-wider text-indigo-200">
+          {report.estimatedBand === null ? 'Development feedback only' : 'Estimated IELTS Writing Band'}
+        </p>
+        <p className="mt-1 text-3xl font-bold">
+          {report.estimatedBand === null ? 'No band estimate' : formatAiBand(report.estimatedBand)}
+        </p>
+      </div>
+      {report.feedbackOnly && (
+        <p className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          A numeric band was withheld because the submitted answer was too short for a full estimate.
+        </p>
+      )}
+      <div className="space-y-4">
+        <TaskAiReport taskNumber={1} report={report.task1} />
+        <TaskAiReport taskNumber={2} report={report.task2} />
+      </div>
+      <p className="mt-4 text-xs text-gray-600">This is your previously saved AI report. Viewing it does not use AI credits. Any teacher score is separate.</p>
+    </section>
+  )
+}
+
 // Mounted only for an approved Maxima institution student's submitted Writing
 // or Mock attempt. Backend callables own identity, submission, access and billing.
 export default function AiWritingStudentPanel({ contentId, attemptNumber, context = 'homework', wordCounts = {}, teacherBand = null, submittedChoice = 'teacher', submittedBillingMode = 'none' }) {

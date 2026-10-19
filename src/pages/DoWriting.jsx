@@ -927,7 +927,9 @@ export default function DoWriting() {
             <p className="text-gray-500 text-sm mb-6">
               {reviewed
                 ? `Your teacher has reviewed this ${isFullWriting ? 'Writing test' : activeTaskLabel}.`
-                : 'Your teacher will review your writing answer.'}
+                : completedSubmission?.aiReviewChoice === 'ai'
+                  ? 'Your Writing was submitted for AI assessment. Results will appear below when ready.'
+                  : 'Your teacher will review your writing answer.'}
             </p>
 
             {alreadyDone && (
@@ -985,6 +987,24 @@ export default function DoWriting() {
               </div>
             )}
 
+            {aiSubmitMessage && <p role="status" className="mb-4 rounded-xl bg-indigo-50 p-3 text-sm text-indigo-800">{aiSubmitMessage}</p>}
+
+            {isInstitutionStudent && completedSubmission?.id && (
+              <AiWritingStudentPanel
+                key={`${user?.uid || ''}:${id}:${completedSubmission.id}`}
+                contentId={id}
+                submittedChoice={completedSubmission.aiReviewChoice || 'teacher'}
+                submittedBillingMode={completedSubmission.aiBillingMode || 'none'}
+                attemptNumber={attemptNumberOfSubmission(completedSubmission)}
+                wordCounts={{
+                  task1Enabled: hasTask1,
+                  task2Enabled: hasTask2,
+                  task1: countWords(completedSubmission.task1Answer || ''),
+                  task2: countWords(completedSubmission.task2Answer || '')
+                }}
+              />
+            )}
+
             <div className={`grid grid-cols-1 ${isFullWriting ? 'lg:grid-cols-2' : ''} gap-4 mb-6 text-left`}>
               {hasTask1 && (
                 <div className="border border-gray-100 rounded-xl p-4">
@@ -1034,24 +1054,6 @@ export default function DoWriting() {
                   {review?.generalFeedback || 'No general feedback.'}
                 </p>
               </div>
-            )}
-
-            {aiSubmitMessage && <p role="status" className="mb-4 rounded-xl bg-indigo-50 p-3 text-sm text-indigo-800">{aiSubmitMessage}</p>}
-
-            {isInstitutionStudent && completedSubmission?.id && (
-              <AiWritingStudentPanel
-                key={`${user?.uid || ''}:${id}:${completedSubmission.id}`}
-                contentId={id}
-                submittedChoice={completedSubmission.aiReviewChoice || 'teacher'}
-                submittedBillingMode={completedSubmission.aiBillingMode || 'none'}
-                attemptNumber={attemptNumberOfSubmission(completedSubmission)}
-                wordCounts={{
-                  task1Enabled: hasTask1,
-                  task2Enabled: hasTask2,
-                  task1: countWords(completedSubmission.task1Answer || ''),
-                  task2: countWords(completedSubmission.task2Answer || '')
-                }}
-              />
             )}
 
             <button

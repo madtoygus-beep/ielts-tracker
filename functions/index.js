@@ -25,6 +25,15 @@ initializeApp()
 const db = getFirestore()
 const adminAuth = getAuth()
 
+// P8-B5: read-only, attempt-scoped student AI results for My Results cards.
+const { prepareAiWritingEvaluation: prepareStudentWritingHistoryAi,
+  validAiWritingReport: validStudentWritingHistoryAi } = require('./lib/aiWritingGrading')
+const { createStudentWritingHistoryAiService } = require('./lib/studentWritingHistoryAi')
+const studentWritingHistoryAi = createStudentWritingHistoryAiService({
+  db, prepareAiWritingEvaluation: prepareStudentWritingHistoryAi,
+  validAiWritingReport: validStudentWritingHistoryAi
+})
+
 // Stage 17D: school / institution status enforcement. Existing data keeps the
 // historical `maxima` fallback, but student and teacher product flows now require
 // an existing ACTIVE school record. Platform admins remain able to manage and
@@ -4663,6 +4672,9 @@ function submissionAttemptSummary(config, data, extra = {}) {
     task1Band: review?.task1Band ?? null,
     task2Band: review?.task2Band ?? null,
     writingMode: data?.writingMode || data?.contentType || '',
+    ...(config.contentType === 'writing' ? {
+      aiReviewChoice: data?.aiReviewChoice === 'ai' ? 'ai' : 'teacher'
+    } : {}),
     task1WordCount: Number.isFinite(Number(data?.task1WordCount)) ? Number(data.task1WordCount) : 0,
     task2WordCount: Number.isFinite(Number(data?.task2WordCount)) ? Number(data.task2WordCount) : 0,
     status: typeof data?.status === 'string' ? data.status : '',
@@ -6929,6 +6941,7 @@ function studentResultSafeBase(id, data, category) {
     'vocabularyTitle', 'mockTitle', 'mockType', 'contentType', 'writingMode',
     'status', 'attemptNumber', 'autoSubmitted', 'finishedLate', 'archived',
     'excludedFromStats', 'reviewed', 'task1WordCount', 'task2WordCount',
+    'aiReviewChoice', 'aiBillingMode',
     'date', 'submittedAt', 'createdAt', 'reviewedAt', 'updatedAt',
     'overall', 'listening', 'reading', 'writing', 'speaking'
   ]) {
@@ -7140,18 +7153,28 @@ exports.getStudentSubmissionAttemptHistory = onCall(async request => {
       visibleIds.has(history.contentId) &&
       !history.contentId.includes('/') && history.contentId.length <= 1500
   })
-  const ids = [...new Set(matches.map(snap => snap.data().contentId))]
+  // For Writing, the title and saved AI score are also needed for a first
+  // submission (which does NOT have a historical retake snapshot yet).
+  const ids = config.contentType === 'writing'
+    ? [...visibleIds].filter(id => typeof id === 'string' && id.trim() &&
+      !id.includes('/') && Buffer.byteLength(id, 'utf8') <= 1500)
+    : [...new Set(matches.map(snap => snap.data().contentId))]
   const availableIds = new Set()
   const currentSourceTitles = new Map()
+  const writingSources = new Map()
   if (ids.length) {
-    const sources = await db.getAll(...ids.map(id =>
-      db.doc(`${config.sourceCollection}/${id}`)))
+    const sources = []
+    for (let i = 0; i < ids.length; i += 100) {
+      sources.push(...await db.getAll(...ids.slice(i, i + 100).map(id =>
+        db.doc(`${config.sourceCollection}/${id}`))))
+    }
     sources.forEach(sourceSnap => {
       const source = sourceSnap.data() || {}
-      if (sourceSnap.exists && source.archived !== true &&
+      if (sourceSnap.exists && source.archived !== true && source.deleted !== true &&
         schoolIdOf(source) === student.schoolId) {
         availableIds.add(sourceSnap.id)
         currentSourceTitles.set(sourceSnap.id, source.title || '')
+        if (config.contentType === 'writing') writingSources.set(sourceSnap.id, source)
       }
     })
   }
@@ -7183,7 +7206,67 @@ exports.getStudentSubmissionAttemptHistory = onCall(async request => {
     .sort((a, b) => (Date.parse(b.submittedAt || '') || 0) -
       (Date.parse(a.submittedAt || '') || 0))
 
-  return { ok: true, contentType: config.contentType, attempts }
+  if (config.contentType !== 'writing') {
+    return { ok: true, contentType: config.contentType, attempts }
+  }
+
+  // Keep historical answers on the server. Resolve saved AI results against
+  // the original submission snapshot + sourceSubmissionId, not the current head.
+  const candidates = new Map()
+  for (const snap of matches) {
+    const history = snap.data() || {}
+    if (!availableIds.has(history.contentId)) continue
+    const n = Number(history.attemptNumber)
+    if (!Number.isSafeInteger(n) || n < 1 || n > 1000) continue
+    const selected = history.submissionSnapshot || {}
+    if ((selected.uid && selected.uid !== student.uid) ||
+        (selected.studentId && selected.studentId !== student.uid)) continue
+    candidates.set(`${history.contentId}\u001f${n}`, {
+      contentId: history.contentId, attemptNumber: n,
+      submission: selected, submissionId: history.sourceSubmissionId || ''
+    })
+  }
+
+  // Optional AI index data must never hide an otherwise valid attempt list
+  // when its separate current-head lookup is temporarily unavailable.
+  let heads = []
+  try {
+    heads = await getStudentOwnedResultSnapshots(config.submissionCollection, student)
+  } catch (error) {
+    console.warn('Saved Writing AI summaries: current-head lookup unavailable', error)
+  }
+  for (const contentId of availableIds) {
+    const eligible = heads.filter(row => submissionMatchesContent(config, row.data, contentId))
+    const deterministic = eligible.find(row => row.id === `${student.uid}_${contentId}`)
+    const selected = deterministic || chooseLegacyCurrentSubmission(eligible.map(row => ({
+      id: row.id, data: row.data,
+      meaningful: submissionHasMeaningfulAnswers(config, row.data),
+      submittedAtMillis: submittedAtMillis(row.data)
+    })))
+    if (!selected) continue
+    const n = attemptNumberOf(selected.data)
+    // The live head wins if the same attempt also appears in a snapshot.
+    candidates.set(`${contentId}\u001f${n}`, {
+      contentId, attemptNumber: n, submission: selected.data, submissionId: selected.id
+    })
+  }
+
+  const aiResults = []
+  const requests = [...candidates.values()]
+  for (let i = 0; i < requests.length; i += 20) {
+    const batch = await Promise.allSettled(requests.slice(i, i + 20).map(entry =>
+      studentWritingHistoryAi.readSavedReport({
+        student, source: writingSources.get(entry.contentId), ...entry
+      })
+    ))
+    // Failed read-only AI lookups cannot suppress saved homework/teacher results.
+    for (const response of batch) {
+      if (response.status === 'fulfilled' && response.value) aiResults.push(response.value)
+    }
+  }
+
+  return { ok: true, contentType: config.contentType, attempts,
+    sourceTitles: Object.fromEntries(currentSourceTitles), aiResults }
 })
 
 // Q2B: Exact selected-attempt review. Never trust a studentId from the client.
@@ -7219,8 +7302,10 @@ exports.getStudentSubmissionAttemptReview = onCall(async request => {
 
   let selected = null
   let isHistorical = false
+  let selectedSubmissionId = ''
   if (attemptNumberOf(current.data) === attemptNumber) {
     selected = current.data
+    selectedSubmissionId = current.id
   } else {
     const historyId = attemptHistoryId(
       attemptControlId(student.uid, config.contentType, contentId),
@@ -7234,6 +7319,7 @@ exports.getStudentSubmissionAttemptReview = onCall(async request => {
         throw new HttpsError('permission-denied', 'The selected attempt is not yours.')
       }
       selected = history.submissionSnapshot || {}
+      selectedSubmissionId = history.sourceSubmissionId || ''
       isHistorical = true
     } else {
       // Legacy submissions may use non-deterministic IDs instead of snapshots.
@@ -7254,6 +7340,7 @@ exports.getStudentSubmissionAttemptReview = onCall(async request => {
       const legacy = chooseLegacyCurrentSubmission([...candidates.values()])
       if (legacy) {
         selected = legacy.data
+        selectedSubmissionId = legacy.id
         isHistorical = legacy.id !== current.id
       }
     }
@@ -7298,9 +7385,23 @@ exports.getStudentSubmissionAttemptReview = onCall(async request => {
       reviewSources: mockReviewSources(mockSources)
     }
   }
+  let aiResult = null
+  if (config.contentType === 'writing') {
+    try {
+      aiResult = await studentWritingHistoryAi.readSavedReport({
+        student, source, contentId, attemptNumber,
+        submission: selected, submissionId: selectedSubmissionId, includeReport: true
+      })
+    } catch (error) {
+      // A temporary AI report outage must not block the existing saved-answer
+      // review. Report access remains read-only and may be retried later.
+      console.warn('Saved Writing AI detail unavailable', error)
+    }
+  }
   return {
     ok: true, contentType: config.contentType, contentId, isHistorical,
-    submission, source: toPlain(source)
+    submission, source: toPlain(source),
+    ...(config.contentType === 'writing' ? { aiResult } : {})
   }
 })
 

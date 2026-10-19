@@ -6,7 +6,7 @@
   import { useNavigate } from 'react-router-dom'
   import { httpsCallable } from 'firebase/functions'
   import { getStudentVisibleResultSnapshot, subscribeStudentVisibleResultSummaries } from '../services/studentResultService'
-  import AiWritingStudentPanel from '../components/AiWritingStudentPanel'
+  import AiWritingStudentPanel, { AiWritingSavedReport } from '../components/AiWritingStudentPanel'
   import { isInstitutionWritingStudent } from '../services/aiWritingStudentPolicy'
 
   const getStudentSubmissionAttemptStateCall = httpsCallable(
@@ -3331,7 +3331,23 @@
     const [writings, setWritings] = useState([])
     const [submissions, setSubmissions] = useState([])
     const [selectedReview, setSelectedReview] = useState(null)
+    const [writingAiResults, setWritingAiResults] = useState({})
     const navigate = useNavigate()
+
+    useEffect(() => {
+      let active = true
+      setWritingAiResults({})
+      if (!user?.uid || !isInstitutionWritingStudent(profile)) return undefined
+      getStudentSubmissionAttemptHistoryCall({ contentType: 'writing' })
+        .then(response => {
+          if (active) setWritingAiResults(writingAiResultIndex(response?.data?.aiResults))
+        })
+        .catch(error => {
+          if (active) console.warn('Saved Writing AI card summaries unavailable:', error)
+        })
+      return () => { active = false }
+    }, [user?.uid, profile?.schoolId, profile?.accountType,
+      profile?.status, profile?.archived, profile?.deleted, mode])
 
     useEffect(() => {
       if (!user) return
@@ -3473,6 +3489,21 @@
               {completedWritings.map((w, index) => {
                 const submission = getSubmission(w.id)
                 const reviewed = Boolean(submission?.reviewed)
+                const aiResult = writingAiResults[`${normalizeId(w.id)}:${submissionAttemptNumber(submission)}`]
+                const openWritingReview = async () => {
+                  try {
+                    // Full Writing answers are fetched only after the existing
+                    // secure callable revalidates assignment and retake locks.
+                    const snapshot = await getStudentVisibleResultSnapshot('writing', w.id)
+                    const records = snapshot.docs.map(item => ({ id: item.id, ...item.data() }))
+                    const selected = chooseCurrentSubmission(records, submission?.id || '')
+                    if (!selected) throw new Error('Your completed submission was not found.')
+                    setSelectedReview({ writing: w, submission: selected })
+                  } catch (error) {
+                    console.warn('Could not open Writing feedback:', error)
+                    window.alert('Writing feedback could not be loaded. Check your assignment or retry.')
+                  }
+                }
 
                 return (
                   <div
@@ -3491,45 +3522,36 @@
                         ⏱ {getWritingTimeLimit(w, submission)} min · {getWritingModeLabel(w, submission)}
                       </p>
 
+                      {aiResult?.status === 'completed' && (
+                        <p className="mt-2 text-sm font-semibold text-indigo-700">
+                          {aiResult.estimatedBand === null
+                            ? 'AI development feedback available (no band)'
+                            : `AI Estimated Band ${formatBand(aiResult.estimatedBand)}`}
+                        </p>
+                      )}
                       {reviewed ? (
-                        <p className="text-xs text-green-600 mt-1 font-medium">
-                          ✓ Reviewed — Band {submission?.review?.overall || '-'}
+                        <p className="mt-1 text-xs font-medium text-green-600">
+                          Teacher graded · Band {submission?.review?.overall || '-'}
                         </p>
                       ) : (
-                        <p className="text-xs text-amber-600 mt-1 font-medium">
-                          ✓ Submitted — Teacher grading optional
-                        </p>
+                        <p className="mt-1 text-xs font-medium text-slate-500">Submitted · Teacher grading optional</p>
                       )}
                     </div>
 
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={async () => {
-                          try {
-                            // Full Writing answers are loaded ONLY after the
-                            // secure server rechecks assignment and retake state.
-                            const snapshot = await getStudentVisibleResultSnapshot('writing', w.id)
-                            const records = snapshot.docs.map(item => ({ id: item.id, ...item.data() }))
-                            const selected = chooseCurrentSubmission(records, submission?.id || '')
-                            if (!selected) throw new Error('Your completed submission was not found.')
-                            setSelectedReview({ writing: w, submission: selected })
-                          } catch (error) {
-                            console.warn('Could not open Writing feedback:', error)
-                            window.alert('Writing feedback could not be loaded. Check your assignment or retry.')
-                          }
-                        }}
-                        className="text-xs bg-purple-600 text-white px-3 py-2 rounded-xl hover:bg-purple-700"
-                      >
-                        {reviewed ? 'Review Feedback' : 'View Submission'}
+                    <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                      {aiResult?.status === 'completed' && (
+                        <button type="button" onClick={openWritingReview}
+                          className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100">
+                          View AI Feedback
+                        </button>
+                      )}
+                      <button type="button" onClick={openWritingReview}
+                        className="rounded-lg bg-purple-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-purple-700">
+                        View Submission
                       </button>
-
-                      <span
-                        className={`text-xs px-3 py-1.5 rounded-full ${
-                          reviewed
-                            ? 'bg-green-50 text-green-600'
-                            : 'bg-amber-50 text-amber-600'
-                        }`}
-                      >
+                      <span className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${
+                        reviewed ? 'bg-green-50 text-green-700' : 'bg-slate-100 text-slate-600'
+                      }`}>
                         {reviewed ? 'Teacher graded' : 'Teacher grade optional'}
                       </span>
                     </div>
@@ -3625,6 +3647,22 @@
                   </div>
                 )}
 
+                {/* Keep the teacher assessment above unchanged.  An AI report is
+                    attached only to the currently selected, server-authorized
+                    Writing attempt.  The panel itself independently checks
+                    server-side access and never reads AI data from Firestore. */}
+                {isInstitutionWritingStudent(profile) &&
+                  selectedReview.writing?.id &&
+                  selectedReview.submission?.id && (
+                    <AiWritingStudentPanel
+                      key={`${user?.uid || ''}:${selectedReview.writing.id}:${selectedReview.submission.id}`}
+                      contentId={selectedReview.writing.id}
+                      attemptNumber={submissionAttemptNumber(selectedReview.submission)}
+                      submittedChoice={selectedReview.submission.aiReviewChoice || 'teacher'}
+                      submittedBillingMode={selectedReview.submission.aiBillingMode || 'none'}
+                    />
+                  )}
+
                 <div className={`grid grid-cols-1 ${hasTask1 && hasTask2 ? 'lg:grid-cols-2' : ''} gap-6`}>
                   {hasTask1 && (
                     <div className="border border-gray-100 rounded-2xl p-5">
@@ -3686,21 +3724,6 @@
                   </p>
                 </div>
 
-                {/* Keep the teacher assessment above unchanged.  An AI report is
-                    attached only to the currently selected, server-authorized
-                    Writing attempt.  The panel itself independently checks
-                    server-side access and never reads AI data from Firestore. */}
-                {isInstitutionWritingStudent(profile) &&
-                  selectedReview.writing?.id &&
-                  selectedReview.submission?.id && (
-                    <AiWritingStudentPanel
-                      key={`${user?.uid || ''}:${selectedReview.writing.id}:${selectedReview.submission.id}`}
-                      contentId={selectedReview.writing.id}
-                      attemptNumber={submissionAttemptNumber(selectedReview.submission)}
-                      submittedChoice={selectedReview.submission.aiReviewChoice || 'teacher'}
-                      submittedBillingMode={selectedReview.submission.aiBillingMode || 'none'}
-                    />
-                  )}
               </div>
             </div>
           )
@@ -4464,12 +4487,32 @@
     ) || ''
   }
 
-  function historyTitle(record, config) {
+  // A read-only, server-authorized AI index keyed by content AND exact attempt.
+  // It contains no raw report text; full reports are fetched only on review.
+  function writingAiResultIndex(rows) {
+    const result = {}
+    for (const item of Array.isArray(rows) ? rows : []) {
+      const n = Number(item?.attemptNumber)
+      if (typeof item?.contentId !== 'string' || !item.contentId ||
+          !Number.isSafeInteger(n) || n < 1 || n > 1000 || item.status !== 'completed' ||
+          !(typeof item.estimatedBand === 'number' && Number.isFinite(item.estimatedBand) &&
+            item.estimatedBand >= 0 && item.estimatedBand <= 9 ||
+            item.estimatedBand === null && item.feedbackOnly === true)) continue
+      result[`${normalizeId(item.contentId)}:${n}`] = item
+    }
+    return result
+  }
+
+  function historyTitle(record, config, sourceTitles = {}) {
     const stored = config.titleFields.map(key => record?.[key]).find(value =>
       typeof value === 'string' && value.trim()
     )
     if (stored) return stored.trim()
     const id = historyContentId(record, config)
+    const sourceTitle = sourceTitles[id]
+    if (typeof sourceTitle === 'string' && sourceTitle.trim()) return sourceTitle.trim()
+    // Never show a cryptic Firestore identifier instead of a Writing task.
+    if (config.contentType === 'writing' || config.label === 'Writing') return 'Writing submission'
     return id ? `${config.label} · ${id.slice(0, 8)}` : `${config.label} submission`
   }
 
@@ -4484,11 +4527,20 @@
     })
   }
 
-  function historySummary(record, category) {
+  function historySummary(record, category, aiResult = null) {
     const result = record?.result || {}
     if (category === 'writing') {
-      if (!record?.reviewed) return 'Submitted · Teacher grade optional'
-      return `Teacher reviewed · Band ${formatBand(record?.review?.overall ?? record?.reviewOverall)}`
+      if (aiResult?.status === 'completed') {
+        return aiResult.estimatedBand === null
+          ? 'AI development feedback available (no band)'
+          : `AI Estimated Band ${formatBand(aiResult.estimatedBand)}`
+      }
+      if (record?.reviewed) {
+        return `Teacher reviewed · Band ${formatBand(record?.review?.overall ?? record?.reviewOverall)}`
+      }
+      return record?.aiReviewChoice === 'ai'
+        ? 'AI check selected · Report pending or unavailable'
+        : 'Submitted'
     }
     if (category === 'mock') {
       const overall = result.finalOverall ?? result.reviewedOverall ?? result.overall ?? result.overallEstimate
@@ -4691,7 +4743,9 @@
     return (
       <div className="mt-4 space-y-4 rounded-xl border border-indigo-100 bg-indigo-50/30 p-4" aria-label={`Attempt ${submission.attemptNumber} answer review`}>
         <p className="text-sm font-semibold text-indigo-950">Attempt {submission.attemptNumber} · Saved answers and feedback (read-only)</p>
-        <p className="text-xs text-slate-600">The score shown above is the score saved for this attempt. Answer keys below come from the current test version; if a teacher edited the test after submission, they may differ from the original marking key.</p>
+        <p className="text-xs text-slate-600">{category === 'writing'
+          ? 'The saved AI estimate and any teacher grade are separate. Feedback and answers belong to the selected attempt.'
+          : 'The score shown above is the score saved for this attempt. Answer keys below come from the current test version; if a teacher edited the test after submission, they may differ from the original marking key.'}</p>
         {groups.map((group, groupIndex) => (
           <details key={`${group.label}:${groupIndex}`} open className="rounded-xl border border-slate-200 bg-white">
             <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-900">{group.label} ({group.rows.length})</summary>
@@ -4716,6 +4770,9 @@
             </div>
           </details>
         ))}
+        {category === 'writing' && payload?.aiResult?.status === 'completed' && (
+          <AiWritingSavedReport aiResult={payload.aiResult} />
+        )}
         {writing && (
           <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
             <p className="text-sm font-semibold text-slate-900">Writing submission and teacher feedback</p>
@@ -4751,6 +4808,8 @@
     const [visibleCount, setVisibleCount] = useState(20)
     const [refreshNumber, setRefreshNumber] = useState(0)
     const [expandedReview, setExpandedReview] = useState(null)
+    const [sourceTitles, setSourceTitles] = useState({})
+    const [writingAiResults, setWritingAiResults] = useState({})
     const reviewRequestRef = useRef(0)
 
     const visibleIdsKey = resultsVisibility?.ready && config
@@ -4776,6 +4835,8 @@
     useEffect(() => {
       let active = true
       setArchivedAttempts([])
+      setSourceTitles({})
+      setWritingAiResults({})
       setHistoryError('')
       setHistoryLoading(Boolean(user?.uid && config && resultsVisibility?.ready && visibleIdsKey))
       if (!user?.uid || !config || !resultsVisibility?.ready || !visibleIdsKey) {
@@ -4787,6 +4848,10 @@
           if (!active) return
           const attempts = Array.isArray(response?.data?.attempts) ? response.data.attempts : []
           setArchivedAttempts(attempts)
+          if (category === 'writing') {
+            setSourceTitles(response?.data?.sourceTitles || {})
+            setWritingAiResults(writingAiResultIndex(response?.data?.aiResults))
+          }
         })
         .catch(error => {
           if (!active) return
@@ -4909,15 +4974,21 @@
                 const attemptNumber = submissionAttemptNumber(record)
                 const reviewKey = `${normalizeId(contentId)}:${attemptNumber}`
                 const isExpanded = expandedReview?.key === reviewKey
+                const aiResult = category === 'writing' ? writingAiResults[reviewKey] : null
                 return (
                   <article key={record.id} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
                     <div className="flex flex-wrap items-start justify-between gap-4">
                       <div className="min-w-0 flex-1">
-                        <p className="break-words text-sm font-semibold text-slate-900">{historyTitle(record, config)}</p>
+                        <p className="break-words text-sm font-semibold text-slate-900">{historyTitle(record, config, sourceTitles)}</p>
                         <p className="mt-1 text-xs text-slate-500">
                           Attempt {attemptNumber} · Submitted {historyDate(record)}
                         </p>
-                        <p className="mt-3 text-sm font-medium text-slate-700">{historySummary(record, category)}</p>
+                        <p className="mt-3 text-sm font-medium text-slate-700">{historySummary(record, category, aiResult)}</p>
+                        {category === 'writing' && aiResult?.status === 'completed' && record.reviewed === true && (
+                          <p className="mt-1 text-xs font-medium text-green-700">
+                            Teacher Writing Band {formatBand(record?.review?.overall ?? record?.reviewOverall)}
+                          </p>
+                        )}
                         <div className="mt-3 flex flex-wrap gap-2">
                           {record.excludedFromStats === true && (
                             <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-800">
@@ -4925,9 +4996,14 @@
                             </span>
                           )}
                           {category === 'writing' && (
-                            <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${record.reviewed ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'}`}>
-                              {record.reviewed ? 'Teacher graded' : 'Teacher grade optional'}
-                            </span>
+                            <>
+                              {aiResult?.status === 'completed' && (
+                                <span className="rounded-full bg-indigo-50 px-2.5 py-1 text-[11px] font-semibold text-indigo-700">AI report ready</span>
+                              )}
+                              <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${record.reviewed ? 'bg-green-50 text-green-700' : 'bg-slate-50 text-slate-600'}`}>
+                                {record.reviewed ? 'Teacher graded' : 'Teacher grade optional'}
+                              </span>
+                            </>
                           )}
                           {record.archived === true && (
                             <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-600">Retained earlier attempt</span>
@@ -4936,7 +5012,7 @@
                       </div>
                       <button type="button" onClick={() => openAttemptReview(record)}
                         className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-700">
-                        {isExpanded ? 'Close review' : `Review Attempt ${attemptNumber}`}
+                        {isExpanded ? 'Close Results' : 'View Results'}
                       </button>
                     </div>
                     {isExpanded && expandedReview?.loading && (
