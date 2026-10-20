@@ -53,6 +53,8 @@ service cloud.firestore {
     function isTeacher() {
       return isApprovedUser()
         && userDoc(request.auth.uid).data.role == 'teacher'
+        && userDoc(request.auth.uid).data.get('archived', false) != true
+        && userDoc(request.auth.uid).data.get('permanentDeleteInProgress', false) != true
         && currentSchoolIsActive();
     }
 
@@ -78,6 +80,7 @@ service cloud.firestore {
 
     function teacherOwns(data) {
       return isTeacher()
+        && sameSchool(data)
         && (
           data.get('teacherId', '') == request.auth.uid
           || data.get('createdBy', '') == request.auth.uid
@@ -116,6 +119,7 @@ service cloud.firestore {
 
     function teacherCanReadUser() {
       return isTeacher()
+        && sameSchool(resource.data)
         && (
           resource.data.get('teacherIds', []).hasAny([request.auth.uid])
           || (
@@ -474,8 +478,24 @@ service cloud.firestore {
       ]);
     }
 
+    // P0-B: historical teacherIds/addedBy/createdBy do not authorize access
+    // to learner answers, academic scores or teacher review updates.
+    // The canonical teacherId must match the active teacher's current school.
+    // This narrow academic guard is distinct from ownership of teacher-created
+    // materials and from explicitly addressed messages/materials.
+    function teacherCurrentAcademicRecord(data) {
+      return isTeacher()
+        && sameSchool(data)
+        && data.get('teacherId', '') == request.auth.uid;
+    }
+
+    function teacherCurrentAcademicParent(data) {
+      return teacherCurrentAcademicRecord(data);
+    }
+
     function teacherListedOn(data) {
       return isTeacher()
+        && sameSchool(data)
         && (
           data.get('teacherId', '') == request.auth.uid
           || data.get('teacherIds', []).hasAny([request.auth.uid])
@@ -774,7 +794,8 @@ service cloud.firestore {
 
     function teacherOwnsScoreMock(data) {
       return mockForScoreExists(data)
-        && teacherOwns(
+        && sameSchool(data)
+        && teacherCurrentAcademicParent(
           get(/databases/$(database)/documents/mockTests/$(data.mockTestId)).data
         );
     }
@@ -793,12 +814,27 @@ service cloud.firestore {
         );
     }
 
+    // P0-B: teacher updates to an existing score must never reassign its
+    // student, school, teacher, source or attempt identity. Admin repairs
+    // remain separate from browser teacher review.
+    function teacherScoreIdentityUnchanged() {
+      return request.resource.data.get('uid', '') == resource.data.get('uid', '')
+        && request.resource.data.get('studentId', '') == resource.data.get('studentId', '')
+        && schoolIdOf(request.resource.data) == schoolIdOf(resource.data)
+        && request.resource.data.get('teacherId', '') == resource.data.get('teacherId', '')
+        && request.resource.data.get('teacherIds', []) == resource.data.get('teacherIds', [])
+        && request.resource.data.get('source', '') == resource.data.get('source', '')
+        && request.resource.data.get('mockTestId', '') == resource.data.get('mockTestId', '')
+        && request.resource.data.get('attemptNumber', 1) == resource.data.get('attemptNumber', 1)
+        && request.resource.data.get('addedBy', '') == resource.data.get('addedBy', '');
+    }
+
     // Q2C-2: Students use getStudentVisibleResults (trusted Cloud Function).
     // Browser get and collection queries are both denied, even for own uid,
     // because Firestore queries cannot enforce archive + access joins safely.
     match /scores/{scoreId} {
       allow get, list: if isAdmin()
-        || teacherListedOn(resource.data)
+        || teacherCurrentAcademicRecord(resource.data)
         || teacherOwnsScoreMock(resource.data);
 
       // 8D-2: objective/mock scores are server-authored for students.
@@ -806,15 +842,18 @@ service cloud.firestore {
       allow create: if isAdmin()
         || (
           isTeacher()
-          && teacherListedOn(request.resource.data)
+          && teacherCurrentAcademicRecord(request.resource.data)
           && schoolIdOf(request.resource.data) == currentSchoolId()
           && userDoc(request.resource.data.uid).data.get('teacherIds', []).hasAny([request.auth.uid])
         );
 
       allow update: if statsModerationFieldsUnchanged() && (
         isAdmin()
-        || teacherListedOn(resource.data)
-        || teacherOwnsScoreMock(resource.data)
+        || (
+          teacherScoreIdentityUnchanged()
+          && (teacherCurrentAcademicRecord(resource.data)
+            || teacherOwnsScoreMock(resource.data))
+        )
       );
       allow delete: if false; // Q1B-B audited server deletion only
     }
@@ -913,7 +952,8 @@ service cloud.firestore {
 
     function teacherOwnsReadingParent(data) {
       return readingParentExists(data)
-        && teacherOwns(
+        && sameSchool(data)
+        && teacherCurrentAcademicParent(
           get(/databases/$(database)/documents/readings/$(data.readingId)).data
         );
     }
@@ -923,7 +963,7 @@ service cloud.firestore {
     // because Firestore queries cannot enforce archive + access joins safely.
     match /readingSubmissions/{id} {
       allow get, list: if isAdmin()
-        || teacherListedOn(resource.data)
+        || teacherCurrentAcademicRecord(resource.data)
         || teacherOwnsReadingParent(resource.data);
 
       // 8D-2: student Reading submissions are created only by submitReadingSecure.
@@ -932,7 +972,7 @@ service cloud.firestore {
 
       allow update: if statsModerationFieldsUnchanged() && (
         isAdmin()
-        || teacherListedOn(resource.data)
+        || teacherCurrentAcademicRecord(resource.data)
         || teacherOwnsReadingParent(resource.data)
       );
       allow delete: if false; // Q1B-B audited server deletion only
@@ -960,7 +1000,8 @@ service cloud.firestore {
 
     function teacherOwnsListeningParent(data) {
       return listeningParentExists(data)
-        && teacherOwns(
+        && sameSchool(data)
+        && teacherCurrentAcademicParent(
           get(/databases/$(database)/documents/listenings/$(data.listeningId)).data
         );
     }
@@ -970,7 +1011,7 @@ service cloud.firestore {
     // because Firestore queries cannot enforce archive + access joins safely.
     match /listeningSubmissions/{id} {
       allow get, list: if isAdmin()
-        || teacherListedOn(resource.data)
+        || teacherCurrentAcademicRecord(resource.data)
         || teacherOwnsListeningParent(resource.data);
 
       // 8D-2: student Listening submissions are created only by submitListeningSecure.
@@ -978,7 +1019,7 @@ service cloud.firestore {
 
       allow update: if statsModerationFieldsUnchanged() && (
         isAdmin()
-        || teacherListedOn(resource.data)
+        || teacherCurrentAcademicRecord(resource.data)
         || teacherOwnsListeningParent(resource.data)
       );
       allow delete: if false; // Q1B-B audited server deletion only
@@ -1012,7 +1053,8 @@ service cloud.firestore {
 
     function teacherOwnsWritingParent(data) {
       return writingParentExists(data)
-        && teacherOwns(
+        && sameSchool(data)
+        && teacherCurrentAcademicParent(
           get(/databases/$(database)/documents/writingHomeworks/$(data.writingId)).data
         );
     }
@@ -1022,7 +1064,7 @@ service cloud.firestore {
     // because Firestore queries cannot enforce archive + access joins safely.
     match /writingSubmissions/{id} {
       allow get, list: if isAdmin()
-        || teacherListedOn(resource.data)
+        || teacherCurrentAcademicRecord(resource.data)
         || teacherOwnsWritingParent(resource.data);
 
       // Stage 16L-2B3: student Writing submissions are server-authored by
@@ -1036,7 +1078,7 @@ service cloud.firestore {
       allow update: if statsModerationFieldsUnchanged() && (
         isAdmin()
         || (
-          (teacherListedOn(resource.data) || teacherOwnsWritingParent(resource.data))
+          (teacherCurrentAcademicRecord(resource.data) || teacherOwnsWritingParent(resource.data))
           && teacherWritingReviewOnly()
         )
       );
@@ -1096,7 +1138,8 @@ service cloud.firestore {
 
     function teacherOwnsMockParent(data) {
       return mockParentExists(data)
-        && teacherOwns(
+        && sameSchool(data)
+        && teacherCurrentAcademicParent(
           get(/databases/$(database)/documents/mockTests/$(data.mockTestId)).data
         );
     }
@@ -1106,7 +1149,7 @@ service cloud.firestore {
     // because Firestore queries cannot enforce archive + access joins safely.
     match /mockSubmissions/{id} {
       allow get, list: if isAdmin()
-        || teacherListedOn(resource.data)
+        || teacherCurrentAcademicRecord(resource.data)
         || teacherOwnsMockParent(resource.data);
 
       // 8D-2: student Mock submissions are created only by submitMockSecure.
@@ -1115,7 +1158,7 @@ service cloud.firestore {
       allow update: if statsModerationFieldsUnchanged() && (
         isAdmin()
         || (
-          (teacherListedOn(resource.data) || teacherOwnsMockParent(resource.data))
+          (teacherCurrentAcademicRecord(resource.data) || teacherOwnsMockParent(resource.data))
           && teacherMockReviewOnly()
         )
       );
@@ -1143,7 +1186,8 @@ service cloud.firestore {
 
     function teacherOwnsVocabularyParent(data) {
       return vocabularyParentExists(data)
-        && teacherOwns(
+        && sameSchool(data)
+        && teacherCurrentAcademicParent(
           get(/databases/$(database)/documents/vocabularyTests/$(data.vocabularyTestId)).data
         );
     }
@@ -1153,7 +1197,7 @@ service cloud.firestore {
     // because Firestore queries cannot enforce archive + access joins safely.
     match /vocabularySubmissions/{id} {
       allow get, list: if isAdmin()
-        || teacherListedOn(resource.data)
+        || teacherCurrentAcademicRecord(resource.data)
         || teacherOwnsVocabularyParent(resource.data);
 
       // 8D-2: student Vocabulary submissions are created only by submitVocabularySecure.
@@ -1161,7 +1205,7 @@ service cloud.firestore {
 
       allow update: if statsModerationFieldsUnchanged() && (
         isAdmin()
-        || teacherListedOn(resource.data)
+        || teacherCurrentAcademicRecord(resource.data)
         || teacherOwnsVocabularyParent(resource.data)
       );
       allow delete: if false; // Q1B-B audited server deletion only

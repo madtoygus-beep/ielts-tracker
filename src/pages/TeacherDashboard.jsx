@@ -202,13 +202,13 @@ function listenMergedQueries(
   }
 }
 
-function buildOwnedContentQueries(collectionName, teacherId) {
+function buildOwnedContentQueries(collectionName, teacherId, schoolId) {
   const source = collection(db, collectionName)
 
   return [
-    query(source, where('teacherIds', 'array-contains', teacherId)),
-    query(source, where('teacherId', '==', teacherId)),
-    query(source, where('createdBy', '==', teacherId))
+    query(source, where('schoolId', '==', schoolId), where('teacherIds', 'array-contains', teacherId)),
+    query(source, where('schoolId', '==', schoolId), where('teacherId', '==', teacherId)),
+    query(source, where('schoolId', '==', schoolId), where('createdBy', '==', teacherId))
   ]
 }
 
@@ -216,7 +216,7 @@ function buildTeacherLibraryQueries(collectionName, teacherId, schoolId) {
   const source = collection(db, collectionName)
 
   return [
-    ...buildOwnedContentQueries(collectionName, teacherId),
+    ...buildOwnedContentQueries(collectionName, teacherId, schoolId),
     query(
       source,
       where('schoolId', '==', schoolId),
@@ -230,9 +230,9 @@ function buildTeacherLibraryQueries(collectionName, teacherId, schoolId) {
   ]
 }
 
-async function getOwnedContentIds(collectionName, teacherId) {
+async function getOwnedContentIds(collectionName, teacherId, schoolId) {
   const snapshots = await Promise.all(
-    buildOwnedContentQueries(collectionName, teacherId).map(queryRef =>
+    buildOwnedContentQueries(collectionName, teacherId, schoolId).map(queryRef =>
       getDocs(queryRef)
     )
   )
@@ -247,18 +247,17 @@ async function getOwnedContentIds(collectionName, teacherId) {
 function buildTeacherSubmissionQueries(
   collectionName,
   teacherId,
+  schoolId,
   _parentFields,
   _parentIds
 ) {
   const source = collection(db, collectionName)
 
-  // Secure and recent legacy submissions already carry teacherId / teacherIds.
-  // Do not add parent-ID `in` fallback listeners here: Firestore Rules may need
-  // one parent-document access per returned submission, which can exceed the
-  // rules access-call budget and surface as `permission-denied` on busy classes.
+  // P0-B: only primary teacherId + the current school authorize learner
+  // academic data. Historical teacherIds cannot be used as a result-query key.
+  // Avoid parent-ID `in` fallback listeners (Rules document-access budget).
   return [
-    query(source, where('teacherIds', 'array-contains', teacherId)),
-    query(source, where('teacherId', '==', teacherId))
+    query(source, where('schoolId', '==', schoolId), where('teacherId', '==', teacherId))
   ]
 }
 
@@ -842,7 +841,8 @@ export default function TeacherDashboard() {
           : query(
               collection(db, 'users'),
               where('role', '==', 'student'),
-              where('teacherIds', 'array-contains', currentUser.uid)
+              where('teacherIds', 'array-contains', currentUser.uid),
+              where('schoolId', '==', teacherSchoolId)
             )
 
         trackSnapshot(
@@ -872,7 +872,8 @@ export default function TeacherDashboard() {
           ? query(collection(db, 'classes'))
           : query(
               collection(db, 'classes'),
-              where('teacherId', '==', currentUser.uid)
+              where('teacherId', '==', currentUser.uid),
+              where('schoolId', '==', teacherSchoolId)
             )
 
         trackSnapshot(
@@ -904,11 +905,11 @@ export default function TeacherDashboard() {
         ] = isAdminUser
           ? [[], [], [], [], []]
           : await Promise.all([
-              getOwnedContentIds('readings', currentUser.uid),
-              getOwnedContentIds('writingHomeworks', currentUser.uid),
-              getOwnedContentIds('listenings', currentUser.uid),
-              getOwnedContentIds('mockTests', currentUser.uid),
-              getOwnedContentIds('vocabularyTests', currentUser.uid)
+              getOwnedContentIds('readings', currentUser.uid, teacherSchoolId),
+              getOwnedContentIds('writingHomeworks', currentUser.uid, teacherSchoolId),
+              getOwnedContentIds('listenings', currentUser.uid, teacherSchoolId),
+              getOwnedContentIds('mockTests', currentUser.uid, teacherSchoolId),
+              getOwnedContentIds('vocabularyTests', currentUser.uid, teacherSchoolId)
             ])
 
         if (!isActive) return
@@ -995,6 +996,7 @@ export default function TeacherDashboard() {
             : buildTeacherSubmissionQueries(
                 collectionName,
                 currentUser.uid,
+                teacherSchoolId,
                 parentFields,
                 parentIds
               )
@@ -1070,11 +1072,13 @@ export default function TeacherDashboard() {
             : [
                 query(
                   collection(db, collectionName),
-                  where('teacherIds', 'array-contains', currentUser.uid)
+                  where('teacherIds', 'array-contains', currentUser.uid),
+                  where('schoolId', '==', teacherSchoolId)
                 ),
                 query(
                   collection(db, collectionName),
-                  where('teacherId', '==', currentUser.uid)
+                  where('teacherId', '==', currentUser.uid),
+                  where('schoolId', '==', teacherSchoolId)
                 )
               ]
 
@@ -1111,17 +1115,11 @@ export default function TeacherDashboard() {
         const scoreQueries = isAdminUser
           ? [query(collection(db, 'scores'))]
           : [
+              // P0-B: historical teacherIds and addedBy are not grants.
               query(
                 collection(db, 'scores'),
-                where('teacherIds', 'array-contains', currentUser.uid)
-              ),
-              query(
-                collection(db, 'scores'),
+                where('schoolId', '==', teacherSchoolId),
                 where('teacherId', '==', currentUser.uid)
-              ),
-              query(
-                collection(db, 'scores'),
-                where('addedBy', '==', currentUser.uid)
               )
             ]
 

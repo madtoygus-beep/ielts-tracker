@@ -734,10 +734,20 @@ export default function CreateReading() {
         setShowLegacyTypes(true)
       }
 
-      const subQuery = query(
-        collection(db, 'readingSubmissions'),
-        where('readingId', '==', id)
-      )
+      // P0-B: a source-only query cannot prove academic teacher/school scope.
+      // Protect historical source edits if the primary teacher has changed.
+      if (profile?.role === 'teacher' && data.teacherId && data.teacherId !== user.uid) {
+        if (isActive) setHasSubmissions(true)
+        return
+      }
+      const subQuery = profile?.role === 'admin'
+        ? query(collection(db, 'readingSubmissions'), where('readingId', '==', id))
+        : query(
+            collection(db, 'readingSubmissions'),
+            where('readingId', '==', id),
+            where('teacherId', '==', user.uid),
+            where('schoolId', '==', getProfileSchoolId(profile))
+          )
 
       unsubSubmissions = onSnapshot(subQuery, subSnap => {
         if (isActive) setHasSubmissions(!subSnap.empty)
