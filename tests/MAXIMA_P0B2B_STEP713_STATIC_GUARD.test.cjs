@@ -1,0 +1,37 @@
+// Step713 static source guard. No network, no application mutation.
+const test=require('node:test')
+const assert=require('node:assert/strict')
+const fs=require('node:fs')
+const crypto=require('node:crypto')
+const hash=p=>crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex')
+const ui=fs.readFileSync('src/pages/TeacherDashboard.jsx','utf8')
+const rules=fs.readFileSync('firestore.rules','utf8')
+test('reviewed source Rules and canonical Dashboard hashes match',()=>{
+  assert.equal(hash('firestore.rules'),'b7be769dfad4ddb18c35cc262edace1c64423e5ba7dbc4f1f3bbc1f7a2ecbd2f')
+  assert.equal(hash('src/pages/TeacherDashboard.jsx'),'67c56fbcf43b81a5879b7154d3675eb9e4e747d726a9760a2f4e88f2baabc616')
+})
+test('Dashboard uses paired uid+studentId queries and index-only teacher student profiles',()=>{
+  const q=ui.slice(ui.indexOf('function buildCanonicalAcademicQuery('),ui.indexOf('function validCanonicalTeacherIndex('))
+  assert.match(q,/where\('uid', '==', uid\)/)
+  assert.match(q,/where\('studentId', '==', uid\)/)
+  assert.match(q,/where\('schoolId', '==', schoolId\)/)
+  assert.match(ui,/where\(documentId\(\), 'in', ids\)/)
+  assert.match(ui,/teacherAcademicIndex', currentUser\.uid/)
+  assert.ok(!ui.includes('function buildTeacherSubmissionQueries('))
+  assert.ok(!ui.includes("where('teacherIds', 'array-contains', currentUser.uid),\n              where('schoolId', '==', teacherSchoolId)"))
+  assert.match(ui,/const CANONICAL_ACADEMIC_BATCH_SIZE = 5/)
+})
+test('Dashboard removes cached results after revocation; school data remains separate',()=>{
+  assert.match(ui,/buckets\.delete\(key\)/)
+  assert.match(ui,/activeAcademicUnsubscribe\(\)/)
+  for(const clear of ['setStudents([])','setWritingSubmissions([])','setMockSubmissions([])','setScores({})'])
+    assert.ok(ui.includes(clear),clear)
+  assert.match(ui,/scores', teacherSchoolId, ids/)
+  assert.match(ui,/if \(isAdminUser\) \{/) // admin path stays available
+})
+test('transferred Mock score edits do not rewrite protected metadata',()=>{
+  const text=ui.slice(ui.indexOf('const immutableScoreFields = new Set'),ui.indexOf('const scoreReviewUpdate ='))
+  for(const field of ['uid','studentId','teacherId','teacherIds','source','schoolId','attemptNumber','excludedFromStats','aiEstimatedWritingBand'])
+    assert.ok(text.includes(`'${field}'`),field)
+  assert.match(ui,/updateDoc\(doc\(db, 'scores', scoreItem.id\), scoreReviewUpdate\)/)
+})

@@ -5,6 +5,9 @@ import {
   addDoc,
   query,
   where,
+  and,
+  or,
+  documentId,
   onSnapshot,
   doc,
   getDoc,
@@ -185,8 +188,10 @@ function listenMergedQueries(
       error => {
         console.warn(`${label} failed`, error)
 
-        // Keep the last successful bucket instead of turning a transient
-        // Firestore error into an empty dashboard.
+        // A permission revocation is NOT transient. Never retain previously
+        // read academic or class data in the current view after a denied query.
+        // Only a network/transient failure can retain its last successful bucket.
+        if (error?.code === 'permission-denied') buckets.delete(index)
         if (typeof onError === 'function') {
           onError(error, label)
         }
@@ -244,23 +249,100 @@ async function getOwnedContentIds(collectionName, teacherId, schoolId) {
   )
 }
 
-function buildTeacherSubmissionQueries(
-  collectionName,
-  teacherId,
-  schoolId,
-  _parentFields,
-  _parentIds
-) {
-  const source = collection(db, collectionName)
+// P0-B2B: Teacher academic queries must use BOTH canonical identity fields.
+// Legacy teacherId, teacherIds, source creator and homework ownership are NEVER
+// used as a student-result collection-query authorization selector.
+const CANONICAL_ACADEMIC_BATCH_SIZE = 5
+const TEACHER_ACADEMIC_RESULT_COLLECTIONS = [
+  'readingSubmissions', 'writingSubmissions', 'listeningSubmissions',
+  'mockSubmissions', 'vocabularySubmissions'
+]
 
-  // P0-B: only primary teacherId + the current school authorize learner
-  // academic data. Historical teacherIds cannot be used as a result-query key.
-  // Avoid parent-ID `in` fallback listeners (Rules document-access budget).
-  return [
-    query(source, where('schoolId', '==', schoolId), where('teacherId', '==', teacherId))
-  ]
+function buildCanonicalAcademicQuery(collectionName, schoolId, studentIds) {
+  if (!studentIds.length) throw new Error('Cannot query empty academic membership')
+  const studentPairs = studentIds.map(uid => and(
+    where('uid', '==', uid),
+    where('studentId', '==', uid)
+  ))
+  const pairs = studentPairs.length === 1 ? studentPairs[0] : or(...studentPairs)
+  return query(
+    collection(db, collectionName),
+    and(where('schoolId', '==', schoolId), pairs)
+  )
 }
 
+function validCanonicalTeacherIndex(index, schoolId, teacherId) {
+  const ids = index?.activeStudentIds
+  return index?.schemaVersion === 1
+    && index?.source === 'managed_active_classes'
+    && index?.schoolId === schoolId
+    && index?.teacherId === teacherId
+    && Array.isArray(ids)
+    && ids.length <= 4000
+    && ids.every(uid =>
+      typeof uid === 'string' && uid.length > 0 && uid.length <= 128
+      && uid.trim() === uid && !uid.includes('/')
+    )
+    && new Set(ids).size === ids.length
+}
+
+// When a single stale/archived profile causes Firestore to deny a group, split
+// the group; discard its cached documents FIRST. Permitted students continue to
+// appear without ever trusting historic teacher/student links or client filters.
+function listenCanonicalTeacherBatches(studentIds, buildQuery, onItems, label, onError) {
+  const batches = chunkValues(studentIds, CANONICAL_ACADEMIC_BATCH_SIZE)
+  if (!batches.length) {
+    onItems([])
+    return () => {}
+  }
+  const unsubscribers = []
+  const buckets = new Map()
+  let active = true
+  const emit = () => {
+    if (!active) return
+    const merged = new Map()
+    buckets.forEach(items => items.forEach(item => merged.set(item.id, item)))
+    onItems([...merged.values()])
+  }
+  const subscribe = (ids, key) => {
+    const unsubscribe = onSnapshot(buildQuery(ids), snapshot => {
+      if (!active) return
+      buckets.set(key, snapshot.docs.map(item => ({ id: item.id, ...item.data() })))
+      emit()
+    }, error => {
+      if (!active) return
+      buckets.delete(key)
+      emit() // Never continue to display cached records from a denied batch.
+      if (error?.code === 'permission-denied' && ids.length > 1) {
+        const middle = Math.ceil(ids.length / 2)
+        subscribe(ids.slice(0, middle), `${key}-a`)
+        subscribe(ids.slice(middle), `${key}-b`)
+      } else if (typeof onError === 'function') {
+        onError(error, label)
+      }
+    })
+    unsubscribers.push(unsubscribe)
+  }
+  batches.forEach((ids, index) => subscribe(ids, String(index)))
+  return () => {
+    active = false
+    unsubscribers.forEach(unsubscribe => unsubscribe())
+    buckets.clear()
+  }
+}
+
+function groupScoresByStudent(scoreItems) {
+  const grouped = {}
+  scoreItems.forEach(score => {
+    if (!score.uid) return
+    if (!grouped[score.uid]) grouped[score.uid] = []
+    grouped[score.uid].push(score)
+  })
+  Object.values(grouped).forEach(items =>
+    items.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0))
+  )
+  return grouped
+}
 
 // MAXIMA Teacher Workspace V2 - presentation-only components.
 // All academic data, assignment, review and content operations remain in this module.
@@ -836,37 +918,107 @@ export default function TeacherDashboard() {
         const isAdminUser = profile.role === 'admin'
         const teacherSchoolId = profile.schoolId || DEFAULT_SCHOOL_ID
 
-        const studentsQuery = isAdminUser
-          ? query(collection(db, 'users'), where('role', '==', 'student'))
-          : query(
-              collection(db, 'users'),
-              where('role', '==', 'student'),
-              where('teacherIds', 'array-contains', currentUser.uid),
-              where('schoolId', '==', teacherSchoolId)
-            )
-
-        trackSnapshot(
-          onSnapshot(
-            studentsQuery,
-            snap => {
-              const list = snap.docs
-                .map(d => ({ id: d.id, ...d.data() }))
-                .filter(u => {
-                  if (u.deleted || u.status !== 'approved') return false
-                  if (u.accountType === 'individual' || u.schoolId === '__individual__') return false
-                  if (isAdminUser) return true
-
-                  return getSchoolId(u) === teacherSchoolId
-                })
-                .sort((a, b) =>
-                  (a.name || a.email || '').localeCompare(b.name || b.email || '')
-                )
-
-              setStudents(list)
-            },
-            error => reportLiveQueryError(error, 'Student list query')
+        const presentStudents = items => items
+          .filter(u => {
+            if (u.deleted || u.status !== 'approved') return false
+            if (!isAdminUser && u.archived === true) return false
+            if (u.accountType === 'individual' || u.schoolId === '__individual__') return false
+            return isAdminUser || getSchoolId(u) === teacherSchoolId
+          })
+          .sort((a, b) =>
+            (a.name || a.email || '').localeCompare(b.name || b.email || '')
           )
-        )
+
+        if (isAdminUser) {
+          trackSnapshot(onSnapshot(
+            query(collection(db, 'users'), where('role', '==', 'student')),
+            snap => setStudents(presentStudents(
+              snap.docs.map(d => ({ id: d.id, ...d.data() }))
+            )),
+            error => reportLiveQueryError(error, 'Student list query')
+          ))
+        } else {
+          let activeAcademicUnsubscribe = () => {}
+          let currentMembershipKey = null
+          const clearTeacherAcademicViews = () => {
+            setStudents([])
+            setSubmissions([])
+            setWritingSubmissions([])
+            setListeningSubmissions([])
+            setMockSubmissions([])
+            setVocabularySubmissions([])
+            setScores({})
+            setSelected(null)
+            setSelectedReview(null)
+            setSelectedVocabularyReview(null)
+            setSelectedWritingReview(null)
+            setSelectedMockWritingReview(null)
+            setAttemptManager(null)
+            setAttemptHistory([])
+          }
+
+          trackSnapshot(() => activeAcademicUnsubscribe())
+          trackSnapshot(onSnapshot(
+            doc(db, 'schools', teacherSchoolId, 'teacherAcademicIndex', currentUser.uid),
+            snapshot => {
+              const index = snapshot.exists() ? snapshot.data() : null
+              if (!validCanonicalTeacherIndex(index, teacherSchoolId, currentUser.uid)) {
+                currentMembershipKey = null
+                activeAcademicUnsubscribe()
+                activeAcademicUnsubscribe = () => {}
+                clearTeacherAcademicViews()
+                setDashboardDataError(
+                  'Active class membership is not initialized or needs administrator repair. Academic results are unavailable until it is checked.'
+                )
+                return
+              }
+              const studentIds = [...index.activeStudentIds].sort()
+              const membershipKey = JSON.stringify(studentIds)
+              if (membershipKey === currentMembershipKey) return
+              currentMembershipKey = membershipKey
+              activeAcademicUnsubscribe()
+              clearTeacherAcademicViews()
+
+              const unsubscribers = []
+              unsubscribers.push(listenCanonicalTeacherBatches(
+                studentIds,
+                ids => query(collection(db, 'users'), where(documentId(), 'in', ids)),
+                items => setStudents(presentStudents(items)),
+                'Canonical student profile query', reportLiveQueryError
+              ))
+              const stateSetters = {
+                readingSubmissions: setSubmissions,
+                writingSubmissions: setWritingSubmissions,
+                listeningSubmissions: setListeningSubmissions,
+                mockSubmissions: setMockSubmissions,
+                vocabularySubmissions: setVocabularySubmissions
+              }
+              TEACHER_ACADEMIC_RESULT_COLLECTIONS.forEach(collectionName => {
+                unsubscribers.push(listenCanonicalTeacherBatches(
+                  studentIds,
+                  ids => buildCanonicalAcademicQuery(collectionName, teacherSchoolId, ids),
+                  stateSetters[collectionName],
+                  `Canonical ${collectionName} query`, reportLiveQueryError
+                ))
+              })
+              unsubscribers.push(listenCanonicalTeacherBatches(
+                studentIds,
+                ids => buildCanonicalAcademicQuery('scores', teacherSchoolId, ids),
+                items => setScores(groupScoresByStudent(items)),
+                'Canonical score query', reportLiveQueryError
+              ))
+              activeAcademicUnsubscribe = () =>
+                unsubscribers.forEach(unsubscribe => unsubscribe())
+            },
+            error => {
+              activeAcademicUnsubscribe()
+              activeAcademicUnsubscribe = () => {}
+              currentMembershipKey = null
+              clearTeacherAcademicViews()
+              reportLiveQueryError(error, 'Canonical academic membership index')
+            }
+          ))
+        }
 
         const classesQuery = isAdminUser
           ? query(collection(db, 'classes'))
@@ -895,22 +1047,6 @@ export default function TeacherDashboard() {
             error => reportLiveQueryError(error, 'Class list query')
           )
         )
-
-        const [
-          ownedReadingIds,
-          ownedWritingIds,
-          ownedListeningIds,
-          ownedMockIds,
-          ownedVocabularyIds
-        ] = isAdminUser
-          ? [[], [], [], [], []]
-          : await Promise.all([
-              getOwnedContentIds('readings', currentUser.uid, teacherSchoolId),
-              getOwnedContentIds('writingHomeworks', currentUser.uid, teacherSchoolId),
-              getOwnedContentIds('listenings', currentUser.uid, teacherSchoolId),
-              getOwnedContentIds('mockTests', currentUser.uid, teacherSchoolId),
-              getOwnedContentIds('vocabularyTests', currentUser.uid, teacherSchoolId)
-            ])
 
         if (!isActive) return
 
@@ -986,85 +1122,22 @@ export default function TeacherDashboard() {
           )
         )
 
-        const submissionQueries = (
-          collectionName,
-          parentFields,
-          parentIds
-        ) =>
-          isAdminUser
-            ? [query(collection(db, collectionName))]
-            : buildTeacherSubmissionQueries(
-                collectionName,
-                currentUser.uid,
-                teacherSchoolId,
-                parentFields,
-                parentIds
-              )
-
-        trackSnapshot(
-          listenMergedQueries(
-            submissionQueries(
-              'readingSubmissions',
-              ['readingId'],
-              ownedReadingIds
-            ),
-            setSubmissions,
-            'Reading submission query',
-            reportLiveQueryError
-          )
-        )
-
-        trackSnapshot(
-          listenMergedQueries(
-            submissionQueries(
-              'writingSubmissions',
-              ['writingId'],
-              ownedWritingIds
-            ),
-            setWritingSubmissions,
-            'Writing submission query',
-            reportLiveQueryError
-          )
-        )
-
-        trackSnapshot(
-          listenMergedQueries(
-            submissionQueries(
-              'listeningSubmissions',
-              ['listeningId'],
-              ownedListeningIds
-            ),
-            setListeningSubmissions,
-            'Listening submission query',
-            reportLiveQueryError
-          )
-        )
-
-        trackSnapshot(
-          listenMergedQueries(
-            submissionQueries(
-              'mockSubmissions',
-              ['mockTestId'],
-              ownedMockIds
-            ),
-            setMockSubmissions,
-            'Mock submission query',
-            reportLiveQueryError
-          )
-        )
-
-        trackSnapshot(
-          listenMergedQueries(
-            submissionQueries(
-              'vocabularySubmissions',
-              ['vocabularyTestId', 'vocabularyId', 'testId', 'homeworkId'],
-              ownedVocabularyIds
-            ),
-            setVocabularySubmissions,
-            'Vocabulary submission query',
-            reportLiveQueryError
-          )
-        )
+        if (isAdminUser) {
+          const adminSubmissions = [
+            ['readingSubmissions', setSubmissions],
+            ['writingSubmissions', setWritingSubmissions],
+            ['listeningSubmissions', setListeningSubmissions],
+            ['mockSubmissions', setMockSubmissions],
+            ['vocabularySubmissions', setVocabularySubmissions]
+          ]
+          adminSubmissions.forEach(([collectionName, setter]) => {
+            trackSnapshot(listenMergedQueries(
+              [query(collection(db, collectionName))],
+              setter,
+              `Admin ${collectionName} query`, reportLiveQueryError
+            ))
+          })
+        }
 
         const communicationQueries = collectionName =>
           isAdminUser
@@ -1112,45 +1185,13 @@ export default function TeacherDashboard() {
           )
         )
 
-        const scoreQueries = isAdminUser
-          ? [query(collection(db, 'scores'))]
-          : [
-              // P0-B: historical teacherIds and addedBy are not grants.
-              query(
-                collection(db, 'scores'),
-                where('schoolId', '==', teacherSchoolId),
-                where('teacherId', '==', currentUser.uid)
-              )
-            ]
-
-        trackSnapshot(
-          listenMergedQueries(
-            scoreQueries,
-            scoreItems => {
-              const groupedScores = {}
-
-              scoreItems.forEach(score => {
-                if (!score.uid) return
-
-                if (!groupedScores[score.uid]) {
-                  groupedScores[score.uid] = []
-                }
-
-                groupedScores[score.uid].push(score)
-              })
-
-              Object.keys(groupedScores).forEach(studentId => {
-                groupedScores[studentId].sort(
-                  (a, b) => new Date(b.date || 0) - new Date(a.date || 0)
-                )
-              })
-
-              setScores(groupedScores)
-            },
-            'Score query',
-            reportLiveQueryError
-          )
-        )
+        if (isAdminUser) {
+          trackSnapshot(listenMergedQueries(
+            [query(collection(db, 'scores'))],
+            scoreItems => setScores(groupScoresByStudent(scoreItems)),
+            'Admin score query', reportLiveQueryError
+          ))
+        }
       } catch (error) {
         console.error(error)
 
@@ -6149,8 +6190,19 @@ export default function TeacherDashboard() {
     })
 
     if (matchingScoreItems.length > 0) {
+      // Score identity is historical and immutable. A newly assigned teacher
+      // may update authorized bands, but not rewrite its original teacherId,
+      // student, school, attempt, source or moderation metadata.
+      const immutableScoreFields = new Set([
+        'uid', 'studentId', 'schoolId', 'teacherId', 'teacherIds',
+        'source', 'mockTestId', 'attemptNumber', 'addedBy',
+        'excludedFromStats', 'aiEstimatedWritingBand'
+      ])
+      const scoreReviewUpdate = Object.fromEntries(
+        Object.entries(mockScorePayload).filter(([key]) => !immutableScoreFields.has(key))
+      )
       for (const scoreItem of matchingScoreItems) {
-        await updateDoc(doc(db, 'scores', scoreItem.id), mockScorePayload)
+        await updateDoc(doc(db, 'scores', scoreItem.id), scoreReviewUpdate)
       }
     } else {
       await addDoc(collection(db, 'scores'), {

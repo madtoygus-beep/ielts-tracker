@@ -117,26 +117,21 @@ service cloud.firestore {
         && request.resource.data.get('createdBy', '') == resource.data.get('createdBy', '');
     }
 
-    function teacherCanReadUser() {
+    // P0-B2B: student profile reads require CURRENT class membership.
+    // Historic users.teacherIds is a compatibility field, not an ACL.
+    function teacherCanReadUser(userId) {
       return isTeacher()
         && sameSchool(resource.data)
         && (
-          resource.data.get('teacherIds', []).hasAny([request.auth.uid])
-          || (
-            resource.data.role == 'teacher'
-            && sameSchool(resource.data)
-          )
+          (resource.data.get('role', '') == 'student'
+            && teacherActiveAcademicStudent(userId))
+          || resource.data.get('role', '') == 'teacher'
         );
     }
 
     function teacherCanReadClass() {
-      return isTeacher()
-        && sameSchool(resource.data)
-        && (
-          resource.data.get('teacherId', '') == request.auth.uid
-          || resource.data.get('createdBy', '') == request.auth.uid
-          || resource.data.get('teacherIds', []).hasAny([request.auth.uid])
-        );
+      return isTeacher() && sameSchool(resource.data)
+        && resource.data.get('teacherId', '') == request.auth.uid;
     }
 
     function privilegedFieldsUnchanged() {
@@ -478,20 +473,55 @@ service cloud.firestore {
       ]);
     }
 
-    // P0-B: historical teacherIds/addedBy/createdBy do not authorize access
-    // to learner answers, academic scores or teacher review updates.
-    // The canonical teacherId must match the active teacher's current school.
-    // This narrow academic guard is distinct from ownership of teacher-created
-    // materials and from explicitly addressed messages/materials.
+    // P0-B2B: server-owned class index plus current student profile is
+    // the academic access grant. Stored submission teacherId/createdBy/arrays
+    // are historical and MUST NEVER grant access to student answers or reviews.
+    function teacherActiveAcademicStudent(uid) {
+      let idx = /databases/$(database)/documents/schools/$(currentSchoolId())/teacherAcademicIndex/$(request.auth.uid);
+      let profile = /databases/$(database)/documents/users/$(uid);
+      return isTeacher() && uid is string && uid != ''
+        && exists(idx)
+        && get(idx).data.get('schemaVersion', 0) == 1
+        && get(idx).data.get('source', '') == 'managed_active_classes'
+        && get(idx).data.get('teacherId', '') == request.auth.uid
+        && get(idx).data.get('schoolId', '') == currentSchoolId()
+        && get(idx).data.get('activeStudentIds', []).hasAny([uid])
+        && exists(profile)
+        && get(profile).data.get('role', '') == 'student'
+        && get(profile).data.get('status', '') == 'approved'
+        && get(profile).data.get('deleted', false) != true
+        && get(profile).data.get('archived', false) != true
+        && get(profile).data.get('permanentDeleteInProgress', false) != true
+        && schoolIdOf(get(profile).data) == currentSchoolId();
+    }
+
+    // P0-B2B: reject conflicting identities before any expensive
+    // index/profile lookups. teacherActiveAcademicStudent already requires
+    // approved teacher, active school, and approved current-class learner.
     function teacherCurrentAcademicRecord(data) {
-      return isTeacher()
-        && sameSchool(data)
-        && data.get('teacherId', '') == request.auth.uid;
+      let uid = data.get('uid', data.get('studentId', ''));
+      return uid is string && uid != ''
+        && (data.get('studentId', '') == '' || data.get('studentId', '') == uid)
+        && teacherActiveAcademicStudent(uid)
+        && schoolIdOf(data) == currentSchoolId();
     }
 
     function teacherCurrentAcademicParent(data) {
       return teacherCurrentAcademicRecord(data);
     }
+
+    // P0-B2B: list queries must prove BOTH student identity fields.
+    // Legacy records missing uid may use authorized direct GET, but are NOT
+    // safe for client collection LIST; a separate authorized migration is needed.
+    // P0-B2B: canonical list proof checks both identity fields first.
+    function teacherCanonicalAcademicList(data) {
+      return data.get('uid', '') is string
+        && data.get('uid', '') != ''
+        && data.get('studentId', '') == data.get('uid', '')
+        && teacherActiveAcademicStudent(data.get('uid', ''))
+        && schoolIdOf(data) == currentSchoolId();
+    }
+
 
     function teacherListedOn(data) {
       return isTeacher()
@@ -713,6 +743,17 @@ service cloud.firestore {
       allow read, create, update, delete: if false;
     }
 
+    // P0-B2B: only active teacher may GET own canonical index.
+    match /schools/{schoolId}/teacherAcademicIndex/{teacherId} {
+      allow get: if isTeacher() && teacherId == request.auth.uid
+        && schoolId == currentSchoolId()
+        && resource.data.get('schemaVersion', 0) == 1
+        && resource.data.get('source', '') == 'managed_active_classes'
+        && resource.data.get('teacherId', '') == teacherId
+        && resource.data.get('schoolId', '') == schoolId;
+      allow list, create, update, delete: if false;
+    }
+
     // ============================================================
     // USERS
     // ============================================================
@@ -722,7 +763,7 @@ service cloud.firestore {
     // bypass these client rules. End users may only update their own non-privileged
     // profile fields already covered by privilegedFieldsUnchanged().
     match /users/{userId} {
-      allow read: if isAdmin() || isOwner(userId) || teacherCanReadUser();
+      allow read: if isAdmin() || isOwner(userId) || teacherCanReadUser(userId);
 
       allow create: if false;
 
@@ -793,7 +834,8 @@ service cloud.firestore {
     }
 
     function teacherOwnsScoreMock(data) {
-      return mockForScoreExists(data)
+      return teacherCurrentAcademicRecord(data)
+        && mockForScoreExists(data)
         && sameSchool(data)
         && teacherCurrentAcademicParent(
           get(/databases/$(database)/documents/mockTests/$(data.mockTestId)).data
@@ -829,30 +871,51 @@ service cloud.firestore {
         && request.resource.data.get('addedBy', '') == resource.data.get('addedBy', '');
     }
 
+    // P0-B2B Step716: CREATE must depend on CURRENT class membership, never
+    // legacy users.teacherIds. Historical score attribution is never copied
+    // or impersonated when a new/current teacher creates a new score.
+    // The teacher Dashboard's two legitimate entry points are:
+    // - manual score with addedBy == current teacher
+    // - Mock Writing first score without addedBy, with updatedBy == current teacher
+    function teacherCanCreateAcademicScore(data) {
+      return teacherCanonicalAcademicList(data)
+        && data.get('schoolId', '') == currentSchoolId()
+        && data.get('teacherId', '') == request.auth.uid
+        && data.get('teacherIds', []) == [request.auth.uid]
+        && (
+          data.get('addedBy', '') == request.auth.uid
+          || (
+            !('addedBy' in data)
+            && data.get('source', '') == 'mock_test'
+            && data.get('updatedBy', '') == request.auth.uid
+          )
+        )
+        && (!('updatedBy' in data) || data.get('updatedBy', '') == request.auth.uid)
+        && (!('createdBy' in data) || data.get('createdBy', '') == request.auth.uid)
+        && (!('reviewedBy' in data) || data.get('reviewedBy', '') == request.auth.uid);
+    }
+
     // Q2C-2: Students use getStudentVisibleResults (trusted Cloud Function).
     // Browser get and collection queries are both denied, even for own uid,
     // because Firestore queries cannot enforce archive + access joins safely.
     match /scores/{scoreId} {
-      allow get, list: if isAdmin()
-        || teacherCurrentAcademicRecord(resource.data)
-        || teacherOwnsScoreMock(resource.data);
+      allow get: if isAdmin()
+        || teacherCurrentAcademicRecord(resource.data);
+
+      // P0-B2B: do not allow parent ownership to bypass list identity proof.
+      allow list: if isAdmin()
+        || teacherCanonicalAcademicList(resource.data);
 
       // 8D-2: objective/mock scores are server-authored for students.
       // Teachers/admins keep their existing manual score path.
       allow create: if isAdmin()
-        || (
-          isTeacher()
-          && teacherCurrentAcademicRecord(request.resource.data)
-          && schoolIdOf(request.resource.data) == currentSchoolId()
-          && userDoc(request.resource.data.uid).data.get('teacherIds', []).hasAny([request.auth.uid])
-        );
+        || teacherCanCreateAcademicScore(request.resource.data);
 
       allow update: if statsModerationFieldsUnchanged() && (
         isAdmin()
         || (
           teacherScoreIdentityUnchanged()
-          && (teacherCurrentAcademicRecord(resource.data)
-            || teacherOwnsScoreMock(resource.data))
+          && (teacherCurrentAcademicRecord(resource.data))
         )
       );
       allow delete: if false; // Q1B-B audited server deletion only
@@ -951,7 +1014,8 @@ service cloud.firestore {
     }
 
     function teacherOwnsReadingParent(data) {
-      return readingParentExists(data)
+      return teacherCurrentAcademicRecord(data)
+        && readingParentExists(data)
         && sameSchool(data)
         && teacherCurrentAcademicParent(
           get(/databases/$(database)/documents/readings/$(data.readingId)).data
@@ -962,9 +1026,12 @@ service cloud.firestore {
     // Browser get and collection queries are both denied, even for own uid,
     // because Firestore queries cannot enforce archive + access joins safely.
     match /readingSubmissions/{id} {
-      allow get, list: if isAdmin()
-        || teacherCurrentAcademicRecord(resource.data)
-        || teacherOwnsReadingParent(resource.data);
+      allow get: if isAdmin()
+        || teacherCurrentAcademicRecord(resource.data);
+
+      // P0-B2B: do not allow parent ownership to bypass list identity proof.
+      allow list: if isAdmin()
+        || teacherCanonicalAcademicList(resource.data);
 
       // 8D-2: student Reading submissions are created only by submitReadingSecure.
       // Cloud Functions use the Admin SDK and bypass Firestore client rules.
@@ -973,7 +1040,6 @@ service cloud.firestore {
       allow update: if statsModerationFieldsUnchanged() && (
         isAdmin()
         || teacherCurrentAcademicRecord(resource.data)
-        || teacherOwnsReadingParent(resource.data)
       );
       allow delete: if false; // Q1B-B audited server deletion only
     }
@@ -999,7 +1065,8 @@ service cloud.firestore {
     }
 
     function teacherOwnsListeningParent(data) {
-      return listeningParentExists(data)
+      return teacherCurrentAcademicRecord(data)
+        && listeningParentExists(data)
         && sameSchool(data)
         && teacherCurrentAcademicParent(
           get(/databases/$(database)/documents/listenings/$(data.listeningId)).data
@@ -1010,9 +1077,12 @@ service cloud.firestore {
     // Browser get and collection queries are both denied, even for own uid,
     // because Firestore queries cannot enforce archive + access joins safely.
     match /listeningSubmissions/{id} {
-      allow get, list: if isAdmin()
-        || teacherCurrentAcademicRecord(resource.data)
-        || teacherOwnsListeningParent(resource.data);
+      allow get: if isAdmin()
+        || teacherCurrentAcademicRecord(resource.data);
+
+      // P0-B2B: do not allow parent ownership to bypass list identity proof.
+      allow list: if isAdmin()
+        || teacherCanonicalAcademicList(resource.data);
 
       // 8D-2: student Listening submissions are created only by submitListeningSecure.
       allow create: if isAdmin();
@@ -1020,7 +1090,6 @@ service cloud.firestore {
       allow update: if statsModerationFieldsUnchanged() && (
         isAdmin()
         || teacherCurrentAcademicRecord(resource.data)
-        || teacherOwnsListeningParent(resource.data)
       );
       allow delete: if false; // Q1B-B audited server deletion only
     }
@@ -1052,7 +1121,8 @@ service cloud.firestore {
     }
 
     function teacherOwnsWritingParent(data) {
-      return writingParentExists(data)
+      return teacherCurrentAcademicRecord(data)
+        && writingParentExists(data)
         && sameSchool(data)
         && teacherCurrentAcademicParent(
           get(/databases/$(database)/documents/writingHomeworks/$(data.writingId)).data
@@ -1063,9 +1133,12 @@ service cloud.firestore {
     // Browser get and collection queries are both denied, even for own uid,
     // because Firestore queries cannot enforce archive + access joins safely.
     match /writingSubmissions/{id} {
-      allow get, list: if isAdmin()
-        || teacherCurrentAcademicRecord(resource.data)
-        || teacherOwnsWritingParent(resource.data);
+      allow get: if isAdmin()
+        || teacherCurrentAcademicRecord(resource.data);
+
+      // P0-B2B: do not allow parent ownership to bypass list identity proof.
+      allow list: if isAdmin()
+        || teacherCanonicalAcademicList(resource.data);
 
       // Stage 16L-2B3: student Writing submissions are server-authored by
       // submitWritingSecure. Cloud Functions use the Admin SDK and bypass rules.
@@ -1078,7 +1151,7 @@ service cloud.firestore {
       allow update: if statsModerationFieldsUnchanged() && (
         isAdmin()
         || (
-          (teacherCurrentAcademicRecord(resource.data) || teacherOwnsWritingParent(resource.data))
+          teacherCurrentAcademicRecord(resource.data)
           && teacherWritingReviewOnly()
         )
       );
@@ -1137,7 +1210,8 @@ service cloud.firestore {
     }
 
     function teacherOwnsMockParent(data) {
-      return mockParentExists(data)
+      return teacherCurrentAcademicRecord(data)
+        && mockParentExists(data)
         && sameSchool(data)
         && teacherCurrentAcademicParent(
           get(/databases/$(database)/documents/mockTests/$(data.mockTestId)).data
@@ -1148,9 +1222,12 @@ service cloud.firestore {
     // Browser get and collection queries are both denied, even for own uid,
     // because Firestore queries cannot enforce archive + access joins safely.
     match /mockSubmissions/{id} {
-      allow get, list: if isAdmin()
-        || teacherCurrentAcademicRecord(resource.data)
-        || teacherOwnsMockParent(resource.data);
+      allow get: if isAdmin()
+        || teacherCurrentAcademicRecord(resource.data);
+
+      // P0-B2B: do not allow parent ownership to bypass list identity proof.
+      allow list: if isAdmin()
+        || teacherCanonicalAcademicList(resource.data);
 
       // 8D-2: student Mock submissions are created only by submitMockSecure.
       allow create: if isAdmin();
@@ -1158,7 +1235,7 @@ service cloud.firestore {
       allow update: if statsModerationFieldsUnchanged() && (
         isAdmin()
         || (
-          (teacherCurrentAcademicRecord(resource.data) || teacherOwnsMockParent(resource.data))
+          teacherCurrentAcademicRecord(resource.data)
           && teacherMockReviewOnly()
         )
       );
@@ -1185,7 +1262,8 @@ service cloud.firestore {
     }
 
     function teacherOwnsVocabularyParent(data) {
-      return vocabularyParentExists(data)
+      return teacherCurrentAcademicRecord(data)
+        && vocabularyParentExists(data)
         && sameSchool(data)
         && teacherCurrentAcademicParent(
           get(/databases/$(database)/documents/vocabularyTests/$(data.vocabularyTestId)).data
@@ -1196,9 +1274,12 @@ service cloud.firestore {
     // Browser get and collection queries are both denied, even for own uid,
     // because Firestore queries cannot enforce archive + access joins safely.
     match /vocabularySubmissions/{id} {
-      allow get, list: if isAdmin()
-        || teacherCurrentAcademicRecord(resource.data)
-        || teacherOwnsVocabularyParent(resource.data);
+      allow get: if isAdmin()
+        || teacherCurrentAcademicRecord(resource.data);
+
+      // P0-B2B: do not allow parent ownership to bypass list identity proof.
+      allow list: if isAdmin()
+        || teacherCanonicalAcademicList(resource.data);
 
       // 8D-2: student Vocabulary submissions are created only by submitVocabularySecure.
       allow create: if isAdmin();
@@ -1206,7 +1287,6 @@ service cloud.firestore {
       allow update: if statsModerationFieldsUnchanged() && (
         isAdmin()
         || teacherCurrentAcademicRecord(resource.data)
-        || teacherOwnsVocabularyParent(resource.data)
       );
       allow delete: if false; // Q1B-B audited server deletion only
     }
