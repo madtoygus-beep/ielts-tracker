@@ -32,7 +32,7 @@ async function change(ref,operation,details=null) {
  return mutateManagedClassWithIndex({
    db,FieldValue,classRef:ref,teacherId,schoolId,operation,payload:details,
    studentRefs:operation==='save'? (details.studentIds||[]).map(x=>db.doc(`users/${x}`)):[],
-   updatedBy:'p0b2a_local_test',now:'2026-10-20T00:00:00Z'
+   updatedBy:'p0b2a_local_test',actorRole:'admin',now:'2026-10-20T00:00:00Z'
  })
 }
 async function indexStudents() {

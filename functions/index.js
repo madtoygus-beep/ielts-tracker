@@ -3666,7 +3666,7 @@ exports.saveManagedClass = onCall({ invoker: 'public' }, async request => {
     await mutateManagedClassWithIndex({
       db, FieldValue, classRef, teacherId, schoolId, operation: 'save',
       payload, studentRefs: students.map(student => student.ref),
-      updatedBy: manager.uid, now
+      updatedBy: manager.uid, actorRole: manager.profile.role, now
     })
   } else {
     // The ALL/system class cannot grant academic access through the index.
@@ -3712,7 +3712,7 @@ exports.setManagedClassArchived = onCall({ invoker: 'public' }, async request =>
     await mutateManagedClassWithIndex({
       db, FieldValue, classRef, teacherId, schoolId: schoolIdOf(classData),
       operation: 'archive', payload: update,
-      updatedBy: manager.uid, now: update.updatedAt
+      updatedBy: manager.uid, actorRole: manager.profile.role, now: update.updatedAt
     })
   } else {
     await classRef.set(update, { merge: true })
@@ -3744,7 +3744,7 @@ exports.deleteManagedClass = onCall({ invoker: 'public' }, async request => {
   if (teacherId) {
     await mutateManagedClassWithIndex({
       db, FieldValue, classRef, teacherId, schoolId: schoolIdOf(classData),
-      operation: 'delete', updatedBy: manager.uid
+      operation: 'delete', updatedBy: manager.uid, actorRole: manager.profile.role
     })
   } else {
     await classRef.delete()

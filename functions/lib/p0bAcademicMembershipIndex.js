@@ -39,17 +39,24 @@ function collectStudentIds(classDocs, teacherId, schoolId) {
  * The index uses ONLY non-archived, non-system, current classes, not profile links.
  *
  * The existing class write eligibility and students validation remains at the caller.
+ * P0-B2B admission hardening: teachers may rearrange/remove existing authorized
+ * learners, but may NEVER expand the canonical academic index. An admin must
+ * explicitly admit a new teacher/student pair through the managed class writer.
+ * Teacher checks and index membership are read in the same transaction to avoid
+ * a concurrent revocation followed by stale teacher re-admission.
  * This function does not bootstrap historical teachers; a separately approved,
  * audited backfill is required before making index-based Firestore Rules live.
  */
 async function mutateManagedClassWithIndex({
   db, FieldValue, classRef, teacherId, schoolId, operation, payload = null,
-  studentRefs = [], updatedBy = '', now = new Date().toISOString()
+  studentRefs = [], updatedBy = '', actorRole, now = new Date().toISOString()
 }) {
   if (!db?.runTransaction || !FieldValue || !classRef?.id ||
       typeof teacherId !== 'string' || !teacherId || teacherId.includes('/') ||
       typeof schoolId !== 'string' || !schoolId || schoolId.includes('/') ||
-      !['save', 'archive', 'delete'].includes(operation)) {
+      !['save', 'archive', 'delete'].includes(operation) ||
+      !['teacher', 'admin'].includes(actorRole) ||
+      (actorRole === 'teacher' && updatedBy !== teacherId)) {
     throw new Error('Invalid P0-B2A class index update request')
   }
   if (operation !== 'delete' && (!payload || typeof payload !== 'object')) {
@@ -88,6 +95,21 @@ async function mutateManagedClassWithIndex({
       .map(doc => doc.data() || {})
     if (effective) otherClasses.push(effective)
     const activeStudentIds = collectStudentIds(otherClasses, teacherId, schoolId)
+
+    // Previous index membership is the only teacher-held admission capability.
+    // Historical users.teacherIds, createdBy, source teacherId and class roster
+    // alone must never grant a new student's historical academic records.
+    if (actorRole === 'teacher') {
+      const priorIds = indexSnap.exists ? indexSnap.data()?.activeStudentIds : []
+      if (!Array.isArray(priorIds) || priorIds.some(uid =>
+        typeof uid !== 'string' || !uid || uid.includes('/'))) {
+        throw new Error('Invalid academic membership index; admin repair required')
+      }
+      const approved = new Set(priorIds)
+      if (activeStudentIds.some(uid => !approved.has(uid))) {
+        throw new Error('New academic class members require admin authorization')
+      }
+    }
 
     if (operation === 'delete') tx.delete(classRef)
     else tx.set(classRef, payload, { merge: Boolean(existing) })

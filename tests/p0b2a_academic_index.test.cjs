@@ -59,7 +59,7 @@ function fakeDb(initial={}) {
 const mutation = (db, ref, operation, payload, extra={})=>mutateManagedClassWithIndex({
   db, FieldValue, classRef:ref, teacherId:T,schoolId:SCHOOL,operation,payload,
   studentRefs:operation==='save'?payload.studentIds.map(id=>db.doc(`users/${id}`)):[],
-  updatedBy:'admin',now:'2026-10-20T00:00:00Z',...extra
+  updatedBy:'admin',actorRole:'admin',now:'2026-10-20T00:00:00Z',...extra
 })
 
 test('excludes archived, system ALL, inactive, other school, other teacher, deleted',()=>{
