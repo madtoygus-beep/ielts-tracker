@@ -524,7 +524,8 @@ async function requireAssignmentManager(request) {
 
   const profile = userSnap.data() || {}
   const allowedRole = profile.role === 'teacher' || profile.role === 'admin'
-  if (!allowedRole || profile.status !== 'approved' || profile.deleted === true) {
+  if (!allowedRole || profile.status !== 'approved' || profile.deleted === true ||
+      profile.archived === true || profile.permanentDeleteInProgress === true) {
     throw new HttpsError('permission-denied', 'This account cannot manage assignments.')
   }
 
@@ -7426,6 +7427,11 @@ exports.getMyAiWritingSubmissionOptions = onCall(request =>
 // Model API calls are OFF by default even when these exports exist.
 const { createAiWritingEvaluationService } = require('./lib/aiWritingEvaluation')
 const { gradeWithOpenAi } = require('./lib/openAiWritingProvider')
+const { createAiWritingSponsoredRecoveryService } = require('./lib/aiWritingSponsoredRecovery')
+// P0-A: repair expired, school-funded reservations without starting a model call.
+// Student access is guarded by the existing ownership/attempt checks in getReport;
+// the separate callable is administrator-only and accepts exact job IDs.
+const aiWritingSponsoredRecovery = createAiWritingSponsoredRecoveryService({ db, FieldValue })
 const maximaOpenAiKey = defineSecret('MAXIMA_OPENAI_API_KEY')
 const aiWritingEvaluationService = createAiWritingEvaluationService({
   db, FieldValue, HttpsError, requireStudent, requireStudentAttemptSource,
@@ -7433,13 +7439,34 @@ const aiWritingEvaluationService = createAiWritingEvaluationService({
   schoolIdOf, getMockEnabledSections, getMockWritingMode,
   provider: gradeWithOpenAi,
   getApiKey: () => maximaOpenAiKey.value(),
-  providerEnabled: () => process.env.MAXIMA_AI_WRITING_ENABLED === 'true'
+  providerEnabled: () => process.env.MAXIMA_AI_WRITING_ENABLED === 'true',
+  reconcileExpiredSponsoredJob: aiWritingSponsoredRecovery.reconcileJob
 })
 exports.evaluateMyAiWriting = onCall({
   secrets: [maximaOpenAiKey], timeoutSeconds: 180, memory: '512MiB'
 }, request => aiWritingEvaluationService.evaluate(request))
 exports.getMyAiWritingReport = onCall(request =>
   aiWritingEvaluationService.getReport(request))
+// Explicit administrator repair when the student never reopens the report.
+// This cannot evaluate Writing, create a new job, spend a student credit or
+// lower the monthly provider request count. It does not scan Firestore.
+exports.reconcileExpiredSponsoredAiWriting = onCall(async request => {
+  await requireAdmin(request)
+  const data = request.data
+  if (!data || typeof data !== 'object' || Array.isArray(data) ||
+      Object.keys(data).length !== 1 || !Array.isArray(data.jobIds) ||
+      data.jobIds.length < 1 || data.jobIds.length > 20 ||
+      data.jobIds.some(id => typeof id !== 'string' || !/^[a-f0-9]{64}$/.test(id)) ||
+      new Set(data.jobIds).size !== data.jobIds.length) {
+    throw new HttpsError('invalid-argument', 'Provide 1–20 unique AI job IDs.')
+  }
+  const results = []
+  for (const jobId of data.jobIds) {
+    const result = await aiWritingSponsoredRecovery.reconcileJob({ jobId })
+    results.push({ jobId, status: result.status })
+  }
+  return { results }
+})
 
 // P5D: separate staff-only, read-only saved report retrieval.
 // Does not call the model and never changes AI credits or teacher grading.

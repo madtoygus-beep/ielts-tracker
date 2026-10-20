@@ -10,6 +10,8 @@ const {
   validAiWritingReport
 } = require('./aiWritingGrading')
 
+const { teacherOwnsSource } = require('./aiWritingTeacherRelationship')
+
 const PILOT_SCHOOL_ID = 'maxima'
 const VALID_ID = /^[A-Za-z0-9_-]{1,150}$/
 const sha = value => createHash('sha256').update(value, 'utf8').digest('hex')
@@ -60,7 +62,10 @@ function createAiWritingManagedReportService({
     // An admin's general content permissions do not grant access outside
     // the institution-only AI pilot. Teachers must also own this source.
     if (!isActiveSource(source) || schoolIdOf(source) !== PILOT_SCHOOL_ID ||
-        !managerCanManageSource(manager, source)) {
+        !managerCanManageSource(manager, source) ||
+        // A stale teacherIds entry is not enough when the source has a
+        // current scalar teacherId. Staff-only AI access follows that owner.
+        (manager.profile.role === 'teacher' && !teacherOwnsSource(source, manager.uid))) {
       fail('permission-denied', 'AI report access is not available for this assignment.')
     }
     // Also verifies the student's current approved institutional profile and

@@ -25,7 +25,8 @@ function createAiWritingEvaluationService({
   db, FieldValue, HttpsError, requireStudent, requireStudentAttemptSource,
   submissionContentConfigFor, findCurrentSubmissionRecord, getOpenSubmissionAttemptControl,
   schoolIdOf, getMockEnabledSections, getMockWritingMode,
-  provider, getApiKey, providerEnabled = () => false, now = () => Date.now()
+  provider, getApiKey, providerEnabled = () => false, now = () => Date.now(),
+  reconcileExpiredSponsoredJob = null
 }) {
   if (![db, FieldValue, HttpsError, requireStudent, requireStudentAttemptSource,
     submissionContentConfigFor, findCurrentSubmissionRecord, getOpenSubmissionAttemptControl,
@@ -503,6 +504,41 @@ function createAiWritingEvaluationService({
       // Sponsored jobs do not have a student-credit ledger. Never run the
       // personal-credit refund/retry path for an institution-funded attempt.
       if (job.billingMode === 'sponsored_auto' && validInteger(job.leaseUntilMs) <= now()) {
+        // P0-A: reconcile the reserved monthly pending count on expiry.
+        // This is a ledger-only transaction, NEVER a second model request.
+        if (typeof reconcileExpiredSponsoredJob === 'function') {
+          let outcome
+          try {
+            outcome = await reconcileExpiredSponsoredJob({
+              jobId: evidence.jobId, expectedStudentId: student.uid
+            })
+          } catch (_) {
+            return { status: 'failed', canRetry: false, institutionFunded: true,
+              requiresAdminReview: true }
+          }
+          if (outcome.status === 'active') {
+            return { status: 'processing', institutionFunded: true, retryAfterSeconds: 5 }
+          }
+          if (outcome.status === 'completed') {
+            // The provider may have settled while the reader waited for the
+            // transaction. Re-read and verify both the job and report.
+            const latestSnap = await evidence.jobRef.get()
+            const latest = dataOf(latestSnap)
+            if (latest) requireMatchingJob(latest, evidence)
+            if (latest?.status === 'completed' &&
+                validAiWritingReport(latest.report, evidence.prepared)) {
+              return { status: 'completed', context: input.context,
+                contentId: input.contentId, attemptNumber: evidence.attemptNumber,
+                report: latest.report, reused: true, institutionFunded: true }
+            }
+            return { status: 'failed', canRetry: false, institutionFunded: true,
+              requiresAdminReview: true }
+          }
+          if (outcome.status !== 'reconciled' && outcome.status !== 'failed') {
+            return { status: 'failed', canRetry: false, institutionFunded: true,
+              requiresAdminReview: true }
+          }
+        }
         return { status: 'failed', canRetry: false, institutionFunded: true }
       }
       if (validInteger(job.leaseUntilMs) <= now() && job.activeLedgerId && job.month) {
