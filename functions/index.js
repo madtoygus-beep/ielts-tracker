@@ -3328,11 +3328,10 @@ function managerCanManageClass(manager, classData) {
   if (manager.profile.role !== 'teacher') return false
 
   const classTeacherId = managedClassTeacherId(classData)
-  return schoolIdOf(classData) === schoolIdOf(manager.profile) && (
-    classTeacherId === manager.uid ||
-    safeString(classData?.createdBy, 1500).trim() === manager.uid ||
-    uniqueStrings(classData?.teacherIds).includes(manager.uid)
-  )
+  // P0-B2A: only the current class teacher, never a historic creator/list,
+  // can mutate managed class membership. Admin access stays separate above.
+  return schoolIdOf(classData) === schoolIdOf(manager.profile)
+    && classTeacherId === manager.uid
 }
 
 async function requireManagedClassSchoolActive(value) {
@@ -3570,6 +3569,8 @@ exports.getManagedClassAudit = onCall({ invoker: 'public' }, async request => {
   }
 })
 
+const { mutateManagedClassWithIndex } = require('./lib/p0bAcademicMembershipIndex')
+
 exports.saveManagedClass = onCall({ invoker: 'public' }, async request => {
   const manager = await requireAssignmentManager(request)
   const data = request.data || {}
@@ -3659,24 +3660,21 @@ exports.saveManagedClass = onCall({ invoker: 'public' }, async request => {
     archived: existing?.archived === true
   }
 
-  const batch = db.batch()
-  if (existing) batch.set(classRef, payload, { merge: true })
-  else batch.set(classRef, payload)
-
-  // Keep the existing additive teacherIds compatibility link. Removing a student
-  // from one class does not remove a teacherId from the profile because the same
-  // teacher may still own another class or assignment for that student.
   if (teacherId) {
-    for (const student of students) {
-      batch.set(student.ref, {
-        teacherIds: FieldValue.arrayUnion(teacherId),
-        updatedAt: now,
-        updatedBy: manager.uid
-      }, { merge: true })
-    }
+    // P0-B2A: index and class change are atomic; student profile teacherIds
+    // remains an additive compatibility field, never an access grant.
+    await mutateManagedClassWithIndex({
+      db, FieldValue, classRef, teacherId, schoolId, operation: 'save',
+      payload, studentRefs: students.map(student => student.ref),
+      updatedBy: manager.uid, now
+    })
+  } else {
+    // The ALL/system class cannot grant academic access through the index.
+    const batch = db.batch()
+    if (existing) batch.set(classRef, payload, { merge: true })
+    else batch.set(classRef, payload)
+    await batch.commit()
   }
-
-  await batch.commit()
 
   return {
     ok: true,
@@ -3708,11 +3706,17 @@ exports.setManagedClassArchived = onCall({ invoker: 'public' }, async request =>
     throw new HttpsError('failed-precondition', 'The ALL/system class cannot be archived.')
   }
 
-  await classRef.set({
-    archived,
-    updatedBy: manager.uid,
-    updatedAt: new Date().toISOString()
-  }, { merge: true })
+  const teacherId = managedClassTeacherId(classData)
+  const update = { archived, updatedBy: manager.uid, updatedAt: new Date().toISOString() }
+  if (teacherId) {
+    await mutateManagedClassWithIndex({
+      db, FieldValue, classRef, teacherId, schoolId: schoolIdOf(classData),
+      operation: 'archive', payload: update,
+      updatedBy: manager.uid, now: update.updatedAt
+    })
+  } else {
+    await classRef.set(update, { merge: true })
+  }
 
   return { ok: true, classId, archived }
 })
@@ -3736,7 +3740,15 @@ exports.deleteManagedClass = onCall({ invoker: 'public' }, async request => {
     throw new HttpsError('failed-precondition', 'The ALL/system class cannot be permanently deleted.')
   }
 
-  await classRef.delete()
+  const teacherId = managedClassTeacherId(classData)
+  if (teacherId) {
+    await mutateManagedClassWithIndex({
+      db, FieldValue, classRef, teacherId, schoolId: schoolIdOf(classData),
+      operation: 'delete', updatedBy: manager.uid
+    })
+  } else {
+    await classRef.delete()
+  }
 
   return {
     ok: true,
