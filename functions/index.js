@@ -3569,7 +3569,7 @@ exports.getManagedClassAudit = onCall({ invoker: 'public' }, async request => {
   }
 })
 
-const { mutateManagedClassWithIndex } = require('./lib/p0bAcademicMembershipIndex')
+const { mutateManagedClassSecure } = require('./lib/p0bManagedClassSecureWriter')
 const { requireCurrentTeacherAcademicStudent } = require('./lib/p0bCurrentAcademicAccess')
 
 exports.saveManagedClass = onCall({ invoker: 'public' }, async request => {
@@ -3661,28 +3661,23 @@ exports.saveManagedClass = onCall({ invoker: 'public' }, async request => {
     archived: existing?.archived === true
   }
 
-  if (teacherId) {
-    // P0-B2A: index and class change are atomic; student profile teacherIds
-    // remains an additive compatibility field, never an access grant.
-    await mutateManagedClassWithIndex({
-      db, FieldValue, classRef, teacherId, schoolId, operation: 'save',
-      payload, studentRefs: students.map(student => student.ref),
-      updatedBy: manager.uid, actorRole: manager.profile.role, now
-    })
-  } else {
-    // The ALL/system class cannot grant academic access through the index.
-    const batch = db.batch()
-    if (existing) batch.set(classRef, payload, { merge: true })
-    else batch.set(classRef, payload)
-    await batch.commit()
-  }
+  // Step786: ALL class changes (including teacherless system classes) use
+  // one transaction that checks live actor, school, roster, class version and
+  // server-owned maintenance gate. Existing revision in-flight writes remain a
+  // separate cutover concern and are NOT made safe by this new gate alone.
+  const mutation = await mutateManagedClassSecure({
+    db, FieldValue, HttpsError, classRef, teacherId, schoolId,
+    operation: existing ? 'edit' : 'create', payload,
+    expectedClassUpdateTime: existingSnap?.exists ? existingSnap.updateTime : null,
+    actorUid: manager.uid, now
+  })
 
   return {
     ok: true,
     created: !existing,
     class: {
       classId: classRef.id,
-      ...payload
+      ...mutation.class
     }
   }
 })
@@ -3709,15 +3704,11 @@ exports.setManagedClassArchived = onCall({ invoker: 'public' }, async request =>
 
   const teacherId = managedClassTeacherId(classData)
   const update = { archived, updatedBy: manager.uid, updatedAt: new Date().toISOString() }
-  if (teacherId) {
-    await mutateManagedClassWithIndex({
-      db, FieldValue, classRef, teacherId, schoolId: schoolIdOf(classData),
-      operation: 'archive', payload: update,
-      updatedBy: manager.uid, actorRole: manager.profile.role, now: update.updatedAt
-    })
-  } else {
-    await classRef.set(update, { merge: true })
-  }
+  await mutateManagedClassSecure({
+    db, FieldValue, HttpsError, classRef, teacherId, schoolId: schoolIdOf(classData),
+    operation: 'archive', payload: update, expectedClassUpdateTime: classSnap.updateTime,
+    actorUid: manager.uid, now: update.updatedAt
+  })
 
   return { ok: true, classId, archived }
 })
@@ -3742,14 +3733,11 @@ exports.deleteManagedClass = onCall({ invoker: 'public' }, async request => {
   }
 
   const teacherId = managedClassTeacherId(classData)
-  if (teacherId) {
-    await mutateManagedClassWithIndex({
-      db, FieldValue, classRef, teacherId, schoolId: schoolIdOf(classData),
-      operation: 'delete', updatedBy: manager.uid, actorRole: manager.profile.role
-    })
-  } else {
-    await classRef.delete()
-  }
+  await mutateManagedClassSecure({
+    db, FieldValue, HttpsError, classRef, teacherId, schoolId: schoolIdOf(classData),
+    operation: 'delete', expectedClassUpdateTime: classSnap.updateTime,
+    actorUid: manager.uid
+  })
 
   return {
     ok: true,
