@@ -88,6 +88,7 @@ const setManagedSubmissionStatsExclusionCall = httpsCallable(
   functions,
   'setManagedSubmissionStatsExclusion'
 )
+const saveMockWritingReviewSecureCall = httpsCallable(functions, 'saveMockWritingReviewSecure')
 const previewManagedSubmissionPermanentDeleteCall = httpsCallable(
   functions,
   'previewManagedSubmissionPermanentDelete'
@@ -6071,145 +6072,24 @@ export default function TeacherDashboard() {
 
   const saveMockWritingReview = async () => {
     if (!selectedMockWritingReview) return
-
     if (!writingReviewForm.overall) {
       alert('Please enter overall writing band.')
       return
     }
 
     const submission = selectedMockWritingReview.submission
-    const result = submission.result || {}
-    const review = buildWritingReviewPayload()
-    const now = new Date().toISOString()
-
-    const includedSections = submission.enabledSections || result.enabledSections || {}
-    const listeningBand = includedSections.listening === false || result.listening?.enabled === false
-      ? NaN : Number(result.listening?.band)
-    const readingBand = includedSections.reading === false || result.reading?.enabled === false
-      ? NaN : Number(result.reading?.band)
-    const writingBand = Number(writingReviewForm.overall)
-
-    const overallInputs = [listeningBand, readingBand, writingBand].filter(
-      value => !Number.isNaN(value) && value > 0
-    )
-
-    const finalOverall =
-      overallInputs.length > 0
-        ? roundToHalf(
-            overallInputs.reduce((sum, value) => sum + value, 0) /
-              overallInputs.length
-          )
-        : writingReviewForm.overall
-
-    await updateDoc(
-      doc(db, 'mockSubmissions', submission.id),
-      {
-        reviewedAt: now,
-        reviewedBy: user.uid,
-        writingReview: {
-          status: 'reviewed',
-          ...review
-        },
-        result: {
-          ...result,
-          writing: {
-            ...(result.writing || {}),
-            status: 'reviewed',
-            band: writingReviewForm.overall,
-            effectiveBand: writingBand,
-            effectiveBandSource: 'teacher',
-            task1Band: review.task1Band,
-            task2Band: review.task2Band,
-            review
-          },
-          finalOverall,
-          reviewedOverall: finalOverall,
-          overallEstimate: finalOverall,
-          overall: finalOverall
-        }
-      }
-    )
-
-    const scoreTeacherIds = profile?.role === 'teacher'
-      ? [user.uid]
-      : Array.isArray(submission.teacherIds)
-        ? submission.teacherIds
-        : submission.teacherId
-          ? [submission.teacherId]
-          : []
-
-    const mockScorePayload = {
-      uid: submission.uid,
-      studentId: submission.studentId || submission.uid,
-      studentEmail: submission.studentEmail || '',
-      date: (submission.submittedAt || now).slice(0, 10),
-      source: 'mock_test',
-      mockTestId: submission.mockTestId || '',
+    // Send ONLY the human review. Never send the old result object, AI data,
+    // objective grades or computed overall from a possibly stale browser.
+    // Server checks current membership and commits Mock + score atomically.
+    await saveMockWritingReviewSecureCall({
+      studentId: submission.uid || submission.studentId,
+      mockTestId: submission.mockTestId,
+      submissionId: submission.id,
+      submittedAt: submission.submittedAt,
       attemptNumber: Number.isSafeInteger(submission.attemptNumber) && submission.attemptNumber > 0
         ? submission.attemptNumber : 1,
-      listening: !Number.isNaN(listeningBand) && listeningBand > 0
-        ? roundToHalf(listeningBand)
-        : result.listening?.band || '',
-      reading: !Number.isNaN(readingBand) && readingBand > 0
-        ? roundToHalf(readingBand)
-        : result.reading?.band || '',
-      writing: writingReviewForm.overall,
-      writingSource: 'teacher',
-      aiEstimatedWritingBand: result.writing?.aiEstimatedBand ?? null,
-      speaking: '',
-      overall: finalOverall,
-      updatedAt: now,
-      updatedBy: user.uid,
-      teacherId: scoreTeacherIds[0] || '',
-      teacherIds: scoreTeacherIds,
-      schoolId: submission.schoolId || profile?.schoolId || DEFAULT_SCHOOL_ID,
-      ...(submission.excludedFromStats === true ? { excludedFromStats: true } : {})
-    }
-
-    const candidateScoreItems = [
-      ...(scores[submission.uid] || []),
-      ...(scores[submission.studentId] || [])
-    ]
-
-    const uniqueCandidateScores = Array.from(
-      new Map(
-        candidateScoreItems
-          .filter(score => score?.id)
-          .map(score => [score.id, score])
-      ).values()
-    )
-
-    const matchingScoreItems = uniqueCandidateScores.filter(score => {
-      const sameMock = score.mockTestId === submission.mockTestId ||
-        score.mockId === submission.mockTestId
-      const sameAttempt = Number(score.attemptNumber || 1) ===
-        Number(submission.attemptNumber || 1)
-      const sameSubmissionTime = !score.createdAt || !submission.submittedAt ||
-        score.createdAt === submission.submittedAt
-      return sameMock && sameAttempt && sameSubmissionTime
+      review: buildWritingReviewPayload()
     })
-
-    if (matchingScoreItems.length > 0) {
-      // Score identity is historical and immutable. A newly assigned teacher
-      // may update authorized bands, but not rewrite its original teacherId,
-      // student, school, attempt, source or moderation metadata.
-      const immutableScoreFields = new Set([
-        'uid', 'studentId', 'schoolId', 'teacherId', 'teacherIds',
-        'source', 'mockTestId', 'attemptNumber', 'addedBy',
-        'excludedFromStats', 'aiEstimatedWritingBand'
-      ])
-      const scoreReviewUpdate = Object.fromEntries(
-        Object.entries(mockScorePayload).filter(([key]) => !immutableScoreFields.has(key))
-      )
-      for (const scoreItem of matchingScoreItems) {
-        await updateDoc(doc(db, 'scores', scoreItem.id), scoreReviewUpdate)
-      }
-    } else {
-      await addDoc(collection(db, 'scores'), {
-        ...mockScorePayload,
-        createdAt: submission.submittedAt || now
-      })
-    }
 
     setSelectedMockWritingReview(null)
     resetWritingReviewForm()

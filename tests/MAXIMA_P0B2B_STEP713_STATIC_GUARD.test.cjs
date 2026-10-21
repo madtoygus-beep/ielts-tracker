@@ -7,8 +7,8 @@ const hash=p=>crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex
 const ui=fs.readFileSync('src/pages/TeacherDashboard.jsx','utf8')
 const rules=fs.readFileSync('firestore.rules','utf8')
 test('reviewed source Rules and canonical Dashboard hashes match',()=>{
-  assert.equal(hash('firestore.rules'),'b7be769dfad4ddb18c35cc262edace1c64423e5ba7dbc4f1f3bbc1f7a2ecbd2f')
-  assert.equal(hash('src/pages/TeacherDashboard.jsx'),'67c56fbcf43b81a5879b7154d3675eb9e4e747d726a9760a2f4e88f2baabc616')
+  assert.equal(hash('firestore.rules'),'9f862f5cd3042336e78821bad4755c871466a425fe0c4a5099b5c86db9bfadc3')
+  assert.equal(hash('src/pages/TeacherDashboard.jsx'),'d4a869f4a2a0c99775ccd7ae7959d97790b8e8d3447ecbd6f99f1b880e1f0274')
 })
 test('Dashboard uses paired uid+studentId queries and index-only teacher student profiles',()=>{
   const q=ui.slice(ui.indexOf('function buildCanonicalAcademicQuery('),ui.indexOf('function validCanonicalTeacherIndex('))
@@ -29,9 +29,18 @@ test('Dashboard removes cached results after revocation; school data remains sep
   assert.match(ui,/scores', teacherSchoolId, ids/)
   assert.match(ui,/if \(isAdminUser\) \{/) // admin path stays available
 })
-test('transferred Mock score edits do not rewrite protected metadata',()=>{
-  const text=ui.slice(ui.indexOf('const immutableScoreFields = new Set'),ui.indexOf('const scoreReviewUpdate ='))
-  for(const field of ['uid','studentId','teacherId','teacherIds','source','schoolId','attemptNumber','excludedFromStats','aiEstimatedWritingBand'])
-    assert.ok(text.includes(`'${field}'`),field)
-  assert.match(ui,/updateDoc\(doc\(db, 'scores', scoreItem.id\), scoreReviewUpdate\)/)
+test('transferred Mock review uses trusted server callable and never writes objective/AI client-side',()=>{
+  const start=ui.indexOf('const saveMockWritingReview = async () => {')
+  const end=ui.indexOf('const getMockSubmittedCount',start)
+  assert.ok(start>=0 && end>start)
+  const body=ui.slice(start,end)
+  assert.match(body,/saveMockWritingReviewSecureCall\(\{/)
+  assert.match(body,/review: buildWritingReviewPayload\(\)/)
+  assert.doesNotMatch(body,/updateDoc\(/)
+  assert.doesNotMatch(body,/setDoc\(/)
+  assert.doesNotMatch(body,/\.\.\.result/)
+  assert.match(ui,/httpsCallable\(functions, 'saveMockWritingReviewSecure'\)/)
+  const server=fs.readFileSync('functions/lib/p0bMockWritingReviewService.js','utf8')
+  assert.match(server,/tx\.update\(selectedScoreRef, scoreGrade\)/)
+  assert.match(server,/tx\.update\(current\.ref/)
 })

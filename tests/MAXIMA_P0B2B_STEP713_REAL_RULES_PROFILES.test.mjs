@@ -10,8 +10,8 @@ import { collection, doc, documentId, getDoc, getDocs, query, setDoc, where } fr
 
 const PROJECT = 'demo-maxima-p0b'
 const LAB = 'firestore.rules'
-const REAL_SHA = 'b7be769dfad4ddb18c35cc262edace1c64423e5ba7dbc4f1f3bbc1f7a2ecbd2f'
-const LAB_SHA = 'b7be769dfad4ddb18c35cc262edace1c64423e5ba7dbc4f1f3bbc1f7a2ecbd2f'
+const REAL_SHA = '9f862f5cd3042336e78821bad4755c871466a425fe0c4a5099b5c86db9bfadc3'
+const LAB_SHA = '9f862f5cd3042336e78821bad4755c871466a425fe0c4a5099b5c86db9bfadc3'
 const INDEX_SHA = 'b93023c08fbf01895cdc42cba4b8854c3050a15f07045735bc7b30b9e5ab6618'
 const T = 'step712_teacher'
 const OLD = 'step712_old_teacher'
@@ -39,7 +39,7 @@ before(async () => {
   assert.match(process.env.FIRESTORE_EMULATOR_HOST || '', /^(127\.0\.0\.1|localhost):8081$/, 'STOP: only local Emulator port 8081')
   assert.equal(process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || PROJECT, PROJECT, 'STOP: wrong demo project')
   assert.equal(execFileSync('git',['branch','--show-current'],{encoding:'utf8'}).trim(), 'security/p0b-teacher-access-20261020', 'STOP: wrong branch')
-  assert.match(execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}), /^28230ac/, 'STOP: Step701 checkpoint missing')
+  assert.doesNotThrow(() => execFileSync('git', ['merge-base', '--is-ancestor', '9c7b233', 'HEAD']), 'STOP: required approved 9c7b233 ancestor is missing')
   assert.equal(hash('firestore.rules'),REAL_SHA,'STOP: source rules differ from reviewed baseline')
   assert.equal(hash(LAB),LAB_SHA,'STOP: local source candidate differs')
   assert.equal(hash('functions/lib/p0bAcademicMembershipIndex.js'),INDEX_SHA,'STOP: index writer differs')

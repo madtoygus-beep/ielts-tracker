@@ -8,7 +8,7 @@ import { initializeTestEnvironment, assertFails, assertSucceeds } from '@firebas
 import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore'
 
 const PROJECT='demo-maxima-p0b'
-const EXPECTED_SHA='b7be769dfad4ddb18c35cc262edace1c64423e5ba7dbc4f1f3bbc1f7a2ecbd2f'
+const EXPECTED_SHA='9f862f5cd3042336e78821bad4755c871466a425fe0c4a5099b5c86db9bfadc3'
 const T='step713_teacher', OLD='step713_old_teacher', S='step713_student'
 let env
 const sha=p=>createHash('sha256').update(readFileSync(p)).digest('hex')
@@ -19,7 +19,7 @@ before(async()=>{
   assert.match(process.env.FIRESTORE_EMULATOR_HOST||'',/^(127\.0\.0\.1|localhost):8081$/,'STOP: local emulator required')
   assert.equal(process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || PROJECT,PROJECT)
   assert.equal(execFileSync('git',['branch','--show-current'],{encoding:'utf8'}).trim(),'security/p0b-teacher-access-20261020')
-  assert.match(execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}),/^28230ac/)
+  assert.doesNotThrow(() => execFileSync('git', ['merge-base', '--is-ancestor', '9c7b233', 'HEAD']), 'STOP: required approved 9c7b233 ancestor is missing')
   assert.equal(sha('firestore.rules'),EXPECTED_SHA,'STOP: Rules candidate changed')
   env=await initializeTestEnvironment({projectId:PROJECT,firestore:{host:'127.0.0.1',port:8081,rules:readFileSync('firestore.rules','utf8')}})
 })
@@ -49,7 +49,7 @@ beforeEach(async()=>{
 })
 test('transferred student: newly admitted teacher updates existing band, preserves original score identity',async()=>{
   await assertSucceeds(updateDoc(ref(T,'scores/legacy_teacher_score'),{
-    writing:7,updatedBy:T,updatedAt:'2026-10-21T01:00:00Z'
+    writing:7,writingSource:'teacher',updatedBy:T,updatedAt:'2026-10-21T01:00:00Z'
   }))
   const snap=await assertSucceeds(getDoc(ref(T,'scores/legacy_teacher_score')))
   assert.equal(snap.data().writing,7)

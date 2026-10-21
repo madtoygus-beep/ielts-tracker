@@ -11,8 +11,8 @@ import { doc, getDoc, getDocs, updateDoc, setDoc, collection, query, where } fro
 
 const PROJECT = 'demo-maxima-p0b'
 const LAB_PATH = 'firestore.rules'
-const EXPECTED_REAL_RULES_SHA = 'b7be769dfad4ddb18c35cc262edace1c64423e5ba7dbc4f1f3bbc1f7a2ecbd2f'
-const EXPECTED_LAB_SHA = 'b7be769dfad4ddb18c35cc262edace1c64423e5ba7dbc4f1f3bbc1f7a2ecbd2f'
+const EXPECTED_REAL_RULES_SHA = '9f862f5cd3042336e78821bad4755c871466a425fe0c4a5099b5c86db9bfadc3'
+const EXPECTED_LAB_SHA = '9f862f5cd3042336e78821bad4755c871466a425fe0c4a5099b5c86db9bfadc3'
 const EXPECTED_INDEX_SHA = 'b93023c08fbf01895cdc42cba4b8854c3050a15f07045735bc7b30b9e5ab6618'
 const OLD = 'step710_old_teacher'
 const CURRENT = 'step710_current_teacher'
@@ -97,8 +97,7 @@ before(async () => {
     'STOP: only demo-maxima-p0b')
   assert.equal(execFileSync('git', ['branch','--show-current'], { encoding: 'utf8' }).trim(),
     'security/p0b-teacher-access-20261020', 'STOP: wrong branch')
-  assert.match(execFileSync('git', ['rev-parse','HEAD'], { encoding: 'utf8' }), /^28230ac/,
-    'STOP: requires Step701 committed checkpoint')
+  assert.doesNotThrow(() => execFileSync('git', ['merge-base', '--is-ancestor', '9c7b233', 'HEAD']), 'STOP: required approved 9c7b233 ancestor is missing')
   assert.equal(sha('firestore.rules'), EXPECTED_REAL_RULES_SHA,
     'STOP: production-source Rules file changed; inspect before retesting')
   assert.equal(sha(LAB_PATH), EXPECTED_LAB_SHA, 'STOP: local source candidate differs')

@@ -9,7 +9,7 @@ import { initializeTestEnvironment, assertFails, assertSucceeds } from '@firebas
 import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore'
 
 const PROJECT='demo-maxima-p0b'
-const RULES_SHA='b7be769dfad4ddb18c35cc262edace1c64423e5ba7dbc4f1f3bbc1f7a2ecbd2f'
+const RULES_SHA='9f862f5cd3042336e78821bad4755c871466a425fe0c4a5099b5c86db9bfadc3'
 const NEW='step716_new_teacher'
 const OLD='step716_old_teacher'
 const ADMIN='step716_admin'
@@ -33,7 +33,9 @@ const validMock=(extra={})=>({
   teacherId:NEW,teacherIds:[NEW],
   updatedBy:NEW,updatedAt:'2026-10-21T01:50:00Z',
   source:'mock_test',mockTestId:'step716_mock',attemptNumber:1,
-  date:'2026-10-21',writing:6.5,overall:6.5,
+  studentEmail:'',date:'2026-10-21',createdAt:'2026-10-21T01:50:00Z',
+  reading:6,listening:6,writing:6.5,speaking:'',overall:6.5,
+  writingSource:'teacher',aiEstimatedWritingBand:null,
   ...extra
 })
 
@@ -42,7 +44,7 @@ before(async()=>{
   assert.equal(process.env.GCLOUD_PROJECT||process.env.GOOGLE_CLOUD_PROJECT||PROJECT,PROJECT,'STOP: demo project only')
   assert.equal(execFileSync('git',['branch','--show-current'],{encoding:'utf8'}).trim(),
     'security/p0b-teacher-access-20261020','STOP: wrong branch')
-  assert.match(execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}),/^28230ac/,'STOP: wrong checkpoint')
+  assert.doesNotThrow(() => execFileSync('git', ['merge-base', '--is-ancestor', '9c7b233', 'HEAD']), 'STOP: required approved 9c7b233 ancestor is missing')
   assert.equal(hash('firestore.rules'),RULES_SHA,'STOP: verified local rules changed')
   env=await initializeTestEnvironment({projectId:PROJECT,firestore:{
     host:'127.0.0.1',port:8081,rules:readFileSync('firestore.rules','utf8')
@@ -74,11 +76,18 @@ beforeEach(async()=>{
         activeStudentIds:students
       })
     }
+    await setDoc(doc(db,`mockSubmissions/${STUDENT}_step716_mock`),{
+      uid:STUDENT,studentId:STUDENT,schoolId:'maxima',mockTestId:'step716_mock',
+      studentEmail:'',gradedByServer:true,status:'submitted',attemptNumber:1,
+      submittedAt:'2026-10-21T01:50:00Z',
+      result:{reading:{band:6},listening:{band:6},writing:{aiEstimatedBand:null}}
+    })
   })
 })
 
 async function deniedAndUnwritten(uid,payload,prefix){
-  const id=nextId(prefix)
+  const id=payload.source==='mock_test' && payload.mockTestId==='step716_mock'
+    ? `${STUDENT}_step716_mock` : nextId(prefix)
   const err=await assertFails(setDoc(ref(uid,id),payload))
   assert.equal(err.code,'permission-denied')
   // rules-unit-testing's privileged helper may not forward return value;
@@ -101,7 +110,7 @@ test('transferred teacher can create MANUAL score without stale profile teacherI
 })
 
 test('transferred teacher can create first MOCK score without addedBy',async()=>{
-  const id=nextId('mock')
+  const id=`${STUDENT}_step716_mock`
   await assertSucceeds(setDoc(ref(NEW,id),validMock()))
   const saved=await assertSucceeds(getDoc(ref(NEW,id)))
   assert.equal(saved.data().teacherId,NEW)

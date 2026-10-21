@@ -3570,6 +3570,7 @@ exports.getManagedClassAudit = onCall({ invoker: 'public' }, async request => {
 })
 
 const { mutateManagedClassWithIndex } = require('./lib/p0bAcademicMembershipIndex')
+const { requireCurrentTeacherAcademicStudent } = require('./lib/p0bCurrentAcademicAccess')
 
 exports.saveManagedClass = onCall({ invoker: 'public' }, async request => {
   const manager = await requireAssignmentManager(request)
@@ -4622,14 +4623,17 @@ exports.getManagedSubmissionAttemptState = onCall(async request => {
   const studentId = assertDocumentId(data.studentId, 'Student ID')
   const source = await getSource(config.sourceCollection, contentId)
 
-  if (!managerCanManageSource(manager, source)) {
-    throw new HttpsError('permission-denied', 'You cannot manage attempts for this content.')
-  }
+  // The active class teacher can review this student's historical results even
+  // when another teacher originally authored the source. Membership below is
+  // the authoritative student permission, not historical source ownership.
 
   const studentSnap = await db.doc(`users/${studentId}`).get()
   if (!studentSnap.exists || schoolIdOf(studentSnap.data() || {}) !== schoolIdOf(source)) {
     throw new HttpsError('not-found', 'The selected student was not found in this school.')
   }
+  await requireCurrentTeacherAcademicStudent({
+    db, HttpsError, manager, studentId, schoolId: schoolIdOf(source)
+  })
 
   const [current, controlSnap] = await Promise.all([
     findCurrentSubmissionRecord(config, studentId, contentId),
@@ -4660,14 +4664,17 @@ exports.getManagedSubmissionAttemptHistory = onCall(async request => {
   const studentId = assertDocumentId(data.studentId, 'Student ID')
   const source = await getSource(config.sourceCollection, contentId)
 
-  if (!managerCanManageSource(manager, source)) {
-    throw new HttpsError('permission-denied', 'You cannot view attempt history for this content.')
-  }
+  // The active class teacher can review this student's historical results even
+  // when another teacher originally authored the source. Membership below is
+  // the authoritative student permission, not historical source ownership.
 
   const studentSnap = await db.doc(`users/${studentId}`).get()
   if (!studentSnap.exists || schoolIdOf(studentSnap.data() || {}) !== schoolIdOf(source)) {
     throw new HttpsError('not-found', 'The selected student was not found in this school.')
   }
+  await requireCurrentTeacherAcademicStudent({
+    db, HttpsError, manager, studentId, schoolId: schoolIdOf(source)
+  })
 
   const [current, historySnap] = await Promise.all([
     findCurrentSubmissionRecord(config, studentId, contentId),
@@ -4814,15 +4821,15 @@ exports.setManagedSubmissionStatsExclusion = onCall(async request => {
   }
 
   const source = await getSource(config.sourceCollection, contentId)
-  if (!managerCanManageSource(manager, source)) {
-    throw new HttpsError('permission-denied', 'You cannot manage this result.')
-  }
+  // Source ownership never grants student result moderation. Current class
+  // membership below grants access even after a teacher transfer.
   const schoolId = schoolIdOf(source)
   const studentSnap = await db.doc(`users/${studentId}`).get()
   const studentProfile = studentSnap.exists ? (studentSnap.data() || {}) : {}
   if (studentProfile.role !== 'student' || schoolIdOf(studentProfile) !== schoolId) {
     throw new HttpsError('permission-denied', 'This is not a learner in the content school.')
   }
+  await requireCurrentTeacherAcademicStudent({ db, HttpsError, manager, studentId, schoolId })
 
   const current = await findCurrentSubmissionRecord(config, studentId, contentId)
   if (!current) {
@@ -4836,6 +4843,11 @@ exports.setManagedSubmissionStatsExclusion = onCall(async request => {
   const result = await db.runTransaction(async tx => {
     const submissionSnap = await tx.get(current.ref)
     const scoreSnap = mockScore ? await tx.get(mockScore.ref) : null
+    const freshSourceSnap = await tx.get(db.doc(`${config.sourceCollection}/${contentId}`))
+    if (!freshSourceSnap.exists || schoolIdOf(freshSourceSnap.data() || {}) !== schoolId) {
+      throw new HttpsError('permission-denied', 'Content authorization changed during moderation.')
+    }
+    await requireCurrentTeacherAcademicStudent({ db, HttpsError, manager, studentId, schoolId, tx })
     if (!submissionSnap.exists) {
       throw new HttpsError('aborted', 'The result changed. Refresh and try again.')
     }
@@ -5110,7 +5122,9 @@ async function collectManagedResultDeletion({ config, studentId, contentId, scho
 }
 
 async function managedResultDeletionContext(request) {
-  const manager = await requireAssignmentManager(request)
+  // Irreversible student result erasure is ADMIN-ONLY. Source authorship
+  // is historical and must not give transferred teachers a delete capability.
+  const manager = await requireAdmin(request)
   const data = request.data || {}
   const config = submissionContentConfigFor(data.contentType)
   const contentId = assertDocumentId(data.contentId, 'Content ID')
@@ -5180,7 +5194,7 @@ exports.permanentlyDeleteManagedSubmissionResult = onCall(async request => {
     if (!source?.exists || !student?.exists || !manager?.exists ||
         student.data()?.role !== 'student' || schoolIdOf(student.data() || {}) !== ctx.schoolId ||
         manager.data()?.status !== 'approved' || manager.data()?.deleted === true ||
-        !['teacher', 'admin'].includes(manager.data()?.role) ||
+        manager.data()?.role !== 'admin' ||
         !managerCanManageSource({ uid: ctx.manager.uid, profile: manager.data() }, source.data())) {
       throw new HttpsError('permission-denied', 'The result deletion authorization changed.')
     }
@@ -5568,7 +5582,8 @@ async function legacyCascadeExecute({ request, kind, context, collected, confirm
       }
     } else {
       const source = byPath.get(sourceRef.path)
-      if (!source?.exists || source.data()?.archived !== true ||
+      if (manager.data()?.role !== 'admin' || !source?.exists ||
+          source.data()?.archived !== true ||
           !managerCanManageSource({ uid: context.manager.uid, profile: manager.data() }, source.data())) {
         throw new HttpsError('permission-denied', 'Content deletion authorization or archive status changed.')
       }
@@ -5622,7 +5637,9 @@ async function legacyStudentPurgeContext(request) {
 }
 
 async function legacyContentPurgeContext(request) {
-  const manager = await requireAssignmentManager(request)
+  // Archiving content is reversible; cascading deletion of *all* linked
+  // student history is irreversible, and therefore requires an active admin.
+  const manager = await requireAdmin(request)
   const data = request.data || {}
   const config = submissionContentConfigFor(data.contentType)
   const contentId = assertDocumentId(data.contentId, 'Content ID')
@@ -5670,14 +5687,15 @@ exports.setSubmissionAttemptControl = onCall(async request => {
   const mode = assertAttemptMode(data.mode)
   const source = await getSource(config.sourceCollection, contentId)
 
-  if (!managerCanManageSource(manager, source)) {
-    throw new HttpsError('permission-denied', 'You cannot reopen attempts for this content.')
-  }
+  // This operation is about the current learner, not a source author's
+  // historical teacherIds. Canonical membership and active assignment gate it.
   if (source.archived === true) {
     throw new HttpsError('failed-precondition', 'Restore this content before reopening an attempt.')
   }
 
-  await requireManagedStudentAssignment(manager, config, source, studentId, contentId)
+  const { accessRef } = await requireManagedStudentAssignment(manager, config, source, studentId, contentId)
+  const schoolId = schoolIdOf(source)
+  await requireCurrentTeacherAcademicStudent({ db, HttpsError, manager, studentId, schoolId })
 
   const current = await findCurrentSubmissionRecord(config, studentId, contentId)
   if (!current) {
@@ -5725,6 +5743,24 @@ exports.setSubmissionAttemptControl = onCall(async request => {
       transaction.get(historyRef),
       mockScore?.ref ? transaction.get(mockScore.ref) : Promise.resolve(null)
     ])
+    const [freshSource, freshAssignment] = await Promise.all([
+      transaction.get(db.doc(`${config.sourceCollection}/${contentId}`)),
+      transaction.get(accessRef)
+    ])
+    const latestSource = freshSource.exists ? (freshSource.data() || {}) : {}
+    const latestAccess = freshAssignment.exists ? (freshAssignment.data() || {}) : {}
+    if (!freshSource.exists || schoolIdOf(latestSource) !== schoolId ||
+        latestSource.archived === true ||
+        latestAccess.uid !== studentId || latestAccess.contentType !== config.contentType ||
+        latestAccess.contentId !== contentId || latestAccess.accessType !== 'assignment' ||
+        latestAccess.sourceCollection !== config.sourceCollection ||
+        schoolIdOf(latestAccess) !== schoolId || latestAccess.status !== 'active' ||
+        latestAccess.adminHidden === true) {
+      throw new HttpsError('permission-denied', 'Assignment or source authorization changed during reopen.')
+    }
+    await requireCurrentTeacherAcademicStudent({
+      db, HttpsError, manager, studentId, schoolId, tx: transaction
+    })
 
     if (controlSnap.exists) {
       const existingControl = controlSnap.data() || {}
@@ -6567,6 +6603,18 @@ function mockReviewSources(sources) {
     writing: sources.writing ? toPlain(sources.writing) : null
   }
 }
+
+// Step751R2: teacher Mock Writing reviews are server-validated and committed
+// atomically with the corresponding score. Browser writes to mockSubmissions
+// are denied for teachers by Firestore Rules.
+const { createMockWritingReviewService } = require('./lib/p0bMockWritingReviewService')
+const saveMockWritingReviewSecureService = createMockWritingReviewService({
+  db, HttpsError, requireAssignmentManager, requireCurrentTeacherAcademicStudent,
+  findCurrentSubmissionRecord, submissionContentConfigFor,
+  matchingCurrentMockScoreForStats, schoolIdOf
+})
+exports.saveMockWritingReviewSecure = onCall(request =>
+  saveMockWritingReviewSecureService(request))
 
 exports.submitMockSecure = onCall(async request => {
   const student = await requireStudent(request)
