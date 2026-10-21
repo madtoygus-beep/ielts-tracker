@@ -123,7 +123,7 @@ test('missing or forged mutation role is rejected before writes',async()=>{
 
 test('runtime explicitly supplies verified role at all three class mutators',()=>{
   const src=fs.readFileSync(require('node:path').resolve(__dirname,'../functions/index.js'),'utf8')
-  const start=src.indexOf('exports.saveManagedClass = onCall(')
+  const start=src.indexOf('exports.saveManagedClassV2 = onCall(')
   const end=src.indexOf('function normalizeManagedAssignmentSnapshotItems(',start)
   assert.ok(start>0 && end>start)
   const scope=src.slice(start,end)

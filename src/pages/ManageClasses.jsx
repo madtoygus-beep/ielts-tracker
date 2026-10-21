@@ -16,9 +16,9 @@ const DEFAULT_SCHOOL_ID = 'maxima'
 const ALL_SCHOOLS_ID = 'all'
 
 const getManagedSchoolsCall = httpsCallable(functions, 'getManagedSchools')
-const saveManagedClassCall = httpsCallable(functions, 'saveManagedClass')
-const setManagedClassArchivedCall = httpsCallable(functions, 'setManagedClassArchived')
-const deleteManagedClassCall = httpsCallable(functions, 'deleteManagedClass')
+const saveManagedClassCall = httpsCallable(functions, 'saveManagedClassV2')
+const setManagedClassArchivedCall = httpsCallable(functions, 'setManagedClassArchivedV2')
+const deleteManagedClassCall = httpsCallable(functions, 'deleteManagedClassV2')
 
 const COLOR_OPTIONS = [
   { id: 'purple', label: 'Purple', bg: 'bg-purple-50', text: 'text-purple-700', border: 'border-purple-200', dot: 'bg-purple-500' },

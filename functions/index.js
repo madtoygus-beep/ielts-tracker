@@ -3572,7 +3572,24 @@ exports.getManagedClassAudit = onCall({ invoker: 'public' }, async request => {
 const { mutateManagedClassSecure } = require('./lib/p0bManagedClassSecureWriter')
 const { requireCurrentTeacherAcademicStudent } = require('./lib/p0bCurrentAcademicAccess')
 
-exports.saveManagedClass = onCall({ invoker: 'public' }, async request => {
+// Step804: keep the three legacy names exported so targeted deployments never
+// accidentally remove them, but make any *future deployment* of these exports
+// reject every mutation. Production's older revisions remain unsafe until the
+// separately authorized freeze/drain/retirement cutover completes.
+// A stale browser must fail closed even after the V2 gate is eventually opened.
+function retiredManagedClassEndpoint() {
+  return onCall({ invoker: 'public' }, async () => {
+    throw new HttpsError('failed-precondition',
+      'This class management endpoint has been retired. Please reload the application.')
+  })
+}
+exports.saveManagedClass = retiredManagedClassEndpoint()
+exports.setManagedClassArchived = retiredManagedClassEndpoint()
+exports.deleteManagedClass = retiredManagedClassEndpoint()
+
+// V2 endpoints preserve the existing client request/response contract and use
+// the Step786 transaction-authorized, default-deny maintenance gate.
+exports.saveManagedClassV2 = onCall({ invoker: 'public' }, async request => {
   const manager = await requireAssignmentManager(request)
   const data = request.data || {}
   const classId = data.classId ? assertDocumentId(data.classId, 'Class ID') : ''
@@ -3682,7 +3699,7 @@ exports.saveManagedClass = onCall({ invoker: 'public' }, async request => {
   }
 })
 
-exports.setManagedClassArchived = onCall({ invoker: 'public' }, async request => {
+exports.setManagedClassArchivedV2 = onCall({ invoker: 'public' }, async request => {
   const manager = await requireAssignmentManager(request)
   const data = request.data || {}
   const classId = assertDocumentId(data.classId, 'Class ID')
@@ -3713,7 +3730,7 @@ exports.setManagedClassArchived = onCall({ invoker: 'public' }, async request =>
   return { ok: true, classId, archived }
 })
 
-exports.deleteManagedClass = onCall({ invoker: 'public' }, async request => {
+exports.deleteManagedClassV2 = onCall({ invoker: 'public' }, async request => {
   const manager = await requireAssignmentManager(request)
   const data = request.data || {}
   const classId = assertDocumentId(data.classId, 'Class ID')

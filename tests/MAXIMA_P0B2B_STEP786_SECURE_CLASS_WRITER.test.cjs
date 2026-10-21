@@ -212,7 +212,7 @@ test('freeze read takes place inside same transaction as writes',async()=>{
 })
 test('runtime uses new guarded writer across all three callables and keeps old Rules untouched',()=>{
   const src=readFileSync(join(__dirname,'../functions/index.js'),'utf8')
-  const start=src.indexOf('exports.saveManagedClass = onCall(')
+  const start=src.indexOf('exports.saveManagedClassV2 = onCall(')
   const end=src.indexOf('function normalizeManagedAssignmentSnapshotItems(',start)
   const block=src.slice(start,end)
   assert.equal((block.match(/mutateManagedClassSecure\(\{/g)||[]).length,3)
