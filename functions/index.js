@@ -25,6 +25,9 @@ initializeApp()
 const db = getFirestore()
 const adminAuth = getAuth()
 
+// G1: institutional authority admission gate (local candidate only).
+const { withG1AuthorityLease } = require('./lib/p0bG1AuthorityLease')
+
 // P8-B5: read-only, attempt-scoped student AI results for My Results cards.
 const { prepareAiWritingEvaluation: prepareStudentWritingHistoryAi,
   validAiWritingReport: validStudentWritingHistoryAi } = require('./lib/aiWritingGrading')
@@ -717,6 +720,9 @@ exports.saveManagedSchool = onCall({ invoker: 'public' }, async request => {
   const teacherSeatInput = normalizeManagedSeatLimitInput(data.teacherSeatLimit, 'Teacher seat limit')
   const logoPathInput = normalizeSchoolLogoPathInput(data.logoPath, schoolId)
   const schoolRef = db.doc(`schools/${schoolId}`)
+  return withG1AuthorityLease({ db, FieldValue, HttpsError,
+    schoolId: schoolId, actorUid: admin.uid, operation: 'saveManagedSchool'
+  }, async () => {
 
   return withManagedSchoolSeatLock(schoolId, async () => {
     const currentSnap = await schoolRef.get()
@@ -809,9 +815,8 @@ exports.saveManagedSchool = onCall({ invoker: 'public' }, async request => {
       )
     }
   })
+  })
 })
-
-
 async function getSchoolCascadeCounts(schoolId) {
   const entries = await Promise.all(
     SCHOOL_CASCADE_COLLECTIONS.map(async collectionName => {
@@ -1105,6 +1110,9 @@ exports.deleteManagedSchool = onCall(async request => {
 
   const data = request.data || {}
   const schoolId = normalizeSchoolId(data.schoolId)
+  return withG1AuthorityLease({ db, FieldValue, HttpsError,
+    schoolId: schoolId, actorUid: admin.uid, operation: 'deleteManagedSchool'
+  }, async () => {
 
   if (schoolId === DEFAULT_SCHOOL_ID) {
     throw new HttpsError(
@@ -1234,9 +1242,8 @@ exports.deleteManagedSchool = onCall(async request => {
     deletedStorageObjects,
     deletedCollections
   }
+  })
 })
-
-
 // Stage 18B: institution accounts are provisioned by the platform admin through
 // trusted Cloud Functions. The browser never chooses a privileged role/school by
 // writing directly to users/{uid}, and Firebase Auth + Firestore profile creation
@@ -1679,6 +1686,9 @@ exports.createManagedUser = onCall({ invoker: 'public' }, async request => {
   const role = normalizeManagedAccountRole(data.role)
   const { schoolId } = await requireManagedAccountSchool(data.schoolId)
   const targetBand = normalizeManagedTargetBand(data.targetBand, role)
+  return withG1AuthorityLease({ db, FieldValue, HttpsError,
+    schoolId: schoolId, actorUid: admin.uid, operation: 'createManagedUser'
+  }, async () => {
 
   await assertNoManagedEmailConflict(email)
 
@@ -1774,8 +1784,8 @@ exports.createManagedUser = onCall({ invoker: 'public' }, async request => {
       passwordSetupRequired: true
     }
   })
+  })
 })
-
 // P4A: self-service B2C onboarding. Firebase Auth creates the identity on the
 // client first; this callable creates the privileged Firestore profile from the
 // authenticated UID/email so role, account type and school boundary are never
@@ -2002,6 +2012,9 @@ exports.approveManagedUser = onCall({ invoker: 'public' }, async request => {
   const userId = assertDocumentId(data.userId, 'User ID')
   const role = normalizeManagedAccountRole(data.role)
   const { schoolId } = await requireManagedAccountSchool(data.schoolId)
+  return withG1AuthorityLease({ db, FieldValue, HttpsError,
+    schoolId: schoolId, actorUid: admin.uid, operation: 'approveManagedUser'
+  }, async () => {
 
   return withManagedSchoolSeatLock(schoolId, async () => {
     const activeSchool = await requireManagedAccountSchool(schoolId)
@@ -2084,8 +2097,8 @@ exports.approveManagedUser = onCall({ invoker: 'public' }, async request => {
 
     return { ok: true, userId, role, schoolId }
   })
+  })
 })
-
 exports.rejectManagedUser = onCall(async request => {
   const admin = await requireAdmin(request)
   const data = request.data || {}
@@ -2098,6 +2111,9 @@ exports.rejectManagedUser = onCall(async request => {
   }
 
   const profile = userSnap.data() || {}
+  return withG1AuthorityLease({ db, FieldValue, HttpsError,
+    schoolId: schoolIdOf(profile), actorUid: admin.uid, operation: 'rejectManagedUser'
+  }, async () => {
   if (profile.role === 'admin' || userId === admin.uid) {
     throw new HttpsError('permission-denied', 'Admin accounts cannot be rejected here.')
   }
@@ -2141,8 +2157,8 @@ exports.rejectManagedUser = onCall(async request => {
   await adminAuth.updateUser(userId, { disabled: true })
 
   return { ok: true, userId, alreadyRejected: false }
+  })
 })
-
 exports.updateManagedUser = onCall({ invoker: 'public' }, async request => {
   const admin = await requireAdmin(request)
   const data = request.data || {}
@@ -2158,6 +2174,9 @@ exports.updateManagedUser = onCall({ invoker: 'public' }, async request => {
   }
 
   const profile = userSnap.data() || {}
+  return withG1AuthorityLease({ db, FieldValue, HttpsError,
+    schoolId: schoolIdOf(profile), actorUid: admin.uid, operation: 'updateManagedUser'
+  }, async () => {
   if (profile.role === 'admin') {
     throw new HttpsError('permission-denied', 'Admin accounts cannot be edited here.')
   }
@@ -2376,8 +2395,8 @@ exports.updateManagedUser = onCall({ invoker: 'public' }, async request => {
     username: username || null,
     targetBand
   }
+  })
 })
-
 exports.deleteManagedUser = onCall(async request => {
   const admin = await requireAdmin(request)
   const data = request.data || {}
@@ -2394,6 +2413,9 @@ exports.deleteManagedUser = onCall(async request => {
   }
 
   const profile = userSnap.data() || {}
+  return withG1AuthorityLease({ db, FieldValue, HttpsError,
+    schoolId: schoolIdOf(profile), actorUid: admin.uid, operation: 'deleteManagedUser'
+  }, async () => {
   if (profile.role === 'admin') {
     throw new HttpsError('permission-denied', 'Admin accounts cannot be deleted here.')
   }
@@ -2428,9 +2450,8 @@ exports.deleteManagedUser = onCall(async request => {
   await adminAuth.updateUser(userId, { disabled: true })
 
   return { ok: true, userId, alreadyDeleted: false }
+  })
 })
-
-
 // Stage 18.2 + P4B: Archived accounts can be restored by the platform admin.
 // Institution student/teacher restores still require the original active school
 // and seat capacity. Individual learners and platform Self-Study Managers restore
@@ -2454,6 +2475,9 @@ exports.restoreManagedUser = onCall({ invoker: 'public' }, async request => {
   const initialRole = permanentDeleteRoleOf(initialProfile)
   const schoolId = schoolIdOf(initialProfile)
   const initialAccountType = accountTypeOf(initialProfile)
+  return withG1AuthorityLease({ db, FieldValue, HttpsError,
+    schoolId: schoolId, actorUid: admin.uid, operation: 'restoreManagedUser'
+  }, async () => {
 
   if (initialAccountType === 'platform') {
     if (!isSelfStudyManagerProfile(initialProfile)) {
@@ -2715,9 +2739,8 @@ exports.restoreManagedUser = onCall({ invoker: 'public' }, async request => {
       alreadyRestored: false
     }
   })
+  })
 })
-
-
 // Stage 18.2: account removal now has two distinct meanings. deleteManagedUser
 // remains the reversible Archive action (soft delete + disabled Auth). Permanent
 // deletion supports students plus already-archived teacher/legacy accounts. Student
@@ -3107,6 +3130,9 @@ exports.permanentlyDeleteManagedUser = onCall({ invoker: 'public' }, async reque
 
   const state = await getManagedUserPermanentDeletionState(userId)
   const profile = state.profile
+  return withG1AuthorityLease({ db, FieldValue, HttpsError,
+    schoolId: schoolIdOf(profile), actorUid: admin.uid, operation: 'permanentlyDeleteManagedUser'
+  }, async () => {
   const profileEmail = safeString(profile.email || '', 320).trim().toLowerCase()
   const confirmedEmail = safeString(data.confirmEmail || '', 320).trim().toLowerCase()
 
@@ -3191,9 +3217,8 @@ exports.permanentlyDeleteManagedUser = onCall({ invoker: 'public' }, async reque
     preservedSharedSchoolContent: state.managedRole !== 'student',
     preservedHistoricalAcademicRecords: state.managedRole !== 'student'
   }
+  })
 })
-
-
 // Stage 18C: class membership may still be authored through the existing client
 // class workflow, but privileged student-profile teacherIds links are server-only.
 // This callable never changes a student's schoolId; it validates that the teacher
@@ -3204,6 +3229,9 @@ exports.syncManagedClassStudentLinks = onCall(async request => {
   const schoolId = normalizeSchoolId(data.schoolId)
   const teacherId = assertDocumentId(data.teacherId, 'Teacher ID')
   const studentIds = assertStudentUidList(data.studentIds || [])
+  return withG1AuthorityLease({ db, FieldValue, HttpsError,
+    schoolId: schoolId, actorUid: admin.uid, operation: 'syncManagedClassStudentLinks'
+  }, async () => {
 
   const schoolSnap = await db.doc(`schools/${schoolId}`).get()
   if (!schoolSnap.exists) {
@@ -3270,8 +3298,8 @@ exports.syncManagedClassStudentLinks = onCall(async request => {
     teacherId,
     updatedStudents: studentRefs.length
   }
+  })
 })
-
 function assertStudentUidList(value) {
   if (!Array.isArray(value)) {
     throw new HttpsError('invalid-argument', 'Student IDs must be an array.')
