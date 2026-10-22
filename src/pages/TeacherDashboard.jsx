@@ -25,6 +25,7 @@ import AiWritingTeacherPanel from '../components/AiWritingTeacherPanel'
 import AiWritingSponsoredAssignmentPanel from '../components/AiWritingSponsoredAssignmentPanel'
 import { buildMissingWritingReviewSources } from '../services/teacherWritingReviewFallbacks'
 import { mockWritingDisplayStatus } from '../services/p7uiReviewPresentation'
+import { groupScoresByStudent } from '../services/p0bG4AcademicScoreGrouping'
 import {
   AI_SPONSORED_SCHOOL_ID,
   activeTeacherAiClassStudentIds,
@@ -330,19 +331,6 @@ function listenCanonicalTeacherBatches(studentIds, buildQuery, onItems, label, o
     unsubscribers.forEach(unsubscribe => unsubscribe())
     buckets.clear()
   }
-}
-
-function groupScoresByStudent(scoreItems) {
-  const grouped = {}
-  scoreItems.forEach(score => {
-    if (!score.uid) return
-    if (!grouped[score.uid]) grouped[score.uid] = []
-    grouped[score.uid].push(score)
-  })
-  Object.values(grouped).forEach(items =>
-    items.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0))
-  )
-  return grouped
 }
 
 // MAXIMA Teacher Workspace V2 - presentation-only components.

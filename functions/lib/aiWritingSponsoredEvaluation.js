@@ -30,6 +30,12 @@ function isNewSubmittedAttempt(context, before, after) {
       (context === 'mock' && after.status !== 'submitted')) return false
   if (!before) return true
   // A teacher changing grades/review or metadata MUST NOT start a paid call.
+  // A changed learner, institution or content reference is NOT a new attempt:
+  // fail closed before touching policy state, budget or the AI provider.
+  const immutable = ['uid', 'studentId', 'schoolId', SOURCE_CONFIG[context].sourceField]
+  if (context === 'mock') immutable.push('writingId')
+  if (immutable.some(field => typeof before[field] === 'string' &&
+      before[field] !== '' && before[field] !== after[field])) return false
   // Secure resubmission increments the attempt and supplies a new submittedAt.
   return Number.isSafeInteger(before.attemptNumber) &&
     after.attemptNumber === before.attemptNumber + 1 &&
