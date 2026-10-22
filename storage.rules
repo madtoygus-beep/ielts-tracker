@@ -13,7 +13,9 @@ service firebase.storage {
     function isApprovedUser() {
       return isAuth()
         && userDoc().data.status == 'approved'
-        && userDoc().data.get('deleted', false) != true;
+        && userDoc().data.get('deleted', false) != true
+        && userDoc().data.get('archived', false) != true
+        && userDoc().data.get('permanentDeleteInProgress', false) != true;
     }
 
     function isAdmin() {
@@ -33,6 +35,36 @@ service firebase.storage {
 
     function isTeacherOrAdmin() {
       return isAdmin() || isTeacher();
+    }
+
+    // Two Firestore lookups at most: current user and, when needed, original
+    // uploader. Uploads since CreateListening add immutable-at-write schoolId.
+    // Older media without schoolId metadata can use the owner's school.
+    function currentSchoolId() {
+      return userDoc().data.get('schoolId', 'maxima');
+    }
+
+    function legacyMediaOwner(ownerId) {
+      return firestore.get(/databases/(default)/documents/users/$(ownerId));
+    }
+
+    function sameSchoolListeningRead(ownerId) {
+      return isAdmin() || (
+        isApprovedUser()
+        && (
+          resource.metadata.get('schoolId', '') == currentSchoolId()
+          || (resource.metadata.get('schoolId', '') == ''
+              && legacyMediaOwner(ownerId).data.get('schoolId', 'maxima') == currentSchoolId())
+          // Library media published by platform administrators may be shared
+          // across schools, even if the asset was originally uploaded at Maxima.
+          || legacyMediaOwner(ownerId).data.get('role', '') == 'admin'
+        )
+      );
+    }
+
+    function validListeningUploader(ownerId) {
+      return request.resource.metadata.get('createdBy', '') == ownerId
+        && request.resource.metadata.get('schoolId', '') == currentSchoolId();
     }
 
     function isAudioFile() {
@@ -75,13 +107,14 @@ service firebase.storage {
     }
 
     match /listening-audios/{ownerId}/{fileName} {
-      allow read: if isApprovedUser();
+      allow read: if sameSchoolListeningRead(ownerId);
 
       allow write: if (
         request.resource != null
         && isTeacherOrAdmin()
         && request.auth.uid == ownerId
         && isAudioFile()
+        && validListeningUploader(ownerId)
         && request.resource.size <= 30 * 1024 * 1024
       ) || (
         request.resource == null
@@ -95,12 +128,13 @@ service firebase.storage {
     // Repair 08A: matches the existing CreateListening upload path.
     match /listening-map-images/{ownerId}/{fileName} {
       // Preserve the same approved-user asset policy as listening audio.
-      allow read: if isApprovedUser();
+      allow read: if sameSchoolListeningRead(ownerId);
 
       allow create, update: if request.resource != null
         && isTeacherOrAdmin()
         && request.auth.uid == ownerId
         && isMapImageFile()
+        && validListeningUploader(ownerId)
         && request.resource.size > 0
         && request.resource.size <= 8 * 1024 * 1024;
 
@@ -114,6 +148,9 @@ service firebase.storage {
         || (
           isStudent()
           && materialDoc(materialId).data.get('recipientIds', []).hasAny([request.auth.uid])
+          && materialDoc(materialId).data.get('schoolId', 'maxima') == currentSchoolId()
+          && materialDoc(materialId).data.get('archived', false) != true
+          && materialDoc(materialId).data.get('deleted', false) != true
           && materialDoc(materialId).data.get('storagePath', '') ==
             'materials/' + ownerId + '/' + materialId + '/' + fileName
         );
