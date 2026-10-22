@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import AiWritingPilotPanel from '../components/AiWritingPilotPanel'
+import { useEscapeDismiss } from '../hooks/useEscapeDismiss'
 
 import { auth, db, functions, storage } from '../firebase'
 
@@ -351,6 +352,19 @@ export default function AdminDashboard() {
   const [managerCreatorOpen, setManagerCreatorOpen] = useState(false)
 
   const navigate = useNavigate()
+  useEscapeDismiss(() => {
+    if (legacyCascadeDialog) {
+      if (legacyCascadeDialog.saving) return false
+      setLegacyCascadeDialog(null)
+      return true
+    }
+    if (editUser) {
+      if (editSaving || passwordSaving) return false
+      setEditUser(null)
+      return true
+    }
+    return false
+  })
 
 
 

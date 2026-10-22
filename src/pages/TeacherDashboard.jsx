@@ -21,6 +21,7 @@ import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from 'fi
 import { useNavigate } from 'react-router-dom'
 import { httpsCallable } from 'firebase/functions'
 import { buildP8CAssignmentDelta } from '../services/p8cAssignmentDelta'
+import { useEscapeDismiss } from '../hooks/useEscapeDismiss'
 import AiWritingTeacherPanel from '../components/AiWritingTeacherPanel'
 import AiWritingSponsoredAssignmentPanel from '../components/AiWritingSponsoredAssignmentPanel'
 import { buildMissingWritingReviewSources } from '../services/teacherWritingReviewFallbacks'
@@ -90,6 +91,7 @@ const setManagedSubmissionStatsExclusionCall = httpsCallable(
   'setManagedSubmissionStatsExclusion'
 )
 const saveMockWritingReviewSecureCall = httpsCallable(functions, 'saveMockWritingReviewSecure')
+const saveWritingReviewSecureCall = httpsCallable(functions, 'saveWritingReviewSecure')
 const previewManagedSubmissionPermanentDeleteCall = httpsCallable(
   functions,
   'previewManagedSubmissionPermanentDelete'
@@ -736,6 +738,49 @@ export default function TeacherDashboard() {
   const [dashboardDataError, setDashboardDataError] = useState('')
 
   const navigate = useNavigate()
+  useEscapeDismiss(() => {
+    if (legacyCascadeDialog) {
+      if (legacyCascadeDialog.saving) return false
+      setLegacyCascadeDialog(null)
+      return true
+    }
+    if (deleteDialogOpen) {
+      if (attemptManagerSaving) return false
+      closeDeleteDialog()
+      return true
+    }
+    if (statsDialogMode) {
+      if (attemptManagerSaving) return false
+      closeStatsDialog()
+      return true
+    }
+    if (attemptManager) {
+      if (attemptManagerSaving) return false
+      closeSubmissionAttemptManager()
+      return true
+    }
+    if (materialShareTarget) {
+      if (materialShareSaving) return false
+      closeMaterialShareAgain()
+      return true
+    }
+    if (selectedHomework) {
+      if (assignmentSaving) return false
+      closeAssignmentManager()
+      return true
+    }
+    if (selectedWritingReview || selectedMockWritingReview) {
+      setSelectedWritingReview(null)
+      setSelectedMockWritingReview(null)
+      resetWritingReviewForm()
+      return true
+    }
+    if (selectedVocabularyReview) { setSelectedVocabularyReview(null); return true }
+    if (selectedReview) { setSelectedReview(null); return true }
+    if (showPasswordModal) { setShowPasswordModal(false); return true }
+    if (createMenuOpen) { setCreateMenuOpen(false); return true }
+    return false
+  })
 
   useEffect(() => {
     try {
@@ -6044,15 +6089,16 @@ export default function TeacherDashboard() {
       return
     }
 
-    await updateDoc(
-      doc(db, 'writingSubmissions', selectedWritingReview.submission.id),
-      {
-        reviewed: true,
-        reviewedAt: new Date().toISOString(),
-        reviewedBy: user.uid,
-        review: buildWritingReviewPayload()
-      }
-    )
+    const submission = selectedWritingReview.submission
+    await saveWritingReviewSecureCall({
+      studentId: submission.uid || submission.studentId,
+      writingId: submission.writingId,
+      submissionId: submission.id,
+      submittedAt: submission.submittedAt,
+      attemptNumber: Number.isSafeInteger(submission.attemptNumber) && submission.attemptNumber > 0
+        ? submission.attemptNumber : 1,
+      review: buildWritingReviewPayload()
+    })
 
     setSelectedWritingReview(null)
     resetWritingReviewForm()

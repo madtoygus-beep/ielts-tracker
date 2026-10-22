@@ -9,6 +9,7 @@
   import AiWritingStudentPanel, { AiWritingSavedReport } from '../components/AiWritingStudentPanel'
   import StudentArchivePanel from '../components/StudentArchivePanel'
   import { isInstitutionWritingStudent } from '../services/aiWritingStudentPolicy'
+  import { useEscapeDismiss } from '../hooks/useEscapeDismiss'
 
   const getStudentSubmissionAttemptStateCall = httpsCallable(
     functions,
@@ -3332,6 +3333,11 @@
     const [writings, setWritings] = useState([])
     const [submissions, setSubmissions] = useState([])
     const [selectedReview, setSelectedReview] = useState(null)
+    useEscapeDismiss(() => {
+      if (!selectedReview) return false
+      setSelectedReview(null)
+      return true
+    })
     const [writingAiResults, setWritingAiResults] = useState({})
     const navigate = useNavigate()
 
@@ -5111,6 +5117,11 @@
     const [scores, setScores] = useState([])
     const [user, setUser] = useState(null)
     const [showPasswordModal, setShowPasswordModal] = useState(false)
+    useEscapeDismiss(() => {
+      if (!showPasswordModal) return false
+      setShowPasswordModal(false)
+      return true
+    })
     const [newPassword, setNewPassword] = useState('')
     const [passwordMsg, setPasswordMsg] = useState('')
     const [resultsCategory, setResultsCategory] = useState('writing')

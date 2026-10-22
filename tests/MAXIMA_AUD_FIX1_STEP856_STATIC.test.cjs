@@ -31,7 +31,7 @@ test('03 six result collections preserve teacher review and narrow admin metadat
     assert.match(block,/adminResultArchiveOnly\(\)/,name)
     assert.doesNotMatch(block,/allow create: if isAdmin\(\)/,name)
     assert.doesNotMatch(block,/allow update: if isAdmin\(\)/,name)
-    if(name==='writingSubmissions') assert.match(block,/teacherWritingReviewOnly\(\)/)
+    if(name==='writingSubmissions') { assert.match(block,/allow update: if adminResultArchiveOnly\(\);/); assert.doesNotMatch(block,/teacherWritingReviewOnly\(\)/) }
     if(name==='scores') assert.match(block,/teacherCan(Update|Create)AcademicScore/)
   }
 })

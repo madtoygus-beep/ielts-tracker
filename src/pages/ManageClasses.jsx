@@ -11,6 +11,7 @@ import {
 import { onAuthStateChanged } from 'firebase/auth'
 import { httpsCallable } from 'firebase/functions'
 import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useEscapeDismiss } from '../hooks/useEscapeDismiss'
 
 const DEFAULT_SCHOOL_ID = 'maxima'
 const ALL_SCHOOLS_ID = 'all'
@@ -119,6 +120,13 @@ export default function ManageClasses() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const routeSchoolId = searchParams.get('school') || ''
+  useEscapeDismiss(() => {
+    if (saving) return false
+    if (showCreateModal) { closeModal(); return true }
+    if (detailClassId) { setDetailClassId(null); return true }
+    if (openActionsId) { setOpenActionsId(null); return true }
+    return false
+  })
 
   // ============================================================
   // Auth check (admin or teacher only)
@@ -147,7 +155,8 @@ export default function ManageClasses() {
           return
         }
 
-        if (userData.status !== 'approved' || userData.deleted === true) {
+        if (userData.status !== 'approved' || userData.deleted === true ||
+            userData.archived === true || userData.permanentDeleteInProgress === true) {
           alert('Your account is not active.')
           navigate('/login')
           return

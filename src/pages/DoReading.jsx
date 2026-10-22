@@ -1,10 +1,32 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useLayoutEffect } from 'react'
 import { auth, db, functions } from '../firebase'
 import { doc, getDoc, getDocFromServer } from 'firebase/firestore'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { httpsCallable } from 'firebase/functions'
 import { useNavigate, useParams } from 'react-router-dom'
 import { getStudentVisibleResultSnapshot } from '../services/studentResultService'
+
+// Previously restored long table answers were clipped until focus.
+function AutoGrowTableAnswer({ value, onChange }) {
+  const inputRef = useRef(null)
+  useLayoutEffect(() => {
+    const field = inputRef.current
+    if (!field) return
+    field.style.height = 'auto'
+    field.style.height = `${Math.max(field.scrollHeight, 42)}px`
+  }, [value])
+  return (
+    <textarea
+      ref={inputRef}
+      rows={1}
+      value={value}
+      onChange={event => onChange(event.target.value)}
+      aria-label="Table completion answer"
+      placeholder="Type answer..."
+      className="block w-full min-w-[180px] min-h-[42px] resize-y overflow-y-auto whitespace-pre-wrap break-words border border-gray-200 rounded-xl px-3 py-2 text-sm leading-5 outline-none focus:border-purple-400 bg-white"
+    />
+  )
+}
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
@@ -3268,25 +3290,11 @@ export default function DoReading() {
                                         Q{getReadingBlankNumber(question.id, row.id, cellIndex)}
                                       </span>
 
-                                      <textarea
-                                        rows={1}
+                                      <AutoGrowTableAnswer
                                         value={answers[key] || ''}
-                                        onChange={e => {
-                                          handleTableAnswer(
-                                            question.id,
-                                            row.id,
-                                            cellIndex,
-                                            e.target.value
-                                          )
-                                          e.currentTarget.style.height = 'auto'
-                                          e.currentTarget.style.height = `${Math.max(e.currentTarget.scrollHeight, 42)}px`
-                                        }}
-                                        onFocus={e => {
-                                          e.currentTarget.style.height = 'auto'
-                                          e.currentTarget.style.height = `${Math.max(e.currentTarget.scrollHeight, 42)}px`
-                                        }}
-                                        placeholder="Type answer..."
-                                        className="block w-full min-w-[180px] min-h-[42px] resize-none overflow-hidden whitespace-pre-wrap break-words border border-gray-200 rounded-xl px-3 py-2 text-sm leading-5 outline-none focus:border-purple-400 bg-white"
+                                        onChange={value => handleTableAnswer(
+                                          question.id, row.id, cellIndex, value
+                                        )}
                                       />
                                     </div>
                                   </td>

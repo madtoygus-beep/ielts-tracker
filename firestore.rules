@@ -982,82 +982,15 @@ service cloud.firestore {
         && validAcademicBand(data.overall);
     }
 
-    // Missing first Mock score is a legacy repair case. It is permitted only
-    // when there is an ACTUAL trusted canonical server submission; identity,
-    // attempt, generated objective bands, AI estimate and moderation must match.
-    function serverMockSubmissionForScore(data) {
-      return get(/databases/$(database)/documents/mockSubmissions/$(data.uid + '_' + data.mockTestId)).data;
-    }
-
-    function sourceMockObjectiveBand(submission, subject) {
-      let section = submission.get('result', {}).get(subject, {});
-      return submission.get('enabledSections', {}).get(subject, true) == false
-        || section.get('enabled', true) == false
-        ? '' : section.get('band', '');
-    }
-
-    function teacherMockScoreCreateAgainstSubmission(data, submission) {
-      return submission.get('uid', '') == data.get('uid', '')
-        && submission.get('studentId', '') == data.get('studentId', '')
-        && submission.get('schoolId', '') == data.get('schoolId', '')
-        && submission.get('mockTestId', '') == data.get('mockTestId', '')
-        && submission.get('status', '') == 'submitted'
-        && submission.get('enabledSections', {}).get('writing', true) == true
-        && submission.get('gradedByServer', false) == true
-        && submission.get('attemptNumber', 1) == data.get('attemptNumber', 0)
-        && submission.get('submittedAt', '') == data.get('createdAt', '')
-        && submission.get('studentEmail', '') == data.get('studentEmail', '')
-        && submission.get('submittedAt', '').matches('^' + data.date + 'T.*')
-        && data.get('listening', '') == sourceMockObjectiveBand(submission, 'listening')
-        && data.get('reading', '') == sourceMockObjectiveBand(submission, 'reading')
-        && data.get('aiEstimatedWritingBand', null) == submission.get('result', {}).get('writing', {}).get('aiEstimatedBand', null)
-        && data.get('excludedFromStats', false) == submission.get('excludedFromStats', false);
-    }
-
-    function teacherMockScoreCreate(data) {
-      return data.keys().hasOnly([
-          'uid', 'studentId', 'schoolId', 'teacherId', 'teacherIds',
-          'studentEmail', 'date', 'source', 'mockTestId', 'attemptNumber',
-          'listening', 'reading', 'writing', 'speaking', 'overall',
-          'writingSource', 'aiEstimatedWritingBand', 'updatedAt', 'updatedBy',
-          'createdAt', 'excludedFromStats'
-        ])
-        && data.keys().hasAll([
-          'uid', 'studentId', 'schoolId', 'teacherId', 'teacherIds',
-          'studentEmail', 'date', 'source', 'mockTestId', 'attemptNumber',
-          'listening', 'reading', 'writing', 'speaking', 'overall',
-          'writingSource', 'updatedAt', 'updatedBy', 'createdAt'
-        ])
-        && data.get('source', '') == 'mock_test'
-        && data.get('mockTestId', '') is string
-        && data.get('mockTestId', '') != ''
-        && data.get('attemptNumber', 0) is int
-        && data.get('attemptNumber', 0) > 0
-        && data.get('updatedBy', '') == request.auth.uid
-        && data.get('writingSource', '') == 'teacher'
-        && data.get('updatedAt', '') is string
-        && data.get('createdAt', '') is string
-        && validScoreDate(data.date)
-        && validOptionalAcademicBand(data.listening)
-        && validOptionalAcademicBand(data.reading)
-        && validAcademicBand(data.writing)
-        && validOptionalAcademicBand(data.speaking)
-        && validAcademicBand(data.overall)
-        && exists(/databases/$(database)/documents/mockSubmissions/$(data.uid + '_' + data.mockTestId))
-        && teacherMockScoreCreateAgainstSubmission(data, serverMockSubmissionForScore(data));
-    }
-
+    // AUD-FIX2: Mock scores are SERVER-ONLY. Manual teacher IELTS scores
+    // remain supported. saveMockWritingReviewSecure updates Mock + score in
+    // one privileged transaction after checking current academic membership.
     function teacherCanCreateAcademicScore(data, scoreId) {
-      return teacherScoreCreateBase(data)
-        && (teacherManualScoreCreate(data)
-          || (scoreId == data.get('uid', '') + '_' + data.get('mockTestId', '')
-            && teacherMockScoreCreate(data)));
+      return teacherScoreCreateBase(data) && teacherManualScoreCreate(data);
     }
 
-    // Browser teachers can update manual bands; Mock updates can change ONLY
-    // teacher Writing band + review overall, never original objective/AI data.
-    // No teacher can modify top-level unknown metadata, server provenance,
-    // gradedByServer, createdAt or statistics flags, including nested maps.
+    // Manual score edits remain allowed; Mock Writing/overall edits must use
+    // saveMockWritingReviewSecure, never client writes to scores.
     function teacherManualScoreUpdateOnly() {
       return request.resource.data.diff(resource.data).affectedKeys()
           .hasOnly(['reading', 'listening', 'writing', 'speaking',
@@ -1068,16 +1001,6 @@ service cloud.firestore {
         && validAcademicBand(request.resource.data.get('writing', -1))
         && validAcademicBand(request.resource.data.get('speaking', -1))
         && validAcademicBand(request.resource.data.get('overall', -1));
-    }
-
-    function teacherMockScoreUpdateOnly() {
-      return request.resource.data.diff(resource.data).affectedKeys()
-          .hasOnly(['writing', 'writingSource', 'overall', 'updatedAt', 'updatedBy'])
-        && request.resource.data.get('updatedBy', '') == request.auth.uid
-        && request.resource.data.get('writingSource', '') == 'teacher'
-        && request.resource.data.get('updatedAt', '') is string
-        && validAcademicBand(request.resource.data.get('writing', -1))
-        && validOptionalAcademicBand(request.resource.data.get('overall', ''));
     }
 
     // LAB ONLY: same live-access checks as teacherCurrentAcademicRecord,
@@ -1114,13 +1037,11 @@ service cloud.firestore {
     }
 
     function teacherCanUpdateAcademicScore() {
-      // First reject disallowed changed fields before expensive live access checks.
-      return (
-          (resource.data.get('source', '') in ['', 'manual']
-            && teacherManualScoreUpdateOnly())
-          || (resource.data.get('source', '') == 'mock_test'
-            && teacherMockScoreUpdateOnly())
-        )
+      // An attacker cannot bypass Mock Writing review atomicity by directly
+      // updating a trusted score, even with an active current class membership.
+      return resource.data.get('source', '') in ['', 'manual']
+        && !resource.data.keys().hasAny(['mockTestId', 'mockId', 'gradedByServer', 'aiEstimatedWritingBand'])
+        && teacherManualScoreUpdateOnly()
         && teacherScoreIdentityUnchanged()
         && teacherScoreUpdateCurrentMembership(resource.data);
     }
@@ -1137,7 +1058,7 @@ service cloud.firestore {
         || teacherCanonicalAcademicList(resource.data);
 
       // 8D-2: objective/mock scores are server-authored for students.
-      // Teachers retain the existing validated manual/Mock score path.
+      // Teachers retain only validated manual score creation/editing.
       // Admin repair must use an audited server endpoint, never direct SDK.
       allow create: if teacherCanCreateAcademicScore(request.resource.data, scoreId);
 
@@ -1375,20 +1296,12 @@ service cloud.firestore {
       // submitWritingSecure. Cloud Functions use the Admin SDK and bypass rules.
       allow create: if false; // No direct admin/student forged submissions.
 
-      // P8-A: a teacher browser may only write the teacher review. Identity,
-      // answers, attempt number, submittedAt and AI choice/billing stay
-      // server-owned (submitWritingSecure), so a client edit can never look
-      // like a new paid attempt to autoEvaluateSponsoredWriting.
-      allow update: if adminResultArchiveOnly()
-        || (statsModerationFieldsUnchanged()
-          && teacherCurrentAcademicRecord(resource.data)
-          && teacherWritingReviewOnly());
+      // AUD-FIX2: All teacher review provenance is written by
+      // saveWritingReviewSecure (Admin SDK + transactional current membership).
+      // Direct browser updates, even by active teachers, are forbidden.
+      // Admins may still archive/restore results using AUD-FIX1's narrow gate.
+      allow update: if adminResultArchiveOnly();
       allow delete: if false; // Q1B-B audited server deletion only
-    }
-
-    function teacherWritingReviewOnly() {
-      return request.resource.data.diff(resource.data).affectedKeys()
-        .hasOnly(['reviewed', 'reviewedAt', 'reviewedBy', 'review']);
     }
 
     // Mock teacher review writes result/writingReview; the attempt identity

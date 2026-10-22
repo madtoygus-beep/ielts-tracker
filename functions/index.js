@@ -6651,6 +6651,16 @@ const saveMockWritingReviewSecureService = createMockWritingReviewService({
 exports.saveMockWritingReviewSecure = onCall(request =>
   saveMockWritingReviewSecureService(request))
 
+// AUD-FIX2: normal Writing reviews also use server-owned actor/timestamp
+// and a fresh academic membership check inside the same transaction.
+const { createWritingReviewSecureService } = require('./lib/p0bWritingReviewSecureService')
+const saveWritingReviewSecureService = createWritingReviewSecureService({
+  db, HttpsError, requireAssignmentManager, requireCurrentTeacherAcademicStudent,
+  schoolIdOf
+})
+exports.saveWritingReviewSecure = onCall(request =>
+  saveWritingReviewSecureService(request))
+
 exports.submitMockSecure = onCall(async request => {
   const student = await requireStudent(request)
   const data = request.data || {}
