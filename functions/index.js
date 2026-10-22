@@ -449,7 +449,9 @@ async function requireStudent(request) {
   }
 
   const profile = userSnap.data() || {}
-  if (profile.role !== 'student' || profile.status !== 'approved' || profile.deleted === true) {
+  if (profile.role !== 'student' || profile.status !== 'approved' ||
+      profile.deleted === true || profile.archived === true ||
+      profile.permanentDeleteInProgress === true) {
     throw new HttpsError('permission-denied', 'This account cannot submit student work.')
   }
 

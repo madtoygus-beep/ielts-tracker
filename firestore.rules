@@ -17,7 +17,9 @@ service cloud.firestore {
     function isApprovedUser() {
       return isAuth()
         && userDoc(request.auth.uid).data.status == 'approved'
-        && userDoc(request.auth.uid).data.get('deleted', false) != true;
+        && userDoc(request.auth.uid).data.get('deleted', false) != true
+        && userDoc(request.auth.uid).data.get('archived', false) != true
+        && userDoc(request.auth.uid).data.get('permanentDeleteInProgress', false) != true;
     }
 
     function isOwner(uid) {
@@ -471,6 +473,44 @@ service cloud.firestore {
         'excludedFromStats', 'statsExcludedAt',
         'statsExcludedBy', 'statsChangedAt', 'statsChangedBy'
       ]);
+    }
+
+    // AUD-FIX1: The browser may only hide/restore a result. Every identity,
+    // attempt, answer, grade, AI choice and billing field is server-owned.
+    // A frozen/missing G1 gate pauses even this narrow admin metadata operation.
+    // Existing legacy results without schoolId are resolved through the
+    // currently verified student profile; a mismatching stored school is denied.
+    function adminResultArchiveOnly() {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      let uid = resource.data.get('uid', resource.data.get('studentId', ''));
+      let studentPath = /databases/$(database)/documents/users/$(uid);
+      return isAdmin()
+        && uid is string && uid != ''
+        && (resource.data.get('studentId', '') == ''
+          || resource.data.get('studentId', '') == uid)
+        && exists(studentPath)
+        && get(studentPath).data.get('role', '') == 'student'
+        && (resource.data.get('schoolId', '') == ''
+          || resource.data.get('schoolId', '') == schoolIdOf(get(studentPath).data))
+        && changed.size() > 0
+        && changed.hasOnly(['archived', 'archivedAt', 'restoredAt', 'updatedAt'])
+        && request.resource.data.get('archived', false) is bool
+        && request.resource.data.get('updatedAt', '') is string
+        && request.resource.data.get('updatedAt', '').size() > 0
+        && (request.resource.data.get('archived', false)
+          ? (request.resource.data.get('archivedAt', '') is string
+            && request.resource.data.get('archivedAt', '').size() > 0)
+          : (request.resource.data.get('restoredAt', '') is string
+            && request.resource.data.get('restoredAt', '').size() > 0))
+        && adminResultGateOpen(schoolIdOf(get(studentPath).data));
+    }
+
+    function adminResultGateOpen(schoolId) {
+      let gatePath = /databases/$(database)/documents/schools/$(schoolId)/classWriteGate/p0b2b;
+      return exists(gatePath)
+        && get(gatePath).data.get('schemaVersion', 0) == 1
+        && get(gatePath).data.get('phase', '') == 'open'
+        && get(gatePath).data.get('release', '') == 'p0b2b-class-writer-v1';
     }
 
     // P0-B2B: server-owned class index plus current student profile is
@@ -1097,12 +1137,13 @@ service cloud.firestore {
         || teacherCanonicalAcademicList(resource.data);
 
       // 8D-2: objective/mock scores are server-authored for students.
-      // Teachers/admins keep their existing manual score path.
-      allow create: if isAdmin()
-        || teacherCanCreateAcademicScore(request.resource.data, scoreId);
+      // Teachers retain the existing validated manual/Mock score path.
+      // Admin repair must use an audited server endpoint, never direct SDK.
+      allow create: if teacherCanCreateAcademicScore(request.resource.data, scoreId);
 
-      allow update: if statsModerationFieldsUnchanged() && (
-        isAdmin() || teacherCanUpdateAcademicScore()
+      allow update: if (
+        adminResultArchiveOnly()
+        || (statsModerationFieldsUnchanged() && teacherCanUpdateAcademicScore())
       );
       allow delete: if false; // Q1B-B audited server deletion only
     }
@@ -1221,14 +1262,14 @@ service cloud.firestore {
 
       // 8D-2: student Reading submissions are created only by submitReadingSecure.
       // Cloud Functions use the Admin SDK and bypass Firestore client rules.
-      allow create: if isAdmin();
+      allow create: if false; // Server-owned, including for admins.
 
       // Step749 P0-2: objective submissions are server-scored evidence.
       // Teachers may READ current learners, but cannot mutate answer/score
       // provenance or re-open a submitted attempt via browser SDK writes.
       // Administrative repairs keep the existing moderation restriction;
       // result-statistics changes use audited Cloud Functions exclusively.
-      allow update: if isAdmin() && statsModerationFieldsUnchanged();
+      allow update: if adminResultArchiveOnly();
       allow delete: if false; // Q1B-B audited server deletion only
     }
 
@@ -1273,14 +1314,14 @@ service cloud.firestore {
         || teacherCanonicalAcademicList(resource.data);
 
       // 8D-2: student Listening submissions are created only by submitListeningSecure.
-      allow create: if isAdmin();
+      allow create: if false; // Server-owned, including for admins.
 
       // Step749 P0-2: objective submissions are server-scored evidence.
       // Teachers may READ current learners, but cannot mutate answer/score
       // provenance or re-open a submitted attempt via browser SDK writes.
       // Administrative repairs keep the existing moderation restriction;
       // result-statistics changes use audited Cloud Functions exclusively.
-      allow update: if isAdmin() && statsModerationFieldsUnchanged();
+      allow update: if adminResultArchiveOnly();
       allow delete: if false; // Q1B-B audited server deletion only
     }
 
@@ -1332,19 +1373,16 @@ service cloud.firestore {
 
       // Stage 16L-2B3: student Writing submissions are server-authored by
       // submitWritingSecure. Cloud Functions use the Admin SDK and bypass rules.
-      allow create: if isAdmin();
+      allow create: if false; // No direct admin/student forged submissions.
 
       // P8-A: a teacher browser may only write the teacher review. Identity,
       // answers, attempt number, submittedAt and AI choice/billing stay
       // server-owned (submitWritingSecure), so a client edit can never look
       // like a new paid attempt to autoEvaluateSponsoredWriting.
-      allow update: if statsModerationFieldsUnchanged() && (
-        isAdmin()
-        || (
-          teacherCurrentAcademicRecord(resource.data)
-          && teacherWritingReviewOnly()
-        )
-      );
+      allow update: if adminResultArchiveOnly()
+        || (statsModerationFieldsUnchanged()
+          && teacherCurrentAcademicRecord(resource.data)
+          && teacherWritingReviewOnly());
       allow delete: if false; // Q1B-B audited server deletion only
     }
 
@@ -1409,10 +1447,10 @@ service cloud.firestore {
       allow list: if isAdmin()
         || teacherCanonicalAcademicList(resource.data);
 
-      // 8D-2: student Mock submissions are created only by submitMockSecure.
-      allow create: if isAdmin();
+      // 8D-2: Mock submissions are server-owned for every browser role.
+      allow create: if false;
 
-      allow update: if isAdmin() && statsModerationFieldsUnchanged();
+      allow update: if adminResultArchiveOnly();
       allow delete: if false; // Q1B-B audited server deletion only
     }
 
@@ -1456,14 +1494,14 @@ service cloud.firestore {
         || teacherCanonicalAcademicList(resource.data);
 
       // 8D-2: student Vocabulary submissions are created only by submitVocabularySecure.
-      allow create: if isAdmin();
+      allow create: if false; // Server-owned, including for admins.
 
       // Step749 P0-2: objective submissions are server-scored evidence.
       // Teachers may READ current learners, but cannot mutate answer/score
       // provenance or re-open a submitted attempt via browser SDK writes.
       // Administrative repairs keep the existing moderation restriction;
       // result-statistics changes use audited Cloud Functions exclusively.
-      allow update: if isAdmin() && statsModerationFieldsUnchanged();
+      allow update: if adminResultArchiveOnly();
       allow delete: if false; // Q1B-B audited server deletion only
     }
     // ============================================================

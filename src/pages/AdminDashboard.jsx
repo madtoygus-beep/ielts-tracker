@@ -245,9 +245,6 @@ export default function AdminDashboard() {
 
   const [passwordSaving, setPasswordSaving] = useState(false)
 
-  const [editScore, setEditScore] = useState(null)
-
-  const [editScoreForm, setEditScoreForm] = useState({})
 
   const [selectedStudent, setSelectedStudent] = useState(null)
 
@@ -500,6 +497,10 @@ export default function AdminDashboard() {
         if (
 
           profile.deleted ||
+
+          profile.archived === true ||
+
+          profile.permanentDeleteInProgress === true ||
 
           profile.status !== 'approved' ||
 
@@ -2430,130 +2431,6 @@ export default function AdminDashboard() {
 
 
 
-  const handleEditScore = (s) => {
-
-    setEditScore(s)
-
-    setEditScoreForm({
-
-      listening: s.listening,
-
-      reading: s.reading,
-
-      writing: s.writing,
-
-      speaking: s.speaking,
-
-      date: s.date
-
-    })
-
-  }
-
-
-
-  const normalizeBandInput = value => {
-
-    if (value === '' || value === null || value === undefined) return null
-
-
-
-    const numberValue = Number(value)
-
-
-
-    if (Number.isNaN(numberValue)) return null
-
-
-
-    return numberValue
-
-  }
-
-
-
-  const roundToIELTSBand = value => {
-
-    return (Math.round(value * 2) / 2).toFixed(1)
-
-  }
-
-
-
-  const handleSaveScore = async () => {
-
-    const scoreFields = ['listening', 'reading', 'writing', 'speaking']
-
-
-
-    const normalizedScores = scoreFields.reduce((acc, field) => {
-
-      const value = normalizeBandInput(editScoreForm[field])
-
-      acc[field] = value
-
-      return acc
-
-    }, {})
-
-
-
-    const validScores = Object.values(normalizedScores).filter(
-
-      value => value !== null
-
-    )
-
-
-
-    if (validScores.length === 0) {
-
-      alert('Please enter at least one score before saving.')
-
-      return
-
-    }
-
-
-
-    const invalidScore = validScores.find(value => value < 0 || value > 9)
-
-
-
-    if (invalidScore !== undefined) {
-
-      alert('Scores must be between 0 and 9.')
-
-      return
-
-    }
-
-
-
-    const avg = validScores.reduce((sum, value) => sum + value, 0) / validScores.length
-
-    const overall = roundToIELTSBand(avg)
-
-
-
-    await updateDoc(doc(db, 'scores', editScore.id), {
-
-      ...editScoreForm,
-
-      ...normalizedScores,
-
-      overall
-
-    })
-
-
-
-    setEditScore(null)
-
-  }
-
-
-
   const handleLogout = async () => {
 
     await signOut(auth)
@@ -3902,7 +3779,7 @@ export default function AdminDashboard() {
 
                                 <p className="text-lg font-bold text-purple-600">{s.overall || '-'}</p>
 
-                                <button onClick={() => handleEditScore(s)} className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-2 py-1 rounded-lg">Edit</button>
+                                <span title="Use the secure teacher Writing review flow; direct score edits are disabled" className="text-[11px] text-slate-400">Teacher review only</span>
 
                                 <button onClick={() => handleDeleteScore(s)} className="text-xs bg-red-50 hover:bg-red-100 text-red-500 px-2 py-1 rounded-lg">Delete</button>
 
@@ -4200,7 +4077,7 @@ export default function AdminDashboard() {
 
                                 <p className="text-lg font-bold text-purple-600">{s.overall || '-'}</p>
 
-                                <button onClick={() => handleEditScore(s)} className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-2 py-1 rounded-lg">Edit</button>
+                                <span title="Use the secure teacher Writing review flow; direct score edits are disabled" className="text-[11px] text-slate-400">Teacher review only</span>
 
                                 <button onClick={() => handleDeleteScore(s)} className="text-xs bg-red-50 hover:bg-red-100 text-red-500 px-2 py-1 rounded-lg">Delete</button>
 
@@ -4524,77 +4401,6 @@ export default function AdminDashboard() {
           onCancel={() => setLegacyCascadeDialog(null)} onConfirm={confirmLegacyCascadePurge} />
       )}
 
-      {editScore && (
-
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 px-4">
-
-          <div className="bg-white rounded-2xl p-6 w-full max-w-sm">
-
-            <h2 className="font-semibold text-gray-800 mb-4">Edit mock score</h2>
-
-            <div className="grid grid-cols-2 gap-3 mb-3">
-
-              {['listening', 'reading', 'writing', 'speaking'].map(s => (
-
-                <div key={s}>
-
-                  <label className="text-xs text-gray-400 capitalize mb-1 block">{s}</label>
-
-                  <input
-
-                    type="number"
-
-                    min="0"
-
-                    max="9"
-
-                    step="0.5"
-
-                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400"
-
-                    value={editScoreForm[s]}
-
-                    onChange={e => setEditScoreForm(p => ({ ...p, [s]: e.target.value }))}
-
-                  />
-
-                </div>
-
-              ))}
-
-            </div>
-
-            <div className="mb-4">
-
-              <label className="text-xs text-gray-400 mb-1 block">Date</label>
-
-              <input
-
-                type="date"
-
-                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400"
-
-                value={editScoreForm.date}
-
-                onChange={e => setEditScoreForm(p => ({ ...p, date: e.target.value }))}
-
-              />
-
-            </div>
-
-            <div className="flex gap-2">
-
-              <button onClick={() => setEditScore(null)} className="flex-1 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-500">Cancel</button>
-
-              <button onClick={handleSaveScore} className="flex-1 py-2.5 rounded-xl bg-purple-600 text-white text-sm font-medium">Save</button>
-
-            </div>
-
-          </div>
-
-        </div>
-
-      )}
     </div>
   )
 }
