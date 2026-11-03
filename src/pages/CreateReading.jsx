@@ -13,6 +13,7 @@ import {
 import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { httpsCallable } from 'firebase/functions'
 import { buildP8CAssignmentDelta } from '../services/p8cAssignmentDelta'
+import { subscribeCurrentTeacherAcademicRoster } from '../services/teacherCurrentAcademicRoster'
 import { useNavigate, useParams } from 'react-router-dom'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
@@ -143,6 +144,7 @@ export default function CreateReading() {
   const [user, setUser] = useState(null)
   const [profile, setProfile] = useState(null)
   const [students, setStudents] = useState([])
+  const [teacherAcademicMembershipReady, setTeacherAcademicMembershipReady] = useState(false)
   const [classes, setClasses] = useState([])
 
   const [title, setTitle] = useState('')
@@ -165,6 +167,7 @@ export default function CreateReading() {
   const [saved, setSaved] = useState(false)
   const [saving, setSaving] = useState(false)
   const [hasSubmissions, setHasSubmissions] = useState(false)
+  const [teacherHistoryUnverifiable, setTeacherHistoryUnverifiable] = useState(false)
   const [showLegacyTypes, setShowLegacyTypes] = useState(false)
   const [readingLoading, setReadingLoading] = useState(isEditMode)
   const [loadedReadingId, setLoadedReadingId] = useState(null)
@@ -374,30 +377,32 @@ export default function CreateReading() {
   useEffect(() => {
     if (!user || !profile) return
 
-    const q = isAdminProfile(profile)
-      ? query(collection(db, 'users'), where('role', '==', 'student'))
-      : query(
-          collection(db, 'users'),
-          where('role', '==', 'student'),
-          where('schoolId', '==', getProfileSchoolId(profile)),
-          where('teacherIds', 'array-contains', user.uid)
-        )
-
-    return onSnapshot(q, snap => {
-      const list = snap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
-        .filter(student => student.status === 'approved' && student.deleted !== true)
-
-      const visibleStudents = filterStudentsByProfile(
-        list,
-        profile,
-        user.uid
-      ).sort((a, b) =>
-        (a.name || a.email || '').localeCompare(b.name || b.email || '')
+    if (!isAdminProfile(profile)) {
+      // One academic-access implementation for Reading and all other creators.
+      // A terminal Firestore error must clear the list and reconnect safely.
+      setTeacherAcademicMembershipReady(false)
+      return subscribeCurrentTeacherAcademicRoster(
+        db, getProfileSchoolId(profile), user.uid, setStudents,
+        status => setTeacherAcademicMembershipReady(status === 'ready')
       )
+    }
 
-      setStudents(visibleStudents)
-    })
+    setTeacherAcademicMembershipReady(false)
+    setStudents([])
+    return onSnapshot(
+      query(collection(db, 'users'), where('role', '==', 'student')),
+      snap => {
+        const list = snap.docs.map(d => ({ ...d.data(), id: d.id }))
+          .filter(student => student.status === 'approved' && student.deleted !== true)
+        setStudents(filterStudentsByProfile(list, profile, user.uid).sort((a,b) =>
+          (a.name || a.email || '').localeCompare(b.name || b.email || '')
+        ))
+      },
+      error => {
+        console.warn('Cannot read admin student list:', error)
+        setStudents([])
+      }
+    )
   }, [user, profile])
 
   useEffect(() => {
@@ -413,7 +418,7 @@ export default function CreateReading() {
 
     return onSnapshot(q, snap => {
       const list = snap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
+        .map(d => ({ ...d.data(), id: d.id }))
         .filter(classItem => classItem.archived !== true)
 
       const visibleClasses = filterClassesByProfile(
@@ -426,15 +431,9 @@ export default function CreateReading() {
     })
   }, [user, profile])
 
-  useEffect(() => {
-    if (!user || !profile || isAdminProfile(profile) || students.length === 0) return
-
-    const visibleStudentIds = new Set(students.map(student => student.id))
-
-    setAssignTo(prev =>
-      prev.filter(studentId => visibleStudentIds.has(studentId))
-    )
-  }, [user, profile, students])
+  // Existing server-authoritative assignments must NOT be pruned as a side
+  // effect of roster changes or temporary permission errors. Only explicit
+  // teacher-selected delta changes reach setContentStudentAccess.
 
   // ============================================================
   // Load existing reading (edit mode)
@@ -740,14 +739,18 @@ export default function CreateReading() {
         if (isActive) setHasSubmissions(true)
         return
       }
-      const subQuery = profile?.role === 'admin'
-        ? query(collection(db, 'readingSubmissions'), where('readingId', '==', id))
-        : query(
-            collection(db, 'readingSubmissions'),
-            where('readingId', '==', id),
-            where('teacherId', '==', user.uid),
-            where('schoolId', '==', getProfileSchoolId(profile))
-          )
+      // An old teacherId-scoped query cannot prove ALL historical submissions.
+      // Under G1 rules the teacher cannot safely establish an empty history.
+      // Fail closed: no question edits until an audited server-side check exists.
+      if (profile?.role === 'teacher') {
+        if (isActive) {
+          setTeacherHistoryUnverifiable(true)
+          setHasSubmissions(true)
+        }
+        return
+      }
+      if (isActive) setTeacherHistoryUnverifiable(false)
+      const subQuery = query(collection(db, 'readingSubmissions'), where('readingId', '==', id))
 
       unsubSubmissions = onSnapshot(subQuery, subSnap => {
         if (isActive) setHasSubmissions(!subSnap.empty)
@@ -2282,6 +2285,29 @@ export default function CreateReading() {
       updatedAt: new Date().toISOString()
     })
 
+    // Never save teacher assignments from a missing or stale G1 index.
+    if (profile?.role === 'teacher') {
+      if (!teacherAcademicMembershipReady) {
+        alert('Active class membership is not verified. No changes were saved.')
+        setSaving(false)
+        return
+      }
+      const allowed = new Set(students.map(student => student.id))
+      const baselineAssignmentIds = new Set(assignmentBaseline)
+      const selectedAssignmentIds = new Set(assignTo)
+      // Unknown historical assignments remain unchanged. Only an explicit
+      // addition/removal must be authorized against current active membership.
+      const changedStudentIds = [
+        ...assignTo.filter(studentId => !baselineAssignmentIds.has(studentId)),
+        ...assignmentBaseline.filter(studentId => !selectedAssignmentIds.has(studentId))
+      ]
+      if (changedStudentIds.some(studentId => !allowed.has(studentId))) {
+        alert('An assignment change refers to a student outside your current active classes. No changes were saved.')
+        setSaving(false)
+        return
+      }
+    }
+
     try {
       let savedReadingId = id
 
@@ -2414,6 +2440,20 @@ export default function CreateReading() {
           </div>
         )}
 
+        {profile?.role === 'teacher' && teacherAcademicMembershipReady &&
+          assignmentBaseline.some(studentId => !students.some(student => student.id === studentId)) && (
+          <p role="status" className="mb-3 text-sm text-amber-800">
+            Previously assigned students outside your current active classes remain assigned.
+            Ask an administrator to change those historical assignments.
+          </p>
+        )}
+        {isEditMode && teacherHistoryUnverifiable && (
+          <p role="status" className="mb-3 text-sm text-amber-800">
+            Question editing is temporarily restricted because historical submissions
+            cannot be securely verified in the browser. Assignment and metadata
+            changes remain subject to server authorization.
+          </p>
+        )}
         {isEditMode && hasSubmissions && (
           <div className="bg-amber-50 text-amber-700 rounded-xl p-4 mb-6 text-sm font-medium">
             ⚠ This reading already has student submissions. Changing questions,

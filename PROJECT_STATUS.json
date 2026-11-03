@@ -1,0 +1,32 @@
+{
+  "sourceRelease": "2026-11-03",
+  "productionDeployment": "dpl_EkcQbvBCrQEpR3aK8Z56Z55yWGLQ",
+  "releaseSource": "/Users/turhanemretoygus_1/Desktop/MAXIMA_IELTS_TRACKER/02_GUNCEL_SURUMLER_VE_YAMALAR/MAXIMA_MEDIA_AI_RELEASE_20261103/app",
+  "backupBeforeSync": "/Users/turhanemretoygus_1/Desktop/MAXIMA_IELTS_TRACKER/03_PRODUCTION_YEDEKLERI/MAXIMA_VSCODE_SYNC_20261103_184700",
+  "productionChangedByThisSync": false,
+  "localValidation": {
+    "build": "PASS",
+    "partialWritingAndRecoveryUnitTests": "13/13 PASS",
+    "legacyAiGradingTests": "62/64 PASS; two obsolete expectations:50-word error and no score for short answer",
+    "legacySponsoredAutoTests": "80/83 PASS; three obsolete expectations for99/100/249-word answers",
+    "legacyMockRulesTest": "NOT RUN: requires isolated Firestore emulator; safety guard stopped execution"
+  },
+  "remainingMedia": {
+    "audioForUserUpload": [
+      "C201L2",
+      "C201L3",
+      "C201L4",
+      "C202L1",
+      "C202L2"
+    ],
+    "mapsForUserUpload": [
+      "S3L2",
+      "S3L4"
+    ]
+  },
+  "nextWork": [
+    "Review5 legacy test expectations against recorded21-word scoring decision; runtime unchanged",
+    "Retain isolated emulator requirement for integration tests"
+  ],
+  "archivePolicy": "Old experiments are preserved outside the active app in backup/LOCAL_EXPERIMENTS; original dirty worktree and Git history are backed up."
+}

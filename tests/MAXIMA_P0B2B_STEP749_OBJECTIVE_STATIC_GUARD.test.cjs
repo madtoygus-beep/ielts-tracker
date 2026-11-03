@@ -6,7 +6,7 @@ const crypto=require('node:crypto')
 const text=fs.readFileSync('firestore.rules','utf8')
 const sha=s=>crypto.createHash('sha256').update(s).digest('hex')
 test('Step749 exact reviewed Firestore Rules hash',()=>{
-  assert.equal(sha(fs.readFileSync('firestore.rules')),'9f862f5cd3042336e78821bad4755c871466a425fe0c4a5099b5c86db9bfadc3')
+  assert.equal(sha(fs.readFileSync('firestore.rules')),'fbd5ff8ec4b01df03a265e815f4a74ee4550144ac6b96d49a8040456718d0596')
 })
 for(const name of ['readingSubmissions','listeningSubmissions','vocabularySubmissions']){
   test(`Step749 ${name} is admin-only for direct browser UPDATE`,()=>{
@@ -16,7 +16,7 @@ for(const name of ['readingSubmissions','listeningSubmissions','vocabularySubmis
     const end=text.indexOf('allow delete:',i)
     assert.ok(end>i,`unable to isolate match ${name}`)
     const section=text.slice(i,end)
-    assert.match(section,/allow update: if isAdmin\(\) && statsModerationFieldsUnchanged\(\);/)
+    assert.match(section,/allow update: if adminResultArchiveOnly\(\);/)
     assert.doesNotMatch(section,/teacherCurrentAcademicRecord\(resource\.data\)\s*\);/)
   })
 }

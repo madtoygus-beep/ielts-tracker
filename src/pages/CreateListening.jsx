@@ -1,24 +1,23 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { auth, db, functions, storage } from '../firebase'
 import {
-  addDoc,
   collection,
   doc,
   getDoc,
   onSnapshot,
   query,
-  updateDoc,
   where
 } from 'firebase/firestore'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { httpsCallable } from 'firebase/functions'
 import { buildP8CAssignmentDelta } from '../services/p8cAssignmentDelta'
+import { subscribeCurrentTeacherAcademicRoster } from '../services/teacherCurrentAcademicRoster'
 import {
-  getDownloadURL,
   ref,
   uploadBytesResumable
 } from 'firebase/storage'
 import { useNavigate, useParams } from 'react-router-dom'
+import { assertListeningMediaSaveSafe } from '../services/listeningMediaGuard.mjs'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
@@ -31,6 +30,16 @@ const ACCEPTED_IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp']
 
 const getContentStudentAccessCall = httpsCallable(functions, 'getContentStudentAccess')
 const setContentStudentAccessCall = httpsCallable(functions, 'setContentStudentAccess')
+const finalizePrivateListeningUploadCall = httpsCallable(functions, 'finalizePrivateListeningUpload', { timeout: 120000 })
+const savePrivateListeningContentCall = httpsCallable(functions, 'savePrivateListeningContent', { timeout: 120000 })
+
+function listeningUpdatedAtVersion(value) {
+  if (typeof value === 'string') return `str:${value}`
+  if (Number.isSafeInteger(value?.seconds) && Number.isSafeInteger(value?.nanoseconds)) {
+    return `ts:${value.seconds}:${value.nanoseconds}`
+  }
+  return null
+}
 
 function isAcceptedAudioFile(file) {
   if (!file) return false
@@ -277,11 +286,16 @@ const normalizeParts = data => {
 export default function CreateListening() {
   const { id } = useParams()
   const isEditMode = Boolean(id)
+  // Reserve the Firestore ID before any private Storage upload. The same ID is
+  // used for metadata, finalization and the eventual new Listening document.
+  const draftListeningId = useMemo(() => doc(collection(db, 'listenings')).id, [])
+  const mediaListeningId = isEditMode ? id : draftListeningId
   const navigate = useNavigate()
 
   const [user, setUser] = useState(null)
   const [profile, setProfile] = useState(null)
   const [students, setStudents] = useState([])
+  const [teacherRosterStatus, setTeacherRosterStatus] = useState('loading')
   const [classes, setClasses] = useState([])
   const [search, setSearch] = useState('')
 
@@ -291,6 +305,14 @@ export default function CreateListening() {
   const [audioUrl, setAudioUrl] = useState('')
   const [audioFileName, setAudioFileName] = useState('')
   const [audioStoragePath, setAudioStoragePath] = useState('')
+  const [audioLocalPreviewUrl, setAudioLocalPreviewUrl] = useState('')
+  const localPreviewUrlsRef = useRef(new Set())
+  const originalMediaRef = useRef(null)
+  const originalDocumentVersionRef = useRef(null)
+  useEffect(() => () => {
+    for (const url of localPreviewUrlsRef.current) URL.revokeObjectURL(url)
+    localPreviewUrlsRef.current.clear()
+  }, [])
   const [audioUploading, setAudioUploading] = useState(false)
   const [audioUploadProgress, setAudioUploadProgress] = useState(0)
   const [mapImageUploads, setMapImageUploads] = useState({})
@@ -361,36 +383,39 @@ export default function CreateListening() {
 
   useEffect(() => {
     if (!user || !profile) return
-
+    if (!isAdminProfile(profile)) {
+      return subscribeCurrentTeacherAcademicRoster(
+        db, getProfileSchoolId(profile), user.uid, setStudents, setTeacherRosterStatus
+      )
+    }
+    setTeacherRosterStatus('loading')
     const q = query(collection(db, 'users'), where('role', '==', 'student'))
-
     return onSnapshot(q, snap => {
-      const list = snap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
+      const list = snap.docs.map(d => ({ ...d.data(), id: d.id }))
         .filter(student => student.status === 'approved' && student.deleted !== true)
-
-      const visibleStudents = filterStudentsByProfile(
-        list,
-        profile,
-        user.uid
-      )
-
-      visibleStudents.sort((a, b) =>
-        (a.name || a.email || '').localeCompare(b.name || b.email || '')
-      )
-
+      const visibleStudents = filterStudentsByProfile(list, profile, user.uid)
+      visibleStudents.sort((a,b) => (a.name || a.email || '').localeCompare(b.name || b.email || ''))
       setStudents(visibleStudents)
+      setTeacherRosterStatus('ready')
+    }, error => {
+      console.warn('Listening admin student roster unavailable:',error?.code || 'unknown')
+      setStudents([])
+      setTeacherRosterStatus('error')
     })
   }, [user, profile])
 
   useEffect(() => {
     if (!user || !profile) return
 
-    const q = query(collection(db, 'classes'))
+    const q = isAdminProfile(profile)
+      ? query(collection(db, 'classes'))
+      : query(collection(db, 'classes'),
+          where('schoolId', '==', getProfileSchoolId(profile)),
+          where('teacherId', '==', user.uid))
 
     return onSnapshot(q, snap => {
       const list = snap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
+        .map(d => ({ ...d.data(), id: d.id }))
         .filter(classItem => classItem.archived !== true)
 
       const visibleClasses = filterClassesByProfile(
@@ -412,6 +437,8 @@ export default function CreateListening() {
   useEffect(() => {
     const loadListening = async () => {
       if (!isEditMode || !user || !profile) return
+      originalMediaRef.current = null
+      originalDocumentVersionRef.current = null
 
       try {
         const snap = await getDoc(doc(db, 'listenings', id))
@@ -423,6 +450,12 @@ export default function CreateListening() {
         }
 
         const data = snap.data()
+        // Web Firestore DocumentSnapshot does not expose updateTime.
+        // The server issues a new revision on every secure Listening save.
+        originalDocumentVersionRef.current = {
+          revision: data.listeningWriteRevision || null,
+          updatedAt: listeningUpdatedAtVersion(data.updatedAt)
+        }
 
         if (
           !isAdminProfile(profile) &&
@@ -444,6 +477,7 @@ export default function CreateListening() {
         setAudioUrl(data.audioUrl || '')
         setAudioFileName(data.audioFileName || data.audioName || '')
         setAudioStoragePath(data.audioStoragePath || '')
+        setAudioLocalPreviewUrl('')
         setInstructions(data.instructions || '')
         setDueDate(data.dueDate || '')
         setTimeLimit(data.timeLimit || 30)
@@ -461,6 +495,12 @@ export default function CreateListening() {
         setAssignmentBaseline(canonicalStudentIds)
 
         const loadedParts = normalizeParts(data)
+        originalMediaRef.current = JSON.parse(JSON.stringify({
+          createdBy: data.createdBy || data.teacherId || '',
+          audioUrl: data.audioUrl || '',
+          audioStoragePath: data.audioStoragePath || '',
+          parts: loadedParts
+        }))
         setParts(loadedParts)
         setActivePartId(loadedParts[0]?.id || null)
       } catch (error) {
@@ -887,6 +927,13 @@ export default function CreateListening() {
       return
     }
 
+    if (isEditMode && (!originalMediaRef.current ||
+        originalMediaRef.current.createdBy !== user.uid)) {
+      alert('Only the original Listening owner can replace media. You can still edit other details.')
+      event.target.value = ''
+      return
+    }
+
     if (!isAcceptedAudioFile(file)) {
       alert('Please upload an audio file. Supported formats: MP3, M4A, WAV, AAC.')
       event.target.value = ''
@@ -911,7 +958,9 @@ export default function CreateListening() {
       customMetadata: {
         createdBy: user.uid,
         schoolId: getProfileSchoolId(profile),
-        originalName: file.name
+        originalName: file.name,
+        listeningId: mediaListeningId,
+        privateMediaV1: 'pending_private_v1'
       }
     })
 
@@ -933,15 +982,27 @@ export default function CreateListening() {
       },
       async () => {
         try {
-          const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref)
-
-          setAudioUrl(downloadUrl)
+          const confirmation = await finalizePrivateListeningUploadCall({
+            asset: 'audio', path: storagePath, listeningId: mediaListeningId
+          })
+          if (confirmation.data?.ok !== true ||
+              confirmation.data.asset !== 'audio' ||
+              confirmation.data.listeningId !== mediaListeningId ||
+              typeof confirmation.data.storagePath !== 'string' ||
+              !confirmation.data.storagePath.startsWith(
+                `private-listening-media/${user.uid}/${mediaListeningId}/audio/`)) {
+            throw new Error('Private audio upload was not confirmed.')
+          }
+          const preview = URL.createObjectURL(file)
+          localPreviewUrlsRef.current.add(preview)
+          setAudioLocalPreviewUrl(preview)
+          setAudioUrl('')
           setAudioFileName(file.name)
-          setAudioStoragePath(storagePath)
+          setAudioStoragePath(confirmation.data.storagePath)
           setAudioUploadProgress(100)
         } catch (error) {
-          console.error('Could not get audio URL:', error)
-          alert('Audio uploaded, but the download URL could not be created.')
+          console.error('Private audio finalization failed:', error)
+          alert('Audio upload could not be securely finalized. Please upload it again.')
         } finally {
           setAudioUploading(false)
           event.target.value = ''
@@ -956,6 +1017,13 @@ export default function CreateListening() {
 
     if (!user) {
       alert('User session expired. Please log in again.')
+      event.target.value = ''
+      return
+    }
+
+    if (isEditMode && (!originalMediaRef.current ||
+        originalMediaRef.current.createdBy !== user.uid)) {
+      alert('Only the original Listening owner can replace media. You can still edit other details.')
       event.target.value = ''
       return
     }
@@ -990,7 +1058,9 @@ export default function CreateListening() {
         createdBy: user.uid,
         schoolId: getProfileSchoolId(profile),
         originalName: file.name,
-        module: 'listening-map'
+        module: 'listening-map',
+        listeningId: mediaListeningId,
+        privateMediaV1: 'pending_private_v1'
       }
     })
 
@@ -1025,7 +1095,19 @@ export default function CreateListening() {
       },
       async () => {
         try {
-          const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref)
+          const confirmation = await finalizePrivateListeningUploadCall({
+            asset: 'map', path: storagePath, listeningId: mediaListeningId
+          })
+          if (confirmation.data?.ok !== true ||
+              confirmation.data.asset !== 'map' ||
+              confirmation.data.listeningId !== mediaListeningId ||
+              typeof confirmation.data.storagePath !== 'string' ||
+              !confirmation.data.storagePath.startsWith(
+                `private-listening-media/${user.uid}/${mediaListeningId}/map/`)) {
+            throw new Error('Private map upload was not confirmed.')
+          }
+          const localPreview = URL.createObjectURL(file)
+          localPreviewUrlsRef.current.add(localPreview)
 
           setQuestions(prev =>
             prev.map(question => {
@@ -1033,9 +1115,9 @@ export default function CreateListening() {
 
               return {
                 ...question,
-                mapImage: downloadUrl,
+                mapImage: localPreview,
                 mapImageFileName: file.name,
-                mapImageStoragePath: storagePath
+                mapImageStoragePath: confirmation.data.storagePath
               }
             })
           )
@@ -1048,8 +1130,8 @@ export default function CreateListening() {
             }
           }))
         } catch (error) {
-          console.error('Could not get map image URL:', error)
-          alert('Map image uploaded, but the download URL could not be created.')
+          console.error('Private map finalization failed:', error)
+          alert('Map upload could not be securely finalized. Please upload it again.')
 
           setMapImageUploads(prev => ({
             ...prev,
@@ -1904,8 +1986,8 @@ export default function CreateListening() {
       }
 
       if (question.type === 'map') {
-        if (!question.mapImage?.trim()) {
-          alert('Map labeling needs a map image. Upload an image or paste a map image URL.')
+        if (!question.mapImage?.trim() && !question.mapImageStoragePath) {
+          alert('Map labeling needs a map image. Upload a private map image or keep an existing legacy image.')
           return false
         }
 
@@ -1941,8 +2023,23 @@ export default function CreateListening() {
       return
     }
 
-    if (!audioUrl.trim()) {
-      alert('Please upload an audio file or add an audio URL.')
+    if (!audioStoragePath && !audioUrl.trim()) {
+      alert('Please upload a private audio file or select existing audio.')
+      return
+    }
+    if (!isEditMode && !audioStoragePath.startsWith(
+      `private-listening-media/${user.uid}/${draftListeningId}/audio/`)) {
+      alert('New Listening content requires a finalized private audio upload.')
+      return
+    }
+    if (audioUploading || Object.values(mapImageUploads).some(item => item?.uploading)) {
+      alert('Please finish all media uploads before saving.')
+      return
+    }
+    if (!isEditMode && parts.some(part => (part.questions || []).some(question =>
+      question.type === 'map' && !question.mapImageStoragePath?.startsWith(
+        `private-listening-media/${user.uid}/${draftListeningId}/map/`)))) {
+      alert('New Listening maps require finalized private image uploads.')
       return
     }
 
@@ -1959,7 +2056,12 @@ export default function CreateListening() {
       ...part,
       title: part.title?.trim() || 'Part',
       instructions: part.instructions || '',
-      questions: part.questions || []
+      // Blob URLs are browser-session previews, never persistent Firestore data.
+      questions: (part.questions || []).map(question => ({
+        ...question,
+        mapImage: typeof question.mapImage === 'string' && question.mapImage.startsWith('blob:')
+          ? '' : (question.mapImage || '')
+      }))
     }))
 
     const payload = {
@@ -1986,21 +2088,49 @@ export default function CreateListening() {
       updatedAt: new Date().toISOString()
     }
 
+    // UI validation is defense in depth. Direct Firestore API writes must also
+    // pass the deployed server-side rules/validator before this becomes GO.
+    try {
+      assertListeningMediaSaveSafe({
+        original: isEditMode ? originalMediaRef.current : null,
+        next: payload,
+        actorId: user?.uid || '',
+        listeningId: mediaListeningId,
+        isEditMode
+      })
+    } catch (mediaError) {
+      alert(mediaError.message)
+      setSaving(false)
+      return
+    }
+
     try {
       let savedListeningId = id
 
-      if (isEditMode) {
-        await updateDoc(doc(db, 'listenings', id), payload)
-      } else {
-        const createdListening = await addDoc(collection(db, 'listenings'), {
-          ...payload,
-          createdBy: user.uid,
-          teacherId: profile?.role === 'teacher' ? user.uid : '',
-          teacherIds: profile?.role === 'teacher' ? [user.uid] : [],
-          createdAt: new Date().toISOString(),
-          archived: false
-        })
-        savedListeningId = createdListening.id
+      // Server validates every nested map and audio transition against the
+      // LIVE document, manager identity, and IAM-only private vault. A stale
+      // editor is blocked instead of overwriting a newer Listening record.
+      const saved = await savePrivateListeningContentCall({
+        listeningId: isEditMode ? id : draftListeningId,
+        isEditMode,
+        expectedVersion: isEditMode ? originalDocumentVersionRef.current : null,
+        content: payload
+      })
+      if (saved.data?.ok !== true ||
+          saved.data.listeningId !== (isEditMode ? id : draftListeningId)) {
+        throw new Error('Secure Listening save was not confirmed.')
+      }
+      if (!isEditMode) savedListeningId = draftListeningId
+      // A completed content save must advance the local version even if
+      // subsequent student assignment synchronization fails and is retried.
+      if (saved.data?.version?.revision &&
+          typeof saved.data.version.updatedAt === 'string') {
+        originalDocumentVersionRef.current = saved.data.version
+      }
+      originalMediaRef.current = {
+        ...(originalMediaRef.current || {}),
+        ...structuredClone(payload),
+        createdBy: originalMediaRef.current?.createdBy || user.uid
       }
 
       try {
@@ -2159,29 +2289,25 @@ export default function CreateListening() {
 
               <div className="mb-4">
                 <label className="text-xs text-gray-400 mb-1 block">
-                  Audio URL / optional manual link
+                  Legacy audio URL (read-only)
                 </label>
 
                 <input
                   value={audioUrl}
-                  onChange={e => {
-                    setAudioUrl(e.target.value)
-                    setAudioFileName('')
-                    setAudioStoragePath('')
-                  }}
-                  placeholder="Paste a direct MP3/M4A URL or upload a file above"
+                  disabled
+                  placeholder="Old URL is retained; use private upload to replace"
                   className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400"
                 />
 
                 <p className="text-xs text-gray-400 mt-2">
-                  Uploaded files automatically fill this field. You can still paste a browser-playable audio URL manually.
+                  Old links remain unchanged for compatibility. External links cannot be added or edited; upload a private audio file to replace one.
                 </p>
               </div>
 
-              {audioUrl && (
+              {(audioLocalPreviewUrl || audioUrl) && (
                 <div className="bg-gray-50 border border-gray-100 rounded-xl p-4 mb-4">
                   <p className="text-xs text-gray-400 mb-2">Audio preview</p>
-                  <audio controls src={audioUrl} className="w-full" />
+                  <audio controls src={audioLocalPreviewUrl || audioUrl} className="w-full" />
                 </div>
               )}
 
@@ -3035,7 +3161,7 @@ export default function CreateListening() {
                           />
 
                           <p className="text-xs text-gray-400 mt-2">
-                            Upload JPG, PNG or WEBP. Maximum file size: 8 MB. The uploaded image URL will be saved automatically.
+                            Upload JPG, PNG or WEBP (up to 8 MB). Private file paths are saved; public URLs are not generated.
                           </p>
 
                           {mapImageUploads[question.id]?.uploading && (
@@ -3062,22 +3188,18 @@ export default function CreateListening() {
 
                           <div className="mt-4">
                             <label className="text-xs text-gray-400 mb-1 block">
-                              Map image URL / optional manual link
+                              Legacy map URL (read-only)
                             </label>
 
                             <input
                               value={question.mapImage || ''}
-                              onChange={e => {
-                                updateQuestion(question.id, 'mapImage', e.target.value)
-                                updateQuestion(question.id, 'mapImageFileName', '')
-                                updateQuestion(question.id, 'mapImageStoragePath', '')
-                              }}
-                              placeholder="https://.../map-image.png or upload an image above"
+                              disabled
+                              placeholder="Old URL is retained; upload a private map to replace"
                               className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-purple-400 bg-white"
                             />
 
                             <p className="text-xs text-gray-400 mt-2">
-                              Uploaded files automatically fill this field. You can still paste a browser-viewable image URL manually.
+                              Old map URLs are preserved only for existing questions. New or replaced maps require a private upload.
                             </p>
                           </div>
                         </div>

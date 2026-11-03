@@ -1,11 +1,17 @@
 import { useEffect, useState } from 'react'
 import { httpsCallable } from 'firebase/functions'
 import { functions } from '../firebase'
+import { formatHomeworkScore } from '../services/ieltsObjectiveScoring'
 
 const getArchive = httpsCallable(functions, 'getMyUnassignedArchive')
 
 function resultLabel(item) {
   const result = item?.result || {}
+  // Normal objective homework and Vocabulary are accuracy-based, not an IELTS
+  // Band. Preserve the separate legacy presentation for Mock and Writing.
+  if (['reading', 'listening', 'vocabulary'].includes(item?.contentType)) {
+    return formatHomeworkScore(result)
+  }
   const band = result.finalOverall ?? result.reviewedOverall ?? result.overall ??
     result.band ?? result.estimatedBand ?? null
   if (typeof band === 'number' && Number.isFinite(band)) return `Band ${band.toFixed(1)}`

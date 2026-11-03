@@ -14,8 +14,8 @@ function createAiWritingSponsoredRecoveryService({ db, FieldValue, now = () => D
     throw new Error('Sponsored recovery dependencies are missing.')
   }
 
-  async function reconcileJob({ jobId, expectedStudentId = null } = {}) {
-    if (typeof jobId !== 'string' || !HASH.test(jobId) ||
+  async function reconcileJob({ jobId, expectedStudentId = null, actorId = null } = {}) {
+    if ((actorId !== null && (typeof actorId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(actorId))) || typeof jobId !== 'string' || !HASH.test(jobId) ||
         (expectedStudentId !== null &&
           (typeof expectedStudentId !== 'string' || !expectedStudentId))) {
       return { status: 'ineligible' }
@@ -58,6 +58,7 @@ function createAiWritingSponsoredRecoveryService({ db, FieldValue, now = () => D
       }
       tx.update(jobRef, {
         status: 'failed', leaseUntilMs: 0,
+        ...(actorId ? { repairedBy: actorId } : {}),
         lastFailureCode: 'sponsored_lease_expired',
         repairedAt: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp()

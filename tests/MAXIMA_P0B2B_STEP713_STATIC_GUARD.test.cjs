@@ -7,8 +7,8 @@ const hash=p=>crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex
 const ui=fs.readFileSync('src/pages/TeacherDashboard.jsx','utf8')
 const rules=fs.readFileSync('firestore.rules','utf8')
 test('reviewed source Rules and canonical Dashboard hashes match',()=>{
-  assert.equal(hash('firestore.rules'),'9f862f5cd3042336e78821bad4755c871466a425fe0c4a5099b5c86db9bfadc3')
-  assert.equal(hash('src/pages/TeacherDashboard.jsx'),'d4a869f4a2a0c99775ccd7ae7959d97790b8e8d3447ecbd6f99f1b880e1f0274')
+  assert.equal(hash('firestore.rules'),'fbd5ff8ec4b01df03a265e815f4a74ee4550144ac6b96d49a8040456718d0596')
+  assert.equal(hash('src/pages/TeacherDashboard.jsx'),'55c2758df4a2bf69df10099e63b36886cf07fed87b5dc9216c8983f090dd96f0')
 })
 test('Dashboard uses paired uid+studentId queries and index-only teacher student profiles',()=>{
   const q=ui.slice(ui.indexOf('function buildCanonicalAcademicQuery('),ui.indexOf('function validCanonicalTeacherIndex('))

@@ -132,46 +132,84 @@ function getBandFromPercentage(correct, total) {
 }
 
 function getReadingBand(correct, total) {
-  if (total === 40) {
-    if (correct >= 39) return 9
-    if (correct >= 37) return 8.5
-    if (correct >= 35) return 8
-    if (correct >= 33) return 7.5
-    if (correct >= 30) return 7
-    if (correct >= 27) return 6.5
-    if (correct >= 23) return 6
-    if (correct >= 19) return 5.5
-    if (correct >= 15) return 5
-    if (correct >= 13) return 4.5
-    if (correct >= 10) return 4
-    return 3.5
-  }
-
-  return getBandFromPercentage(correct, total)
+  if (!Number.isFinite(correct) || !Number.isFinite(total) || total <= 0) return 0
+  // Short tests use a 40-question equivalent: estimated IELTS band.
+  const raw = Math.max(0, Math.min(40, Math.round(correct * 40 / total)))
+  if (raw >= 39) return 9
+  if (raw >= 37) return 8.5
+  if (raw >= 35) return 8
+  if (raw >= 33) return 7.5
+  if (raw >= 30) return 7
+  if (raw >= 27) return 6.5
+  if (raw >= 23) return 6
+  if (raw >= 19) return 5.5
+  if (raw >= 15) return 5
+  if (raw >= 13) return 4.5
+  if (raw >= 10) return 4
+  if (raw >= 8) return 3.5
+  if (raw >= 6) return 3
+  if (raw >= 4) return 2.5
+  if (raw >= 2) return 2
+  return 1
 }
 
 function getListeningBand(correct, total) {
-  if (total === 40) {
-    if (correct >= 39) return 9
-    if (correct >= 37) return 8.5
-    if (correct >= 35) return 8
-    if (correct >= 32) return 7.5
-    if (correct >= 30) return 7
-    if (correct >= 26) return 6.5
-    if (correct >= 23) return 6
-    if (correct >= 18) return 5.5
-    if (correct >= 16) return 5
-    if (correct >= 13) return 4.5
-    if (correct >= 10) return 4
-    return 3.5
-  }
-
-  return getBandFromPercentage(correct, total)
+  if (!Number.isFinite(correct) || !Number.isFinite(total) || total <= 0) return 0
+  // Short tests use a 40-question equivalent: estimated IELTS band.
+  const raw = Math.max(0, Math.min(40, Math.round(correct * 40 / total)))
+  if (raw >= 39) return 9
+  if (raw >= 37) return 8.5
+  if (raw >= 35) return 8
+  if (raw >= 32) return 7.5
+  if (raw >= 30) return 7
+  if (raw >= 26) return 6.5
+  if (raw >= 23) return 6
+  if (raw >= 18) return 5.5
+  if (raw >= 16) return 5
+  if (raw >= 13) return 4.5
+  if (raw >= 11) return 4
+  if (raw >= 8) return 3.5
+  if (raw >= 6) return 3
+  if (raw >= 4) return 2.5
+  if (raw >= 2) return 2
+  return 1
 }
 
+// Historical helper kept for deferred callers; the institutional endpoint
+// explicitly requests percentage-only Vocabulary output.
 function getVocabularyBand(correct, total) {
   if (!total) return 0
   return getBandFromPercentage(correct, total)
+}
+
+// Award one mark per correct answer only when the submitted set has no more
+// choices than the expected set. Repeated/extra choices cannot boost a score.
+function scoreMultipleAnswers(selectedAnswers, correctAnswers) {
+  const expected = Array.isArray(correctAnswers)
+    ? [...new Set(correctAnswers.map(v => v?.toString().trim()).filter(Boolean))]
+    : []
+  const selectedRaw = Array.isArray(selectedAnswers)
+    ? selectedAnswers.map(v => v?.toString().trim()).filter(Boolean)
+    : []
+  const selected = [...new Set(selectedRaw)]
+  const total = expected.length || 2
+  if (selected.length !== selectedRaw.length || selected.length > total) {
+    return { correct: 0, total }
+  }
+  return { correct: selected.filter(v => expected.includes(v)).length, total }
+}
+
+// Keep the existing selection behavior for deferred callers; do not change
+// Self-Study behavior as part of the institutional objective scoring project.
+function scoreMultipleAnswersLegacy(selectedAnswers, correctAnswers) {
+  const selected = Array.isArray(selectedAnswers)
+    ? Array.from(new Set(selectedAnswers.map(item => item?.toString()).filter(Boolean)))
+    : []
+  const expected = Array.isArray(correctAnswers)
+    ? correctAnswers.map(item => item?.toString()).filter(Boolean)
+    : []
+  return { correct: selected.filter(item => expected.includes(item)).length,
+    total: expected.length || 2 }
 }
 
 function addBreakdown(breakdown, type, correct, total) {
@@ -335,6 +373,10 @@ function sanitizeListeningQuestion(question) {
 
 function sanitizeListening(source) {
   const publicData = deepClone(source || {})
+  // Duplicate retry/provenance data is server-internal. Student projection
+  // should contain the exercise, not a link to unassigned source content.
+  delete publicData.duplicateSourceId
+  delete publicData.duplicateRequestFingerprint
 
   if (Array.isArray(publicData.parts)) {
     publicData.parts = publicData.parts.map(part => ({
@@ -424,7 +466,7 @@ function sanitizeVocabulary(source) {
   return publicData
 }
 
-function gradeReading(source, answers = {}) {
+function gradeReading(source, answers = {}, options = {}) {
   let correct = 0
   let total = 0
   const breakdown = {}
@@ -524,16 +566,9 @@ function gradeReading(source, answers = {}) {
     }
 
     if (type === 'mcq' && question.mode === 'multi') {
-      const selected = Array.isArray(answers[question.id])
-        ? Array.from(new Set(
-            answers[question.id].map(item => item?.toString()).filter(Boolean)
-          ))
-        : []
-      const expected = Array.isArray(question.answers)
-        ? question.answers.map(item => item?.toString()).filter(Boolean)
-        : []
-      const localCorrect = selected.filter(item => expected.includes(item)).length
-      const localTotal = expected.length || 2
+      const { correct: localCorrect, total: localTotal } = (
+        options.institutionalScoring === true ? scoreMultipleAnswers : scoreMultipleAnswersLegacy
+      )(answers[question.id], question.answers)
       correct += localCorrect
       total += localTotal
       addBreakdown(breakdown, 'mcq_multi', localCorrect, localTotal)
@@ -673,16 +708,9 @@ function gradeListening(source, answers = {}, options = {}) {
       }
 
       if (type === 'mcq' && question.mode === 'multi') {
-        const selected = Array.isArray(answers[question.id])
-          ? Array.from(new Set(
-              answers[question.id].map(item => item?.toString()).filter(Boolean)
-            ))
-          : []
-        const expected = Array.isArray(question.answers)
-          ? question.answers.map(item => item?.toString()).filter(Boolean)
-          : []
-        const localCorrect = selected.filter(item => expected.includes(item)).length
-        const localTotal = expected.length || 2
+        const { correct: localCorrect, total: localTotal } = (
+          options.institutionalScoring === true ? scoreMultipleAnswers : scoreMultipleAnswersLegacy
+        )(answers[question.id], question.answers)
         correct += localCorrect
         total += localTotal
         addBreakdown(breakdown, 'mcq_multi', localCorrect, localTotal)
@@ -707,7 +735,7 @@ function gradeListening(source, answers = {}, options = {}) {
   }
 }
 
-function gradeVocabulary(source, answers = {}) {
+function gradeVocabulary(source, answers = {}, options = {}) {
   const questions = Array.isArray(source?.questions) ? source.questions : []
   const matchingOrder = buildVocabularyMatchingOrder(source)
   let correct = 0
@@ -750,7 +778,7 @@ function gradeVocabulary(source, answers = {}) {
     correct,
     total,
     percentage,
-    band: getVocabularyBand(correct, total),
+    band: options.institutionalScoring === true ? null : getVocabularyBand(correct, total),
     gradingBreakdown: breakdown,
     gradingSchemaVersion: 1
   }
@@ -834,7 +862,7 @@ function gradeMock(mock, listeningSources, readingSources, writingSource, payloa
     enabled: enabledSections.listening,
     correct: 0,
     total: 0,
-    band: enabledSections.listening ? 4 : null,
+    band: enabledSections.listening ? 0 : null,
     gradingBreakdown: {},
     gradingSchemaVersion: 1
   }
@@ -843,9 +871,7 @@ function gradeMock(mock, listeningSources, readingSources, writingSource, payloa
     const aggregate = { correct: 0, total: 0, gradingBreakdown: {} }
     for (const source of listeningSources || []) {
       const namespaced = namespaceListeningForMock(source)
-      const result = gradeListening(namespaced, listeningAnswers, {
-        useBasicNormalization: true
-      })
+      const result = gradeListening(namespaced, listeningAnswers, { institutionalScoring: true })
       aggregate.correct += result.correct
       aggregate.total += result.total
       mergeBreakdowns(aggregate.gradingBreakdown, result.gradingBreakdown)
@@ -867,7 +893,7 @@ function gradeMock(mock, listeningSources, readingSources, writingSource, payloa
 
   if (enabledSections.reading) {
     for (const reading of readingSources || []) {
-      const result = gradeReading(reading, readingAnswers?.[reading.id] || {})
+      const result = gradeReading(reading, readingAnswers?.[reading.id] || {}, { institutionalScoring: true })
       readingPassages.push({
         readingId: reading.id,
         title: reading.title || '',
@@ -893,7 +919,7 @@ function gradeMock(mock, listeningSources, readingSources, writingSource, payloa
   const availableBands = [
     enabledSections.listening ? listeningResult.band : null,
     enabledSections.reading ? readingBand : null
-  ].filter(value => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value)))
+  ].filter(value => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value)) && Number(value) > 0)
 
   const overallEstimate = availableBands.length
     ? Math.round((availableBands.reduce((sum, band) => sum + Number(band), 0) / availableBands.length) * 2) / 2

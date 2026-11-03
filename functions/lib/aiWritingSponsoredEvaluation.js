@@ -23,6 +23,17 @@ const integer = value => Number.isSafeInteger(value) && value >= 0 ? value : nul
 const active = value => value && value.deleted !== true && value.archived !== true &&
   value.permanentDeleteInProgress !== true
 
+// A sponsored charge must agree with the canonical academic permission index.
+// Old class writers or a partial backfill must never authorize a paid request
+// from a legacy class list alone. A missing index fails closed.
+function currentTeacherIndexAllowsStudent(index, teacherId, studentId, schoolId) {
+  return index?.schemaVersion === 1 &&
+    index.source === 'managed_active_classes' &&
+    index.schoolId === schoolId &&
+    index.teacherId === teacherId &&
+    Array.isArray(index.activeStudentIds) && index.activeStudentIds.includes(studentId)
+}
+
 function isNewSubmittedAttempt(context, before, after) {
   if (!SOURCE_CONFIG[context] || !after || typeof after !== 'object') return false
   if (typeof after.submittedAt !== 'string' || !Number.isFinite(Date.parse(after.submittedAt)) ||
@@ -30,6 +41,12 @@ function isNewSubmittedAttempt(context, before, after) {
       (context === 'mock' && after.status !== 'submitted')) return false
   if (!before) return true
   // A teacher changing grades/review or metadata MUST NOT start a paid call.
+  // A changed learner, institution or content reference is NOT a new attempt:
+  // fail closed before touching policy state, budget or the AI provider.
+  const immutable = ['uid', 'studentId', 'schoolId', SOURCE_CONFIG[context].sourceField]
+  if (context === 'mock') immutable.push('writingId')
+  if (immutable.some(field => typeof before[field] === 'string' &&
+      before[field] !== '' && before[field] !== after[field])) return false
   // Secure resubmission increments the attempt and supplies a new submittedAt.
   return Number.isSafeInteger(before.attemptNumber) &&
     after.attemptNumber === before.attemptNumber + 1 &&
@@ -184,6 +201,13 @@ function createAiWritingSponsoredEvaluationService({
       if (!teacherOwnsSource(source, updatedBy)) return null
       const classes = await reader.get(teacherClassQuery(db, updatedBy))
       if (!currentTeacherStudents(classes, updatedBy).has(refs.uid)) return null
+      // Require both independently maintained views. A mismatch denies paid AI.
+      const indexSnap = await reader.get(db.doc(
+        `schools/${PILOT_SCHOOL_ID}/teacherAcademicIndex/${updatedBy}`
+      ))
+      if (!currentTeacherIndexAllowsStudent(
+        dataOf(indexSnap), updatedBy, refs.uid, PILOT_SCHOOL_ID
+      )) return null
     }
     return { ...checked, fingerprint: sha(JSON.stringify(checked.prepared)), linkedRef }
   }
@@ -343,5 +367,6 @@ module.exports = {
   isNewSubmittedAttempt,
   submissionSignature,
   policyUpdatedAfterSubmission,
-  MAX_MONTHLY_SCHOOL_EVALUATIONS
+  MAX_MONTHLY_SCHOOL_EVALUATIONS,
+  currentTeacherIndexAllowsStudent
 }

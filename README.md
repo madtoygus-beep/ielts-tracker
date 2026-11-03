@@ -1,16 +1,20 @@
-# React + Vite
+# MAXIMA IELTS Tracker
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Aktif geliştirme klasörü. Uygulama kaynakları 3 Kasım 2026 tarihinde yayımlanan sürümle eşitlenmiştir.
 
-Currently, two official plugins are available:
+Canlı uygulama: https://ielts-tracker-lemon.vercel.app
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+Yerel durum, doğrulama sonuçları ve kalan işler `PROJECT_STATUS.json` dosyasındadır.
+Eski denemeler ve eşitleme öncesi çalışmalar orada belirtilen yedek klasöründe korunur.
 
-## React Compiler
+## Yerel geliştirme
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+Node.js 22 kullanın. `npm run build` üretim derlemesini oluşturur.
+`npm run dev` geliştirme sunucusunu açar. Aktif Firebase ayarı gerçek projeye bağlıdır;
+veri yazan testleri yalnız ayrı, emülatöre bağlı UAT klasöründe çalıştırın.
 
-## Expanding the ESLint configuration
+## Yayın ve test durumu
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+Bu eşitleme yerel bir düzenlemedir; yeni dağıtım veya uzak Git gönderimi yapmaz.
+Uygulama kodu yayımlanan sürümle aynıdır. Bazı eski testler önceki kelime sınırı
+beklentilerini içerir; ayrıntıları `PROJECT_STATUS.json` içinde kayıtlıdır.

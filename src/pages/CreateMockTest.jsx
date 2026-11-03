@@ -13,6 +13,7 @@ import {
 import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { httpsCallable } from 'firebase/functions'
 import { buildP8CAssignmentDelta } from '../services/p8cAssignmentDelta'
+import { subscribeCurrentTeacherAcademicRoster } from '../services/teacherCurrentAcademicRoster'
 import { useNavigate, useParams } from 'react-router-dom'
 import AiWritingSponsoredAssignmentPanel from '../components/AiWritingSponsoredAssignmentPanel'
 import {
@@ -250,7 +251,7 @@ function listenMergedQueries(queryList, onItems, label = 'Firestore query') {
       snapshot => {
         buckets.set(
           index,
-          snapshot.docs.map(item => ({ id: item.id, ...item.data() }))
+          snapshot.docs.map(item => ({ ...item.data(), id: item.id }))
         )
         emit()
       },
@@ -268,13 +269,12 @@ function listenMergedQueries(queryList, onItems, label = 'Firestore query') {
   }
 }
 
-function buildTeacherOwnedQueries(collectionName, teacherId) {
+function buildTeacherOwnedQueries(collectionName, teacherId, schoolId) {
   const source = collection(db, collectionName)
-
   return [
-    query(source, where('teacherIds', 'array-contains', teacherId)),
-    query(source, where('teacherId', '==', teacherId)),
-    query(source, where('createdBy', '==', teacherId))
+    query(source, where('schoolId', '==', schoolId), where('teacherIds', 'array-contains', teacherId)),
+    query(source, where('schoolId', '==', schoolId), where('teacherId', '==', teacherId)),
+    query(source, where('schoolId', '==', schoolId), where('createdBy', '==', teacherId))
   ]
 }
 
@@ -282,7 +282,7 @@ function buildTeacherLibraryQueries(collectionName, teacherId, schoolId) {
   const source = collection(db, collectionName)
 
   return [
-    ...buildTeacherOwnedQueries(collectionName, teacherId),
+    ...buildTeacherOwnedQueries(collectionName, teacherId, schoolId),
     query(
       source,
       where('schoolId', '==', schoolId),
@@ -304,6 +304,7 @@ export default function CreateMockTest() {
   const [user, setUser] = useState(null)
   const [profile, setProfile] = useState(null)
   const [checkingUser, setCheckingUser] = useState(true)
+  const [teacherRosterStatus, setTeacherRosterStatus] = useState('loading')
 
   const [title, setTitle] = useState('')
   const [visibility, setVisibility] = useState('private')
@@ -591,60 +592,34 @@ export default function CreateMockTest() {
       'Mock writing library query'
     )
 
-    const studentQueries = isAdmin
-      ? [
-          query(
-            collection(db, 'users'),
-            where('role', '==', 'student')
-          )
-        ]
-      : [
-          query(
-            collection(db, 'users'),
-            where('teacherIds', 'array-contains', user.uid)
-          )
-        ]
-
-    const unsubStudents = listenMergedQueries(
-      studentQueries,
-      items => {
-        const list = items.filter(student =>
-          student.role === 'student' &&
-          student.status === 'approved' &&
-          student.deleted !== true
+    const unsubStudents = isAdmin
+      ? onSnapshot(
+          query(collection(db, 'users'), where('role', '==', 'student')),
+          snap => {
+            const list = snap.docs.map(d => ({ ...d.data(), id: d.id }))
+              .filter(student => student.role === 'student' &&
+                student.status === 'approved' && student.deleted !== true)
+            const visibleStudents = filterStudentsByProfile(list,profile,user.uid)
+            visibleStudents.sort((a,b) => (a.name || a.email || '').localeCompare(b.name || b.email || ''))
+            setStudents(visibleStudents)
+            setTeacherRosterStatus('ready')
+          }, error => {
+            console.warn('Mock admin student roster unavailable:',error?.code || 'unknown')
+            setStudents([])
+            setTeacherRosterStatus('error')
+          })
+      : subscribeCurrentTeacherAcademicRoster(
+          db, schoolId, user.uid, setStudents, setTeacherRosterStatus
         )
-
-        const visibleStudents = filterStudentsByProfile(
-          list,
-          profile,
-          user.uid
-        )
-
-        visibleStudents.sort((a, b) =>
-          (a.name || a.email || '').localeCompare(b.name || b.email || '')
-        )
-
-        setStudents(visibleStudents)
-      },
-      'Mock student query'
-    )
 
     // Class reads additionally require sameSchool in Firestore rules. A
     // teacher-owned query without schoolId is not safe/authorized for lists.
     const classCollection = collection(db, 'classes')
     const classQueries = isAdmin
       ? [query(classCollection)]
-      : [
-          query(classCollection,
-            where('schoolId', '==', schoolId),
-            where('teacherId', '==', user.uid)),
-          query(classCollection,
-            where('schoolId', '==', schoolId),
-            where('createdBy', '==', user.uid)),
-          query(classCollection,
-            where('schoolId', '==', schoolId),
-            where('teacherIds', 'array-contains', user.uid))
-        ]
+      : [query(classCollection,
+          where('schoolId', '==', schoolId),
+          where('teacherId', '==', user.uid))]
 
     const unsubClasses = listenMergedQueries(
       classQueries,

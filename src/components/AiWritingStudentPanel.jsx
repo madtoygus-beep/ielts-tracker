@@ -1,3 +1,4 @@
+import PartialWritingNotice from './PartialWritingNotice'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { httpsCallable } from 'firebase/functions'
 import { functions } from '../firebase'
@@ -15,6 +16,53 @@ import {
 const getMyAiWritingAccessCall = httpsCallable(functions, 'getMyAiWritingAccess')
 const getMyAiWritingReportCall = httpsCallable(functions, 'getMyAiWritingReport')
 const evaluateMyAiWritingCall = httpsCallable(functions, 'evaluateMyAiWriting', { timeout: 180000 })
+
+// Illustrative waiting animation, not a measured OpenAI completion percentage.
+// No polling, model calls, credit use or server state changes occur here.
+function AiWritingWaitingProgress() {
+  return (
+    <div className="mt-5 text-left" aria-label="AI Writing assessment progress">
+      <style>{`
+        @keyframes maximaAiWritingProgressFill {
+          0% { transform: scaleX(0.08); }
+          22% { transform: scaleX(0.26); }
+          50% { transform: scaleX(0.57); }
+          78% { transform: scaleX(0.83); }
+          100% { transform: scaleX(1); }
+        }
+        @keyframes maximaAiWritingProgressShine {
+          0% { transform: translateX(-120%); opacity: 0.15; }
+          50% { opacity: 0.65; }
+          100% { transform: translateX(400%); opacity: 0.15; }
+        }
+        .maxima-ai-writing-progress-fill {
+          width: 88%;
+          transform-origin: left center;
+          animation: maximaAiWritingProgressFill 16s ease-out both;
+        }
+        .maxima-ai-writing-progress-shine {
+          animation: maximaAiWritingProgressShine 2.5s ease-in-out infinite;
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .maxima-ai-writing-progress-fill { animation: none; transform: none; }
+          .maxima-ai-writing-progress-shine { animation: none; opacity: 0; }
+        }
+      `}</style>
+      <div className="flex items-center justify-between gap-3 text-xs">
+        <span className="font-semibold text-indigo-800">Preparing your IELTS feedback</span>
+        <span className="text-gray-500">In progress</span>
+      </div>
+      <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-indigo-100" aria-hidden="true">
+        <div className="maxima-ai-writing-progress-fill relative h-full overflow-hidden rounded-full bg-gradient-to-r from-indigo-600 via-violet-600 to-fuchsia-500">
+          <span className="maxima-ai-writing-progress-shine absolute inset-y-0 left-0 w-1/3 bg-white/40" />
+        </div>
+      </div>
+      <p className="mt-2 text-xs text-gray-500">
+        This animation shows waiting time, not the AI model's exact completion percentage.
+      </p>
+    </div>
+  )
+}
 
 function TaskAiReport({ taskNumber, report }) {
   if (!report) return null
@@ -125,6 +173,8 @@ export default function AiWritingStudentPanel({ contentId, attemptNumber, contex
   const [access, setAccess] = useState(null)
   const [envelope, setEnvelope] = useState({ status: 'not_started' })
   const [loading, setLoading] = useState(true)
+  const [waitLimitReached, setWaitLimitReached] = useState(false)
+  const pollingBusyRef = useRef(false)
   const [requesting, setRequesting] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
   const requestSerial = useRef(0)
@@ -171,20 +221,35 @@ export default function AiWritingStudentPanel({ contentId, attemptNumber, contex
   }, [refresh])
 
   useEffect(() => {
-    if (envelope.status !== 'processing' &&
-        !(envelope.institutionFunded === true && envelope.status === 'not_started') &&
-        !(submittedChoice === 'ai' && envelope.status === 'not_started')) return undefined
+    const waitingForAi = envelope.status === 'processing' ||
+      (envelope.institutionFunded === true && envelope.status === 'not_started') ||
+      (submittedChoice === 'ai' && envelope.status === 'not_started')
+    if (!waitingForAi || waitLimitReached) return undefined
+
     const timer = setInterval(() => {
-      if (!requesting) refresh({ quiet: true })
-    }, 8000)
+      if (loading || requesting || pollingBusyRef.current) return
+      pollingBusyRef.current = true
+      Promise.resolve(refresh({ quiet: true }))
+        .catch(() => {})
+        .finally(() => { pollingBusyRef.current = false })
+    }, 3000)
+
     return () => clearInterval(timer)
-  }, [envelope.status, envelope.institutionFunded, requesting, refresh, submittedChoice])
+  }, [envelope.status, submittedChoice, waitLimitReached, loading, requesting, refresh])
+
+  // The waiting limit concerns display/polling only; it never cancels the
+  // server-side AI job and never initiates another paid evaluation.
+  useEffect(() => {
+    if (submittedChoice !== 'ai') return undefined
+    const timer = setTimeout(() => setWaitLimitReached(true), 90000)
+    return () => clearTimeout(timer)
+  }, [submittedChoice])
 
   const startEvaluation = async () => {
     if (requestingRef.current || !personalCreditSelected ||
         !canRequestAiWriting(access, envelope, requesting || loading)) return
     const confirmed = window.confirm(
-      'Check this submitted Writing attempt with AI? One personal AI credit is used only if a new result is saved. A completed report is reused without extra credit. Task 1 needs 50+ words and Task 2 needs 100+ words for feedback; bands require 150/250 words.'
+      'Check this submitted Writing attempt with AI? One personal AI credit is used only if a new result is saved. A completed report is reused without extra credit. AI assessment is available from 21 words in either task; IELTS recommended lengths remain 150/250 words.'
     )
     if (!confirmed) return
     // An immediate ref lock prevents a second click before React re-renders.
@@ -213,7 +278,7 @@ export default function AiWritingStudentPanel({ contentId, attemptNumber, contex
     }
   }
 
-  if (loading && !access && envelope.status !== 'completed') return null
+  if (loading && !access && envelope.status !== 'completed' && submittedChoice !== 'ai') return null
   if (!shouldShowAiWritingPanel(access, envelope) && submittedChoice !== 'ai') return null
   // A teacher-submitted Writing with no saved AI result is not an invitation
   // to buy a later AI check; the decision belongs in the original submit UI.
@@ -240,7 +305,7 @@ export default function AiWritingStudentPanel({ contentId, attemptNumber, contex
           <p className="text-xs text-gray-600 mt-1">AI estimates for IELTS preparation - not official IELTS scores.</p>
         </div>
         <div className="rounded-full px-3 py-1 text-xs bg-white border border-indigo-100 text-indigo-700 font-semibold">
-          {envelope.institutionFunded ? 'Included by your institution' :
+          {(envelope.institutionFunded || submittedBillingMode === 'institution') ? 'Included by your institution' :
             access ? `${access.creditsRemaining} AI ${access.creditsRemaining === 1 ? 'credit' : 'credits'} remaining` : 'AI report'}
         </div>
       </div>
@@ -277,6 +342,7 @@ export default function AiWritingStudentPanel({ contentId, attemptNumber, contex
             </p>
           )}
           <div className="space-y-4">
+            <PartialWritingNotice report={report} />
             <TaskAiReport taskNumber={1} report={report.task1} />
             <TaskAiReport taskNumber={2} report={report.task2} />
             {shortTasks.map(task => <p key={task.label} role="status" className="text-sm text-amber-900 bg-amber-50 p-3 rounded-lg">
@@ -291,9 +357,42 @@ export default function AiWritingStudentPanel({ contentId, attemptNumber, contex
         </>
       ) : (
         <div className="bg-white rounded-xl border border-gray-100 p-4">
-          {envelope.status === 'too_short' ? (
+          {submittedChoice === 'ai' &&
+                (envelope.status === 'not_started' || envelope.status === 'processing') ? (
+              <div role="status" aria-live="polite" className="rounded-xl border border-indigo-100 bg-indigo-50 p-4 sm:p-5">
+                {!waitLimitReached ? (
+                  <>
+                    <div className="flex items-center gap-4">
+                      <span aria-hidden="true"
+                        className="h-9 w-9 shrink-0 animate-spin motion-reduce:animate-none rounded-full border-4 border-indigo-100 border-t-indigo-600" />
+                      <div>
+                        <h4 className="text-base font-bold text-gray-900">AI is evaluating your Writing</h4>
+                        <p className="mt-1 text-sm text-gray-600">Your answers are saved. Your IELTS feedback is being prepared.</p>
+                      </div>
+                    </div>
+                    <AiWritingWaitingProgress />
+                    <div className="mt-5 space-y-3 rounded-lg bg-white p-4 text-sm">
+                      <p className="font-medium text-emerald-700">Writing submitted successfully</p>
+                      <p className="font-medium text-indigo-700">Checking AI assessment status...</p>
+                      <p className="text-gray-500">Preparing band scores and corrections</p>
+                    </div>
+                    <p className="mt-4 text-xs text-gray-500">
+                      This usually takes a few moments. You can leave this page safely.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <h4 className="font-semibold text-gray-900">AI assessment is taking longer than expected</h4>
+                    <p className="mt-2 text-sm text-gray-600">
+                      Your Writing is saved. You can return to the dashboard and check the result later,
+                      or use Refresh AI status below.
+                    </p>
+                  </>
+                )}
+              </div>
+            ) : envelope.status === 'too_short' ? (
             <p role="status" className="text-sm text-amber-900">
-              Your Writing answer is below the AI feedback minimum (Task 1: 50 words; Task 2: 100 words).
+              Your Writing answer is below the AI model minimum (21 words in either task).
               No AI model was called, and no student credit or institution quota was used.
               Your exam submission remains complete and your teacher can review it.
             </p>
@@ -313,7 +412,7 @@ export default function AiWritingStudentPanel({ contentId, attemptNumber, contex
                 {envelope.status === 'unavailable' || envelope.status === 'stale_attempt'
                   ? 'The AI report service cannot confirm this attempt right now. Refresh the report before requesting another evaluation.'
                   : access?.creditsRemaining > 0
-                    ? 'AI feedback needs at least 50 words in Task 1 or 100 in Task 2. A band estimate requires 150 / 250 words respectively. Very short answers cannot use an AI credit.'
+                    ? 'AI assessment needs at least 21 words in either task. Scores are evidence-based even below the recommended 150 / 250 words. Answers of 20 words or fewer do not call the paid model.'
                     : 'You have no AI credits left. Contact your school administrator if you need additional evaluations.'}
               </p>
               {personalCreditSelected && envelope.canRetry === true && access?.canEvaluate === true ? (

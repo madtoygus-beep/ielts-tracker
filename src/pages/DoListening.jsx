@@ -5,6 +5,8 @@ import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { httpsCallable } from 'firebase/functions'
 import { useNavigate, useParams } from 'react-router-dom'
 import { getStudentVisibleResultSnapshot } from '../services/studentResultService'
+import { objectiveAccuracy, getListeningBand, scoreMultipleAnswers, normalizeIELTSListeningAnswer, isIELTSListeningBlankCorrect } from '../services/ieltsObjectiveScoring'
+import { loadPrivateListeningMedia } from '../services/privateListeningMedia'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
@@ -47,7 +49,10 @@ function normalizeListeningParts(listening) {
   ]
 }
 
-function getListeningQuestionImage(question) {
+function getListeningQuestionImage(question, secureMaps = {}) {
+  if (question?.mapImageStoragePath) {
+    return secureMaps[`${question.partId || ''}::${question.id}`] || ''
+  }
   return (
     question?.mapImage ||
     question?.mapImageUrl ||
@@ -414,43 +419,6 @@ function getMatchingQuestionNumber(parts, partId, questionId, itemId) {
   return number
 }
 
-function getPercentageBand(correct, total) {
-  const percentage = total ? correct / total : 0
-
-  if (percentage >= 0.97) return 9
-  if (percentage >= 0.93) return 8.5
-  if (percentage >= 0.87) return 8
-  if (percentage >= 0.8) return 7.5
-  if (percentage >= 0.72) return 7
-  if (percentage >= 0.63) return 6.5
-  if (percentage >= 0.53) return 6
-  if (percentage >= 0.43) return 5.5
-  if (percentage >= 0.33) return 5
-  if (percentage >= 0.23) return 4.5
-
-  return 4
-}
-
-function getListeningBand(correct, total) {
-  if (total === 40) {
-    if (correct >= 39) return 9
-    if (correct >= 37) return 8.5
-    if (correct >= 35) return 8
-    if (correct >= 32) return 7.5
-    if (correct >= 30) return 7
-    if (correct >= 26) return 6.5
-    if (correct >= 23) return 6
-    if (correct >= 18) return 5.5
-    if (correct >= 16) return 5
-    if (correct >= 13) return 4.5
-    if (correct >= 10) return 4
-
-    return 3.5
-  }
-
-  return getPercentageBand(correct, total)
-}
-
 export default function DoListening() {
   const { id } = useParams()
 
@@ -469,6 +437,10 @@ export default function DoListening() {
   const [loadError, setLoadError] = useState('')
   const [reloadCount, setReloadCount] = useState(0)
   const [attemptState, setAttemptState] = useState(null)
+  const [privateAudioUrl, setPrivateAudioUrl] = useState('')
+  const [privateMapUrls, setPrivateMapUrls] = useState({})
+  const [privateAudioError, setPrivateAudioError] = useState('')
+  const [privateMapErrors, setPrivateMapErrors] = useState({})
 
   const timerRef = useRef(null)
   const submittingRef = useRef(false)
@@ -497,6 +469,66 @@ export default function DoListening() {
   const activePart = parts.find(part => part.id === activePartId) || parts[0]
   const activeQuestions = activePart?.questions || []
   const totalQuestionCount = getTotalListeningQuestionCount(parts)
+
+  // Blob URLs exist only for this browser session; no download-token fallback.
+  useEffect(() => {
+    const controller = new AbortController()
+    let createdUrl = ''
+    setPrivateAudioUrl('')
+    setPrivateAudioError('')
+    if (listening?.audioStoragePath) {
+      loadPrivateListeningMedia({
+          listeningId: id, asset: 'audio', signal: controller.signal,
+          progressive: true, parallelChunks: 3,
+          onStreamError: error => {
+            if (controller.signal.aborted) return
+            console.error('Private Listening audio stream:', error)
+            setPrivateAudioError('Secure audio stream was interrupted. Please retry.')
+          }
+        })
+        .then(url => {
+          if (controller.signal.aborted) URL.revokeObjectURL(url)
+          else { createdUrl = url; setPrivateAudioUrl(url) }
+        })
+        .catch(error => {
+          if (!controller.signal.aborted) {
+            console.error('Private Listening audio:', error)
+            setPrivateAudioError('Secure audio could not be loaded. Please retry.')
+          }
+        })
+    }
+    return () => { controller.abort(); if (createdUrl) URL.revokeObjectURL(createdUrl) }
+  }, [id, listening?.audioStoragePath])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    const createdUrls = []
+    setPrivateMapUrls({})
+    setPrivateMapErrors({})
+    const sourceHasParts = Array.isArray(listening?.parts) && listening.parts.length > 0
+    const requested = normalizeListeningParts(listening).flatMap(part =>
+      (part.questions || []).filter(q => q.type === 'map' && q.mapImageStoragePath)
+        .map(q => ({
+          key: `${q.partId || ''}::${q.id}`,
+          partId: sourceHasParts ? part.id : '', questionId: q.id
+        }))
+    )
+    for (const q of requested) {
+      loadPrivateListeningMedia({
+        listeningId: id, asset: 'map', partId: q.partId,
+        questionId: q.questionId, signal: controller.signal
+      }).then(url => {
+        if (controller.signal.aborted) URL.revokeObjectURL(url)
+        else { createdUrls.push(url); setPrivateMapUrls(old => ({ ...old, [q.key]: url })) }
+      }).catch(error => {
+        if (!controller.signal.aborted) {
+          console.error('Private Listening map:', error)
+          setPrivateMapErrors(old => ({ ...old, [q.key]: true }))
+        }
+      })
+    }
+    return () => { controller.abort(); createdUrls.forEach(url => URL.revokeObjectURL(url)) }
+  }, [id, listening])
 
   useEffect(() => {
     let active = true
@@ -1131,44 +1163,21 @@ export default function DoListening() {
       return userAnswer.join('|') === correctAnswer.join('|')
     }
 
-    const userAnswer = normalize(answers[question.id])
-    const correctAnswer = normalize(question.answer)
+    const userAnswer = normalizeIELTSListeningAnswer(answers[question.id])
+    const correctAnswer = normalizeIELTSListeningAnswer(question.answer)
 
     if (!userAnswer || !correctAnswer) return false
 
     return userAnswer === correctAnswer
   }
 
-  const getMultiAnswerScore = question => {
-    const selected = Array.isArray(answers[question.id])
-      ? answers[question.id].map(item => item?.toString())
-      : []
-
-    const correctAnswers = Array.isArray(question.answers)
-      ? question.answers.map(item => item?.toString())
-      : []
-
-    const correctCount = selected.filter(answer =>
-      correctAnswers.includes(answer)
-    ).length
-
-    return {
-      correct: correctCount,
-      total: correctAnswers.length || 2
-    }
-  }
+  const getMultiAnswerScore = question =>
+    scoreMultipleAnswers(answers[question.id], question.answers)
 
   const isTableCellCorrect = (question, row, cellIndex) => {
     const key = tableAnswerKey(question.id, row.id, cellIndex)
     const cell = row.cells[cellIndex]
-    const userAnswer = normalize(answers[key])
-    const acceptedAnswers = parseAcceptedAnswers(cell).map(normalize)
-
-    if (!userAnswer) return false
-    if (acceptedAnswers.length === 0) return false
-    if (!isWithinWordLimit(answers[key], cell.maxWords)) return false
-
-    return acceptedAnswers.includes(userAnswer)
+    return isIELTSListeningBlankCorrect(answers[key], cell.answer, cell.acceptedAnswers, cell.maxWords)
   }
 
 
@@ -1180,18 +1189,7 @@ export default function DoListening() {
       return userAnswer?.toString().trim() === item.answer?.toString().trim()
     }
 
-    const acceptedAnswers = [
-      item.answer,
-      ...(item.acceptedAnswers
-        ? item.acceptedAnswers.split(',').map(answer => answer.trim()).filter(Boolean)
-        : [])
-    ].map(normalize)
-
-    if (!normalize(userAnswer)) return false
-    if (acceptedAnswers.length === 0) return false
-    if (!isWithinWordLimit(userAnswer, item.maxWords)) return false
-
-    return acceptedAnswers.includes(normalize(userAnswer))
+    return isIELTSListeningBlankCorrect(userAnswer, item.answer, item.acceptedAnswers, item.maxWords)
   }
 
   const getCompletionOptionText = (question, letter) => {
@@ -1202,8 +1200,8 @@ export default function DoListening() {
 
   const isMapItemCorrect = (question, item) => {
     const key = mapAnswerKey(question.id, item.id)
-    const userAnswer = normalize(answers[key])
-    const correctAnswer = normalize(item.answer)
+    const userAnswer = normalizeIELTSListeningAnswer(answers[key])
+    const correctAnswer = normalizeIELTSListeningAnswer(item.answer)
 
     if (!userAnswer || !correctAnswer) return false
 
@@ -1212,8 +1210,8 @@ export default function DoListening() {
 
   const isMatchingItemCorrect = (question, item) => {
     const key = matchingAnswerKey(question.id, item.id)
-    const userAnswer = normalize(answers[key])
-    const correctAnswer = normalize(item.answer)
+    const userAnswer = normalizeIELTSListeningAnswer(answers[key])
+    const correctAnswer = normalizeIELTSListeningAnswer(item.answer)
 
     if (!userAnswer || !correctAnswer) return false
 
@@ -1796,11 +1794,13 @@ export default function DoListening() {
         <div className="max-w-4xl mx-auto px-6 py-10">
           <div className="bg-white border border-gray-100 rounded-2xl p-8 text-center shadow-sm mb-8">
             <div className="text-5xl font-bold text-purple-600 mb-2">
-              {result.band}
+              {objectiveAccuracy(result.correct, result.total) === null
+                ? '—'
+                : `${objectiveAccuracy(result.correct, result.total)}%`}
             </div>
 
             <p className="text-gray-400 text-sm mb-1">
-              IELTS Listening Band
+              Listening accuracy
             </p>
 
             <p className="text-gray-600 text-sm mb-4">
@@ -1893,10 +1893,13 @@ export default function DoListening() {
 
                       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)] gap-5 lg:items-start">
                         <div className="space-y-4">
-                          {getListeningQuestionImage(question) && (
+                          {question.mapImageStoragePath && privateMapErrors[`${question.partId || ''}::${question.id}`] && (
+                            <p role="alert" className="text-sm text-red-600">Secure map could not be loaded.</p>
+                          )}
+                          {getListeningQuestionImage(question, privateMapUrls) && (
                             <div className="bg-gray-50 border border-gray-100 rounded-2xl p-4">
                               <img
-                                src={getListeningQuestionImage(question)}
+                                src={getListeningQuestionImage(question, privateMapUrls)}
                                 alt="Map"
                                 className="w-full max-h-[520px] object-contain rounded-xl bg-white"
                               />
@@ -2210,7 +2213,13 @@ export default function DoListening() {
             </p>
           )}
 
-          <audio controls src={listening.audioUrl} className="w-full" />
+          {privateAudioError && (
+            <p role="alert" className="text-sm text-red-600 mb-2">{privateAudioError}</p>
+          )}
+          {listening.audioStoragePath && !privateAudioUrl && !privateAudioError && (
+            <p className="text-sm text-gray-500 mb-2">Loading secure Listening audio...</p>
+          )}
+          <audio controls src={listening.audioStoragePath ? privateAudioUrl : listening.audioUrl} className="w-full" />
         </div>
 
         <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm">
@@ -2467,10 +2476,13 @@ export default function DoListening() {
 
                     <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)] gap-5 lg:items-start">
                       <div className="lg:sticky lg:top-[220px] space-y-4">
-                        {getListeningQuestionImage(question) && (
+                        {question.mapImageStoragePath && privateMapErrors[`${question.partId || ''}::${question.id}`] && (
+                          <p role="alert" className="text-sm text-red-600">Secure map could not be loaded.</p>
+                        )}
+                        {getListeningQuestionImage(question, privateMapUrls) && (
                           <div className="bg-gray-50 border border-gray-100 rounded-2xl p-4">
                             <img
-                              src={getListeningQuestionImage(question)}
+                              src={getListeningQuestionImage(question, privateMapUrls)}
                               alt="Map"
                               className="w-full max-h-[520px] object-contain rounded-xl bg-white"
                             />

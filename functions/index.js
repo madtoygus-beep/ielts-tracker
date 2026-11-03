@@ -25,6 +25,9 @@ initializeApp()
 const db = getFirestore()
 const adminAuth = getAuth()
 
+// G1: institutional authority admission gate (local candidate only).
+const { withG1AuthorityLease } = require('./lib/p0bG1AuthorityLease')
+
 // P8-B5: read-only, attempt-scoped student AI results for My Results cards.
 const { prepareAiWritingEvaluation: prepareStudentWritingHistoryAi,
   validAiWritingReport: validStudentWritingHistoryAi } = require('./lib/aiWritingGrading')
@@ -122,6 +125,8 @@ const MOCK_RESOURCE_ACCESS_SUBCOLLECTIONS = [
   'mockTests'
 ]
 
+const { stripInstitutionalListeningUrls } = require('./lib/p0bInstitutionalListeningProjection')
+
 const STORAGE_BUCKET_NAME = 'maxima-tracker.firebasestorage.app'
 
 const OBJECTIVE_CONFIG = {
@@ -139,7 +144,7 @@ const OBJECTIVE_CONFIG = {
     publicCollection: 'studentListenings',
     submissionCollection: 'listeningSubmissions',
     parentField: 'listeningId',
-    sanitizer: sanitizeListening
+    sanitizer: stripInstitutionalListeningUrls
   },
   vocabulary: {
     contentType: 'vocabulary',
@@ -446,7 +451,9 @@ async function requireStudent(request) {
   }
 
   const profile = userSnap.data() || {}
-  if (profile.role !== 'student' || profile.status !== 'approved' || profile.deleted === true) {
+  if (profile.role !== 'student' || profile.status !== 'approved' ||
+      profile.deleted === true || profile.archived === true ||
+      profile.permanentDeleteInProgress === true) {
     throw new HttpsError('permission-denied', 'This account cannot submit student work.')
   }
 
@@ -717,6 +724,9 @@ exports.saveManagedSchool = onCall({ invoker: 'public' }, async request => {
   const teacherSeatInput = normalizeManagedSeatLimitInput(data.teacherSeatLimit, 'Teacher seat limit')
   const logoPathInput = normalizeSchoolLogoPathInput(data.logoPath, schoolId)
   const schoolRef = db.doc(`schools/${schoolId}`)
+  return withG1AuthorityLease({ db, FieldValue, HttpsError,
+    schoolId: schoolId, actorUid: admin.uid, operation: 'saveManagedSchool'
+  }, async () => {
 
   return withManagedSchoolSeatLock(schoolId, async () => {
     const currentSnap = await schoolRef.get()
@@ -809,9 +819,8 @@ exports.saveManagedSchool = onCall({ invoker: 'public' }, async request => {
       )
     }
   })
+  })
 })
-
-
 async function getSchoolCascadeCounts(schoolId) {
   const entries = await Promise.all(
     SCHOOL_CASCADE_COLLECTIONS.map(async collectionName => {
@@ -1105,6 +1114,9 @@ exports.deleteManagedSchool = onCall(async request => {
 
   const data = request.data || {}
   const schoolId = normalizeSchoolId(data.schoolId)
+  return withG1AuthorityLease({ db, FieldValue, HttpsError,
+    schoolId: schoolId, actorUid: admin.uid, operation: 'deleteManagedSchool'
+  }, async () => {
 
   if (schoolId === DEFAULT_SCHOOL_ID) {
     throw new HttpsError(
@@ -1234,9 +1246,8 @@ exports.deleteManagedSchool = onCall(async request => {
     deletedStorageObjects,
     deletedCollections
   }
+  })
 })
-
-
 // Stage 18B: institution accounts are provisioned by the platform admin through
 // trusted Cloud Functions. The browser never chooses a privileged role/school by
 // writing directly to users/{uid}, and Firebase Auth + Firestore profile creation
@@ -1679,6 +1690,9 @@ exports.createManagedUser = onCall({ invoker: 'public' }, async request => {
   const role = normalizeManagedAccountRole(data.role)
   const { schoolId } = await requireManagedAccountSchool(data.schoolId)
   const targetBand = normalizeManagedTargetBand(data.targetBand, role)
+  return withG1AuthorityLease({ db, FieldValue, HttpsError,
+    schoolId: schoolId, actorUid: admin.uid, operation: 'createManagedUser'
+  }, async () => {
 
   await assertNoManagedEmailConflict(email)
 
@@ -1774,8 +1788,8 @@ exports.createManagedUser = onCall({ invoker: 'public' }, async request => {
       passwordSetupRequired: true
     }
   })
+  })
 })
-
 // P4A: self-service B2C onboarding. Firebase Auth creates the identity on the
 // client first; this callable creates the privileged Firestore profile from the
 // authenticated UID/email so role, account type and school boundary are never
@@ -2002,6 +2016,9 @@ exports.approveManagedUser = onCall({ invoker: 'public' }, async request => {
   const userId = assertDocumentId(data.userId, 'User ID')
   const role = normalizeManagedAccountRole(data.role)
   const { schoolId } = await requireManagedAccountSchool(data.schoolId)
+  return withG1AuthorityLease({ db, FieldValue, HttpsError,
+    schoolId: schoolId, actorUid: admin.uid, operation: 'approveManagedUser'
+  }, async () => {
 
   return withManagedSchoolSeatLock(schoolId, async () => {
     const activeSchool = await requireManagedAccountSchool(schoolId)
@@ -2084,8 +2101,8 @@ exports.approveManagedUser = onCall({ invoker: 'public' }, async request => {
 
     return { ok: true, userId, role, schoolId }
   })
+  })
 })
-
 exports.rejectManagedUser = onCall(async request => {
   const admin = await requireAdmin(request)
   const data = request.data || {}
@@ -2098,6 +2115,9 @@ exports.rejectManagedUser = onCall(async request => {
   }
 
   const profile = userSnap.data() || {}
+  return withG1AuthorityLease({ db, FieldValue, HttpsError,
+    schoolId: schoolIdOf(profile), actorUid: admin.uid, operation: 'rejectManagedUser'
+  }, async () => {
   if (profile.role === 'admin' || userId === admin.uid) {
     throw new HttpsError('permission-denied', 'Admin accounts cannot be rejected here.')
   }
@@ -2141,8 +2161,8 @@ exports.rejectManagedUser = onCall(async request => {
   await adminAuth.updateUser(userId, { disabled: true })
 
   return { ok: true, userId, alreadyRejected: false }
+  })
 })
-
 exports.updateManagedUser = onCall({ invoker: 'public' }, async request => {
   const admin = await requireAdmin(request)
   const data = request.data || {}
@@ -2158,6 +2178,9 @@ exports.updateManagedUser = onCall({ invoker: 'public' }, async request => {
   }
 
   const profile = userSnap.data() || {}
+  return withG1AuthorityLease({ db, FieldValue, HttpsError,
+    schoolId: schoolIdOf(profile), actorUid: admin.uid, operation: 'updateManagedUser'
+  }, async () => {
   if (profile.role === 'admin') {
     throw new HttpsError('permission-denied', 'Admin accounts cannot be edited here.')
   }
@@ -2376,8 +2399,8 @@ exports.updateManagedUser = onCall({ invoker: 'public' }, async request => {
     username: username || null,
     targetBand
   }
+  })
 })
-
 exports.deleteManagedUser = onCall(async request => {
   const admin = await requireAdmin(request)
   const data = request.data || {}
@@ -2394,6 +2417,9 @@ exports.deleteManagedUser = onCall(async request => {
   }
 
   const profile = userSnap.data() || {}
+  return withG1AuthorityLease({ db, FieldValue, HttpsError,
+    schoolId: schoolIdOf(profile), actorUid: admin.uid, operation: 'deleteManagedUser'
+  }, async () => {
   if (profile.role === 'admin') {
     throw new HttpsError('permission-denied', 'Admin accounts cannot be deleted here.')
   }
@@ -2428,9 +2454,8 @@ exports.deleteManagedUser = onCall(async request => {
   await adminAuth.updateUser(userId, { disabled: true })
 
   return { ok: true, userId, alreadyDeleted: false }
+  })
 })
-
-
 // Stage 18.2 + P4B: Archived accounts can be restored by the platform admin.
 // Institution student/teacher restores still require the original active school
 // and seat capacity. Individual learners and platform Self-Study Managers restore
@@ -2454,6 +2479,9 @@ exports.restoreManagedUser = onCall({ invoker: 'public' }, async request => {
   const initialRole = permanentDeleteRoleOf(initialProfile)
   const schoolId = schoolIdOf(initialProfile)
   const initialAccountType = accountTypeOf(initialProfile)
+  return withG1AuthorityLease({ db, FieldValue, HttpsError,
+    schoolId: schoolId, actorUid: admin.uid, operation: 'restoreManagedUser'
+  }, async () => {
 
   if (initialAccountType === 'platform') {
     if (!isSelfStudyManagerProfile(initialProfile)) {
@@ -2715,9 +2743,8 @@ exports.restoreManagedUser = onCall({ invoker: 'public' }, async request => {
       alreadyRestored: false
     }
   })
+  })
 })
-
-
 // Stage 18.2: account removal now has two distinct meanings. deleteManagedUser
 // remains the reversible Archive action (soft delete + disabled Auth). Permanent
 // deletion supports students plus already-archived teacher/legacy accounts. Student
@@ -3107,6 +3134,9 @@ exports.permanentlyDeleteManagedUser = onCall({ invoker: 'public' }, async reque
 
   const state = await getManagedUserPermanentDeletionState(userId)
   const profile = state.profile
+  return withG1AuthorityLease({ db, FieldValue, HttpsError,
+    schoolId: schoolIdOf(profile), actorUid: admin.uid, operation: 'permanentlyDeleteManagedUser'
+  }, async () => {
   const profileEmail = safeString(profile.email || '', 320).trim().toLowerCase()
   const confirmedEmail = safeString(data.confirmEmail || '', 320).trim().toLowerCase()
 
@@ -3191,9 +3221,8 @@ exports.permanentlyDeleteManagedUser = onCall({ invoker: 'public' }, async reque
     preservedSharedSchoolContent: state.managedRole !== 'student',
     preservedHistoricalAcademicRecords: state.managedRole !== 'student'
   }
+  })
 })
-
-
 // Stage 18C: class membership may still be authored through the existing client
 // class workflow, but privileged student-profile teacherIds links are server-only.
 // This callable never changes a student's schoolId; it validates that the teacher
@@ -3204,6 +3233,9 @@ exports.syncManagedClassStudentLinks = onCall(async request => {
   const schoolId = normalizeSchoolId(data.schoolId)
   const teacherId = assertDocumentId(data.teacherId, 'Teacher ID')
   const studentIds = assertStudentUidList(data.studentIds || [])
+  return withG1AuthorityLease({ db, FieldValue, HttpsError,
+    schoolId: schoolId, actorUid: admin.uid, operation: 'syncManagedClassStudentLinks'
+  }, async () => {
 
   const schoolSnap = await db.doc(`schools/${schoolId}`).get()
   if (!schoolSnap.exists) {
@@ -3270,8 +3302,8 @@ exports.syncManagedClassStudentLinks = onCall(async request => {
     teacherId,
     updatedStudents: studentRefs.length
   }
+  })
 })
-
 function assertStudentUidList(value) {
   if (!Array.isArray(value)) {
     throw new HttpsError('invalid-argument', 'Student IDs must be an array.')
@@ -3569,10 +3601,27 @@ exports.getManagedClassAudit = onCall({ invoker: 'public' }, async request => {
   }
 })
 
-const { mutateManagedClassWithIndex } = require('./lib/p0bAcademicMembershipIndex')
+const { mutateManagedClassSecure } = require('./lib/p0bManagedClassSecureWriter')
 const { requireCurrentTeacherAcademicStudent } = require('./lib/p0bCurrentAcademicAccess')
 
-exports.saveManagedClass = onCall({ invoker: 'public' }, async request => {
+// Step804: keep the three legacy names exported so targeted deployments never
+// accidentally remove them, but make any *future deployment* of these exports
+// reject every mutation. Production's older revisions remain unsafe until the
+// separately authorized freeze/drain/retirement cutover completes.
+// A stale browser must fail closed even after the V2 gate is eventually opened.
+function retiredManagedClassEndpoint() {
+  return onCall({ invoker: 'public' }, async () => {
+    throw new HttpsError('failed-precondition',
+      'This class management endpoint has been retired. Please reload the application.')
+  })
+}
+exports.saveManagedClass = retiredManagedClassEndpoint()
+exports.setManagedClassArchived = retiredManagedClassEndpoint()
+exports.deleteManagedClass = retiredManagedClassEndpoint()
+
+// V2 endpoints preserve the existing client request/response contract and use
+// the Step786 transaction-authorized, default-deny maintenance gate.
+exports.saveManagedClassV2 = onCall({ invoker: 'public' }, async request => {
   const manager = await requireAssignmentManager(request)
   const data = request.data || {}
   const classId = data.classId ? assertDocumentId(data.classId, 'Class ID') : ''
@@ -3591,6 +3640,19 @@ exports.saveManagedClass = onCall({ invoker: 'public' }, async request => {
   }
 
   const existing = existingSnap?.exists ? (existingSnap.data() || {}) : null
+
+  // R99-R3: reject stale edit forms before the secure transaction.
+  // The existing writer also checks Firestore updateTime inside its transaction.
+  if (existing) {
+    if (typeof data.baseUpdatedAt !== 'string' ||
+        !data.baseUpdatedAt ||
+        typeof existing.updatedAt !== 'string' ||
+        data.baseUpdatedAt !== existing.updatedAt) {
+      throw new HttpsError('aborted',
+        'This class changed after you opened it. Reload the class before saving.')
+    }
+  }
+
   if (existing && !managerCanManageClass(manager, existing)) {
     throw new HttpsError('permission-denied', 'You cannot manage this class.')
   }
@@ -3661,33 +3723,28 @@ exports.saveManagedClass = onCall({ invoker: 'public' }, async request => {
     archived: existing?.archived === true
   }
 
-  if (teacherId) {
-    // P0-B2A: index and class change are atomic; student profile teacherIds
-    // remains an additive compatibility field, never an access grant.
-    await mutateManagedClassWithIndex({
-      db, FieldValue, classRef, teacherId, schoolId, operation: 'save',
-      payload, studentRefs: students.map(student => student.ref),
-      updatedBy: manager.uid, actorRole: manager.profile.role, now
-    })
-  } else {
-    // The ALL/system class cannot grant academic access through the index.
-    const batch = db.batch()
-    if (existing) batch.set(classRef, payload, { merge: true })
-    else batch.set(classRef, payload)
-    await batch.commit()
-  }
+  // Step786: ALL class changes (including teacherless system classes) use
+  // one transaction that checks live actor, school, roster, class version and
+  // server-owned maintenance gate. Existing revision in-flight writes remain a
+  // separate cutover concern and are NOT made safe by this new gate alone.
+  const mutation = await mutateManagedClassSecure({
+    db, FieldValue, HttpsError, classRef, teacherId, schoolId,
+    operation: existing ? 'edit' : 'create', payload,
+    expectedClassUpdateTime: existingSnap?.exists ? existingSnap.updateTime : null,
+    actorUid: manager.uid, now
+  })
 
   return {
     ok: true,
     created: !existing,
     class: {
       classId: classRef.id,
-      ...payload
+      ...mutation.class
     }
   }
 })
 
-exports.setManagedClassArchived = onCall({ invoker: 'public' }, async request => {
+exports.setManagedClassArchivedV2 = onCall({ invoker: 'public' }, async request => {
   const manager = await requireAssignmentManager(request)
   const data = request.data || {}
   const classId = assertDocumentId(data.classId, 'Class ID')
@@ -3709,20 +3766,16 @@ exports.setManagedClassArchived = onCall({ invoker: 'public' }, async request =>
 
   const teacherId = managedClassTeacherId(classData)
   const update = { archived, updatedBy: manager.uid, updatedAt: new Date().toISOString() }
-  if (teacherId) {
-    await mutateManagedClassWithIndex({
-      db, FieldValue, classRef, teacherId, schoolId: schoolIdOf(classData),
-      operation: 'archive', payload: update,
-      updatedBy: manager.uid, actorRole: manager.profile.role, now: update.updatedAt
-    })
-  } else {
-    await classRef.set(update, { merge: true })
-  }
+  await mutateManagedClassSecure({
+    db, FieldValue, HttpsError, classRef, teacherId, schoolId: schoolIdOf(classData),
+    operation: 'archive', payload: update, expectedClassUpdateTime: classSnap.updateTime,
+    actorUid: manager.uid, now: update.updatedAt
+  })
 
   return { ok: true, classId, archived }
 })
 
-exports.deleteManagedClass = onCall({ invoker: 'public' }, async request => {
+exports.deleteManagedClassV2 = onCall({ invoker: 'public' }, async request => {
   const manager = await requireAssignmentManager(request)
   const data = request.data || {}
   const classId = assertDocumentId(data.classId, 'Class ID')
@@ -3742,14 +3795,11 @@ exports.deleteManagedClass = onCall({ invoker: 'public' }, async request => {
   }
 
   const teacherId = managedClassTeacherId(classData)
-  if (teacherId) {
-    await mutateManagedClassWithIndex({
-      db, FieldValue, classRef, teacherId, schoolId: schoolIdOf(classData),
-      operation: 'delete', updatedBy: manager.uid, actorRole: manager.profile.role
-    })
-  } else {
-    await classRef.delete()
-  }
+  await mutateManagedClassSecure({
+    db, FieldValue, HttpsError, classRef, teacherId, schoolId: schoolIdOf(classData),
+    operation: 'delete', expectedClassUpdateTime: classSnap.updateTime,
+    actorUid: manager.uid
+  })
 
   return {
     ok: true,
@@ -3913,7 +3963,7 @@ async function getSource(collectionName, id) {
   const safeId = assertDocumentId(id)
   const snap = await db.doc(`${collectionName}/${safeId}`).get()
   if (!snap.exists) throw new HttpsError('not-found', 'Homework was not found.')
-  return { id: snap.id, ...snap.data() }
+  return { ...snap.data(), id: snap.id }
 }
 
 async function writeProjection(config, id, source) {
@@ -4320,6 +4370,70 @@ async function requireAssignedMock(mockTestId, student) {
   })
   return mock
 }
+
+// STEP1000C7P: resolve a dedicated IAM-only Cloud Storage vault.
+// Absent or unsafe configuration must fail closed. These new functions are
+// NOT DEPLOYABLE until the bucket, scoped identities and access checks exist.
+function resolveProtectedListeningBucket() {
+  const name = String(process.env.MAXIMA_PRIVATE_MEDIA_BUCKET || '').trim()
+  if (!/^maxima-tracker-private-listening-[a-z0-9-]{6,}$/.test(name) ||
+      name === STORAGE_BUCKET_NAME || name.includes('storage-backups')) {
+    throw new HttpsError('failed-precondition','Private Listening media vault is not configured.')
+  }
+  return getStorage().bucket(name)
+}
+
+// Step1000B (STAGED): confirm a NEW Listening upload is token-free before
+// storing its path in a source document. Never finalize historical objects.
+const { createFinalizePrivateListeningUpload } = require('./lib/p0bFinalizePrivateListeningUpload')
+const finalizePrivateListeningUpload = createFinalizePrivateListeningUpload({
+  bucket:getStorage().bucket(STORAGE_BUCKET_NAME),
+  getVaultBucket:resolveProtectedListeningBucket, HttpsError,
+  requireAssignmentManager, schoolIdOf
+})
+exports.finalizePrivateListeningUpload = onCall({ invoker:'public', region:'us-central1',
+  serviceAccount:'maxima-media-finalizer@maxima-tracker.iam.gserviceaccount.com' },
+  request => finalizePrivateListeningUpload(request))
+
+// Step998 (STAGED): chunks are fetched only after fresh Listening/Mock authorization.
+// No Firebase download-token or bearer URL is exposed by this endpoint.
+const { createPrivateListeningMediaService } = require('./lib/p0bPrivateListeningMedia')
+const getPrivateListeningMediaChunk = createPrivateListeningMediaService({
+  db, bucket:getStorage().bucket(STORAGE_BUCKET_NAME),
+  getVaultBucket:resolveProtectedListeningBucket, HttpsError,
+  requireStudent, requireAssignmentManager, requireAvailableStudentSource,
+  requireAssignedMock, assertMockResourceEnabled, schoolIdOf,
+  managerCanManageSource
+})
+exports.getPrivateListeningMediaChunk = onCall({ invoker:'public', region:'us-central1', memory:'512MiB',
+  serviceAccount:'maxima-media-reader@maxima-tracker.iam.gserviceaccount.com' },
+  request => getPrivateListeningMediaChunk(request))
+
+// STEP1000C7T: central Listening authoring boundary. Matching Firestore
+// rules deny direct Listening writes after coordinated client migration.
+const { createSaveListeningSecure } = require('./lib/p0bListeningSecureWrite')
+const savePrivateListeningContent = createSaveListeningSecure({
+  db, HttpsError, requireAssignmentManager, managerCanManageSource, schoolIdOf,
+  bucket:getStorage().bucket(STORAGE_BUCKET_NAME),
+  getVaultBucket:resolveProtectedListeningBucket
+})
+exports.savePrivateListeningContent = onCall({ invoker:'public', region:'us-central1',
+  timeoutSeconds:120, memory:'512MiB',
+  serviceAccount:'maxima-media-finalizer@maxima-tracker.iam.gserviceaccount.com' },
+  request=>savePrivateListeningContent(request))
+
+// STEP1000C7V: Duplicate only if all source media is already in the
+// IAM-isolated private vault. This never copies legacy bearer URLs.
+const { createDuplicatePrivateListeningSecure } = require('./lib/p0bDuplicatePrivateListening')
+const duplicatePrivateListeningContent = createDuplicatePrivateListeningSecure({
+  db, HttpsError, requireAssignmentManager, managerCanManageSource, schoolIdOf,
+  bucket:getStorage().bucket(STORAGE_BUCKET_NAME),
+  getVaultBucket:resolveProtectedListeningBucket
+})
+exports.duplicatePrivateListeningContent = onCall({ invoker:'public', region:'us-central1',
+  timeoutSeconds:120, memory:'512MiB',
+  serviceAccount:'maxima-media-finalizer@maxima-tracker.iam.gserviceaccount.com' },
+  request=>duplicatePrivateListeningContent(request))
 
 exports.ensureMockObjectiveResource = onCall(async request => {
   const student = await requireStudent(request)
@@ -6354,7 +6468,7 @@ exports.submitReadingSecure = onCall(async request => {
     }
   }
 
-  const result = gradeReading(source, answers)
+  const result = gradeReading(source, answers, { institutionalScoring: true })
   const submission = {
     ...baseSubmission(source, student),
     readingId,
@@ -6436,7 +6550,7 @@ exports.submitListeningSecure = onCall(async request => {
     }
   }
 
-  const result = gradeListening(source, answers)
+  const result = gradeListening(source, answers, { institutionalScoring: true })
   const submission = {
     ...baseSubmission(source, student),
     listeningId,
@@ -6517,7 +6631,7 @@ exports.submitVocabularySecure = onCall(async request => {
     }
   }
 
-  const result = gradeVocabulary(source, answers)
+  const result = gradeVocabulary(source, answers, { institutionalScoring: true })
   const submission = {
     ...baseSubmission(source, student),
     vocabularyTestId,
@@ -6615,6 +6729,26 @@ const saveMockWritingReviewSecureService = createMockWritingReviewService({
 })
 exports.saveMockWritingReviewSecure = onCall(request =>
   saveMockWritingReviewSecureService(request))
+
+// AUD-FIX2: normal Writing reviews also use server-owned actor/timestamp
+// and a fresh academic membership check inside the same transaction.
+const { createWritingReviewSecureService } = require('./lib/p0bWritingReviewSecureService')
+const saveWritingReviewSecureService = createWritingReviewSecureService({
+  db, HttpsError, requireAssignmentManager, requireCurrentTeacherAcademicStudent,
+  schoolIdOf
+})
+exports.saveWritingReviewSecure = onCall(request =>
+  saveWritingReviewSecureService(request))
+
+// Step973: admin-only manual IELTS band recording. School and learner identity,
+// band rounding and actor attribution are checked server-side in a transaction.
+// Public *transport* is necessary for HTTPS callable; requireAdmin authorizes use.
+const { createAdminManualScoreSecureService } = require('./lib/p0bAdminManualScoreSecureService')
+const createAdminManualScoreSecureHandler = createAdminManualScoreSecureService({
+  db, HttpsError, requireAdmin, schoolIdOf
+})
+exports.createAdminManualScoreSecure = onCall({ invoker: 'public' }, request =>
+  createAdminManualScoreSecureHandler(request))
 
 exports.submitMockSecure = onCall(async request => {
   const student = await requireStudent(request)
@@ -7510,23 +7644,10 @@ exports.getMyAiWritingReport = onCall(request =>
 // Explicit administrator repair when the student never reopens the report.
 // This cannot evaluate Writing, create a new job, spend a student credit or
 // lower the monthly provider request count. It does not scan Firestore.
-exports.reconcileExpiredSponsoredAiWriting = onCall(async request => {
-  await requireAdmin(request)
-  const data = request.data
-  if (!data || typeof data !== 'object' || Array.isArray(data) ||
-      Object.keys(data).length !== 1 || !Array.isArray(data.jobIds) ||
-      data.jobIds.length < 1 || data.jobIds.length > 20 ||
-      data.jobIds.some(id => typeof id !== 'string' || !/^[a-f0-9]{64}$/.test(id)) ||
-      new Set(data.jobIds).size !== data.jobIds.length) {
-    throw new HttpsError('invalid-argument', 'Provide 1–20 unique AI job IDs.')
-  }
-  const results = []
-  for (const jobId of data.jobIds) {
-    const result = await aiWritingSponsoredRecovery.reconcileJob({ jobId })
-    results.push({ jobId, status: result.status })
-  }
-  return { results }
-})
+const { createAiWritingRecoveryAdmin } = require('./lib/aiWritingRecoveryAdmin')
+const aiWritingRecoveryAdmin = createAiWritingRecoveryAdmin({ db, requireAdmin, HttpsError, recovery: aiWritingSponsoredRecovery })
+exports.getExpiredSponsoredAiWritingJobs = onCall(request => aiWritingRecoveryAdmin.list(request))
+exports.reconcileExpiredSponsoredAiWriting = onCall(request => aiWritingRecoveryAdmin.reconcile(request))
 
 // P5D: separate staff-only, read-only saved report retrieval.
 // Does not call the model and never changes AI credits or teacher grading.

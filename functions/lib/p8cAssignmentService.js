@@ -4,6 +4,7 @@
 // whole assignment roster from a potentially stale browser snapshot.
 const { grantMapIsConsistent, grantsForPolicy } = require('./aiWritingSponsoredGrants')
 const { teacherOwnsSource } = require('./aiWritingTeacherRelationship')
+const { activeClassStudents } = require('./p0bAcademicMembershipIndex')
 const ALLOWED_TYPES = Object.freeze({
   reading: 'readings', listening: 'listenings', writing: 'writingHomeworks',
   vocabulary: 'vocabularyTests', mock: 'mockTests'
@@ -89,8 +90,46 @@ function createP8CAssignmentService({
             : managerCanManageSource({ uid: manager.uid, profile: freshManagerProfile }, source))) {
         fail('permission-denied', 'You can no longer manage this assignment.')
       }
-      if (dataOf(reads[1])?.status !== 'active') {
+      if (dataOf(reads[1])?.status !== 'active' ||
+          dataOf(reads[1])?.deleteInProgress === true) {
         fail('failed-precondition', 'The institution is not active.')
+      }
+      // P0-B2B-01: browser roster filtering is never a server authorization.
+      // Teachers can add only students present BOTH in the canonical live index
+      // AND in an eligible, active, same-school class. Read both in this same
+      // transaction before any writes so index/class revocation causes a retry.
+      // Removal remains possible after a student leaves the class: it archives
+      // historic assignments and prunes any related institutional AI grant.
+      if (freshManagerProfile.role === 'teacher' && input.changes.some(c => c.assigned)) {
+        const indexRef = db.doc(`schools/${schoolId}/teacherAcademicIndex/${manager.uid}`)
+        const classesQuery = db.collection('classes').where('teacherId', '==', manager.uid)
+        const [indexSnap, classSnaps] = await Promise.all([
+          tx.get(indexRef), tx.get(classesQuery)
+        ])
+        const index = dataOf(indexSnap)
+        const ids = index?.activeStudentIds
+        const validIndex = index?.schemaVersion === 1 &&
+          index?.source === 'managed_active_classes' &&
+          index?.teacherId === manager.uid && index?.schoolId === schoolId &&
+          Array.isArray(ids) && ids.length <= 4000 &&
+          ids.every(uid => typeof uid === 'string' && uid.length > 0 &&
+            uid.length <= 128 && uid.trim() === uid && !uid.includes('/')) &&
+          new Set(ids).size === ids.length
+        if (!validIndex || !Array.isArray(classSnaps?.docs)) {
+          fail('permission-denied', 'Current teacher classroom index is unavailable.')
+        }
+        const canonical = new Set(ids)
+        const activeClassMembers = new Set()
+        for (const classSnap of classSnaps.docs) {
+          if (!classSnap.exists) continue
+          for (const uid of activeClassStudents(classSnap.data() || {}, manager.uid, schoolId)) {
+            activeClassMembers.add(uid)
+          }
+        }
+        if (input.changes.some(change => change.assigned &&
+            (!canonical.has(change.studentId) || !activeClassMembers.has(change.studentId)))) {
+          fail('permission-denied', 'An added learner must belong to your current active class.')
+        }
       }
       let offset = 2
       const oldPolicy = policyRef ? dataOf(reads[offset++]) : null

@@ -13,6 +13,7 @@ import {
 import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { httpsCallable } from 'firebase/functions'
 import { buildP8CAssignmentDelta } from '../services/p8cAssignmentDelta'
+import { subscribeCurrentTeacherAcademicRoster } from '../services/teacherCurrentAcademicRoster'
 import { useNavigate, useParams } from 'react-router-dom'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
@@ -189,6 +190,7 @@ export default function CreateVocabulary() {
   const [saving, setSaving] = useState(false)
 
   const [title, setTitle] = useState('')
+  const [teacherRosterStatus, setTeacherRosterStatus] = useState('loading')
   const [contentType, setContentType] = useState('mixed_practice')
   const [visibility, setVisibility] = useState('private')
   const [instructions, setInstructions] = useState('')
@@ -256,35 +258,35 @@ export default function CreateVocabulary() {
         setUser(currentUser)
         setProfile({ id: currentUser.uid, ...loadedProfile })
 
-        const studentsQuery = query(
-          collection(db, 'users'),
-          where('role', '==', 'student')
-        )
-
-        liveUnsubscribers.push(
-          onSnapshot(studentsQuery, snap => {
-            const list = snap.docs
-              .map(d => ({ id: d.id, ...d.data() }))
+        if (isAdminProfile(loadedProfile)) {
+          const studentsQuery = query(collection(db, 'users'), where('role', '==', 'student'))
+          liveUnsubscribers.push(onSnapshot(studentsQuery, snap => {
+            const list = snap.docs.map(d => ({ ...d.data(), id: d.id }))
               .filter(item => !item.deleted && item.status === 'approved')
-
-            const visibleStudents = filterStudentsByProfile(
-              list,
-              loadedProfile,
-              currentUser.uid
-            )
-
-            visibleStudents.sort((a, b) =>
-              (a.name || a.email || '').localeCompare(b.name || b.email || '')
-            )
-
+            const visibleStudents = filterStudentsByProfile(list, loadedProfile, currentUser.uid)
+            visibleStudents.sort((a,b) => (a.name || a.email || '').localeCompare(b.name || b.email || ''))
             setStudents(visibleStudents)
-          })
-        )
+            setTeacherRosterStatus('ready')
+          }, error => {
+            console.warn('Vocabulary admin roster unavailable:',error?.code || 'unknown')
+            setStudents([])
+            setTeacherRosterStatus('error')
+          }))
+        } else {
+          liveUnsubscribers.push(subscribeCurrentTeacherAcademicRoster(
+            db, getProfileSchoolId(loadedProfile), currentUser.uid,
+            setStudents, setTeacherRosterStatus
+          ))
+        }
 
         liveUnsubscribers.push(
-          onSnapshot(collection(db, 'classes'), snap => {
+          onSnapshot(isAdminProfile(loadedProfile)
+            ? collection(db, 'classes')
+            : query(collection(db, 'classes'),
+                where('schoolId', '==', getProfileSchoolId(loadedProfile)),
+                where('teacherId', '==', currentUser.uid)), snap => {
             const list = snap.docs
-              .map(d => ({ id: d.id, ...d.data() }))
+              .map(d => ({ ...d.data(), id: d.id }))
               .filter(classItem => classItem.archived !== true)
 
             const visibleClasses = filterClassesByProfile(
@@ -365,15 +367,9 @@ export default function CreateVocabulary() {
     }
   }, [id, isEditMode, navigate])
 
-  useEffect(() => {
-    if (!user || !profile || isAdminProfile(profile) || students.length === 0) return
-
-    const visibleStudentIds = new Set(students.map(student => student.id))
-
-    setAssignTo(prev =>
-      prev.filter(studentId => visibleStudentIds.has(studentId))
-    )
-  }, [user, profile, students])
+  // P0-B2B: existing canonical assignments are server-authoritative.
+  // Never silently remove them when the teacher's current roster changes.
+  // The callable validates explicit changes against current permissions.
 
   const filteredStudents = useMemo(() => {
     const term = studentSearch.trim().toLowerCase()

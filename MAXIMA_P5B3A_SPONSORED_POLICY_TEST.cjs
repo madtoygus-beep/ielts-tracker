@@ -51,10 +51,37 @@ class FakeDb {
         if (startedWriting) throw new Error('Firestore forbids read after transaction write')
         return ref.get()
       },
-      set: (ref, data, opts) => { startedWriting = true; staged.push({ ref, data, opts }) }
+      set: (ref, data, opts) => {
+        startedWriting = true
+        staged.push({ ref, data, opts, mode: 'set' })
+      },
+      create: (ref, data) => {
+        startedWriting = true
+        staged.push({ ref, data, mode: 'create' })
+      },
+      update: (ref, data) => {
+        startedWriting = true
+        staged.push({ ref, data, mode: 'update' })
+      }
     }
     const result = await fn(tx)
-    for (const row of staged) this.put(row.ref.path, row.data, row.opts)
+    const existingPaths = new Set(this.docs.keys())
+    for (const row of staged) {
+      if (row.mode === 'create' && existingPaths.has(row.ref.path)) {
+        throw new Error('Firestore create requires a missing document')
+      }
+      if (row.mode === 'update' && !existingPaths.has(row.ref.path)) {
+        throw new Error('Firestore update requires an existing document')
+      }
+      existingPaths.add(row.ref.path)
+    }
+    for (const row of staged) {
+      this.put(
+        row.ref.path,
+        row.data,
+        row.mode === 'update' ? { merge: true } : row.opts
+      )
+    }
     return result
   }
 }

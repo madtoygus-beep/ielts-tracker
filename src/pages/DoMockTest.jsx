@@ -1,11 +1,17 @@
+import PartialWritingNotice from '../components/PartialWritingNotice'
+import { partialWritingSummary } from '../services/partialWritingPresentation'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { auth, db, functions } from '../firebase'
 import { doc, getDoc, getDocFromServer, setDoc, serverTimestamp } from 'firebase/firestore'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { httpsCallable } from 'firebase/functions'
+import { loadPrivateListeningMedia } from '../services/privateListeningMedia'
 import { useNavigate, useParams } from 'react-router-dom'
+import { getReadingBand, getListeningBand, scoreMultipleAnswers, normalizeIELTSListeningAnswer, isIELTSListeningBlankCorrect } from '../services/ieltsObjectiveScoring'
 import { getStudentVisibleResultSnapshot, getStudentVisibleResultDoc } from '../services/studentResultService'
 import AiWritingStudentPanel from '../components/AiWritingStudentPanel'
+import MockAiResultsGate from '../components/MockAiResultsGate'
+import { savedMockWritingScoreReady } from '../services/mockAiResultGatePolicy'
 import { isInstitutionWritingStudent } from '../services/aiWritingStudentPolicy'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
@@ -216,62 +222,6 @@ function isBlankCorrect(userAnswer, mainAnswer, acceptedAnswers = '', maxWords =
   const accepted = getAcceptedAnswers(mainAnswer, acceptedAnswers)
 
   return accepted.includes(cleanUser)
-}
-
-function getBandFromPercentage(correct, total) {
-  const percentage = total ? correct / total : 0
-
-  if (percentage >= 0.97) return 9
-  if (percentage >= 0.93) return 8.5
-  if (percentage >= 0.87) return 8
-  if (percentage >= 0.8) return 7.5
-  if (percentage >= 0.72) return 7
-  if (percentage >= 0.63) return 6.5
-  if (percentage >= 0.53) return 6
-  if (percentage >= 0.43) return 5.5
-  if (percentage >= 0.33) return 5
-  if (percentage >= 0.23) return 4.5
-  return 4
-}
-
-function getListeningBand(correct, total) {
-  if (total === 40) {
-    if (correct >= 39) return 9
-    if (correct >= 37) return 8.5
-    if (correct >= 35) return 8
-    if (correct >= 32) return 7.5
-    if (correct >= 30) return 7
-    if (correct >= 26) return 6.5
-    if (correct >= 23) return 6
-    if (correct >= 18) return 5.5
-    if (correct >= 16) return 5
-    if (correct >= 13) return 4.5
-    if (correct >= 10) return 4
-
-    return 3.5
-  }
-
-  return getBandFromPercentage(correct, total)
-}
-
-function getReadingBand(correct, total) {
-  if (total === 40) {
-    if (correct >= 39) return 9
-    if (correct >= 37) return 8.5
-    if (correct >= 35) return 8
-    if (correct >= 33) return 7.5
-    if (correct >= 30) return 7
-    if (correct >= 27) return 6.5
-    if (correct >= 23) return 6
-    if (correct >= 19) return 5.5
-    if (correct >= 15) return 5
-    if (correct >= 13) return 4.5
-    if (correct >= 10) return 4
-
-    return 3.5
-  }
-
-  return getBandFromPercentage(correct, total)
 }
 
 // Repair 04: Short-answer groups use the same item IDs as standalone Reading.
@@ -1000,6 +950,7 @@ export default function DoMockTest() {
 
   const [finalResult, setFinalResult] = useState(null)
   const [completedSubmission, setCompletedSubmission] = useState(null)
+  const [mockAiGateOutcome, setMockAiGateOutcome] = useState(null)
   const [submitting, setSubmitting] = useState(false)
 
   const submittingRef = useRef(false)
@@ -1025,6 +976,9 @@ export default function DoMockTest() {
   const [audioCurrentTime, setAudioCurrentTime] = useState(0)
   const [audioDuration, setAudioDuration] = useState(0)
   const [audioResumePending, setAudioResumePending] = useState(false)
+  const [privateAudio, setPrivateAudio] = useState({ listeningId: '', url: '', error: '' })
+  const [privateMapUrls, setPrivateMapUrls] = useState({})
+  const [privateMapErrors, setPrivateMapErrors] = useState({})
   const [tabWarning, setTabWarning] = useState('')
 
   const activeDraftAttemptNumber = attemptState?.open
@@ -1065,6 +1019,7 @@ export default function DoMockTest() {
       setAlreadySubmitted(false)
       setFinalResult(null)
       setCompletedSubmission(null)
+      setMockAiGateOutcome(null)
       setSectionIndex(0)
       setMaxUnlockedSectionIndex(0)
       setListeningAnswers({})
@@ -1205,6 +1160,7 @@ export default function DoMockTest() {
           setAlreadySubmitted(false)
           setCompletedSubmission(null)
           setFinalResult(null)
+          setMockAiGateOutcome(null)
           setSectionIndex(0)
           setMaxUnlockedSectionIndex(0)
           setListeningAnswers(
@@ -1374,7 +1330,7 @@ export default function DoMockTest() {
 
         const loadedListenings = listeningDocs
           .filter(snap => snap.exists())
-          .map(snap => ({ id: snap.id, ...snap.data() }))
+          .map(snap => ({ ...snap.data(), id: snap.id }))
 
         if (
           enabledSections.listening &&
@@ -1387,7 +1343,7 @@ export default function DoMockTest() {
 
         const loadedReadings = readingDocs
           .filter(snap => snap.exists())
-          .map(snap => ({ id: snap.id, ...snap.data() }))
+          .map(snap => ({ ...snap.data(), id: snap.id }))
 
         if (
           enabledSections.reading &&
@@ -1409,7 +1365,7 @@ export default function DoMockTest() {
         setReadings(loadedReadings)
         setWriting(
           writingSnap && writingSnap.exists()
-            ? { id: writingSnap.id, ...writingSnap.data() }
+            ? { ...writingSnap.data(), id: writingSnap.id }
             : null
         )
 
@@ -1613,8 +1569,12 @@ export default function DoMockTest() {
           Number.isFinite(mediaDuration) && mediaDuration > 0
             ? mediaDuration
             : Math.max(0, Number(audioDuration) || 0),
-        audioSourceUrl:
-          audioRef.current?.currentSrc || audioRef.current?.src || '',
+        // Persist a stable identity, never a temporary blob: URL or download token.
+        audioSourceUrl: activeSection.key?.startsWith('listening-')
+          ? (activeSection.listeningPart?.listeningAudioStoragePath
+              ? `private:${activeSection.listeningPart.listeningId}`
+              : activeSection.listeningPart?.listeningAudioUrl || '')
+          : '',
         tabSwitchCount: tabSwitchCountRef.current,
         updatedAt: new Date().toISOString()
       }
@@ -1688,6 +1648,7 @@ export default function DoMockTest() {
           listeningId: listeningItem.id,
           listeningTitle: listeningItem.title || `Listening ${listeningIndex + 1}`,
           listeningAudioUrl: listeningItem.audioUrl || '',
+          listeningAudioStoragePath: listeningItem.audioStoragePath || '',
           listeningInstructions: listeningItem.instructions || '',
           questions: (part.questions || []).map((question, questionIndex) => ({
             ...question,
@@ -1792,9 +1753,87 @@ export default function DoMockTest() {
   ])
 
   const activeSection = sections[sectionIndex] || sections[0]
-  const activeListeningAudioKey = activeSection.key?.startsWith('listening-')
-    ? `${activeSection.listeningPart?.listeningId || ''}::${activeSection.listeningPart?.listeningAudioUrl || ''}`
+  const activeListeningPart = activeSection.key?.startsWith('listening-')
+    ? activeSection.listeningPart
+    : null
+  const activePrivateListeningId = activeListeningPart?.listeningAudioStoragePath
+    ? activeListeningPart.listeningId
     : ''
+  const activeListeningAudioKey = activeListeningPart
+    ? `${activeListeningPart.listeningId}::${activeListeningPart.listeningAudioStoragePath || activeListeningPart.listeningAudioUrl || ''}`
+    : ''
+  const activeListeningAudioSrc = activePrivateListeningId
+    ? (privateAudio.listeningId === activePrivateListeningId ? privateAudio.url : '')
+    : (activeListeningPart?.listeningAudioUrl || '')
+
+  // Load protected audio only for the active Listening source. Keep Blob URLs
+  // session-local, and retain the same audio object while moving between parts.
+  useEffect(() => {
+    const controller = new AbortController()
+    let createdUrl = ''
+    setPrivateAudio({ listeningId: activePrivateListeningId, url: '', error: '' })
+    if (activePrivateListeningId) {
+      loadPrivateListeningMedia({
+        listeningId: activePrivateListeningId, mockTestId: id,
+        asset: 'audio', parallelChunks: 3, progressive: true,
+          onStreamError: error => {
+            if (controller.signal.aborted) return
+            console.error('Protected Mock Listening stream:', error)
+            setPrivateAudio(previous => previous.listeningId === activePrivateListeningId
+              ? { ...previous, error: 'Secure audio stream was interrupted. Please retry.' }
+              : previous)
+          },
+          signal: controller.signal
+      }).then(url => {
+        if (controller.signal.aborted) URL.revokeObjectURL(url)
+        else { createdUrl = url; setPrivateAudio({ listeningId: activePrivateListeningId, url, error: '' }) }
+      }).catch(error => {
+        if (!controller.signal.aborted) {
+          console.error('Protected Mock Listening audio:', error)
+          setPrivateAudio({ listeningId: activePrivateListeningId, url: '', error: 'Secure audio could not be loaded. Please retry.' })
+        }
+      })
+    }
+    return () => { controller.abort(); if (createdUrl) URL.revokeObjectURL(createdUrl) }
+  }, [id, activePrivateListeningId, activeListeningPart?.listeningAudioStoragePath])
+
+  // Mock question IDs are namespaced. Authorization requires the ORIGINAL
+  // Listening question and part IDs, not the Mock rendering IDs.
+  useEffect(() => {
+    const controller = new AbortController()
+    const createdUrls = []
+    setPrivateMapUrls({})
+    setPrivateMapErrors({})
+    const part = activeListeningPart
+    if (part) {
+      const source = listenings.find(item => item.id === part.listeningId)
+      const sourcePart = Array.isArray(source?.parts)
+        ? source.parts.find(item => item.id === part.originalPartId)
+        : null
+      for (const question of part.questions || []) {
+        if (question.type !== 'map' || !question.mapImageStoragePath) continue
+        const key = `${part.id}::${question.id}`
+        if (!question.originalQuestionId) {
+          setPrivateMapErrors(prev => ({ ...prev, [key]: true }))
+          continue
+        }
+        loadPrivateListeningMedia({
+          listeningId: part.listeningId, mockTestId: id,
+          asset: 'map', questionId: question.originalQuestionId,
+          partId: sourcePart?.id || '', signal: controller.signal
+        }).then(url => {
+          if (controller.signal.aborted) URL.revokeObjectURL(url)
+          else { createdUrls.push(url); setPrivateMapUrls(prev => ({ ...prev, [key]: url })) }
+        }).catch(error => {
+          if (!controller.signal.aborted) {
+            console.error('Protected Mock Listening map:', error)
+            setPrivateMapErrors(prev => ({ ...prev, [key]: true }))
+          }
+        })
+      }
+    }
+    return () => { controller.abort(); createdUrls.forEach(url => URL.revokeObjectURL(url)) }
+  }, [id, activeListeningPart, listenings])
 
   const hasAnswerValue = value => {
     if (Array.isArray(value)) {
@@ -2116,12 +2155,15 @@ export default function DoMockTest() {
     activeAudioKeyRef.current = activeListeningAudioKey
 
     const pendingRestore = pendingAudioRestoreRef.current
-    const currentSourceUrl =
-      activeSection.listeningPart?.listeningAudioUrl || ''
+    const currentSourceUrl = activeListeningPart?.listeningAudioStoragePath
+      ? `private:${activeListeningPart.listeningId}`
+      : (activeListeningPart?.listeningAudioUrl || '')
     const restoreMatchesCurrentAudio =
       pendingRestore &&
       (!pendingRestore.sourceUrl ||
-        pendingRestore.sourceUrl === currentSourceUrl)
+        pendingRestore.sourceUrl === currentSourceUrl ||
+        (activeListeningPart?.listeningAudioStoragePath &&
+          pendingRestore.sourceUrl === activeListeningPart.listeningAudioUrl))
 
     if (restoreMatchesCurrentAudio) {
       const restoredTime = Math.max(0, Number(pendingRestore.time) || 0)
@@ -2160,11 +2202,13 @@ export default function DoMockTest() {
       audioRef.current.pause()
       audioRef.current.currentTime = 0
     }
-  }, [activeListeningAudioKey, activeSection.listeningPart?.listeningAudioUrl])
+  }, [activeListeningAudioKey, activeListeningPart?.listeningAudioUrl, activeListeningPart?.listeningAudioStoragePath])
 
   useEffect(() => {
     if (!activeSection.key?.startsWith('listening-')) return
     if (!pendingListeningAutoPlayRef.current) return
+    // Do not discard the initial autoplay intent while protected media loads.
+    if (activePrivateListeningId && !activeListeningAudioSrc) return
 
     const timeout = setTimeout(() => {
       if (!audioRef.current || listeningLocked || audioLocked) {
@@ -2186,7 +2230,7 @@ export default function DoMockTest() {
     }, 250)
 
     return () => clearTimeout(timeout)
-  }, [activeSection.key, listeningLocked, audioLocked])
+  }, [activeSection.key, listeningLocked, audioLocked, activePrivateListeningId, activeListeningAudioSrc])
 
   useEffect(() => {
     if (!listeningStarted || listeningLocked) return
@@ -2725,43 +2769,11 @@ export default function DoMockTest() {
     return value?.toString() === item.answer?.toString()
   }
 
-  const getReadingMultiAnswerScore = (readingId, question) => {
-    const selected = Array.isArray(readingAnswers[readingId]?.[question.id])
-      ? readingAnswers[readingId][question.id].map(item => item?.toString())
-      : []
+  const getReadingMultiAnswerScore = (readingId, question) =>
+    scoreMultipleAnswers(readingAnswers[readingId]?.[question.id], question.answers)
 
-    const correctAnswers = Array.isArray(question.answers)
-      ? question.answers.map(item => item?.toString())
-      : []
-
-    const correctCount = selected.filter(answer =>
-      correctAnswers.includes(answer)
-    ).length
-
-    return {
-      correct: correctCount,
-      total: correctAnswers.length || 2
-    }
-  }
-
-  const getListeningMultiAnswerScore = question => {
-    const selected = Array.isArray(listeningAnswers[question.id])
-      ? listeningAnswers[question.id].map(item => item?.toString())
-      : []
-
-    const correctAnswers = Array.isArray(question.answers)
-      ? question.answers.map(item => item?.toString())
-      : []
-
-    const correctCount = selected.filter(answer =>
-      correctAnswers.includes(answer)
-    ).length
-
-    return {
-      correct: correctCount,
-      total: correctAnswers.length || 2
-    }
-  }
+  const getListeningMultiAnswerScore = question =>
+    scoreMultipleAnswers(listeningAnswers[question.id], question.answers)
 
   const isListeningCompletionPartCorrect = (question, section, item) => {
     const key = listeningCompletionAnswerKey(question.id, section.id, item.id)
@@ -2771,7 +2783,7 @@ export default function DoMockTest() {
       return userAnswer?.toString().trim() === item.answer?.toString().trim()
     }
 
-    return isBlankCorrect(
+    return isIELTSListeningBlankCorrect(
       userAnswer,
       item.answer,
       item.acceptedAnswers,
@@ -2789,7 +2801,8 @@ export default function DoMockTest() {
     const key = matchingAnswerKey(question.id, item.id)
     const userAnswer = listeningAnswers[key]
 
-    return normalize(userAnswer) === normalize(item.answer)
+    return Boolean(normalizeIELTSListeningAnswer(userAnswer)) &&
+      normalizeIELTSListeningAnswer(userAnswer) === normalizeIELTSListeningAnswer(item.answer)
   }
 
   const getListeningMatchingOptionText = (question, letter) => {
@@ -2805,7 +2818,8 @@ export default function DoMockTest() {
       return sortAnswers(value).join('|') === sortAnswers(question.answers || []).join('|')
     }
 
-    return normalize(value) === normalize(question.answer)
+    return Boolean(normalizeIELTSListeningAnswer(value)) &&
+      normalizeIELTSListeningAnswer(value) === normalizeIELTSListeningAnswer(question.answer)
   }
 
   const scoreListening = () => {
@@ -2826,7 +2840,7 @@ export default function DoMockTest() {
               const userAnswer = listeningAnswers[tableAnswerKey(question.id, row.id, cellIndex)]
 
               if (
-                isBlankCorrect(
+                isIELTSListeningBlankCorrect(
                   userAnswer,
                   cell.answer,
                   cell.acceptedAnswers,
@@ -2863,7 +2877,8 @@ export default function DoMockTest() {
           total++
           const userAnswer = listeningAnswers[mapAnswerKey(question.id, item.id)]
 
-          if (normalize(userAnswer) === normalize(item.answer)) {
+          if (Boolean(normalizeIELTSListeningAnswer(userAnswer)) &&
+      normalizeIELTSListeningAnswer(userAnswer) === normalizeIELTSListeningAnswer(item.answer)) {
             correct++
           }
         })
@@ -3084,7 +3099,7 @@ export default function DoMockTest() {
         value !== null &&
         value !== undefined &&
         value !== '' &&
-        Number.isFinite(Number(value))
+        Number.isFinite(Number(value)) && Number(value) > 0
     )
 
     const overallEstimate = availableBands.length
@@ -3202,6 +3217,11 @@ export default function DoMockTest() {
       audioLastTimeRef.current = currentTime
       setAudioCurrentTime(currentTime)
     }
+  }
+
+  const handleAudioDurationChange = () => {
+    const duration = Number(audioRef.current?.duration)
+    if (Number.isFinite(duration) && duration > 0) setAudioDuration(duration)
   }
 
   const handleAudioLoadedMetadata = () => {
@@ -3323,6 +3343,7 @@ export default function DoMockTest() {
     }
 
     submittingRef.current = true
+    setMockAiGateOutcome(null)
     setSubmitting(true)
 
     try {
@@ -3407,6 +3428,9 @@ export default function DoMockTest() {
 
       let submissionForReview = {
         mockTestId: mock.id,
+        attemptNumber: Number(payload.attemptNumber) ||
+          (attemptState?.open ? Number(attemptState.nextAttemptNumber) :
+            Number(attemptState?.currentAttemptNumber)) || 1,
         listeningAnswers: listeningAnswers || {},
         readingAnswers: readingAnswers || {},
         writingAnswers: {
@@ -3453,7 +3477,8 @@ export default function DoMockTest() {
       }
 
       setCompletedSubmission(submissionForReview)
-      setFinalResult(result)
+      setFinalResult(payload.alreadySubmitted && submissionForReview.result
+        ? submissionForReview.result : result)
       setAttemptState(previous => ({
         ...(previous || {}),
         open: false,
@@ -4129,7 +4154,7 @@ ${previousLabel} will be permanently locked and you will not be able to return t
         </div>
       )}
 
-      <div className="bg-white border border-gray-100 rounded-2xl p-6 sticky top-[120px] z-10">
+      <div className="bg-white border border-gray-100 rounded-2xl p-6">
         <h2 className="text-xl font-bold text-gray-900 mb-1">
           {part?.listeningTitle || 'Listening'}
         </h2>
@@ -4144,6 +4169,12 @@ ${previousLabel} will be permanently locked and you will not be able to return t
           </p>
         )}
 
+        {activePrivateListeningId && privateAudio.listeningId === activePrivateListeningId && privateAudio.error && (
+          <p role="alert" className="text-sm text-red-600 mb-3">{privateAudio.error}</p>
+        )}
+        {activePrivateListeningId && !activeListeningAudioSrc && !privateAudio.error && (
+          <p className="text-sm text-gray-500 mb-3">Loading secure Listening audio...</p>
+        )}
         {audioWarning && (
           <div className="bg-amber-50 border border-amber-100 text-amber-700 rounded-xl p-3 mb-4 text-xs font-medium">
             {audioWarning}
@@ -4169,7 +4200,7 @@ ${previousLabel} will be permanently locked and you will not be able to return t
                 (audioStarted && !audioResumePending) ||
                 listeningLocked ||
                 audioLocked ||
-                !part?.listeningAudioUrl
+                !activeListeningAudioSrc
               }
               className="bg-purple-600 text-white rounded-xl px-5 py-2.5 text-sm font-semibold hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed"
             >
@@ -4212,9 +4243,10 @@ ${previousLabel} will be permanently locked and you will not be able to return t
         <audio
           ref={audioRef}
           preload="metadata"
-          src={part?.listeningAudioUrl}
+          src={activeListeningAudioSrc || undefined}
           className="hidden"
           onLoadedMetadata={handleAudioLoadedMetadata}
+            onDurationChange={handleAudioDurationChange}
           onPlay={handleAudioPlay}
           onPause={handleAudioPause}
           onSeeking={handleAudioSeeking}
@@ -4448,10 +4480,19 @@ ${previousLabel} will be permanently locked and you will not be able to return t
 
                 <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)] gap-5 lg:items-start">
                   <div className="space-y-4 lg:sticky lg:top-[210px]">
-                    {question.mapImage && (
+                    {question.mapImageStoragePath && privateMapErrors[`${part.id}::${question.id}`] && (
+                      <p role="alert" className="text-sm text-red-600">Secure map could not be loaded.</p>
+                    )}
+                    {question.mapImageStoragePath && !privateMapUrls[`${part.id}::${question.id}`] &&
+                      !privateMapErrors[`${part.id}::${question.id}`] && (
+                        <p className="text-sm text-gray-500">Loading secure map...</p>
+                      )}
+                    {(question.mapImageStoragePath
+                      ? privateMapUrls[`${part.id}::${question.id}`]
+                      : question.mapImage) && (
                       <div className="bg-white border border-gray-100 rounded-2xl p-4">
                         <img
-                          src={question.mapImage}
+                          src={question.mapImageStoragePath ? privateMapUrls[`${part.id}::${question.id}`] : question.mapImage}
                           alt="Map"
                           className="w-full max-h-[520px] object-contain rounded-xl bg-gray-50"
                         />
@@ -5848,7 +5889,7 @@ ${previousLabel} will be permanently locked and you will not be able to return t
                   question.instruction,
                 userAnswer,
                 correctAnswer: cell.answer,
-                correct: isBlankCorrect(
+                correct: isIELTSListeningBlankCorrect(
                   userAnswer,
                   cell.answer,
                   cell.acceptedAnswers,
@@ -5913,8 +5954,9 @@ ${previousLabel} will be permanently locked and you will not be able to return t
               userAnswer,
               correctAnswer: item.answer,
               correct:
-                normalize(userAnswer) ===
-                normalize(item.answer)
+                Boolean(normalizeIELTSListeningAnswer(userAnswer)) &&
+                normalizeIELTSListeningAnswer(userAnswer) ===
+                normalizeIELTSListeningAnswer(item.answer)
             })
           })
 
@@ -6373,6 +6415,34 @@ ${previousLabel} will be permanently locked and you will not be able to return t
   }
 
   if (finalResult) {
+    // The secure submission returns objective scores immediately. For an
+    // institution student's Writing Mock, withhold the score screen until
+    // the separate AI job has completed AND its Overall sync is saved.
+    // A pre-existing complete AI or teacher score can be shown immediately.
+    const waitingForMockAi = enabledSections.writing &&
+      studentProfile && isInstitutionWritingStudent(studentProfile) &&
+      !mockAiGateOutcome &&
+      !savedMockWritingScoreReady(finalResult, completedSubmission)
+
+    if (waitingForMockAi) {
+      return (
+        <MockAiResultsGate
+          key={`${user?.uid || ''}:${id}:${completedSubmission?.attemptNumber ||
+            attemptState?.currentAttemptNumber || 1}`}
+          mockTestId={id}
+          attemptNumber={Number(completedSubmission?.attemptNumber) ||
+            Number(attemptState?.currentAttemptNumber) || 1}
+          onRelease={({ result, outcome }) => {
+            setFinalResult(result)
+            setCompletedSubmission(previous => previous
+              ? { ...previous, result } : previous)
+            setMockAiGateOutcome(outcome)
+          }}
+          onBack={() => navigate('/student')}
+        />
+      )
+    }
+
     const listeningReviewItems = buildListeningReviewItems()
     const readingReviewItems = buildReadingReviewItems()
     const listeningMistakes = listeningReviewItems.filter(
@@ -6406,21 +6476,31 @@ ${previousLabel} will be permanently locked and you will not be able to return t
     const aiBand = aiBandValue === null || aiBandValue === undefined || aiBandValue === ''
       ? null : Number(aiBandValue)
     const hasAiBand = Number.isFinite(aiBand) && aiBand > 0
-    const displayedOverall =
-      finalResult?.finalOverall ||
-      finalResult?.overall ||
-      finalResult?.overallEstimate ||
-      '-'
+    const pendingWritingScore = enabledSections.writing &&
+      Boolean(mockAiGateOutcome) &&
+      !savedMockWritingScoreReady(finalResult, completedSubmission)
+    const displayedOverall = pendingWritingScore ? '-' :
+      (finalResult?.finalOverall ||
+        finalResult?.overall ||
+        finalResult?.overallEstimate ||
+        '-')
+    const writingPresentationSubmission = { ...completedSubmission, result: finalResult, writingMode }
+    const writingDisplayBand = teacherWritingBand ?? (hasAiBand ? aiBand : null)
+    const writingBandLabel = teacherWritingBand !== null
+      ? 'Teacher band (takes priority)'
+      : hasAiBand ? 'AI estimate · Teacher may review' : partialWritingSummary(writingPresentationSubmission) ? 'Partial AI feedback ready · Combined band unavailable' : 'Not yet graded'
 
-    const overallLabel = enabledSections.writing
-      ? writingReviewed
-        ? 'Overall uses teacher Writing band (priority over AI)'
-        : hasAiBand
-          ? 'Overall includes AI Writing estimate · Teacher grade optional'
-          : enabledSections.listening || enabledSections.reading
-            ? 'Current estimate from objective sections · Teacher grade optional'
-            : 'Writing band not yet available · Teacher grade optional'
-      : 'Overall from included objective sections'
+    const overallLabel = pendingWritingScore
+      ? 'Overall unavailable until Writing receives a valid band'
+      : enabledSections.writing
+        ? writingReviewed
+          ? 'Overall uses teacher Writing band (priority over AI)'
+          : hasAiBand
+            ? 'Overall includes AI Writing estimate · Teacher grade optional'
+            : enabledSections.listening || enabledSections.reading
+              ? 'Current estimate from objective sections · Teacher grade optional'
+              : 'Writing band not yet available · Teacher grade optional'
+        : 'Overall from included objective sections'
 
     return (
       <div className="min-h-screen bg-[#faf9f6]">
@@ -6468,9 +6548,14 @@ ${previousLabel} will be permanently locked and you will not be able to return t
             </p>
           </div>
 
-          {(enabledSections.listening || enabledSections.reading) && (
-            <div className={`grid grid-cols-1 ${enabledSections.listening && enabledSections.reading
-              ? 'md:grid-cols-2' : 'max-w-md mx-auto'} gap-4 mb-6`}>
+          <PartialWritingNotice submission={writingPresentationSubmission} />
+
+          {(enabledSections.listening || enabledSections.reading || enabledSections.writing) && (
+            <div className={`grid grid-cols-1 ${[
+              enabledSections.listening, enabledSections.reading, enabledSections.writing
+            ].filter(Boolean).length === 3 ? 'md:grid-cols-3' :
+              [enabledSections.listening, enabledSections.reading, enabledSections.writing]
+                .filter(Boolean).length === 2 ? 'md:grid-cols-2' : 'max-w-md mx-auto'} gap-4 mb-6`}>
               {enabledSections.listening && (
                 <div className="bg-white border border-gray-100 rounded-2xl p-5">
                   <p className="text-xs text-gray-400 mb-1">Listening</p>
@@ -6490,6 +6575,17 @@ ${previousLabel} will be permanently locked and you will not be able to return t
                   </p>
                   <p className="text-xs text-gray-400 mt-1">
                     {finalResult.reading.correct}/{finalResult.reading.total}
+                  </p>
+                </div>
+              )}
+              {enabledSections.writing && (
+                <div className="bg-white border border-gray-100 rounded-2xl p-5">
+                  <p className="text-xs text-gray-400 mb-1">Writing</p>
+                  <p className="text-3xl font-bold text-indigo-600">
+                    {writingDisplayBand ?? '-'}
+                  </p>
+                  <p className="text-xs text-gray-400 mt-1">
+                    {writingBandLabel}
                   </p>
                 </div>
               )}

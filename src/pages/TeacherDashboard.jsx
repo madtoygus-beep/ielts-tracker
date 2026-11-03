@@ -1,4 +1,8 @@
+import { dashboardMockOverall } from '../services/mockAiResultGatePolicy'
+import PartialWritingNotice from '../components/PartialWritingNotice'
+import { partialWritingSummary } from '../services/partialWritingPresentation'
 import { useState, useEffect, useRef, useMemo } from 'react'
+import { getReadingBand, savedObjectiveBand, scoreMultipleAnswers, formatHomeworkScore, objectiveAccuracy } from '../services/ieltsObjectiveScoring'
 import { auth, db, storage, functions } from '../firebase'
 import {
   collection,
@@ -21,10 +25,12 @@ import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from 'fi
 import { useNavigate } from 'react-router-dom'
 import { httpsCallable } from 'firebase/functions'
 import { buildP8CAssignmentDelta } from '../services/p8cAssignmentDelta'
+import { useEscapeDismiss } from '../hooks/useEscapeDismiss'
 import AiWritingTeacherPanel from '../components/AiWritingTeacherPanel'
 import AiWritingSponsoredAssignmentPanel from '../components/AiWritingSponsoredAssignmentPanel'
 import { buildMissingWritingReviewSources } from '../services/teacherWritingReviewFallbacks'
 import { mockWritingDisplayStatus } from '../services/p7uiReviewPresentation'
+import { groupScoresByStudent } from '../services/p0bG4AcademicScoreGrouping'
 import {
   AI_SPONSORED_SCHOOL_ID,
   activeTeacherAiClassStudentIds,
@@ -69,6 +75,9 @@ const getManagedContentStudentAccessSnapshotCall = httpsCallable(
   'getManagedContentStudentAccessSnapshot'
 )
 const setContentStudentAccessCall = httpsCallable(functions, 'setContentStudentAccess')
+const duplicatePrivateListeningContentCall = httpsCallable(
+  functions, 'duplicatePrivateListeningContent', { timeout: 120000 }
+)
 const getSponsoredPolicyCall = httpsCallable(functions, 'getAiWritingSponsoredPolicy')
 const setSponsoredPolicyCall = httpsCallable(functions, 'setAiWritingSponsoredPolicy')
 const setContentArchivedStateCall = httpsCallable(functions, 'setContentArchivedState')
@@ -89,6 +98,8 @@ const setManagedSubmissionStatsExclusionCall = httpsCallable(
   'setManagedSubmissionStatsExclusion'
 )
 const saveMockWritingReviewSecureCall = httpsCallable(functions, 'saveMockWritingReviewSecure')
+const saveWritingReviewSecureCall = httpsCallable(functions, 'saveWritingReviewSecure')
+const createAdminManualScoreSecureCall = httpsCallable(functions, 'createAdminManualScoreSecure')
 const previewManagedSubmissionPermanentDeleteCall = httpsCallable(
   functions,
   'previewManagedSubmissionPermanentDelete'
@@ -182,7 +193,7 @@ function listenMergedQueries(
       snapshot => {
         buckets.set(
           index,
-          snapshot.docs.map(item => ({ id: item.id, ...item.data() }))
+          snapshot.docs.map(item => ({ ...item.data(), id: item.id }))
         )
         emit()
       },
@@ -308,7 +319,7 @@ function listenCanonicalTeacherBatches(studentIds, buildQuery, onItems, label, o
   const subscribe = (ids, key) => {
     const unsubscribe = onSnapshot(buildQuery(ids), snapshot => {
       if (!active) return
-      buckets.set(key, snapshot.docs.map(item => ({ id: item.id, ...item.data() })))
+      buckets.set(key, snapshot.docs.map(item => ({ ...item.data(), id: item.id })))
       emit()
     }, error => {
       if (!active) return
@@ -330,19 +341,6 @@ function listenCanonicalTeacherBatches(studentIds, buildQuery, onItems, label, o
     unsubscribers.forEach(unsubscribe => unsubscribe())
     buckets.clear()
   }
-}
-
-function groupScoresByStudent(scoreItems) {
-  const grouped = {}
-  scoreItems.forEach(score => {
-    if (!score.uid) return
-    if (!grouped[score.uid]) grouped[score.uid] = []
-    grouped[score.uid].push(score)
-  })
-  Object.values(grouped).forEach(items =>
-    items.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0))
-  )
-  return grouped
 }
 
 // MAXIMA Teacher Workspace V2 - presentation-only components.
@@ -709,6 +707,9 @@ export default function TeacherDashboard() {
     speaking: '',
     date: ''
   })
+  // Stable idempotency key until a save succeeds, including network retries.
+  const manualScoreSubmittingRef = useRef(false)
+  const manualScoreRequestRef = useRef(null)
 
   const [user, setUser] = useState(null)
   const [profile, setProfile] = useState(null)
@@ -748,6 +749,49 @@ export default function TeacherDashboard() {
   const [dashboardDataError, setDashboardDataError] = useState('')
 
   const navigate = useNavigate()
+  useEscapeDismiss(() => {
+    if (legacyCascadeDialog) {
+      if (legacyCascadeDialog.saving) return false
+      setLegacyCascadeDialog(null)
+      return true
+    }
+    if (deleteDialogOpen) {
+      if (attemptManagerSaving) return false
+      closeDeleteDialog()
+      return true
+    }
+    if (statsDialogMode) {
+      if (attemptManagerSaving) return false
+      closeStatsDialog()
+      return true
+    }
+    if (attemptManager) {
+      if (attemptManagerSaving) return false
+      closeSubmissionAttemptManager()
+      return true
+    }
+    if (materialShareTarget) {
+      if (materialShareSaving) return false
+      closeMaterialShareAgain()
+      return true
+    }
+    if (selectedHomework) {
+      if (assignmentSaving) return false
+      closeAssignmentManager()
+      return true
+    }
+    if (selectedWritingReview || selectedMockWritingReview) {
+      setSelectedWritingReview(null)
+      setSelectedMockWritingReview(null)
+      resetWritingReviewForm()
+      return true
+    }
+    if (selectedVocabularyReview) { setSelectedVocabularyReview(null); return true }
+    if (selectedReview) { setSelectedReview(null); return true }
+    if (showPasswordModal) { setShowPasswordModal(false); return true }
+    if (createMenuOpen) { setCreateMenuOpen(false); return true }
+    return false
+  })
 
   useEffect(() => {
     try {
@@ -934,7 +978,7 @@ export default function TeacherDashboard() {
           trackSnapshot(onSnapshot(
             query(collection(db, 'users'), where('role', '==', 'student')),
             snap => setStudents(presentStudents(
-              snap.docs.map(d => ({ id: d.id, ...d.data() }))
+              snap.docs.map(d => ({ ...d.data(), id: d.id }))
             )),
             error => reportLiveQueryError(error, 'Student list query')
           ))
@@ -1034,7 +1078,7 @@ export default function TeacherDashboard() {
             classesQuery,
             snap => {
               const list = snap.docs
-                .map(d => ({ id: d.id, ...d.data() }))
+                .map(d => ({ ...d.data(), id: d.id }))
                 .filter(classItem => {
                   if (classItem.archived === true) return false
                   if (isAdminUser) return true
@@ -1427,38 +1471,59 @@ export default function TeacherDashboard() {
   )
 
   const handleAddScore = async () => {
-    if (
-      !form.listening ||
-      !form.reading ||
-      !form.writing ||
-      !form.speaking ||
-      !form.date
-    ) {
+    if (manualScoreSubmittingRef.current || !user || !selected || !profile) return
+    if ([form.listening, form.reading, form.writing, form.speaking, form.date]
+        .some(value => value === null || value === undefined || String(value).trim() === '')) {
+      alert('Complete all four IELTS bands and the test date.')
       return
     }
-
-    const scoreTeacherIds = profile?.role === 'teacher'
-      ? [user.uid]
-      : selected.teacherIds || []
-
-    await addDoc(collection(db, 'scores'), {
-      ...form,
-      uid: getStudentPrimaryAssignmentId(selected),
-      studentId: getStudentPrimaryAssignmentId(selected),
-      overall: overall(form),
-      addedBy: user.uid,
-      teacherId: scoreTeacherIds[0] || '',
-      teacherIds: scoreTeacherIds,
-      schoolId: profile?.schoolId || getSchoolId(selected)
-    })
-
-    setForm({
-      listening: '',
-      reading: '',
-      writing: '',
-      speaking: '',
-      date: ''
-    })
+    manualScoreSubmittingRef.current = true
+    try {
+      if (profile.role === 'admin') {
+        // selected.id comes from snap.id, never from legacy uid/authUid/email.
+        const studentId = selected.id
+        if (typeof studentId !== 'string' || !studentId || studentId.includes('/')) {
+          throw new Error('Cannot establish the student document ID. Refresh the student list.')
+        }
+        const payload = {
+          studentId,
+          date: form.date,
+          listening: form.listening,
+          reading: form.reading,
+          writing: form.writing,
+          speaking: form.speaking
+        }
+        const fingerprint = JSON.stringify(payload)
+        if (manualScoreRequestRef.current?.fingerprint !== fingerprint) {
+          manualScoreRequestRef.current = {fingerprint, requestId: crypto.randomUUID()}
+        }
+        await createAdminManualScoreSecureCall({
+          ...payload, requestId: manualScoreRequestRef.current.requestId
+        })
+      } else if (profile.role === 'teacher') {
+        // Keep existing teacher direct-write path; tightened Firestore Rules
+        // still demand current active classroom membership.
+        await addDoc(collection(db, 'scores'), {
+          ...form,
+          uid: getStudentPrimaryAssignmentId(selected),
+          studentId: getStudentPrimaryAssignmentId(selected),
+          overall: overall(form),
+          addedBy: user.uid,
+          teacherId: user.uid,
+          teacherIds: [user.uid],
+          schoolId: profile?.schoolId || getSchoolId(selected)
+        })
+      } else {
+        throw new Error('Manual IELTS scores require a staff account.')
+      }
+      manualScoreRequestRef.current = null
+      setForm({listening:'', reading:'', writing:'', speaking:'', date:''})
+    } catch (error) {
+      console.error('Could not save manual IELTS score:',error)
+      alert(error?.message || 'The IELTS score was not saved. Please try again.')
+    } finally {
+      manualScoreSubmittingRef.current = false
+    }
   }
 
   const latestScore = studentId => {
@@ -2927,13 +2992,10 @@ export default function TeacherDashboard() {
 
     if (contentType === 'mock') {
       const overall = result.reviewedOverall ?? result.finalOverall ?? result.overall ?? result.overallEstimate
-      return `Overall ${overall ?? '-'} · L ${result.listening?.band ?? '-'} · R ${result.reading?.band ?? '-'}`
+      return `Overall ${overall ?? '-'} · L ${savedObjectiveBand('listening', result.listening) ?? '-'} · R ${savedObjectiveBand('reading', result.reading) ?? '-'}`
     }
 
-    const band = result.band ?? result.estimatedBand ?? '-'
-    const correct = result.correct ?? '-'
-    const total = result.total ?? '-'
-    return `Band ${band} · ${correct}/${total} correct`
+    return formatHomeworkScore(result)
   }
 
   const formatAttemptHistoryDate = value => {
@@ -3554,27 +3616,21 @@ export default function TeacherDashboard() {
 
     if (!ok) return
 
-    const {
-      id,
-      createdAt,
-      updatedAt,
-      createdBy,
-      archived,
-      ...copyData
-    } = listening
-
-    await addDoc(collection(db, 'listenings'), {
-      ...copyData,
-      title: `${listening.title} Copy`,
-      visibility: 'private',
-      archived: false,
-      createdBy: user.uid,
-      teacherId: profile?.role === 'teacher' ? user.uid : listening.teacherId || '',
-      teacherIds: profile?.role === 'teacher' ? [user.uid] : listening.teacherIds || (listening.teacherId ? [listening.teacherId] : []),
-      schoolId: profile?.schoolId || getSchoolId(listening),
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    })
+    // Do not copy a private object path (bound to the original Listening ID),
+    // and never carry forward a legacy download-token URL to a new document.
+    const targetListeningId = doc(collection(db, 'listenings')).id
+    try {
+      const result = await duplicatePrivateListeningContentCall({
+        sourceListeningId: listening.id,
+        targetListeningId
+      })
+      if (result.data?.ok !== true || result.data.listeningId !== targetListeningId) {
+        throw new Error('The secure duplicate was not confirmed.')
+      }
+    } catch (error) {
+      console.error('Could not duplicate this Listening safely:', error)
+      alert('Listening could not be duplicated securely. Older media must first be migrated to private storage. No copy was created. ' + (error?.message || ''))
+    }
   }
 
   const archiveVocabularyTest = async vocabularyTest => {
@@ -4130,18 +4186,7 @@ export default function TeacherDashboard() {
     return merged
   }
 
-  const getPartialMultiAnswerScore = (selectedAnswers, correctAnswers) => {
-    const selected = Array.isArray(selectedAnswers)
-      ? Array.from(new Set(selectedAnswers.map(value => value?.toString()).filter(Boolean)))
-      : []
-    const expected = Array.isArray(correctAnswers)
-      ? correctAnswers.map(value => value?.toString()).filter(Boolean)
-      : []
-    const total = expected.length || 2
-    const correct = selected.filter(value => expected.includes(value)).length
-
-    return { correct, total }
-  }
+  const getPartialMultiAnswerScore = scoreMultipleAnswers
 
   const normalizeVocabularyValue = value =>
     value === undefined || value === null
@@ -4217,24 +4262,7 @@ export default function TeacherDashboard() {
 
 
 
-  const estimateReadingBand = (correct, total) => {
-    if (!total) return null
-
-    const percentage = (correct / total) * 100
-
-    if (percentage >= 90) return 9
-    if (percentage >= 85) return 8.5
-    if (percentage >= 80) return 8
-    if (percentage >= 75) return 7.5
-    if (percentage >= 70) return 7
-    if (percentage >= 65) return 6.5
-    if (percentage >= 60) return 6
-    if (percentage >= 50) return 5.5
-    if (percentage >= 40) return 5
-    if (percentage >= 30) return 4.5
-    if (percentage >= 20) return 4
-    return 3.5
-  }
+  const estimateReadingBand = getReadingBand
 
   const getReadingSubmissionResult = submission => {
     const reading = readings.find(item => item.id === submission.readingId)
@@ -4324,6 +4352,13 @@ export default function TeacherDashboard() {
         return
       }
 
+      if (question.type === 'mcq' && question.mode === 'multi') {
+        const multi = scoreMultipleAnswers(submission.answers?.[question.id], question.answers)
+        correct += multi.correct
+        total += multi.total
+        return
+      }
+
       total++
 
       if (isNormalCorrect(submission, question)) {
@@ -4342,8 +4377,8 @@ export default function TeacherDashboard() {
   const getAverageReadingEstimatedBand = () => {
     const bands = analyticsReadingSubmissions
       .map(submission => {
-        if (submission.result?.band) return Number(submission.result.band)
-        if (submission.result?.estimatedBand) return Number(submission.result.estimatedBand)
+        const saved = savedObjectiveBand('reading', submission.result)
+        if (saved !== null) return saved
 
         const result = getReadingSubmissionResult(submission)
         return result?.estimatedBand
@@ -4518,10 +4553,11 @@ export default function TeacherDashboard() {
 
         if (!latest) return null
 
-        const result = latest.result?.band
+        const saved = savedObjectiveBand('reading', latest.result)
+        const result = saved !== null
           ? {
-              estimatedBand: Number(latest.result.band),
-              accuracy: latest.result.accuracy || null
+              estimatedBand: saved,
+              accuracy: latest.result.accuracy ?? null
             }
           : getReadingSubmissionResult(latest)
 
@@ -4679,21 +4715,32 @@ export default function TeacherDashboard() {
       .sort((a, b) => new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0))
   }
 
-  const getAverageReadingEstimatedBandFromSubmissions = targetSubmissions => {
-    const bands = targetSubmissions
-      .map(submission => {
-        if (submission.result?.band) return Number(submission.result.band)
-        if (submission.result?.estimatedBand) return Number(submission.result.estimatedBand)
+  const getAverageReadingAccuracyFromSubmissions = targetSubmissions => {
+    let totalCorrect = 0
+    let totalQuestions = 0
 
-        const result = getReadingSubmissionResult(submission)
-        return result?.estimatedBand
-      })
-      .filter(value => !Number.isNaN(value) && value > 0)
+    for (const submission of targetSubmissions) {
+      const stored = submission?.result || {}
+      const hasStored = stored.correct != null && stored.total != null
+      let correct = hasStored ? Number(stored.correct) : NaN
+      let total = hasStored ? Number(stored.total) : NaN
 
-    if (bands.length === 0) return null
+      if (!Number.isFinite(correct) || !Number.isFinite(total) || total <= 0) {
+        const derived = getReadingSubmissionResult(submission)
+        correct = Number(derived?.correct)
+        total = Number(derived?.total)
+      }
 
-    const avg = bands.reduce((sum, value) => sum + value, 0) / bands.length
-    return (Math.round(avg * 10) / 10).toFixed(1)
+      if (Number.isFinite(correct) && Number.isFinite(total) &&
+          total > 0 && correct >= 0 && correct <= total) {
+        totalCorrect += correct
+        totalQuestions += total
+      }
+    }
+
+    return totalQuestions > 0
+      ? Math.round(totalCorrect * 100 / totalQuestions)
+      : null
   }
 
   const getReadingCompletionStatsForStudent = studentId => {
@@ -4993,15 +5040,17 @@ export default function TeacherDashboard() {
     }
   }
 
-  const getAverageListeningBandFromSubmissions = targetSubmissions => {
-    const bands = targetSubmissions
-      .map(submission => Number(submission.result?.band))
-      .filter(value => !Number.isNaN(value) && value > 0)
-
-    if (bands.length === 0) return null
-
-    const avg = bands.reduce((sum, value) => sum + value, 0) / bands.length
-    return (Math.round(avg * 10) / 10).toFixed(1)
+  const getAverageListeningAccuracyFromSubmissions = targetSubmissions => {
+    const totals = targetSubmissions.reduce((stats, submission) => {
+      const correct = submission.result?.correct
+      const total = submission.result?.total
+      if (objectiveAccuracy(correct, total) !== null) {
+        stats.correct += correct
+        stats.total += total
+      }
+      return stats
+    }, { correct: 0, total: 0 })
+    return objectiveAccuracy(totals.correct, totals.total)
   }
 
   const getListeningTypeAnalyticsForSubmissions = targetSubmissions => {
@@ -5334,7 +5383,7 @@ export default function TeacherDashboard() {
 
   const getAverageListeningBand = () => {
     const bands = analyticsListeningSubmissions
-      .map(sub => Number(sub.result?.band))
+      .map(sub => savedObjectiveBand('listening', sub.result))
       .filter(value => !Number.isNaN(value) && value > 0)
 
     if (bands.length === 0) return null
@@ -5474,7 +5523,7 @@ export default function TeacherDashboard() {
     return students
       .map(student => {
         const studentSubs = analyticsListeningSubmissions
-          .filter(sub => submissionBelongsToStudent(sub, student) && sub.result?.band)
+          .filter(sub => submissionBelongsToStudent(sub, student) && savedObjectiveBand('listening', sub.result) !== null)
           .sort(
             (a, b) =>
               new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0)
@@ -5486,7 +5535,7 @@ export default function TeacherDashboard() {
 
         return {
           student,
-          latestBand: Number(latest.result.band),
+          latestBand: savedObjectiveBand('listening', latest.result),
           submissions: studentSubs.length
         }
       })
@@ -5619,17 +5668,7 @@ export default function TeacherDashboard() {
     return Number.isFinite(number) && number > 0 ? number.toFixed(1) : '-'
   }
 
-  const getMockOverall = submission => {
-    const result = submission?.result || {}
-
-    return (
-      result.reviewedOverall ||
-      result.finalOverall ||
-      result.overall ||
-      result.overallEstimate ||
-      null
-    )
-  }
+  const getMockOverall = submission => dashboardMockOverall(submission)
 
 
   const getMockTypeForSubmission = submission => {
@@ -5676,6 +5715,7 @@ export default function TeacherDashboard() {
       return `AI estimate · Band ${formatBand(aiBand)} · Teacher grade optional`
     }
 
+    if (partialWritingSummary(submission)) return 'Partial AI feedback ready · Combined Writing band unavailable'
     return 'Teacher grade not added (optional)'
   }
 
@@ -5763,8 +5803,8 @@ export default function TeacherDashboard() {
       appendCell(row, formatDateShort(submission.submittedAt))
       appendCell(row, getMockTitle(submission))
       appendCell(row, getMockTypeLabelForSubmission(submission))
-      appendCell(row, formatBand(result.listening?.band))
-      appendCell(row, formatBand(result.reading?.band))
+      appendCell(row, formatBand(savedObjectiveBand('listening', result.listening)))
+      appendCell(row, formatBand(savedObjectiveBand('reading', result.reading)))
       const teacherWritingBand = getMockWritingBand(submission)
       const aiWritingBand = Number(result.writing?.aiEstimatedBand)
       appendCell(row, teacherWritingBand
@@ -6056,15 +6096,16 @@ export default function TeacherDashboard() {
       return
     }
 
-    await updateDoc(
-      doc(db, 'writingSubmissions', selectedWritingReview.submission.id),
-      {
-        reviewed: true,
-        reviewedAt: new Date().toISOString(),
-        reviewedBy: user.uid,
-        review: buildWritingReviewPayload()
-      }
-    )
+    const submission = selectedWritingReview.submission
+    await saveWritingReviewSecureCall({
+      studentId: submission.uid || submission.studentId,
+      writingId: submission.writingId,
+      submissionId: submission.id,
+      submittedAt: submission.submittedAt,
+      attemptNumber: Number.isSafeInteger(submission.attemptNumber) && submission.attemptNumber > 0
+        ? submission.attemptNumber : 1,
+      review: buildWritingReviewPayload()
+    })
 
     setSelectedWritingReview(null)
     resetWritingReviewForm()
@@ -6389,8 +6430,8 @@ export default function TeacherDashboard() {
   const selectedAnalyticsReadingStats = selectedAnalyticsStudent
     ? getReadingCompletionStatsForStudent(selectedAnalyticsStudent.id)
     : null
-  const selectedAnalyticsAverageReadingBand = selectedAnalyticsStudent
-    ? getAverageReadingEstimatedBandFromSubmissions(selectedAnalyticsReadingSubmissions)
+  const selectedAnalyticsAverageReadingAccuracy = selectedAnalyticsStudent
+    ? getAverageReadingAccuracyFromSubmissions(selectedAnalyticsReadingSubmissions)
     : null
   const selectedAnalyticsReadingTypeAnalytics = selectedAnalyticsStudent
     ? getReadingTypeAnalyticsForSubmissions(selectedAnalyticsReadingSubmissions)
@@ -6408,8 +6449,8 @@ export default function TeacherDashboard() {
   const selectedAnalyticsListeningStats = selectedAnalyticsStudent
     ? getListeningCompletionStatsForStudent(selectedAnalyticsStudent.id)
     : null
-  const selectedAnalyticsAverageListeningBand = selectedAnalyticsStudent
-    ? getAverageListeningBandFromSubmissions(selectedAnalyticsListeningSubmissions)
+  const selectedAnalyticsAverageListeningAccuracy = selectedAnalyticsStudent
+    ? getAverageListeningAccuracyFromSubmissions(selectedAnalyticsListeningSubmissions)
     : null
   const selectedAnalyticsListeningTypeAnalytics = selectedAnalyticsStudent
     ? getListeningTypeAnalyticsForSubmissions(selectedAnalyticsListeningSubmissions)
@@ -6822,7 +6863,7 @@ export default function TeacherDashboard() {
                       </p>
 
                       <p className="text-xs text-gray-500 mt-2">
-                        {selectedAnalyticsReadingStats?.completed || 0}/{selectedAnalyticsReadingStats?.assigned || 0} completed · Avg Band {selectedAnalyticsAverageReadingBand || '--'}
+                        {selectedAnalyticsReadingStats?.completed || 0}/{selectedAnalyticsReadingStats?.assigned || 0} completed · Avg Accuracy {selectedAnalyticsAverageReadingAccuracy === null ? '--' : `${selectedAnalyticsAverageReadingAccuracy}%`}
                       </p>
                     </div>
 
@@ -6836,7 +6877,7 @@ export default function TeacherDashboard() {
                       </p>
 
                       <p className="text-xs text-gray-500 mt-2">
-                        {selectedAnalyticsListeningStats?.completed || 0}/{selectedAnalyticsListeningStats?.assigned || 0} completed · Avg Band {selectedAnalyticsAverageListeningBand || '--'}
+                        {selectedAnalyticsListeningStats?.completed || 0}/{selectedAnalyticsListeningStats?.assigned || 0} completed · Avg Accuracy {selectedAnalyticsAverageListeningAccuracy === null ? '--' : `${selectedAnalyticsAverageListeningAccuracy}%`}
                       </p>
                     </div>
 
@@ -7692,7 +7733,7 @@ export default function TeacherDashboard() {
                       </p>
 
                       <p className="text-xs text-gray-400 mt-1">
-                        Mock Overall {item.submission.result?.overall ?? item.submission.result?.overallEstimate ?? '-'}
+                        Mock Overall {getMockOverall(item.submission) ?? '-'}
                       </p>
                     </div>
                     <button
@@ -8331,11 +8372,12 @@ export default function TeacherDashboard() {
                                       </div>
                                     </div>
 
+                                    <PartialWritingNotice submission={submission} />
                                     <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
                                       <div className="bg-white rounded-xl p-3">
                                         <p className="text-[11px] text-gray-400 mb-1">Listening</p>
                                         <p className="text-lg font-bold text-purple-600">
-                                          {formatBand(result.listening?.band)}
+                                          {formatBand(savedObjectiveBand('listening', result.listening))}
                                         </p>
                                         <p className="text-[10px] text-gray-400 mt-1">
                                           {result.listening?.correct ?? '-'}/{result.listening?.total ?? '-'} correct
@@ -8345,7 +8387,7 @@ export default function TeacherDashboard() {
                                       <div className="bg-white rounded-xl p-3">
                                         <p className="text-[11px] text-gray-400 mb-1">Reading</p>
                                         <p className="text-lg font-bold text-blue-600">
-                                          {formatBand(result.reading?.band)}
+                                          {formatBand(savedObjectiveBand('reading', result.reading))}
                                         </p>
                                         <p className="text-[10px] text-gray-400 mt-1">
                                           {result.reading?.correct ?? '-'}/{result.reading?.total ?? '-'} correct
@@ -8384,7 +8426,9 @@ export default function TeacherDashboard() {
                                                 ? 'Writing answer unavailable'
                                                 : getMockWritingStatus(submission) === 'reviewed'
                                                   ? 'Reviewed'
-                                                  : 'Waiting for writing review'}
+                                                  : partialWritingSummary(submission)
+                                                    ? 'AI feedback ready · Some Writing tasks incomplete'
+                                                    : 'Waiting for writing review'}
                                         </p>
                                       </div>
                                     </div>
@@ -8522,11 +8566,13 @@ export default function TeacherDashboard() {
                                     <div className="flex items-center gap-3">
                                       <div className="text-right">
                                         <p className="text-xs text-gray-400">
-                                          Band
+                                          Accuracy
                                         </p>
 
                                         <p className="text-lg font-bold text-purple-600">
-                                          {submission.result?.band}
+                                          {objectiveAccuracy(submission.result?.correct, submission.result?.total) === null
+                                            ? '--'
+                                            : `${objectiveAccuracy(submission.result.correct, submission.result.total)}%`}
                                         </p>
                                       </div>
 
@@ -8703,11 +8749,13 @@ export default function TeacherDashboard() {
                                     <div className="flex items-center gap-3">
                                       <div className="text-right">
                                         <p className="text-xs text-gray-400">
-                                          Band
+                                          Accuracy
                                         </p>
 
                                         <p className="text-lg font-bold text-purple-600">
-                                          {submission.result?.band || '-'}
+                                          {objectiveAccuracy(submission.result?.correct, submission.result?.total) === null
+                                            ? '--'
+                                            : `${objectiveAccuracy(submission.result.correct, submission.result.total)}%`}
                                         </p>
                                       </div>
 
@@ -9601,9 +9649,7 @@ export default function TeacherDashboard() {
                 </p>
 
                 <p className="text-sm text-purple-600 font-semibold mt-1">
-                  Band {selectedReview.submission.result?.band} ·{' '}
-                  {selectedReview.submission.result?.correct}/
-                  {selectedReview.submission.result?.total} correct
+                  {formatHomeworkScore(selectedReview.submission.result)}
                 </p>
               </div>
 

@@ -1,3 +1,4 @@
+import PartialWritingNotice from './PartialWritingNotice'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { httpsCallable } from 'firebase/functions'
 import { functions } from '../firebase'
@@ -172,6 +173,7 @@ export default function AiWritingTeacherPanel({ studentId, contentId, context, a
         )}
         {showDetails && report && (
           <div className="mt-3 space-y-3" aria-label="Saved AI Writing feedback details">
+            <PartialWritingNotice report={report} />
             <TaskReport taskNumber={1} report={report.task1} />
             <TaskReport taskNumber={2} report={report.task2} />
             <p className="text-xs text-slate-600">Read-only AI estimate; not an official IELTS score or a teacher grade.</p>
@@ -208,6 +210,7 @@ export default function AiWritingTeacherPanel({ studentId, contentId, context, a
             )}
           </div>
           <div className="space-y-3">
+            <PartialWritingNotice report={report} />
             <TaskReport taskNumber={1} report={report.task1} />
             <TaskReport taskNumber={2} report={report.task2} />
           </div>

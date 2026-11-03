@@ -1,3 +1,4 @@
+import AiWritingRecoveryPanel from './AiWritingRecoveryPanel'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { httpsCallable } from 'firebase/functions'
 import { functions } from '../firebase'
@@ -166,6 +167,7 @@ export default function AiWritingPilotPanel({ users, adminSchoolId, schoolActive
 
   return (
     <div className="space-y-5" aria-label="AI Writing pilot administration">
+      {canManage && <AiWritingRecoveryPanel users={users} />}
       <div className="rounded-2xl border border-indigo-100 bg-indigo-50/60 px-5 py-4 text-sm text-indigo-900">
         <p className="font-semibold">Maxima institution pilot · Initially disabled</p>
         <p className="mt-1 text-indigo-800">Only approved institution students can be selected. Changing a school or student permission does not run GPT or spend an API credit. Activate the pilot only when the AI evaluation service and student experience have passed testing.</p>

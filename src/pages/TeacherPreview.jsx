@@ -3,6 +3,7 @@ import { auth, db } from '../firebase'
 import { doc, getDoc } from 'firebase/firestore'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { useNavigate, useParams } from 'react-router-dom'
+import { loadPrivateListeningMedia } from '../services/privateListeningMedia'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
@@ -1341,6 +1342,96 @@ function ListeningPreview({
   questionOffset = 0
 }) {
   const parts = normalizeListeningParts(listening)
+  const listeningId = listening?.id || ''
+  const audioPath = listening?.audioStoragePath || ''
+  const [protectedAudio, setProtectedAudio] = useState({ id: '', url: '', error: '' })
+  const [protectedMaps, setProtectedMaps] = useState({})
+  const [mapErrors, setMapErrors] = useState({})
+
+  useEffect(() => {
+    const controller = new AbortController()
+    let createdUrl = ''
+    setProtectedAudio({ id: listeningId, url: '', error: '' })
+
+    if (listeningId && audioPath) {
+      loadPrivateListeningMedia({
+          listeningId, asset: 'audio', signal: controller.signal,
+          progressive: true, parallelChunks: 3,
+          onStreamError: error => {
+            if (controller.signal.aborted) return
+            console.error('Teacher Listening audio stream:', error)
+            setProtectedAudio(previous => previous.id === listeningId
+              ? { ...previous, error: 'Secure audio stream was interrupted. Please retry.' }
+              : previous)
+          }
+        })
+        .then(url => {
+          if (controller.signal.aborted) URL.revokeObjectURL(url)
+          else {
+            createdUrl = url
+            setProtectedAudio({ id: listeningId, url, error: '' })
+          }
+        })
+        .catch(error => {
+          if (!controller.signal.aborted) {
+            console.error('Protected teacher Listening audio:', error)
+            setProtectedAudio({ id: listeningId, url: '', error: 'Secure audio could not be loaded.' })
+          }
+        })
+    }
+    return () => {
+      controller.abort()
+      if (createdUrl) URL.revokeObjectURL(createdUrl)
+    }
+  }, [listeningId, audioPath])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    const createdUrls = []
+    setProtectedMaps({})
+    setMapErrors({})
+    if (!listeningId) return () => controller.abort()
+
+    const rawParts = Array.isArray(listening?.parts) ? listening.parts : []
+    const items = normalizeListeningParts(listening).flatMap((part, index) =>
+      toArray(part.questions)
+        .filter(q => q.type === 'map' && q.mapImageStoragePath)
+        .map(q => ({
+          key: `${part.id}::${q.id}`,
+          questionId: q.id,
+          // Legacy one-part documents use top-level questions, not source.parts.
+          partId: rawParts.length ? (rawParts[index]?.id || '') : ''
+        }))
+    )
+
+    for (const item of items) {
+      loadPrivateListeningMedia({
+        listeningId, asset: 'map', questionId: item.questionId,
+        partId: item.partId, signal: controller.signal
+      }).then(url => {
+        if (controller.signal.aborted) URL.revokeObjectURL(url)
+        else {
+          createdUrls.push(url)
+          setProtectedMaps(previous => ({ ...previous, [item.key]: url }))
+        }
+      }).catch(error => {
+        if (!controller.signal.aborted) {
+          console.error('Protected teacher Listening map:', error)
+          setMapErrors(previous => ({ ...previous, [item.key]: true }))
+        }
+      })
+    }
+    return () => {
+      controller.abort()
+      createdUrls.forEach(url => URL.revokeObjectURL(url))
+    }
+  }, [listeningId, listening])
+
+  const audioSource = audioPath
+    ? (protectedAudio.id === listeningId ? protectedAudio.url : '')
+    : (listening?.audioUrl || '')
+  const audioError = audioPath && protectedAudio.id === listeningId
+    ? protectedAudio.error : ''
 
   const setMulti = (key, letter, max = 2) => {
     const current = Array.isArray(answers[key]) ? answers[key] : []
@@ -1374,16 +1465,17 @@ function ListeningPreview({
           </span>
         </div>
 
-        {listening?.audioUrl ? (
+        {audioSource ? (
           <audio
             controls
             preload="metadata"
-            src={listening.audioUrl}
+            src={audioSource}
             className="w-full mt-5"
           />
         ) : (
-          <p className="text-sm text-amber-600 bg-amber-50 rounded-xl px-4 py-3 mt-5">
-            No audio file is attached.
+          <p role={audioError ? 'alert' : undefined}
+             className="text-sm text-amber-600 bg-amber-50 rounded-xl px-4 py-3 mt-5">
+            {audioError || (audioPath ? 'Loading secure Listening audio...' : 'No audio file is attached.')}
           </p>
         )}
       </div>
@@ -1592,12 +1684,10 @@ function ListeningPreview({
                       ? toArray(question.mapItems)
                       : toArray(question.matchingItems)
 
-                  const imageUrl =
-                    question.mapImage ||
-                    question.mapImageUrl ||
-                    question.image ||
-                    question.imageUrl ||
-                    ''
+                  const mapKey = `${part.id}::${question.id}`
+                  const imageUrl = question.mapImageStoragePath
+                    ? (protectedMaps[mapKey] || '')
+                    : (question.mapImage || question.mapImageUrl || question.image || question.imageUrl || '')
 
                   const selectOptions =
                     question.type === 'map'
@@ -1632,6 +1722,12 @@ function ListeningPreview({
                         </h4>
                       )}
 
+                      {question.mapImageStoragePath && !imageUrl && (
+                        <p role={mapErrors[mapKey] ? 'alert' : undefined}
+                           className="text-sm text-amber-600 mb-4">
+                          {mapErrors[mapKey] ? 'Secure map could not be loaded.' : 'Loading secure Listening map...'}
+                        </p>
+                      )}
                       {imageUrl && (
                         <img
                           src={imageUrl}
@@ -2277,8 +2373,8 @@ export default function TeacherPreview() {
         }
 
         const loadedContent = {
-          id: contentSnap.id,
-          ...contentSnap.data()
+          ...contentSnap.data(),
+          id: contentSnap.id
         }
 
         if (!active) return
@@ -2358,8 +2454,8 @@ export default function TeacherPreview() {
             listenings: listeningDocs
               .filter(snapshot => snapshot.exists())
               .map(snapshot => ({
-                id: snapshot.id,
-                ...snapshot.data()
+                ...snapshot.data(),
+                id: snapshot.id
               })),
             writing:
               writingSnap && writingSnap.exists()

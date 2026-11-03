@@ -9,7 +9,7 @@ test('teacher can no longer directly update Mock submissions in browser',()=>{
   const start=rules.indexOf('match /mockSubmissions/{id} {'),end=rules.indexOf('allow delete:',start)
   assert.ok(start>0&&end>start)
   const block=rules.slice(start,end)
-  assert.match(block,/allow update: if isAdmin\(\) && statsModerationFieldsUnchanged\(\);/)
+  assert.match(block,/allow update: if adminResultArchiveOnly\(\);/)
   assert.doesNotMatch(block,/teacherMockReviewOnly/)
 })
 test('UI sends only human review plus immutable attempt locator to trusted callable',()=>{

@@ -1,3 +1,5 @@
+import { dashboardMockOverall } from '../services/mockAiResultGatePolicy'
+import { formatHomeworkScore, savedObjectiveBand } from '../services/ieltsObjectiveScoring'
   import { useState, useEffect, useMemo, useRef } from 'react'
   import { auth, db, storage, functions } from '../firebase'
   import { collection, query, where, onSnapshot, doc, getDoc, updateDoc, arrayUnion } from 'firebase/firestore'
@@ -9,6 +11,7 @@
   import AiWritingStudentPanel, { AiWritingSavedReport } from '../components/AiWritingStudentPanel'
   import StudentArchivePanel from '../components/StudentArchivePanel'
   import { isInstitutionWritingStudent } from '../services/aiWritingStudentPolicy'
+  import { useEscapeDismiss } from '../hooks/useEscapeDismiss'
 
   const getStudentSubmissionAttemptStateCall = httpsCallable(
     functions,
@@ -171,7 +174,7 @@
       entry.unsubscribe = onSnapshot(
         firestoreQuery,
         snap => {
-          const items = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+          const items = snap.docs.map(d => ({ ...d.data(), id: d.id }))
           entry.lastItems = items
           emitStudentDataError(key)
 
@@ -1163,25 +1166,6 @@
     return userAnswer === correctAnswer
   }
 
-  function estimateHomeworkBand(correct, total) {
-    if (!total) return null
-
-    const percentage = (correct / total) * 100
-
-    if (percentage >= 90) return 9
-    if (percentage >= 85) return 8.5
-    if (percentage >= 80) return 8
-    if (percentage >= 75) return 7.5
-    if (percentage >= 70) return 7
-    if (percentage >= 65) return 6.5
-    if (percentage >= 60) return 6
-    if (percentage >= 50) return 5.5
-    if (percentage >= 40) return 5
-    if (percentage >= 30) return 4.5
-    if (percentage >= 20) return 4
-    return 3.5
-  }
-
   function getQuestionTypeLabel(type) {
     if (type === 'matching') return 'Matching Headings'
     if (type === 'matchingInformation') return 'Matching Information'
@@ -1228,7 +1212,6 @@
 
     let totalCorrect = 0
     let totalQuestions = 0
-    const storedBands = []
 
     submissions.filter(submission => submission.excludedFromStats !== true).forEach(submission => {
       const result = submission?.result || {}
@@ -1242,13 +1225,6 @@
       ) {
         totalCorrect += storedCorrect
         totalQuestions += storedTotal
-      }
-
-      const bandValue = result.band ?? result.estimatedBand
-      const band = toNumber(bandValue)
-
-      if (band !== null && band > 0) {
-        storedBands.push(band)
       }
 
       const breakdown = result.gradingBreakdown
@@ -1294,11 +1270,8 @@
       ? Math.round((totalCorrect / totalQuestions) * 100)
       : null
 
-    const estimatedBand = storedBands.length
-      ? Math.round(
-          (storedBands.reduce((sum, value) => sum + value, 0) / storedBands.length) * 10
-        ) / 10
-      : estimateHomeworkBand(totalCorrect, totalQuestions)
+    // Homework analytics deliberately report accuracy, never an IELTS band.
+    const estimatedBand = null
 
     return {
       totalCorrect,
@@ -1591,15 +1564,15 @@
 
           <div className="bg-purple-50 rounded-2xl p-5">
             <p className="text-xs text-gray-500 mb-1">
-              Estimated Band
+              Questions Assessed
             </p>
 
             <p className="text-3xl font-bold text-purple-600">
-              {analytics.estimatedBand ? analytics.estimatedBand.toFixed(1) : '--'}
+              {analytics.totalQuestions}
             </p>
 
             <p className="text-xs text-gray-500 mt-2">
-              Homework estimate, not full IELTS band
+              Total graded items across completed homework
             </p>
           </div>
 
@@ -1676,7 +1649,7 @@
           </div>
 
           <p className="text-sm text-gray-400">
-            Once you complete reading or listening homework, your accuracy, estimated band and weakest question types will appear here.
+            Once you complete reading or listening homework, your accuracy and weakest question types will appear here.
           </p>
         </div>
       )
@@ -1864,7 +1837,7 @@
                       </p>
 
                       <p className="text-xs text-green-600 mt-1 font-medium">
-                        ✓ Completed — Estimated Band {result?.band}
+                        ✓ Completed — {formatHomeworkScore(result)}
                       </p>
                     </div>
 
@@ -2044,7 +2017,7 @@
                       </p>
 
                       <p className="text-xs text-green-600 mt-1 font-medium">
-                        ✓ Completed — Estimated Band {result?.band}
+                        ✓ Completed — {formatHomeworkScore(result)}
                       </p>
                     </div>
 
@@ -2158,12 +2131,7 @@
     const getMockOverall = submission => {
       const result = submission?.result || {}
 
-      return getValidBand(
-        result.reviewedOverall,
-        result.finalOverall,
-        result.overall,
-        result.overallEstimate
-      )
+      return dashboardMockOverall(submission)
     }
 
     const getWritingBand = submission => {
@@ -2310,7 +2278,7 @@
             </p>
 
             <p className="text-3xl font-bold text-purple-600">
-              {formatBand(latest?.result?.listening?.band)}
+              {formatBand(savedObjectiveBand('listening', latest?.result?.listening))}
             </p>
 
             <p className="text-xs text-gray-500 mt-2">
@@ -2324,7 +2292,7 @@
             </p>
 
             <p className="text-3xl font-bold text-blue-600">
-              {formatBand(latest?.result?.reading?.band)}
+              {formatBand(savedObjectiveBand('reading', latest?.result?.reading))}
             </p>
 
             <p className="text-xs text-gray-500 mt-2">
@@ -2425,7 +2393,7 @@
                     </p>
 
                     <p className="text-xs text-gray-500 mt-1">
-                      L {formatBand(result.listening?.band)} · R {formatBand(result.reading?.band)} · Writing {getWritingStatus(submission)}
+                      L {formatBand(savedObjectiveBand('listening', result.listening))} · R {formatBand(savedObjectiveBand('reading', result.reading))} · Writing {getWritingStatus(submission)}
                     </p>
                   </div>
 
@@ -2643,13 +2611,7 @@
     const getMockOverall = submission => {
       const result = submission?.result || {}
 
-      return (
-        result.finalOverall ||
-        result.overall ||
-        result.reviewedOverall ||
-        result.overallEstimate ||
-        null
-      )
+      return dashboardMockOverall(submission)
     }
 
     const getMockWritingBand = submission => {
@@ -3332,6 +3294,11 @@
     const [writings, setWritings] = useState([])
     const [submissions, setSubmissions] = useState([])
     const [selectedReview, setSelectedReview] = useState(null)
+    useEscapeDismiss(() => {
+      if (!selectedReview) return false
+      setSelectedReview(null)
+      return true
+    })
     const [writingAiResults, setWritingAiResults] = useState({})
     const navigate = useNavigate()
 
@@ -3496,7 +3463,7 @@
                     // Full Writing answers are fetched only after the existing
                     // secure callable revalidates assignment and retake locks.
                     const snapshot = await getStudentVisibleResultSnapshot('writing', w.id)
-                    const records = snapshot.docs.map(item => ({ id: item.id, ...item.data() }))
+                    const records = snapshot.docs.map(item => ({ ...item.data(), id: item.id }))
                     const selected = chooseCurrentSubmission(records, submission?.id || '')
                     if (!selected) throw new Error('Your completed submission was not found.')
                     setSelectedReview({ writing: w, submission: selected })
@@ -4544,10 +4511,10 @@
         : 'Submitted'
     }
     if (category === 'mock') {
-      const overall = result.finalOverall ?? result.reviewedOverall ?? result.overall ?? result.overallEstimate
+      const overall = dashboardMockOverall(record)
       const listening = result.listening?.band
       const reading = result.reading?.band
-      const sections = [`Overall ${formatBand(overall)}`]
+      const sections = [`Overall ${overall === null ? 'pending' : formatBand(overall)}`]
       if (toNumber(listening) !== null) sections.push(`Listening ${formatBand(listening)}`)
       if (toNumber(reading) !== null) sections.push(`Reading ${formatBand(reading)}`)
       return sections.join(' · ')
@@ -4557,9 +4524,8 @@
     const score = correct !== null && total !== null
       ? `${correct}/${total} correct`
       : 'Submitted'
-    const band = result.band ?? result.estimatedBand
     const percentage = toNumber(result.percentage)
-    if (toNumber(band) !== null) return `${score} · Band ${formatBand(band)}`
+    if (percentage === null && correct !== null && total !== null && total > 0) return `${score} · ${Math.round(correct * 100 / total)}%`
     if (percentage !== null) return `${score} · ${Math.round(percentage)}%`
     return score
   }
@@ -5109,8 +5075,14 @@
 
   export default function StudentDashboard() {
     const [scores, setScores] = useState([])
+    const [overviewMockSubmissions, setOverviewMockSubmissions] = useState([])
     const [user, setUser] = useState(null)
     const [showPasswordModal, setShowPasswordModal] = useState(false)
+    useEscapeDismiss(() => {
+      if (!showPasswordModal) return false
+      setShowPasswordModal(false)
+      return true
+    })
     const [newPassword, setNewPassword] = useState('')
     const [passwordMsg, setPasswordMsg] = useState('')
     const [resultsCategory, setResultsCategory] = useState('writing')
@@ -5142,6 +5114,12 @@
     const [authRetryKey, setAuthRetryKey] = useState(0)
     const navigate = useNavigate()
     const resultsVisibility = useStudentResultsVisibility(user, profile)
+
+    useEffect(() => {
+      setOverviewMockSubmissions([])
+      if (!user?.uid) return
+      return listenUserCollection('mockSubmissions', user.uid, setOverviewMockSubmissions)
+    }, [user?.uid])
 
     useEffect(() => {
       try {
@@ -5306,7 +5284,17 @@
     const targetDisplay = Number.isFinite(targetBand) && targetBand > 0
       ? targetBand.toFixed(1)
       : '--'
-    const latestMockDisplay = formatBand(latestMockScore?.overall)
+    const latestMockSubmission = chooseCurrentSubmission(
+      overviewMockSubmissions.filter(submission =>
+        (submission.mockTestId || submission.mockId) ===
+          (latestMockScore?.mockTestId || latestMockScore?.mockId) &&
+        submissionAttemptNumber(submission) === submissionAttemptNumber(latestMockScore)
+      )
+    )
+    const latestMockOverall = dashboardMockOverall(latestMockSubmission)
+    const latestMockDisplay = latestMockScore && latestMockOverall === null
+      ? 'Pending'
+      : formatBand(latestMockOverall)
 
     const renderOverview = () => (
       <div className="space-y-6">

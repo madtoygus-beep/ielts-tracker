@@ -2,19 +2,21 @@ const test=require('node:test'), assert=require('node:assert/strict')
 const fs=require('node:fs'), crypto=require('node:crypto')
 const rules=fs.readFileSync('firestore.rules','utf8'),ui=fs.readFileSync('src/pages/TeacherDashboard.jsx','utf8')
 const sha=crypto.createHash('sha256').update(rules).digest('hex')
-test('Step750 exact Rules SHA and validated source',()=>assert.equal(sha,'9f862f5cd3042336e78821bad4755c871466a425fe0c4a5099b5c86db9bfadc3'))
+test('Step750 exact Rules SHA and validated source',()=>assert.equal(sha,'fbd5ff8ec4b01df03a265e815f4a74ee4550144ac6b96d49a8040456718d0596'))
 test('score manual CREATE has a strict key whitelist',()=>{
   assert.match(rules,/function teacherManualScoreCreate\(data\)/)
   assert.match(rules,/data\.keys\(\)\.hasOnly\(/)
 })
-test('Mock CREATE binds trusted server submission',()=>{
-  assert.match(rules,/function teacherMockScoreCreateAgainstSubmission\(/)
-  assert.match(rules,/scoreId == data.get\('uid', ''\) \+ '_' \+ data.get\('mockTestId', ''\)/)
-  assert.match(rules,/gradedByServer', false\) == true/)
+test('Mock score CREATE is server-only and manual teacher scores remain valid',()=>{
+  assert.match(rules,/function teacherCanCreateAcademicScore\(/)
+  assert.match(rules,/return teacherScoreCreateBase\(data\) && teacherManualScoreCreate\(data\);/)
+  assert.doesNotMatch(rules,/function teacherMockScoreCreateAgainstSubmission\(/)
 })
-test('Mock UPDATE has dedicated Writing-only key allowlist',()=>{
-  assert.match(rules,/function teacherMockScoreUpdateOnly\(/)
-  assert.match(rules,/\.hasOnly\(\['writing', 'writingSource', 'overall', 'updatedAt', 'updatedBy'\]\)/)
+test('Mock score UPDATE is server-only with narrowly scoped manual score edits',()=>{
+  assert.match(rules,/function teacherCanUpdateAcademicScore\(/)
+  assert.match(rules,/resource.data.get\('source', ''\) in \['', 'manual'\]/)
+  assert.match(rules,/!resource.data.keys\(\).hasAny\(\['mockTestId', 'mockId', 'gradedByServer', 'aiEstimatedWritingBand'\]\)/)
+  assert.doesNotMatch(rules,/function teacherMockScoreUpdateOnly\(/)
 })
 test('manual teacher update narrow and current membership bound',()=>{
   assert.match(rules,/function teacherCanUpdateAcademicScore\(/)

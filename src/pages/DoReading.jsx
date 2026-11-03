@@ -1,10 +1,33 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useLayoutEffect } from 'react'
 import { auth, db, functions } from '../firebase'
 import { doc, getDoc, getDocFromServer } from 'firebase/firestore'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { httpsCallable } from 'firebase/functions'
 import { useNavigate, useParams } from 'react-router-dom'
 import { getStudentVisibleResultSnapshot } from '../services/studentResultService'
+import { objectiveAccuracy, getReadingBand, scoreMultipleAnswers } from '../services/ieltsObjectiveScoring'
+
+// Previously restored long table answers were clipped until focus.
+function AutoGrowTableAnswer({ value, onChange }) {
+  const inputRef = useRef(null)
+  useLayoutEffect(() => {
+    const field = inputRef.current
+    if (!field) return
+    field.style.height = 'auto'
+    field.style.height = `${Math.max(field.scrollHeight, 42)}px`
+  }, [value])
+  return (
+    <textarea
+      ref={inputRef}
+      rows={1}
+      value={value}
+      onChange={event => onChange(event.target.value)}
+      aria-label="Table completion answer"
+      placeholder="Type answer..."
+      className="block w-full min-w-[180px] min-h-[42px] resize-y overflow-y-auto whitespace-pre-wrap break-words border border-gray-200 rounded-xl px-3 py-2 text-sm leading-5 outline-none focus:border-purple-400 bg-white"
+    />
+  )
+}
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
@@ -14,43 +37,6 @@ const getStudentSubmissionAttemptState = httpsCallable(
   functions,
   'getStudentSubmissionAttemptState'
 )
-
-function getBandFromPercentage(correct, total) {
-  const percentage = total ? correct / total : 0
-
-  if (percentage >= 0.97) return 9
-  if (percentage >= 0.93) return 8.5
-  if (percentage >= 0.87) return 8
-  if (percentage >= 0.8) return 7.5
-  if (percentage >= 0.72) return 7
-  if (percentage >= 0.63) return 6.5
-  if (percentage >= 0.53) return 6
-  if (percentage >= 0.43) return 5.5
-  if (percentage >= 0.33) return 5
-  if (percentage >= 0.23) return 4.5
-
-  return 4
-}
-
-function getReadingBand(correct, total) {
-  if (total === 40) {
-    if (correct >= 39) return 9
-    if (correct >= 37) return 8.5
-    if (correct >= 35) return 8
-    if (correct >= 33) return 7.5
-    if (correct >= 30) return 7
-    if (correct >= 27) return 6.5
-    if (correct >= 23) return 6
-    if (correct >= 19) return 5.5
-    if (correct >= 15) return 5
-    if (correct >= 13) return 4.5
-    if (correct >= 10) return 4
-
-    return 3.5
-  }
-
-  return getBandFromPercentage(correct, total)
-}
 
 function getAttemptStorageSuffix(attemptNumber, mode = '') {
   const number = Number(attemptNumber)
@@ -1373,24 +1359,8 @@ export default function DoReading() {
     )
   }
 
-  const getMultiAnswerScore = question => {
-    const selected = Array.isArray(answers[question.id])
-      ? answers[question.id].map(item => item?.toString())
-      : []
-
-    const correctAnswers = Array.isArray(question.answers)
-      ? question.answers.map(item => item?.toString())
-      : []
-
-    const correctCount = selected.filter(answer =>
-      correctAnswers.includes(answer)
-    ).length
-
-    return {
-      correct: correctCount,
-      total: correctAnswers.length || 2
-    }
-  }
+  const getMultiAnswerScore = question =>
+    scoreMultipleAnswers(answers[question.id], question.answers)
 
   const getMultiAnswerStatus = question => {
     const score = getMultiAnswerScore(question)
@@ -1856,11 +1826,13 @@ export default function DoReading() {
         <div className="max-w-5xl mx-auto px-6 py-10">
           <div className="bg-white border border-gray-100 rounded-2xl p-8 text-center shadow-sm mb-8">
             <div className="text-5xl font-bold text-purple-600 mb-2">
-              {result.band}
+              {objectiveAccuracy(result.correct, result.total) === null
+                ? '—'
+                : `${objectiveAccuracy(result.correct, result.total)}%`}
             </div>
 
             <p className="text-gray-400 text-sm mb-1">
-              IELTS Reading Band
+              Reading accuracy
             </p>
 
             <p className="text-gray-600 text-sm mb-4">
@@ -3268,25 +3240,11 @@ export default function DoReading() {
                                         Q{getReadingBlankNumber(question.id, row.id, cellIndex)}
                                       </span>
 
-                                      <textarea
-                                        rows={1}
+                                      <AutoGrowTableAnswer
                                         value={answers[key] || ''}
-                                        onChange={e => {
-                                          handleTableAnswer(
-                                            question.id,
-                                            row.id,
-                                            cellIndex,
-                                            e.target.value
-                                          )
-                                          e.currentTarget.style.height = 'auto'
-                                          e.currentTarget.style.height = `${Math.max(e.currentTarget.scrollHeight, 42)}px`
-                                        }}
-                                        onFocus={e => {
-                                          e.currentTarget.style.height = 'auto'
-                                          e.currentTarget.style.height = `${Math.max(e.currentTarget.scrollHeight, 42)}px`
-                                        }}
-                                        placeholder="Type answer..."
-                                        className="block w-full min-w-[180px] min-h-[42px] resize-none overflow-hidden whitespace-pre-wrap break-words border border-gray-200 rounded-xl px-3 py-2 text-sm leading-5 outline-none focus:border-purple-400 bg-white"
+                                        onChange={value => handleTableAnswer(
+                                          question.id, row.id, cellIndex, value
+                                        )}
                                       />
                                     </div>
                                   </td>

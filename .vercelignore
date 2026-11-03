@@ -1,0 +1,9 @@
+functions/
+tests/
+MAXIMA_*.cjs
+MAXIMA_*.mjs
+firestore.rules
+storage.rules
+firebase.json
+.env*
+*.log

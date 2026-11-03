@@ -11,14 +11,16 @@ import {
 import { onAuthStateChanged } from 'firebase/auth'
 import { httpsCallable } from 'firebase/functions'
 import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useEscapeDismiss } from '../hooks/useEscapeDismiss'
+import { subscribeCurrentTeacherAcademicRoster } from '../services/teacherCurrentAcademicRoster'
 
 const DEFAULT_SCHOOL_ID = 'maxima'
 const ALL_SCHOOLS_ID = 'all'
 
 const getManagedSchoolsCall = httpsCallable(functions, 'getManagedSchools')
-const saveManagedClassCall = httpsCallable(functions, 'saveManagedClass')
-const setManagedClassArchivedCall = httpsCallable(functions, 'setManagedClassArchived')
-const deleteManagedClassCall = httpsCallable(functions, 'deleteManagedClass')
+const saveManagedClassCall = httpsCallable(functions, 'saveManagedClassV2')
+const setManagedClassArchivedCall = httpsCallable(functions, 'setManagedClassArchivedV2')
+const deleteManagedClassCall = httpsCallable(functions, 'deleteManagedClassV2')
 
 const COLOR_OPTIONS = [
   { id: 'purple', label: 'Purple', bg: 'bg-purple-50', text: 'text-purple-700', border: 'border-purple-200', dot: 'bg-purple-500' },
@@ -119,6 +121,13 @@ export default function ManageClasses() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const routeSchoolId = searchParams.get('school') || ''
+  useEscapeDismiss(() => {
+    if (saving) return false
+    if (showCreateModal) { closeModal(); return true }
+    if (detailClassId) { setDetailClassId(null); return true }
+    if (openActionsId) { setOpenActionsId(null); return true }
+    return false
+  })
 
   // ============================================================
   // Auth check (admin or teacher only)
@@ -147,7 +156,8 @@ export default function ManageClasses() {
           return
         }
 
-        if (userData.status !== 'approved' || userData.deleted === true) {
+        if (userData.status !== 'approved' || userData.deleted === true ||
+            userData.archived === true || userData.permanentDeleteInProgress === true) {
           alert('Your account is not active.')
           navigate('/login')
           return
@@ -280,7 +290,7 @@ export default function ManageClasses() {
       q,
       snap => {
         const list = snap.docs
-          .map(d => ({ id: d.id, ...d.data() }))
+          .map(d => ({ ...d.data(), id: d.id }))
           .filter(classItem => {
             if (classItem.archived) return false
 
@@ -318,61 +328,46 @@ export default function ManageClasses() {
   ])
 
   // ============================================================
-  // Subscribe to students
-  // Admin reads the existing student query, then applies the selected school.
-  // Teacher keeps the existing teacherIds compatibility query and own-school filter.
+  // Subscribe to students. Teacher access is limited to CURRENT G1 class membership.
+  // Admin's whole-school roster remains separate and unchanged.
   // ============================================================
   useEffect(() => {
     if (authChecking || !user) return
     if (userRole === 'admin' && schoolsLoading) return
-
+    setStudents([])
     setRosterStatus('loading')
-
-    const q = userRole === 'admin'
-      ? query(collection(db, 'users'), where('role', '==', 'student'))
-      : query(
-          collection(db, 'users'),
-          where('role', '==', 'student'),
-          where('teacherIds', 'array-contains', user.uid)
-        )
-
+    if (userRole === 'teacher') {
+      if (!userProfile || userProfile.role !== 'teacher') {
+        setRosterStatus('error')
+        return
+      }
+      return subscribeCurrentTeacherAcademicRoster(
+        db, schoolIdOf(userProfile), user.uid,
+        setStudents, setRosterStatus
+      )
+    }
+    if (userRole !== 'admin') {
+      setRosterStatus('error')
+      return
+    }
     return onSnapshot(
-      q,
+      query(collection(db, 'users'), where('role', '==', 'student')),
       snap => {
-        const teacherSchoolId = schoolIdOf(userProfile)
-
-        const list = snap.docs
-          .map(d => ({ id: d.id, ...d.data() }))
-          .filter(student => {
-            if (student.status !== 'approved' || student.deleted === true) return false
-            if (student.accountType === 'individual' || student.schoolId === '__individual__') return false
-
-            if (userRole === 'admin') {
-              return selectedSchoolId === ALL_SCHOOLS_ID ||
-                schoolIdOf(student) === selectedSchoolId
-            }
-
-            return schoolIdOf(student) === teacherSchoolId
-          })
-          .sort((a, b) => (a.name || a.email || '').localeCompare(b.name || b.email || ''))
-
+        const list = snap.docs.map(d => ({ ...d.data(), id: d.id }))
+          .filter(student => student.status === 'approved' && student.deleted !== true)
+          .filter(student => student.accountType !== 'individual' && student.schoolId !== '__individual__')
+          .filter(student => selectedSchoolId === ALL_SCHOOLS_ID || schoolIdOf(student) === selectedSchoolId)
+          .sort((a,b) => (a.name || a.email || '').localeCompare(b.name || b.email || ''))
         setStudents(list)
         setRosterStatus('ready')
       },
       error => {
-        console.error('Students snapshot error:', error)
+        console.error('Students snapshot error:',error)
         setStudents([])
         setRosterStatus('error')
       }
     )
-  }, [
-    authChecking,
-    user,
-    userRole,
-    userProfile,
-    selectedSchoolId,
-    schoolsLoading
-  ])
+  }, [authChecking,user,userRole,userProfile,selectedSchoolId,schoolsLoading])
 
   // ============================================================
   // Subscribe to teachers (admin only), scoped to the selected school.
@@ -391,7 +386,7 @@ export default function ManageClasses() {
       q,
       snap => {
         const list = snap.docs
-          .map(d => ({ id: d.id, ...d.data() }))
+          .map(d => ({ ...d.data(), id: d.id }))
           .filter(teacher => {
             if (teacher.status !== 'approved' || teacher.deleted === true) return false
             return selectedSchoolId === ALL_SCHOOLS_ID ||
@@ -448,6 +443,14 @@ export default function ManageClasses() {
         const student = students.find(item => item.id === studentId)
         return Boolean(student) && schoolIdOf(student) === classSchoolId
       })
+  }
+
+  // R99: do not silently remove class members absent from the teacher roster.
+  const classMembersOutsideVisibleRoster = classItem => {
+    if (!classItem) return false
+    const originalIds = Array.isArray(classItem.studentIds) ? classItem.studentIds : []
+    const visibleIds = new Set(getValidStudentIdsForClass(classItem))
+    return originalIds.some(id => !visibleIds.has(id))
   }
 
   const getStudentName = studentId => {
@@ -515,6 +518,13 @@ export default function ManageClasses() {
       alert('The student roster is still loading or could not be loaded. Please try again when it is available.')
       return
     }
+    if (classMembersOutsideVisibleRoster(classItem)) {
+      alert(userRole === 'admin'
+        ? 'Some existing class members are unavailable in the school roster. Review or restore their student records before editing. No changes were saved.'
+        : 'Some class members are unavailable in your current academic roster. Ask an administrator to review membership before editing. No changes were saved.')
+      return
+    }
+
     setEditingClass(classItem)
     setFormSchoolId(schoolIdOf(classItem))
     setFormName(classItem.name || '')
@@ -597,6 +607,18 @@ export default function ManageClasses() {
       return
     }
 
+    if (rosterStatus !== 'ready') {
+      alert('The student roster is unavailable. No changes were saved.')
+      return
+    }
+
+    if (editingClass && classMembersOutsideVisibleRoster(editingClass)) {
+      alert(userRole === 'admin'
+        ? 'Some saved class members are unavailable in the school roster. Review or restore their student records before saving. No changes were saved.'
+        : 'Class membership is not fully available in your academic roster. Ask an administrator to review membership. No changes were saved.')
+      return
+    }
+
     const schoolId = editingClass
       ? schoolIdOf(editingClass)
       : formSchoolId || (userRole === 'teacher' ? schoolIdOf(userProfile) : '')
@@ -655,6 +677,7 @@ export default function ManageClasses() {
     try {
       await saveManagedClassCall({
         ...(editingClass?.id ? { classId: editingClass.id } : {}),
+        ...(editingClass?.id ? { baseUpdatedAt: editingClass.updatedAt || '' } : {}),
         schoolId,
         name: formName.trim(),
         description: formDescription.trim(),
@@ -832,7 +855,9 @@ export default function ManageClasses() {
             </div>
           )}
 
-          {missingCount > 0 && <p className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2">{missingCount} inactive or missing student reference{missingCount === 1 ? '' : 's'} hidden. Edit and Save to clean this class.</p>}
+          {missingCount > 0 && <p className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2">{userRole === 'teacher'
+              ? `${missingCount} class member${missingCount === 1 ? '' : 's'} unavailable in your current academic roster. Ask an administrator to review membership before editing.`
+              : `${missingCount} inactive or missing student reference${missingCount === 1 ? '' : 's'} hidden. Review membership carefully before saving.`}</p>}
 
           <div className={`flex flex-wrap items-center gap-2 ${listStyle ? 'lg:justify-end' : ''}`}>
             <button type="button" disabled={rosterStatus !== 'ready'} onClick={() => { setOpenActionsId(null); setDetailClassId(classItem.id) }} className="flex-1 lg:flex-none inline-flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-slate-700 text-xs font-semibold hover:bg-slate-50 disabled:opacity-40">

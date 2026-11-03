@@ -15,25 +15,6 @@ const getStudentSubmissionAttemptState = httpsCallable(
   'getStudentSubmissionAttemptState'
 )
 
-function getVocabularyBand(correct, total) {
-  if (!total) return 0
-
-  const percentage = correct / total
-
-  if (percentage >= 0.97) return 9
-  if (percentage >= 0.93) return 8.5
-  if (percentage >= 0.87) return 8
-  if (percentage >= 0.8) return 7.5
-  if (percentage >= 0.72) return 7
-  if (percentage >= 0.63) return 6.5
-  if (percentage >= 0.53) return 6
-  if (percentage >= 0.43) return 5.5
-  if (percentage >= 0.33) return 5
-  if (percentage >= 0.23) return 4.5
-
-  return 4
-}
-
 function normalizeValue(value) {
   return value === undefined || value === null
     ? ''
@@ -870,11 +851,11 @@ export default function DoVocabulary() {
 
     const percentage = total ? Math.round((correct / total) * 100) : 0
 
+    // Vocabulary is scored by percentage, not by an unofficial IELTS band.
     return {
       correct,
       total,
-      percentage,
-      band: getVocabularyBand(correct, total)
+      percentage
     }
   }
 

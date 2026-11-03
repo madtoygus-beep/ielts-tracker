@@ -51,7 +51,7 @@ function getWritingAiActionMessage({ submitting, aiLoading, aiError, expired, ca
     return 'No active AI credit or institution-funded assessment is available for this assignment. Send to Teacher remains available.'
   }
   if (!feedbackEligible) {
-    return 'AI feedback requires at least 50 words in Task 1 or 100 in Task 2. Continue writing, or Send to Teacher now.'
+    return 'AI assessment requires at least 21 words in Task 1 or Task 2. Continue writing, or Send to Teacher now.'
   }
   if (institutionFunded) {
     return 'AI assessment is funded by your institution. Your personal AI credits will not be used.'
@@ -121,7 +121,7 @@ function selectCurrentWritingSubmission(snapshot) {
   if (!snapshot || snapshot.empty) return null
 
   return snapshot.docs
-    .map(item => ({ id: item.id, ...item.data() }))
+    .map(item => ({ ...item.data(), id: item.id }))
     .sort((a, b) => {
       const attemptDifference = attemptNumberOfSubmission(b) - attemptNumberOfSubmission(a)
       if (attemptDifference !== 0) return attemptDifference
@@ -769,10 +769,10 @@ export default function DoWriting() {
       return
     }
     if (aiRequested && !(
-      (hasTask1 && countWords(task1Answer) >= 50) ||
-      (hasTask2 && countWords(task2Answer) >= 100)
+      (hasTask1 && countWords(task1Answer) >= 21) ||
+      (hasTask2 && countWords(task2Answer) >= 21)
     )) {
-      alert('AI feedback needs at least 50 words for Task 1 or 100 words for Task 2. Continue writing, or choose Send to Teacher without AI.')
+      alert('AI assessment needs at least 21 words for either task. Continue writing, or choose Send to Teacher without AI.')
       return
     }
 
@@ -785,8 +785,8 @@ export default function DoWriting() {
         : aiRequested ? 'Submit this Writing for AI evaluation?' : 'Send this Writing to your teacher?'
 
       const shortTasks = [
-        hasTask1 && countWords(task1Answer) < 50 ? `Task 1: ${countWords(task1Answer)}/50 words` : null,
-        hasTask2 && countWords(task2Answer) < 100 ? `Task 2: ${countWords(task2Answer)}/100 words` : null
+        hasTask1 && countWords(task1Answer) < 21 ? `Task 1: ${countWords(task1Answer)}/21 words` : null,
+        hasTask2 && countWords(task2Answer) < 21 ? `Task 2: ${countWords(task2Answer)}/21 words` : null
       ].filter(Boolean)
       const warning = aiRequested && shortTasks.length
         ? `\n\nToo short for AI feedback:\n${shortTasks.join('\n')}\n\nOnly eligible tasks will be evaluated. Choose Cancel to continue writing or Send to Teacher to submit without AI.`
@@ -1319,7 +1319,7 @@ export default function DoWriting() {
                   aiError={aiOptions.error}
                   aiReason={aiOptions.reason}
                   canChooseAi={aiOptions.canChooseAi}
-                  feedbackEligible={(hasTask1 && task1Words >= 50) || (hasTask2 && task2Words >= 100)}
+                  feedbackEligible={(hasTask1 && task1Words >= 21) || (hasTask2 && task2Words >= 21)}
                   expired={timeLeft <= 0}
                   institutionFunded={aiOptions.institutionFunded}
                   creditsRemaining={aiOptions.creditsRemaining}
@@ -1393,7 +1393,7 @@ export default function DoWriting() {
                   aiError={aiOptions.error}
                   aiReason={aiOptions.reason}
                   canChooseAi={aiOptions.canChooseAi}
-                  feedbackEligible={(hasTask1 && task1Words >= 50) || (hasTask2 && task2Words >= 100)}
+                  feedbackEligible={(hasTask1 && task1Words >= 21) || (hasTask2 && task2Words >= 21)}
                   expired={timeLeft <= 0}
                   institutionFunded={aiOptions.institutionFunded}
                   creditsRemaining={aiOptions.creditsRemaining}

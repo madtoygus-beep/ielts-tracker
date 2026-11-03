@@ -13,6 +13,7 @@ import {
 import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { httpsCallable } from 'firebase/functions'
 import { buildP8CAssignmentDelta } from '../services/p8cAssignmentDelta'
+import { subscribeCurrentTeacherAcademicRoster } from '../services/teacherCurrentAcademicRoster'
 import { useNavigate, useParams } from 'react-router-dom'
 import AiWritingSponsoredAssignmentPanel from '../components/AiWritingSponsoredAssignmentPanel'
 import {
@@ -126,7 +127,7 @@ function listenMergedQueries(queryList, onItems, label) {
   const unsubscribers = queryList.map((queryRef, index) => onSnapshot(
     queryRef,
     snap => {
-      buckets.set(index, snap.docs.map(item => ({ id: item.id, ...item.data() })))
+      buckets.set(index, snap.docs.map(item => ({ ...item.data(), id: item.id })))
       emit()
     },
     error => {
@@ -188,6 +189,7 @@ export default function CreateWriting() {
   )
 
   const [saving, setSaving] = useState(false)
+  const [teacherRosterStatus, setTeacherRosterStatus] = useState('loading')
   const [saved, setSaved] = useState(false)
 
   useEffect(() => {
@@ -242,25 +244,25 @@ export default function CreateWriting() {
 
   useEffect(() => {
     if (!user || !profile) return
-
-    const q = isAdminProfile(profile)
-      ? query(collection(db, 'users'), where('role', '==', 'student'))
-      : query(collection(db, 'users'), where('teacherIds', 'array-contains', user.uid))
-
+    if (!isAdminProfile(profile)) {
+      return subscribeCurrentTeacherAcademicRoster(
+        db, getProfileSchoolId(profile), user.uid, setStudents, setTeacherRosterStatus
+      )
+    }
+    setTeacherRosterStatus('loading')
+    const q = query(collection(db, 'users'), where('role', '==', 'student'))
     return onSnapshot(q, snap => {
-      const list = snap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
+      const list = snap.docs.map(d => ({ ...d.data(), id: d.id }))
         .filter(student => student.role === 'student' &&
           student.status === 'approved' && student.deleted !== true)
-
-      const visibleStudents = filterStudentsByProfile(list, profile, user.uid)
-      visibleStudents.sort((a, b) =>
-        (a.name || a.email || '').localeCompare(b.name || b.email || '')
-      )
+      const visibleStudents = filterStudentsByProfile(list,profile,user.uid)
+      visibleStudents.sort((a,b) => (a.name || a.email || '').localeCompare(b.name || b.email || ''))
       setStudents(visibleStudents)
+      setTeacherRosterStatus('ready')
     }, error => {
-      console.warn('Writing student query failed:', error)
+      console.warn('Writing admin student roster unavailable:', error?.code || 'unknown')
       setStudents([])
+      setTeacherRosterStatus('error')
     })
   }, [user, profile])
 
@@ -270,17 +272,9 @@ export default function CreateWriting() {
     const classCollection = collection(db, 'classes')
     const classQueries = isAdminProfile(profile)
       ? [query(classCollection)]
-      : [
-          query(classCollection,
-            where('schoolId', '==', getProfileSchoolId(profile)),
-            where('teacherId', '==', user.uid)),
-          query(classCollection,
-            where('schoolId', '==', getProfileSchoolId(profile)),
-            where('createdBy', '==', user.uid)),
-          query(classCollection,
-            where('schoolId', '==', getProfileSchoolId(profile)),
-            where('teacherIds', 'array-contains', user.uid))
-        ]
+      : [query(classCollection,
+          where('schoolId', '==', getProfileSchoolId(profile)),
+          where('teacherId', '==', user.uid))]
 
     return listenMergedQueries(classQueries, items => {
       const visibleClasses = filterClassesByProfile(

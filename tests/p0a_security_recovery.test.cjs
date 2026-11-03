@@ -153,7 +153,9 @@ test('legacy source without primary teacher retains controlled teacherIds compat
 test('archived staff and permanent deletion checks exist in authoritative manager helper',()=>{
   const index=fs.readFileSync(path.join(__dirname,'../functions/index.js'),'utf8')
   assert.match(index,/profile\.archived === true \|\| profile\.permanentDeleteInProgress === true/)
-  assert.match(index,/await requireAdmin\(request\)[\s\S]*?data\.jobIds/)
+  const handler=fs.readFileSync(path.join(__dirname,'../functions/lib/aiWritingRecoveryAdmin.js'),'utf8')
+  assert.match(handler,/await requireAdmin\(request\)/)
+  assert.match(index,/aiWritingRecoveryAdmin\.reconcile\(request\)/)
 })
 
 // Test the actual student report path with an expired sponsored job.

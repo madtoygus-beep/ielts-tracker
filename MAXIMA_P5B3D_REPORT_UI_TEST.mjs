@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import { safeAiWritingEnvelope, shouldShowAiWritingPanel, canRequestAiWriting } from './src/services/aiWritingStudentPolicy.js'
+import { safeAiWritingEnvelope, shouldShowAiWritingPanel, canRequestAiWriting, isPersonalCreditAiSelection } from './src/services/aiWritingStudentPolicy.js'
 
 let passed = 0, failed = 0
 async function test(name, fn) {
@@ -58,8 +58,31 @@ await test('Legacy unfunded failed shape preserved',()=>{
   const v=safeAiWritingEnvelope({status:'failed',canRetry:true},1)
   assert.deepEqual(v,{status:'failed',canRetry:true})
 })
-await test('Legacy student-grant evaluation can still be requested',()=>{
-  assert.equal(canRequestAiWriting(nonFunded,{status:'not_started'},false),true)
+await test('Personal credit retry requires original selected route',()=>{
+  assert.equal(
+    canRequestAiWriting(
+      nonFunded,{status:'not_started'},false
+    ),false
+  )
+  assert.equal(
+    canRequestAiWriting(
+      nonFunded,{status:'not_started',canRetry:true},false
+    ),true
+  )
+  assert.equal(
+    isPersonalCreditAiSelection(
+      'homework','ai','student_credit'
+    ),true
+  )
+  assert.equal(
+    isPersonalCreditAiSelection('homework','teacher','none'),false
+  )
+  assert.equal(
+    isPersonalCreditAiSelection('homework','ai','institution'),false
+  )
+  assert.equal(
+    isPersonalCreditAiSelection('mock','ai','student_credit'),false
+  )
 })
 await test('Zero credit prevents elective request',()=>{
   assert.equal(canRequestAiWriting(noGrant,{status:'not_started'},false),false)
@@ -69,16 +92,16 @@ await test('Busy student cannot spend twice',()=>{
 })
 await test('Mock view loads panel only on completed saved attempt',()=>{
   assert.match(mock,/completedSubmission && finalResult/)
-  assert.match(mock,/isInstitutionWritingStudent\(profile\)/)
+  assert.match(mock,/isInstitutionWritingStudent\(studentProfile\)/)
   assert.match(mock,/context="mock"/)
 })
 await test('Mock AI report remains separate from official grade',()=>{
-  assert.match(panel,/Official Mock scores remain separate/)
+  assert.match(panel,/A teacher band, when available, takes priority for Mock Overall/)
   assert.match(mock,/writingReviewed/)
 })
 await test('Manual credit button never appears for sponsored view',()=>{
   assert.match(panel,/envelope\.institutionFunded \?/)
-  assert.match(panel,/context === 'homework' &&/)
+  assert.match(panel,/personalCreditSelected &&/)
   assert.match(panel,/context === 'mock' && !envelope\.institutionFunded/)
 })
 await test('Sponsored feedback explicitly states no student credit was used',()=>{
@@ -90,7 +113,7 @@ await test('Mock student payload is source-ID only, not a submitted essay',()=>{
 })
 await test('Backend sponsorship eligibility verifies the selected student',()=>{
   assert.match(backend,/policy\.studentIds\.includes\(evidence\.student\.uid\)/)
-  assert.match(backend,/updatedMs <= submittedMs/)
+  assert.match(backend,/grantMs <= submittedMs/)
 })
 await test('Report read does not invoke an AI provider or credit transaction',()=>{
   const section=backend.slice(backend.indexOf('async function pendingInstitutionSponsoredReport('),backend.indexOf('  return { evaluate, getReport }'))

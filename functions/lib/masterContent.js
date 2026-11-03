@@ -225,16 +225,26 @@ async function loadSource(type, id) {
 // Media must be first-party Firebase Storage objects. Download-token URLs and
 // external URLs are not retained or copied; otherwise imports would still be
 // live-linked to Maxima or a third-party host. Source owner path is checked.
-function mappedMediaPath(path, kind, source, masterId, media) {
-  const expectedPrefix = kind === 'audio' ? 'listening-audios/' : 'listening-map-images/'
+function mappedMediaPath(path, kind, source, masterId, media, sourceContentId) {
   const ownerId = cleanString(source.createdBy || source.teacherId, 200)
-  const expectedOwnerPrefix = `${expectedPrefix}${ownerId}/`
-  if (!ownerId || typeof path !== 'string' || !path.startsWith(expectedOwnerPrefix)) {
-    fail('failed-precondition', `${kind} must have a valid source-owned Firebase Storage path.`)
+  if (!ownerId || typeof path !== 'string' || !path || !sourceContentId) {
+    fail('failed-precondition', `${kind} requires a source-owned media path.`)
   }
-  const fileName = path.slice(expectedOwnerPrefix.length)
-  if (!fileName || fileName.includes('/') || fileName.includes('..') || fileName.length > 220) {
-    fail('failed-precondition', `Invalid ${kind} source file name.`)
+  const legacyPrefix = `${kind === 'audio' ? 'listening-audios' : 'listening-map-images'}/${ownerId}/`
+  const privatePrefix = `private-listening-media/${ownerId}/${sourceContentId}/${kind}/`
+  let fileName = ''
+  if (path.startsWith(privatePrefix)) {
+    fileName = path.slice(privatePrefix.length)
+    if (!/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(fileName)) {
+      fail('failed-precondition', `Invalid finalized private ${kind} media identity.`)
+    }
+  } else if (path.startsWith(legacyPrefix)) {
+    fileName = path.slice(legacyPrefix.length)
+    if (!fileName || fileName.includes('/') || fileName.includes('..') || fileName.length > 220) {
+      fail('failed-precondition', `Invalid legacy ${kind} media file name.`)
+    }
+  } else {
+    fail('failed-precondition', `${kind} must have a valid source-owned Firebase Storage path.`)
   }
   if (media.has(path)) return media.get(path).dest
   const ext = fileName.match(/\.([a-z0-9]{2,5})$/i)?.[1]?.toLowerCase() || (kind === 'audio' ? 'bin' : 'png')
@@ -243,10 +253,10 @@ function mappedMediaPath(path, kind, source, masterId, media) {
   return dest
 }
 
-function remapNestedMapImages(node, source, masterId, media, depth = 0) {
+function remapNestedMapImages(node, source, masterId, media, sourceContentId, depth = 0) {
   if (depth > 30) fail('failed-precondition', 'Map image data is too deeply nested.')
   if (Array.isArray(node)) {
-    node.forEach(child => remapNestedMapImages(child, source, masterId, media, depth + 1))
+    node.forEach(child => remapNestedMapImages(child, source, masterId, media, sourceContentId, depth + 1))
     return
   }
   if (!node || typeof node !== 'object') return
@@ -257,15 +267,15 @@ function remapNestedMapImages(node, source, masterId, media, depth = 0) {
     if (!path) {
       fail('failed-precondition', 'A Listening map image uses an external URL. Upload it to Maxima Storage before importing.')
     }
-    node.mapImageStoragePath = mappedMediaPath(path, 'map', source, masterId, media)
+    node.mapImageStoragePath = mappedMediaPath(path, 'map', source, masterId, media, sourceContentId)
     // DoListening supports multiple legacy image-property names. Strip every
     // original URL so no fallback can still fetch the institution asset.
     possibleImageKeys.forEach(key => { if (Object.hasOwn(node, key)) node[key] = '' })
   }
-  for (const child of Object.values(node)) remapNestedMapImages(child, source, masterId, media, depth + 1)
+  for (const child of Object.values(node)) remapNestedMapImages(child, source, masterId, media, sourceContentId, depth + 1)
 }
 
-function buildMasterContent(source, type, masterId) {
+function buildMasterContent(source, type, masterId, sourceContentId) {
   const content = copyTeachingFields(source, type)
   const media = new Map()
   if (type === 'writing' && content.task1?.image) {
@@ -279,11 +289,11 @@ function buildMasterContent(source, type, masterId) {
       fail('failed-precondition', 'Audio uses an external URL. Upload the audio file to Maxima Storage before importing.')
     }
     if (content.audioStoragePath) {
-      content.audioStoragePath = mappedMediaPath(content.audioStoragePath, 'audio', source, masterId, media)
+      content.audioStoragePath = mappedMediaPath(content.audioStoragePath, 'audio', source, masterId, media, sourceContentId)
       content.audioUrl = '' // P4D issues signed URLs only after entitlement.
     }
-    remapNestedMapImages(content.parts, source, masterId, media)
-    remapNestedMapImages(content.questions, source, masterId, media)
+    remapNestedMapImages(content.parts, source, masterId, media, sourceContentId)
+    remapNestedMapImages(content.questions, source, masterId, media, sourceContentId)
   }
   return { content, media: [...media.values()] }
 }
@@ -297,7 +307,7 @@ function contentBlockCount(content, type) {
 
 function masterPayload(plan, managerUid, rootId) {
   const source = plan.snapshot.data() || {}
-  const copy = buildMasterContent(source, plan.type, plan.id)
+  const copy = buildMasterContent(source, plan.type, plan.id, plan.snapshot.id)
   plan.assets = copy.media
   if (plan.type === 'mock') {
     const childMap = new Map(plan.children.map(child => [`${child.type}:${child.snapshot.id}`, child.id]))
@@ -340,6 +350,12 @@ function masterPayload(plan, managerUid, rootId) {
 }
 
 async function copyIndependentMedia(plans) {
+  // STEP1000C7P: fail closed on Listening/Mock-media import until the
+  // independent Self-Study delivery path is migrated off Firebase bearer URLs.
+  // Reading/Writing/Vocabulary without attached Listening assets remain intact.
+  if (plans.some(plan => Array.isArray(plan.assets) && plan.assets.length > 0)) {
+    fail('failed-precondition', 'Listening media imports are temporarily disabled pending secure Self-Study delivery.')
+  }
   const bucket = getStorage().bucket(STORAGE_BUCKET)
   const tasks = []
   let combinedBytes = 0

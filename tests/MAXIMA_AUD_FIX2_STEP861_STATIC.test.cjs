@@ -1,0 +1,31 @@
+'use strict'
+const test=require('node:test')
+const assert=require('node:assert/strict')
+const {readFileSync}=require('node:fs')
+const rules=readFileSync('firestore.rules','utf8')
+const index=readFileSync('functions/index.js','utf8')
+const ui=readFileSync('src/pages/TeacherDashboard.jsx','utf8')
+test('01 no browser Mock score create/update, manual score path retained',()=>{
+ assert.match(rules,/teacherScoreCreateBase\(data\) && teacherManualScoreCreate\(data\)/)
+ assert.match(rules,/!resource\.data\.keys\(\)\.hasAny\(\['mockTestId', 'mockId'/)
+ assert.doesNotMatch(rules,/teacherMockScoreUpdateOnly\(/)
+ assert.match(rules,/teacherManualScoreUpdateOnly\(\)/)
+})
+test('02 normal Writing review requires server Callable',()=>{
+ assert.match(rules,/match \/writingSubmissions\/\{id\}[\s\S]*?allow update: if adminResultArchiveOnly\(\);/)
+ assert.doesNotMatch(rules,/teacherWritingReviewOnly\(/)
+ assert.match(index,/exports\.saveWritingReviewSecure = onCall\(request/)
+ assert.match(ui,/saveWritingReviewSecureCall\(\{[\s\S]*?submittedAt: submission\.submittedAt/)
+})
+test('03 UI no longer directly mutates Writing review document',()=>{
+ const a=ui.indexOf('const saveWritingReview = async () => {')
+ const b=ui.indexOf('const saveMockWritingReview = async () => {',a)
+ assert.ok(a>=0&&b>a)
+ assert.doesNotMatch(ui.slice(a,b),/updateDoc\(/)
+})
+test('04 permanent change excludes live deploy commands',()=>{
+ const service=readFileSync('functions/lib/p0bWritingReviewSecureService.js','utf8')
+ assert.doesNotMatch(service,/child_process|execFileSync|fetch\(|api\.openai\.com|deploy|gcloud/)
+ assert.match(service,/tx\.update\(ref, \{/)
+ assert.match(service,/requireCurrentTeacherAcademicStudent/)
+})

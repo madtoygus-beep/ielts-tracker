@@ -108,7 +108,8 @@ function fixture({context='homework', selected=[student], pilotEnabled=true,
     ? {...baseSubmission,mockTestId:id,writingId:writingId,status:'submitted',
       enabledSections:{writing:true},writingAnswers:{task1:'',task2:SPONSORED_TEST_ESSAY},
       result:{overallEstimate:6.5}}
-    : {...baseSubmission,writingId:id,task1Answer:'',task2Answer:SPONSORED_TEST_ESSAY}
+    : {...baseSubmission,writingId:id,task1Answer:'',task2Answer:SPONSORED_TEST_ESSAY,
+        aiReviewChoice:'ai',aiBillingMode:'institution'}
   db.put('users/'+student,{role:'student',status:'approved',schoolId:'maxima',accountType:'institution'})
   db.put('users/'+other,{role:'student',status:'approved',schoolId:'maxima',accountType:'institution'})
   db.put('schools/maxima',{status:'active'})
@@ -133,6 +134,26 @@ function fixture({context='homework', selected=[student], pilotEnabled=true,
     if(provider)return provider(prepared,key,db)
     assert.equal(key,secret)
     return {report:makeReport(prepared),model:'gpt-5-mini',providerResponseId:'response-test'}
+  }
+
+  // Current server-locked submission choice and canonical membership fixture.
+  if (context === 'homework' &&
+      submission.aiReviewChoice == null &&
+      submission.aiBillingMode == null) {
+    submission.aiReviewChoice = 'ai'
+    submission.aiBillingMode = 'institution'
+    db.put(subPath, submission)
+  }
+
+  const indexPath = 'schools/maxima/teacherAcademicIndex/' + teacher
+  if (!db.docs.has(indexPath)) {
+    db.put(indexPath, {
+      schemaVersion: 1,
+      source: 'managed_active_classes',
+      schoolId: 'maxima',
+      teacherId: teacher,
+      activeStudentIds: [student]
+    })
   }
   const service=createAiWritingSponsoredEvaluationService({
     db,FieldValue:{serverTimestamp:()=>NOW},
@@ -280,14 +301,26 @@ await test('Disabled teacher policy: no automatic call',async()=>{
   const f=fixture();f.db.docs.get(policyPath('homework',writingId)).enabled=false
   assert.equal((await f.evaluate()).status,'ineligible')
 })
-await test('Policy created AFTER student submit does not trigger retroactive spend',async()=>{
+await test('Server-authorized homework AI choice survives a later policy edit',async()=>{
+  // The secure server wrote aiReviewChoice='ai' and aiBillingMode='institution'
+  // at submission time. Editing the policy timestamp later does not erase that choice.
   const f=fixture();f.db.docs.get(policyPath('homework',writingId)).updatedAt='2026-10-15T02:30:00Z'
-  assert.equal((await f.evaluate()).status,'ineligible');assert.equal(f.calls(),0)
+  assert.equal((await f.evaluate()).status,'completed');assert.equal(f.calls(),1)
 })
-await test('Missing policy timestamp fails closed',async()=>{
+await test('A later grant never retroactively bills a teacher-only submission',async()=>{
+  const f=fixture()
+  const teacherSubmission={...f.submission,aiReviewChoice:'teacher',aiBillingMode:'none'}
+  f.db.put(f.subPath,teacherSubmission)
+  f.db.docs.get(policyPath('homework',writingId)).updatedAt='2026-10-15T02:30:00Z'
+  assert.equal((await f.evaluate(null,teacherSubmission)).status,'ignored')
+  assert.equal(f.calls(),0)
+})
+await test('Mock grant without timestamp fails closed',async()=>{
+  // Mock AI grants must predate submission, unlike the server-signed homework choice.
   assert.equal(policyUpdatedAfterSubmission({},{submittedAt:SUBMITTED}),true)
-  const f=fixture();delete f.db.docs.get(policyPath('homework',writingId)).updatedAt
+  const f=fixture({context:'mock'});delete f.db.docs.get(policyPath('mock',mockId)).updatedAt
   assert.equal((await f.evaluate()).status,'ineligible')
+  assert.equal(f.calls(),0)
 })
 await test('School pilot disabled fails closed independent of selected assignment',async()=>{
   const f=fixture({pilotEnabled:false});assert.equal((await f.evaluate()).status,'ineligible')
@@ -452,10 +485,17 @@ await test('Changing student attribution in Firestore invalidates event',async()
   const f=fixture();f.db.docs.get(f.subPath).studentId=other
   assert.equal((await f.evaluate()).status,'ineligible')
 })
-await test('different attempt number produces separate AI job',async()=>{
-  const f=fixture({attempt:2});assert.equal((await f.evaluate()).status,'completed')
+await test('Server-consumed retake creates a distinct AI job',async()=>{
+  const f=fixture({attempt:2})
+  f.db.put(controlPath('homework',student,writingId),{
+    status:'consumed',
+    completedAttemptNumber:2
+  })
+  assert.equal((await f.evaluate()).status,'completed')
   assert.ok(f.db.docs.has(jobPath('homework',student,writingId,2)))
-  assert.equal(f.db.docs.has(jobPath('homework',student,writingId,1)),false)
+  assert.equal(
+    f.db.docs.has(jobPath('homework',student,writingId,1)),false
+  )
 })
 await test('Reservation writes not started for wrong current submission',async()=>{
   const f=fixture();f.db.docs.get(f.subPath).attemptNumber=2
@@ -484,7 +524,7 @@ await test('Evaluation read/credit paths explicitly distinguish sponsored jobs',
   const s=fs.readFileSync(path.join(__dirname,'functions/lib/aiWritingEvaluation.js'),'utf8')
   assert.match(s,/job\.billingMode === 'sponsored_auto'/)
   assert.match(s,/institutionFunded: job\.billingMode === 'sponsored_auto'/)
-  assert.match(s,/if \(job\.billingMode === 'sponsored_auto'\)/)
+  assert.match(s,/if \(job\.billingMode === 'sponsored_auto' && validInteger\(job\.leaseUntilMs\) <= now\(\)\)/)
 })
 
 
@@ -650,6 +690,36 @@ await test('P6-A2: saved Mock Writing policy is subject to same current-teacher 
   assert.equal((await f.evaluate()).status,'ineligible')
   assert.equal(f.calls(),0)
 })
+
+await test('C9H4: Teacher-only route cannot reserve AI quota',async()=>{
+  const f=fixture()
+  const after={
+    ...f.submission,
+    aiReviewChoice:'teacher',
+    aiBillingMode:'none'
+  }
+  f.db.put(f.subPath,after)
+  assert.equal((await f.evaluate(null,after)).status,'ignored')
+  assert.equal(f.calls(),0)
+  assert.equal(f.db.docs.has(monthPath),false)
+})
+
+await test('C9H4: Missing academic index denies paid AI',async()=>{
+  const f=fixture()
+  f.db.docs.delete('schools/maxima/teacherAcademicIndex/'+teacher)
+  assert.equal((await f.evaluate()).status,'ineligible')
+  assert.equal(f.calls(),0)
+  assert.equal(f.db.docs.has(monthPath),false)
+})
+
+await test('C9H4: Late Mock grant cannot reserve paid AI',async()=>{
+  const f=fixture({context:'mock'})
+  f.db.docs.get(policyPath('mock',mockId)).updatedAt =
+    '2026-10-15T02:30:00Z'
+  assert.equal((await f.evaluate()).status,'ineligible')
+  assert.equal(f.calls(),0)
+})
+
 console.log(`\nP5B-3C sponsored submission evaluation: ${passed}/${passed+failed} PASS; ${failed} FAIL`)
 if(failed)process.exitCode=1
 })().catch(error=>{console.error('TEST HARNESS ERROR',error?.stack||error);process.exitCode=1})
