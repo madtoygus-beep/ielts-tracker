@@ -28,5 +28,13 @@
     "Review5 legacy test expectations against recorded21-word scoring decision; runtime unchanged",
     "Retain isolated emulator requirement for integration tests"
   ],
-  "archivePolicy": "Old experiments are preserved outside the active app in backup/LOCAL_EXPERIMENTS; original dirty worktree and Git history are backed up."
+  "archivePolicy": "Old experiments are preserved outside the active app in backup/LOCAL_EXPERIMENTS; original dirty worktree and Git history are backed up.",
+  "gitPublication": {
+    "repository": "madtoygus-beep/ielts-tracker",
+    "workingBranch": "main",
+    "vercelProductionBranch": "main",
+    "frontendDeployment": "Vercel builds pushes to main automatically; verify READY and live URL after each push",
+    "firebaseDeployment": "functions/ and Firestore/Storage rules require a separate Firebase deployment; Git push alone does not deploy them",
+    "rollbackDeployment": "dpl_EkcQbvBCrQEpR3aK8Z56Z55yWGLQ"
+  }
 }
