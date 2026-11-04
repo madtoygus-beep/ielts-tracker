@@ -12,6 +12,7 @@ import { formatHomeworkScore, savedObjectiveBand } from '../services/ieltsObject
   import StudentArchivePanel from '../components/StudentArchivePanel'
   import { isInstitutionWritingStudent } from '../services/aiWritingStudentPolicy'
   import { useEscapeDismiss } from '../hooks/useEscapeDismiss'
+  import { runWithDismissLock } from '../services/escapeDismissPolicy'
 
   const getStudentSubmissionAttemptStateCall = httpsCallable(
     functions,
@@ -5078,11 +5079,13 @@ import { formatHomeworkScore, savedObjectiveBand } from '../services/ieltsObject
     const [overviewMockSubmissions, setOverviewMockSubmissions] = useState([])
     const [user, setUser] = useState(null)
     const [showPasswordModal, setShowPasswordModal] = useState(false)
+    const passwordSavingRef = useRef(false)
     useEscapeDismiss(() => {
       if (!showPasswordModal) return false
+      if (passwordSavingRef.current) return true
       setShowPasswordModal(false)
       return true
-    })
+    }, 20)
     const [newPassword, setNewPassword] = useState('')
     const [passwordMsg, setPasswordMsg] = useState('')
     const [resultsCategory, setResultsCategory] = useState('writing')
@@ -5367,7 +5370,7 @@ import { formatHomeworkScore, savedObjectiveBand } from '../services/ieltsObject
       </div>
     )
 
-    const handleChangePassword = async () => {
+    const handleChangePassword = () => runWithDismissLock(passwordSavingRef, async () => {
       if (newPassword.length < 6) {
         setPasswordMsg('Password must be at least 6 characters')
         return
@@ -5382,7 +5385,7 @@ import { formatHomeworkScore, savedObjectiveBand } from '../services/ieltsObject
           'Error: Please log out and log back in first, then try again.'
         )
       }
-    }
+    })
 
     return (
       <div className="min-h-screen bg-slate-50 text-slate-900">

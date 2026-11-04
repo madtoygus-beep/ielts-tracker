@@ -1,3 +1,4 @@
+import { useEscapeDismiss } from '../hooks/useEscapeDismiss'
 import { useEffect, useRef, useState } from 'react'
 import { auth, db, functions } from '../firebase'
 import { doc, getDoc } from 'firebase/firestore'
@@ -655,19 +656,11 @@ export default function DoWriting() {
     }
   }, [draftKey, loading, submitted, alreadyDone, submitting, draftLoaded, writing?.id, id])
 
-  useEffect(() => {
-    const handleKeyDown = event => {
-      if (event.key === 'Escape') {
-        setImageZoomOpen(false)
-      }
-    }
-
-    window.addEventListener('keydown', handleKeyDown)
-
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown)
-    }
-  }, [])
+  useEscapeDismiss(() => {
+    if (!imageZoomOpen) return false
+    setImageZoomOpen(false)
+    return true
+  })
 
   useEffect(() => {
     const saveLatestSilently = () => {

@@ -122,7 +122,7 @@ export default function ManageClasses() {
   const [searchParams, setSearchParams] = useSearchParams()
   const routeSchoolId = searchParams.get('school') || ''
   useEscapeDismiss(() => {
-    if (saving) return false
+    if (saving && showCreateModal) return true
     if (showCreateModal) { closeModal(); return true }
     if (detailClassId) { setDetailClassId(null); return true }
     if (openActionsId) { setOpenActionsId(null); return true }

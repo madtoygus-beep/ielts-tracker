@@ -354,13 +354,28 @@ export default function AdminDashboard() {
   const navigate = useNavigate()
   useEscapeDismiss(() => {
     if (legacyCascadeDialog) {
-      if (legacyCascadeDialog.saving) return false
+      if (legacyCascadeDialog.saving) return true
       setLegacyCascadeDialog(null)
       return true
     }
     if (editUser) {
-      if (editSaving || passwordSaving) return false
+      if (editSaving || passwordSaving) return true
       setEditUser(null)
+      return true
+    }
+    if (schoolEditorOpen && adminSection === 'schools') {
+      if (schoolSaving) return true
+      setSchoolEditorOpen(false)
+      return true
+    }
+    if (accountCreatorOpen && adminSection === 'users') {
+      if (accountCreating) return true
+      setAccountCreatorOpen(false)
+      return true
+    }
+    if (managerCreatorOpen && adminSection === 'selfstudy' && selfStudyTab === 'managers') {
+      if (managerCreating) return true
+      setManagerCreatorOpen(false)
       return true
     }
     return false

@@ -34,3 +34,10 @@ Daha büyük değişikliklerde ayrı bir dal kullanıp önce Vercel ön izlemesi
 `functions/`, `firestore.rules` ve `storage.rules` değişiklikleri Git gönderimiyle
 Firebase’e yayınlanmaz. Bunları ayrı test edip ilgili Firebase bileşenini ayrıca yayınlayın.
 Gizli anahtarları ve `.env` dosyalarını Git’e eklemeyin.
+
+## Esc ile kapatma
+
+Esc görünür en üst pencereyi kapatır. Kayıt veya silme sürerken pencere açık kalır.
+Basılı tutulan Esc, metin giriş birleştirmesi ve başka bir kontrolün işlediği tuş olayı
+arka plandaki pencereleri kapatmaz. `node --test tests/escape_dismiss.test.mjs`
+ile bu davranışları ağ bağlantısı ve gerçek veri kullanmadan kontrol edebilirsiniz.

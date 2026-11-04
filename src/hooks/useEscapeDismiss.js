@@ -1,17 +1,19 @@
 import { useEffect, useRef } from 'react'
+import { createEscapeDismissRegistry } from '../services/escapeDismissPolicy'
 
-// One safe dismissal per Escape. Callers must not cancel in-progress writes.
-export function useEscapeDismiss(onEscape) {
+const registries = new WeakMap()
+
+// Return true when a visible layer closes OR must stay open while saving.
+// Return false only when this handler has no visible layer to dismiss.
+export function useEscapeDismiss(onEscape, priority = 0) {
   const handlerRef = useRef(onEscape)
   handlerRef.current = onEscape
   useEffect(() => {
-    const onKeyDown = event => {
-      if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing) return
-      if (typeof handlerRef.current === 'function' && handlerRef.current() === true) {
-        event.preventDefault()
-      }
+    let registry = registries.get(window)
+    if (!registry) {
+      registry = createEscapeDismissRegistry(window)
+      registries.set(window, registry)
     }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [])
+    return registry.register(() => handlerRef.current?.() === true, priority)
+  }, [priority])
 }

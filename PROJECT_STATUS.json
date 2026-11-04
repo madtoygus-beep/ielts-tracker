@@ -25,7 +25,8 @@
     ]
   },
   "nextWork": [
-    "Retain isolated emulator requirement for integration tests"
+    "Retain isolated emulator requirement for integration tests",
+    "Review3 pre-existing P5B3B teacher UI static assertions: assigned-student parameters, wording and old not-yet-live message"
   ],
   "archivePolicy": "Old experiments are preserved outside the active app in backup/LOCAL_EXPERIMENTS; original dirty worktree and Git history are backed up.",
   "gitPublication": {
@@ -43,5 +44,21 @@
     "runtimeSourceFilesUnchanged": 89,
     "paidAiCalls": 0,
     "productionStudentDataChanged": false
+  },
+  "escapeUpdate": {
+    "date": "2026-11-04",
+    "relatedChecksPassed": 29,
+    "escapeChecksPassed": 16,
+    "build": "PASS",
+    "scope": [
+      "Admin visible institution/account/manager panels",
+      "Teacher review/password/assignment/retake dialogs",
+      "Student password and Writing reviews",
+      "Class editor/details",
+      "Writing image zoom"
+    ],
+    "saveInProgress": "Escape consumed without dismissing; async locks protect reviews and password changes",
+    "keyboard": "One visible layer per press; repeated/composing/already-handled events ignored",
+    "unrelatedTeacherUiBaseline": "79/82; same3 failures before and after; outdated assignment-panel source assertions, not changed here"
   }
 }

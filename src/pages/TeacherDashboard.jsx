@@ -26,6 +26,7 @@ import { useNavigate } from 'react-router-dom'
 import { httpsCallable } from 'firebase/functions'
 import { buildP8CAssignmentDelta } from '../services/p8cAssignmentDelta'
 import { useEscapeDismiss } from '../hooks/useEscapeDismiss'
+import { runWithDismissLock } from '../services/escapeDismissPolicy'
 import AiWritingTeacherPanel from '../components/AiWritingTeacherPanel'
 import AiWritingSponsoredAssignmentPanel from '../components/AiWritingSponsoredAssignmentPanel'
 import { buildMissingWritingReviewSources } from '../services/teacherWritingReviewFallbacks'
@@ -708,6 +709,8 @@ export default function TeacherDashboard() {
     date: ''
   })
   // Stable idempotency key until a save succeeds, including network retries.
+  const writingReviewSavingRef = useRef(false)
+  const passwordSavingRef = useRef(false)
   const manualScoreSubmittingRef = useRef(false)
   const manualScoreRequestRef = useRef(null)
 
@@ -751,36 +754,32 @@ export default function TeacherDashboard() {
   const navigate = useNavigate()
   useEscapeDismiss(() => {
     if (legacyCascadeDialog) {
-      if (legacyCascadeDialog.saving) return false
+      if (legacyCascadeDialog.saving) return true
       setLegacyCascadeDialog(null)
       return true
     }
     if (deleteDialogOpen) {
-      if (attemptManagerSaving) return false
+      if (attemptManagerSaving) return true
       closeDeleteDialog()
       return true
     }
     if (statsDialogMode) {
-      if (attemptManagerSaving) return false
+      if (attemptManagerSaving) return true
       closeStatsDialog()
       return true
     }
     if (attemptManager) {
-      if (attemptManagerSaving) return false
+      if (attemptManagerSaving) return true
       closeSubmissionAttemptManager()
       return true
     }
-    if (materialShareTarget) {
-      if (materialShareSaving) return false
-      closeMaterialShareAgain()
-      return true
-    }
-    if (selectedHomework) {
-      if (assignmentSaving) return false
-      closeAssignmentManager()
+    if (showPasswordModal) {
+      if (passwordSavingRef.current) return true
+      setShowPasswordModal(false)
       return true
     }
     if (selectedWritingReview || selectedMockWritingReview) {
+      if (writingReviewSavingRef.current) return true
       setSelectedWritingReview(null)
       setSelectedMockWritingReview(null)
       resetWritingReviewForm()
@@ -788,7 +787,16 @@ export default function TeacherDashboard() {
     }
     if (selectedVocabularyReview) { setSelectedVocabularyReview(null); return true }
     if (selectedReview) { setSelectedReview(null); return true }
-    if (showPasswordModal) { setShowPasswordModal(false); return true }
+    if (selectedHomework) {
+      if (assignmentSaving) return true
+      closeAssignmentManager()
+      return true
+    }
+    if (materialShareTarget) {
+      if (materialShareSaving) return true
+      closeMaterialShareAgain()
+      return true
+    }
     if (createMenuOpen) { setCreateMenuOpen(false); return true }
     return false
   })
@@ -5824,7 +5832,7 @@ export default function TeacherDashboard() {
     printWindow.print()
   }
 
-  const handleChangePassword = async () => {
+  const handleChangePassword = () => runWithDismissLock(passwordSavingRef, async () => {
     if (newPassword.length < 6) {
       setPasswordMsg('Password must be at least 6 characters')
       return
@@ -5839,7 +5847,7 @@ export default function TeacherDashboard() {
         'Error: Please log out and log back in first, then try again.'
       )
     }
-  }
+  })
 
 
   const getWritingMode = (writing, submission = {}) =>
@@ -6088,7 +6096,7 @@ export default function TeacherDashboard() {
     generalFeedback: writingReviewForm.generalFeedback
   })
 
-  const saveWritingReview = async () => {
+  const saveWritingReview = () => runWithDismissLock(writingReviewSavingRef, async () => {
     if (!selectedWritingReview) return
 
     if (!writingReviewForm.overall) {
@@ -6109,9 +6117,9 @@ export default function TeacherDashboard() {
 
     setSelectedWritingReview(null)
     resetWritingReviewForm()
-  }
+  })
 
-  const saveMockWritingReview = async () => {
+  const saveMockWritingReview = () => runWithDismissLock(writingReviewSavingRef, async () => {
     if (!selectedMockWritingReview) return
     if (!writingReviewForm.overall) {
       alert('Please enter overall writing band.')
@@ -6134,7 +6142,7 @@ export default function TeacherDashboard() {
 
     setSelectedMockWritingReview(null)
     resetWritingReviewForm()
-  }
+  })
 
 
   const getMockSubmittedCount = mockTest => {
