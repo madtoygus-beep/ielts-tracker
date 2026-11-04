@@ -81,7 +81,7 @@ test('No answer remains submittable but cannot use AI', () => {
   const prep = prepareAiWritingEvaluation({ source: source(), submission: {task1Answer: ' ', task2Answer: ''} })
   assert.equal(prep.task1.wordCount, 0)
   assert.equal(prep.task2.wordCount, 0)
-  assert.throws(() => grading.requireAiEligible(prep), /50 words/)
+  assert.throws(() => grading.requireAiEligible(prep), /longer than 20 words/)
 })
 test('Unexpected task flags rejected', () => assert.throws(() => prepareAiWritingEvaluation({ source: source(), submission: { ...submission(), task1Enabled: false } }), /disagree/))
 test('Missing task1 image rejected', () => assert.throws(() => prepareAiWritingEvaluation({ source: { ...source(), task1: { prompt: 'hi' } }, submission: submission() }), /Task 1 visual/))
@@ -159,19 +159,42 @@ test('Empty Task 2 is excluded from AI with no combined band', () => {
 })
 test('Task1-only report computes only Task1 score', () => assert.equal(normalizeAiWritingReport({ task1: reports().task1, task2: null }, prepared('task1_only')).estimatedBand, 6.5))
 test('Task2-only report computes only Task2 score', () => assert.equal(normalizeAiWritingReport({ task1: null, task2: reports().task2 }, prepared('task2_only')).estimatedBand, 7.5))
-test('Eligible short answers get developmental feedback without numeric band', () => {
+// Current contract: 21+ words may receive rubric-based numeric estimates.
+// IELTS target lengths (150/250) do not mechanically suppress a valid band.
+test('Underlength assessable answers retain criterion bands and weighted Writing estimate', () => {
   const prep = prepareAiWritingEvaluation({source: source(), submission: {
     task1Answer: TASK1_ANSWER.split(/\s+/).slice(0,75).join(' '),
     task2Answer: TASK2_ANSWER.split(/\s+/).slice(0,140).join(' ')
   }})
   const report = normalizeAiWritingReport(reports(), prep)
-  assert.equal(report.estimatedBand, null)
-  assert.equal(report.task1.estimatedBand, null)
-  assert.equal(report.task1.criteria.lexicalResource.band, null)
-  assert.equal(report.task2.estimatedBand, null)
-  assert.equal(report.task2.criteria.coherenceAndCohesion.band, null)
-  assert.equal(report.task1.feedbackOnly && report.task2.feedbackOnly, true)
+  assert.equal(report.task1.wordCount, 75)
+  assert.equal(report.task2.wordCount, 140)
+  assert.equal(report.estimatedBand, 7)
+  assert.equal(report.task1.estimatedBand, 6.5)
+  assert.equal(report.task1.criteria.lexicalResource.band, 6.5)
+  assert.equal(report.task2.estimatedBand, 7.5)
+  assert.equal(report.task2.criteria.coherenceAndCohesion.band, 7.5)
+  assert.equal(report.feedbackOnly, false)
+  assert.equal(report.task1.feedbackOnly || report.task2.feedbackOnly, false)
 })
+for (const task of ['task1', 'task2']) {
+  test(`${task}: 20 words cannot request paid AI; 21 words can receive a numeric estimate`, () => {
+    const mode = task === 'task1' ? 'task1_only' : 'task2_only'
+    const prep = words => prepareAiWritingEvaluation({source: source(mode), submission: {
+      task1Answer: task === 'task1' ? Array(words).fill('word').join(' ') : '',
+      task2Answer: task === 'task2' ? Array(words).fill('word').join(' ') : ''
+    }})
+    assert.throws(() => grading.requireAiEligible(prep(20)), /longer than 20 words/)
+    assert.doesNotThrow(() => grading.requireAiEligible(prep(21)))
+    const raw = task === 'task1' ? reports(oneTaskReport('', [6,6,6,6]), null)
+      : reports(null, oneTaskReport('', [6,6,6,6]))
+    const report = normalizeAiWritingReport(raw, prep(21))
+    assert.equal(report[task].wordCount, 21)
+    assert.equal(report[task].estimatedBand, 6)
+    assert.equal(report.estimatedBand, 6)
+    assert.equal(report.feedbackOnly, false)
+  })
+}
 test('Bogus half-step score rejected', () => {
   const raw = reports()
   raw.task2.criteria.coherenceAndCohesion.band = 7.2

@@ -16,8 +16,9 @@ veri yazan testleri yalnız ayrı, emülatöre bağlı UAT klasöründe çalış
 ## Yayın ve test durumu
 
 Güncel kaynaklar GitHub `main` dalında tutulur. Vercel bu dalı üretim yayını için izler.
-Uygulama kodu yayımlanan sürümle aynıdır. Bazı eski testler önceki kelime sınırı
-beklentilerini içerir; ayrıntıları `PROJECT_STATUS.json` içinde kayıtlıdır.
+Uygulama kodu yayımlanan sürümle aynıdır. AI Writing kelime sınırı testleri
+4 Kasım 2026 tarihinde güncellenmiş ve ilgili 164 kontrol geçmiştir. Ayrıntılar
+`PROJECT_STATUS.json` içinde kayıtlıdır.
 
 ## Manuel değişiklik ve yayın
 

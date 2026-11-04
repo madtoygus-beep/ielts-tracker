@@ -236,41 +236,40 @@ await test('Concurrent duplicate events reserve only one model call',async()=>{
   assert.equal(f.calls(),1)
   assert.equal(f.db.docs.get(monthPath).requestCount,1)
 })
-await test('P5C: Sponsored 99-word Task2 makes no API call or budget reservation',async()=>{
-  const f=fixture();const after={...f.submission,task2Answer:Array(99).fill('word').join(' ')}
-  f.db.put(f.subPath,after)
-  assert.equal((await f.evaluate(null,after)).status,'too_short')
-  assert.equal(f.calls(),0);assert.equal(f.db.writes.length,0)
-  assert.equal(f.db.docs.has(monthPath),false)
-})
-await test('P5C: Sponsored blank Task2 makes no API call or budget reservation',async()=>{
-  const f=fixture();const after={...f.submission,task2Answer:''}
-  f.db.put(f.subPath,after)
-  assert.equal((await f.evaluate(null,after)).status,'too_short')
-  assert.equal(f.calls(),0);assert.equal(f.db.writes.length,0)
-})
-await test('P5C: Sponsored 100-word Task2 produces feedback without a score',async()=>{
-  const f=fixture();const after={...f.submission,task2Answer:Array(100).fill('word').join(' ')}
-  f.db.put(f.subPath,after);assert.equal((await f.evaluate(null,after)).status,'completed')
-  const r=f.db.docs.get(jobPath('homework',student,writingId)).report
-  assert.equal(r.estimatedBand,null);assert.equal(r.feedbackOnly,true)
-  assert.equal(r.task2.estimatedBand,null);assert.equal(r.task2.criteria.lexicalResource.band,null)
-  assert.equal(f.calls(),1);assert.equal(f.db.docs.get(monthPath).sponsoredRequestCount,1)
-  assert.equal(f.db.writes.some(x=>x.p.startsWith('aiWritingStudentAccess/')||x.p.startsWith('aiWritingCreditOperations/')),false)
-})
-await test('P5C: Sponsored 249-word Task2 still cannot publish band',async()=>{
-  const f=fixture();const after={...f.submission,task2Answer:Array(249).fill('word').join(' ')}
-  f.db.put(f.subPath,after);assert.equal((await f.evaluate(null,after)).status,'completed')
-  const r=f.db.docs.get(jobPath('homework',student,writingId)).report
-  assert.equal(r.task2.estimatedBand,null);assert.equal(r.estimatedBand,null)
-})
-await test('P5C: Sponsored 250-word Task2 produces full IELTS band',async()=>{
-  const f=fixture();const after={...f.submission,task2Answer:Array(250).fill('word').join(' ')}
-  f.db.put(f.subPath,after);assert.equal((await f.evaluate(null,after)).status,'completed')
-  const r=f.db.docs.get(jobPath('homework',student,writingId)).report
-  assert.equal(r.task2.estimatedBand,6.5);assert.equal(r.estimatedBand,6.5)
-})
-await test('P5C: Sponsored forged numeric feedback score fails safely',async()=>{
+// Current 21-word paid-model threshold; repeated words are synthetic fixtures,
+// and the injected provider supplies rubric scores without any external call.
+for (const words of [0, 20]) {
+  await test(`Sponsored ${words}-word Task2 makes no API call or budget reservation`,async()=>{
+    const f=fixture();const after={...f.submission,task2Answer:Array(words).fill('word').join(' ')}
+    f.db.put(f.subPath,after)
+    assert.equal((await f.evaluate(null,after)).status,'too_short')
+    assert.equal(f.calls(),0);assert.equal(f.db.writes.length,0)
+    assert.equal(f.db.docs.has(monthPath),false)
+    assert.equal(f.db.docs.has(jobPath('homework',student,writingId)),false)
+  })
+}
+for (const words of [21, 99, 100, 249, 250]) {
+  await test(`Sponsored ${words}-word Task2 preserves numeric rubric scores and settles one institution request`,async()=>{
+    const f=fixture();const after={...f.submission,task2Answer:Array(words).fill('word').join(' ')}
+    f.db.put(f.subPath,after)
+    assert.equal((await f.evaluate(null,after)).status,'completed')
+    const job=f.db.docs.get(jobPath('homework',student,writingId))
+    const r=job.report;const usage=f.db.docs.get(monthPath)
+    assert.equal(r.task1,null)
+    assert.equal(r.task2.wordCount,words)
+    assert.equal(r.task2.estimatedBand,6.5);assert.equal(r.estimatedBand,6.5)
+    assert.equal(r.task2.criteria.lexicalResource.band,6.5)
+    assert.equal(r.feedbackOnly,false);assert.equal(r.task2.feedbackOnly,false)
+    assert.equal(job.status,'completed')
+    assert.equal(f.calls(),1);assert.equal(usage.requestCount,1)
+    assert.equal(usage.sponsoredRequestCount,1)
+    assert.equal(usage.pendingCount,0);assert.equal(usage.completedCount,1)
+    assert.equal(f.db.writes.some(x=>x.p.startsWith('aiWritingStudentAccess/')||x.p.startsWith('aiWritingCreditOperations/')),false)
+    assert.equal((await f.evaluate(null,after)).status,'completed')
+    assert.equal(f.calls(),1);assert.equal(f.db.docs.get(monthPath).requestCount,1)
+  })
+}
+await test('Sponsored inconsistent criterion average fails safely for an underlength answer',async()=>{
   const f=fixture({provider:async prep=>{
     const report=makeReport(prep);report.task2.estimatedBand=9
     return {report,model:'gpt-5-mini'}
