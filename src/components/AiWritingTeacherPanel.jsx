@@ -1,3 +1,4 @@
+import WritingLengthNotice from './WritingLengthNotice'
 import PartialWritingNotice from './PartialWritingNotice'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { httpsCallable } from 'firebase/functions'
@@ -24,6 +25,7 @@ function TaskReport({ taskNumber, report }) {
         </span>
       </div>
       <p className="text-xs text-slate-500 mb-3">{report.wordCount} words</p>
+      <WritingLengthNotice taskNumber={taskNumber} wordCount={report.wordCount} />
       {report.overview && <p className="text-sm whitespace-pre-wrap leading-6 text-slate-700 mb-3">{report.overview}</p>}
       <div className="grid gap-3 sm:grid-cols-2">
         {rows.map(row => (

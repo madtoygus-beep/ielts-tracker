@@ -1,3 +1,4 @@
+import WritingLengthNotice from './WritingLengthNotice'
 import PartialWritingNotice from './PartialWritingNotice'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { httpsCallable } from 'firebase/functions'
@@ -67,7 +68,6 @@ function AiWritingWaitingProgress() {
 function TaskAiReport({ taskNumber, report }) {
   if (!report) return null
   const rows = aiWritingCriterionRows(report, taskNumber)
-  const wordMinimum = taskNumber === 1 ? 150 : 250
   return (
     <section className="border border-indigo-100 rounded-xl p-4 text-left bg-white">
       <div className="flex items-center justify-between gap-3 mb-2">
@@ -76,8 +76,8 @@ function TaskAiReport({ taskNumber, report }) {
       </div>
       <div className="text-xs text-gray-500 mb-3">
         {Number.isInteger(report.wordCount) ? `${report.wordCount} words` : ''}
-        {report.belowRecommendedLength === true && ` - Under the recommended ${wordMinimum} words`}
       </div>
+      <WritingLengthNotice taskNumber={taskNumber} wordCount={report.wordCount} />
       {typeof report.overview === 'string' && report.overview && (
         <p className="text-sm text-gray-700 leading-6 mb-4 whitespace-pre-wrap">{report.overview}</p>
       )}

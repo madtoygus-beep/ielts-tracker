@@ -1,0 +1,81 @@
+{
+  "date": "2026-11-05",
+  "productionChanged": false,
+  "studentScoresChanged": false,
+  "promptCandidateOnly": true,
+  "offlineTestsPassed": 66,
+  "noticeRenderChecksPassed": 12,
+  "diagnosticLimits": [
+    "Synthetic expected bands are developer hypotheses, not examiner labels. Failed short Task1 diagnostic retained.",
+    "Only two official Task2 anchors; no Task1 examiner calibration yet.",
+    "Candidate prompt has not demonstrated improved agreement. Do not claim calibrated accuracy."
+  ],
+  "officialSource": "https://ielts.org/cdn/computer-delivered-sample-tests-academic-writing/ielts-academic-writing-example-responses-to-parts-1-and-2-with-band-scores-and-examiner-comments.pdf",
+  "candidateStatus": "REJECTED_FOR_PRODUCTION_QUALITY_REGRESSION",
+  "productionModelChanged": false,
+  "heldOutComparisons": [
+    {
+      "id": "heldout_official_task1_radio_tv_band6",
+      "version": "before",
+      "words": 174,
+      "band": 5.5,
+      "criteria": {
+        "taskAchievementOrResponse": 5.5,
+        "coherenceAndCohesion": 6,
+        "lexicalResource": 5,
+        "grammaticalRangeAndAccuracy": 5
+      },
+      "pass": true
+    },
+    {
+      "id": "heldout_official_task1_radio_tv_band6",
+      "version": "after",
+      "words": 174,
+      "band": 5,
+      "criteria": {
+        "taskAchievementOrResponse": 5,
+        "coherenceAndCohesion": 5,
+        "lexicalResource": 5,
+        "grammaticalRangeAndAccuracy": 5
+      },
+      "pass": false
+    },
+    {
+      "id": "heldout_official_task2_wealth_band4",
+      "version": "before",
+      "words": 179,
+      "band": 4.5,
+      "criteria": {
+        "taskAchievementOrResponse": 5,
+        "coherenceAndCohesion": 5,
+        "lexicalResource": 4,
+        "grammaticalRangeAndAccuracy": 4
+      },
+      "pass": true
+    },
+    {
+      "id": "heldout_official_task2_wealth_band4",
+      "version": "after",
+      "words": 179,
+      "band": 4.5,
+      "criteria": {
+        "taskAchievementOrResponse": 5,
+        "coherenceAndCohesion": 4,
+        "lexicalResource": 4,
+        "grammaticalRangeAndAccuracy": 4
+      },
+      "pass": true
+    }
+  ],
+  "higherReasoningExperiment": "INCOMPLETE_OUTPUT; not usable within existing token budget; not deployed",
+  "scoringFixComplete": false,
+  "frontendDraft": {
+    "branch": "fix/writing-calibration-20261105",
+    "checks": "12/12 rendered notice cases; production build PASS",
+    "deployed": false
+  },
+  "candidateSha256": "0b5bea177ec5d3e0e5801186e1a9a60afc91c0cc51b4b99f58c3be5742106422",
+  "heldOutSource": "https://ielts.org/cdn/Sample-tests/ielts-academic-writing-sample-tasks-2023.pdf",
+  "heldOutCaveat": "Responses manually transcribed from source images; no examiner comments or expected band sent to model. Small sample; not an accuracy estimate.",
+  "nextRequiredWork": "Broader expert-labelled Academic Task1/Task2 corpus with locked held-out acceptance criteria; reject global penalty/caps and deployment on failed quality gate."
+}
