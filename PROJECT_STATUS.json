@@ -45,7 +45,7 @@
     "KVKK legal bases, transfer mechanism, retention and notice implementation",
     "AI score calibration: both November5 candidates rejected; live grader unchanged",
     "Load/concurrency testing and backup restoration exercise",
-    "Google Search Console setup and affected-student network verification",
+    "Google Search Console processing and indexing follow-up; both properties verified, Tracker sitemap processed, affected-student network verification remains",
     "Admin global-query pagination/scale review; subscription errors now handled"
   ],
   "archivePolicy": "Old experiments are preserved outside the active app in backup/LOCAL_EXPERIMENTS; original dirty worktree and Git history are backed up.",
@@ -138,6 +138,18 @@
     "homepageMetadataPrepared": true,
     "sitemapOnlyPublicHomepage": true,
     "nonRootPagesNoindex": true,
-    "siteMapSubmission": "PENDING_POST_DEPLOY"
+    "siteMapSubmission": "SUCCESSFULLY_PROCESSED",
+    "discoveredPublicPages": 1,
+    "homepageIndexRequest": "ACCEPTED_PRIORITY_CRAWL_QUEUE",
+    "siteMapLastRead": "2026-11-06",
+    "mainWebsite": {
+      "domain": "maximaegitim.com",
+      "alreadyVerified": true,
+      "existingSitemapStatus": "SUCCESS",
+      "indexed": 38,
+      "indexReportUpdated": "2026-10-23",
+      "pendingPublicPagesChecked": 7,
+      "allPendingPagesHttp200": true
+    }
   }
 }
