@@ -259,6 +259,8 @@ export default function AdminDashboard() {
   const [accountAudienceView, setAccountAudienceView] = useState('institution')
 
   const [authChecking, setAuthChecking] = useState(true)
+  const [usersLoadError, setUsersLoadError] = useState('')
+  const [scoresLoadError, setScoresLoadError] = useState('')
   const [adminSchoolId, setAdminSchoolId] = useState('')
 
   const [schools, setSchools] = useState([])
@@ -552,6 +554,8 @@ export default function AdminDashboard() {
         loadSchools()
 
         unsubUsers = onSnapshot(collection(db, 'users'), snap => {
+          if (!active) return
+          setUsersLoadError('')
 
           const list = snap.docs
 
@@ -562,11 +566,15 @@ export default function AdminDashboard() {
 
           setUsers(list)
 
+        }, () => {
+          if (active) setUsersLoadError('Users could not be refreshed. The displayed list may be out of date. Reload this page before managing accounts.')
         })
 
 
 
         unsubScores = onSnapshot(collection(db, 'scores'), snap => {
+          if (!active) return
+          setScoresLoadError('')
 
           const groupedScores = {}
 
@@ -616,6 +624,8 @@ export default function AdminDashboard() {
 
           setScores(groupedScores)
 
+        }, () => {
+          if (active) setScoresLoadError('Results could not be refreshed. Displayed scores and statistics may be out of date. Reload this page to retry.')
         })
 
       } catch (error) {
@@ -2729,6 +2739,17 @@ export default function AdminDashboard() {
           </header>
 
           <main className="max-w-[1480px] mx-auto px-4 sm:px-7 lg:px-9 py-7 sm:py-9 pb-20">
+            {(usersLoadError || scoresLoadError) && (
+              <div role="alert" className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
+                <p className="font-semibold">Some information could not be refreshed</p>
+                {usersLoadError && <p className="mt-1">{usersLoadError}</p>}
+                {scoresLoadError && <p className="mt-1">{scoresLoadError}</p>}
+                <button type="button" onClick={() => window.location.reload()}
+                  className="mt-3 rounded-lg border border-amber-400 px-3 py-1.5 font-medium hover:bg-amber-100">
+                  Reload page
+                </button>
+              </div>
+            )}
             <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-8">
               <div>
                 <p className="text-xs font-medium text-indigo-700 mb-2 uppercase tracking-[.12em]">Maxima / Administration</p>

@@ -27,13 +27,13 @@
     "verified": "Private objects downloaded and SHA256 matched; five source updates applied atomically and read back; student browser playback not exercised"
   },
   "nextWork": [
-    "Isolated Firestore emulator integration tests",
+    "Broader integration/load coverage; Mock access, recovery and assignment concurrency integration checks now pass",
     "Upload two missing Test2 audio files: C202L1 and C202L2; complete authenticated playback check",
     "KVKK legal bases, transfer mechanism, retention and notice implementation",
     "AI score calibration: both November5 candidates rejected; live grader unchanged",
     "Load/concurrency testing and backup restoration exercise",
     "Google Search Console setup and affected-student network verification",
-    "Admin query scale and subscription error handling review"
+    "Admin global-query pagination/scale review; subscription errors now handled"
   ],
   "archivePolicy": "Old experiments are preserved outside the active app in backup/LOCAL_EXPERIMENTS; original dirty worktree and Git history are backed up.",
   "gitPublication": {
@@ -97,5 +97,24 @@
     "underlengthNoticePublished": true,
     "noMinimumBand5": true,
     "studentSavedGradesChanged": false
+  },
+  "integrationVerification20261106": {
+    "localDemoOnly": true,
+    "host": "127.0.0.1:8086",
+    "mockAccessRules": "12/12 PASS",
+    "recoveryConcurrentRepair": "PASS",
+    "assignmentConcurrentWritesAndArchive": "PASS",
+    "productionDatabaseAccessed": false,
+    "fixtureFixes": [
+      "Canonical accessType assignment included",
+      "Teacher academic index and active class present"
+    ]
+  },
+  "adminSubscriptionErrors20261106": {
+    "usersAndScoresErrorCallbacks": true,
+    "visibleStaleDataWarning": true,
+    "reloadAction": true,
+    "build": "PASS",
+    "authenticatedAdminBrowserFailureInjection": "NOT_PERFORMED"
   }
 }

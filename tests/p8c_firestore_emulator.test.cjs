@@ -35,6 +35,8 @@ test('P8C-E1 real Firestore transactions: concurrent assignments, sponsor prune,
       await db.doc(`users/${teacher}`).set({role:'teacher',status:'approved',schoolId:school,accountType:'institution'})
       for (const uid of [student1,student2]) await db.doc(`users/${uid}`).set({role:'student',status:'approved',schoolId:school,accountType:'institution'})
       await db.doc(`${sourceCollection}/${contentId}`).set({...source,title:'P8C test writing'})
+      await db.doc(`classes/Class${suffix}`).set({name:'Synthetic active class',schoolId:school,teacherId:teacher,status:'active',studentIds:[student1,student2]})
+      await db.doc(`schools/${school}/teacherAcademicIndex/${teacher}`).set({schemaVersion:1,source:'managed_active_classes',teacherId:teacher,schoolId:school,activeStudentIds:[student1,student2]})
       const service=createP8CAssignmentService({db,FieldValue,HttpsError:TestError,
         requireAssignmentManager:async req=>({uid:req.auth.uid,profile:{role:'teacher',status:'approved',schoolId:school}}),
         managerCanManageSource:(manager,s)=>s.teacherId===manager.uid,

@@ -63,7 +63,7 @@ async function main() {
         })
         await asData(db, `studentAccess/${U}_mock_${id}`, {
           uid: U, contentType: 'mock', contentId: id,
-          status: 'active', schoolId: SCHOOL
+          accessType: 'assignment', status: 'active', schoolId: SCHOOL
         })
       }
       await asData(db, `writingHomeworks/${W}`, {
@@ -78,7 +78,7 @@ async function main() {
         writingId: W2
       })
       await asData(db, `studentAccess/${U}_mock_${M2}`, {
-        uid: U, contentType: 'mock', contentId: M2, status: 'active', schoolId: SCHOOL
+        uid: U, contentType: 'mock', contentId: M2, accessType: 'assignment', status: 'active', schoolId: SCHOOL
       })
       await asData(db, `writingHomeworks/${W2}`, {
         schoolId: SCHOOL, createdBy: T2, teacherId: T2, teacherIds: [T2],
