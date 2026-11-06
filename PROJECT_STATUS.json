@@ -129,5 +129,15 @@
     "reloadAction": true,
     "build": "PASS",
     "authenticatedAdminBrowserFailureInjection": "NOT_PERFORMED"
+  },
+  "searchConsolePreparation20261106": {
+    "primaryDomain": "maximatracker.com",
+    "domainOwnershipVerified": true,
+    "dnsTxtRecordAdded": true,
+    "existingDnsRecordsPreserved": 5,
+    "homepageMetadataPrepared": true,
+    "sitemapOnlyPublicHomepage": true,
+    "nonRootPagesNoindex": true,
+    "siteMapSubmission": "PENDING_POST_DEPLOY"
   }
 }
