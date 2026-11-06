@@ -24,11 +24,24 @@
       "S3L2 museum image",
       "S3L4 rice chart"
     ],
-    "verified": "Private objects downloaded and SHA256 matched; five source updates applied atomically and read back; student browser playback not exercised"
+    "verified": "Private objects downloaded and SHA256 matched; five source updates applied atomically and read back; student browser playback not exercised",
+    "status": "DEFERRED_USER_MANUAL_UPLOAD",
+    "userDecisionDate": "2026-11-06",
+    "userWillUploadLater": true,
+    "pendingLessons": [
+      {
+        "lesson": "C202L1",
+        "requiredAudio": "Cambridge IELTS20 Academic Test2 Part1"
+      },
+      {
+        "lesson": "C202L2",
+        "requiredAudio": "Cambridge IELTS20 Academic Test2 Part2"
+      }
+    ]
   },
   "nextWork": [
     "Broader integration/load coverage; Mock access, recovery and assignment concurrency integration checks now pass",
-    "Upload two missing Test2 audio files: C202L1 and C202L2; complete authenticated playback check",
+    "Deferred: user will manually upload C202L1/Test2 Part1 and C202L2/Test2 Part2 later; do not replace with Test1 audio",
     "KVKK legal bases, transfer mechanism, retention and notice implementation",
     "AI score calibration: both November5 candidates rejected; live grader unchanged",
     "Load/concurrency testing and backup restoration exercise",
