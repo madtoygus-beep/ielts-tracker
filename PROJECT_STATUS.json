@@ -13,20 +13,22 @@
   },
   "remainingMedia": {
     "audioForUserUpload": [
-      "C201L2",
-      "C201L3",
-      "C201L4",
       "C202L1",
       "C202L2"
     ],
-    "mapsForUserUpload": [
-      "S3L2",
-      "S3L4"
-    ]
+    "mapsForUserUpload": [],
+    "restoredOn20261106": [
+      "C201L2 audio",
+      "C201L3 audio",
+      "C201L4 audio",
+      "S3L2 museum image",
+      "S3L4 rice chart"
+    ],
+    "verified": "Private objects downloaded and SHA256 matched; five source updates applied atomically and read back; student browser playback not exercised"
   },
   "nextWork": [
     "Isolated Firestore emulator integration tests",
-    "Two Test2 audio files missing; three Test1 audio and two maps prepared, waiting specific production-upload approval",
+    "Upload two missing Test2 audio files: C202L1 and C202L2; complete authenticated playback check",
     "KVKK legal bases, transfer mechanism, retention and notice implementation",
     "AI score calibration: both November5 candidates rejected; live grader unchanged",
     "Load/concurrency testing and backup restoration exercise",
