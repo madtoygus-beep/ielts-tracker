@@ -88,7 +88,7 @@ function baseSeed({ credits = 5, studentEnabled = true, pilotEnabled = true } = 
     },
     [`writingSubmissions/${studentUid}_w1`]: {
       uid: studentUid, studentId: studentUid, schoolId, writingId: 'w1',
-      attemptNumber: 1, task1Answer: t1, task2Answer: t2,
+      attemptNumber: 1, aiReviewChoice: 'ai', aiBillingMode: 'student_credit', task1Answer: t1, task2Answer: t2,
       task1Enabled: true, task2Enabled: true, reviewed: false
     },
     [`studentAccess/${studentUid}_writing_w1`]: {
@@ -238,6 +238,17 @@ await test('Pilot disabled is fail closed', async () => {
   await assert.rejects(fx.service.evaluate(fx.homework), { code: 'permission-denied' })
   assert.equal(balance(fx), 5)
 })
+for(const choice of ['teacher',undefined]) {
+ await test(`Homework choice ${choice ?? 'missing'} never calls paid AI or spends credits`,async()=>{
+  const seed=baseSeed();const sub=seed[`writingSubmissions/${studentUid}_w1`]
+  if(choice===undefined){delete sub.aiReviewChoice;delete sub.aiBillingMode}
+  else {sub.aiReviewChoice=choice;sub.aiBillingMode='none'}
+  let calls=0;const fx=fixture({seed,provider:async()=>{calls++;throw Error('No AI call allowed')}})
+  await assert.rejects(fx.service.evaluate(fx.homework),{code:'permission-denied'})
+  assert.equal(calls,0);assert.equal(balance(fx),5);assert.equal(jobs(fx).length,0);assert.equal(ledgers(fx).length,0)
+  assert.equal(fx.db.snapshot(`aiWritingMonthlyUsage/${schoolId}_${month}`).exists,false)
+ })
+}
 await test('Zero available credits prevents provider call', async () => {
   let calls = 0
   const fx = fixture({ seed: baseSeed({ credits: 0 }), provider: async () => { calls++; throw new Error('no') } })
@@ -320,10 +331,10 @@ await test('Empty Writing answers never cost a credit', async () => {
   await assert.rejects(fx.service.evaluate(fx.homework))
   assert.equal(balance(fx), 5); assert.equal(jobs(fx).length, 0)
 })
-await test('P5C: 49/99 words cost zero credits, quota, and API requests', async () => {
+await test('Current 20/20 words cost zero credits, quota, and API requests', async () => {
   const seed = baseSeed()
-  seed[`writingSubmissions/${studentUid}_w1`].task1Answer = Array(49).fill('word').join(' ')
-  seed[`writingSubmissions/${studentUid}_w1`].task2Answer = Array(99).fill('word').join(' ')
+  seed[`writingSubmissions/${studentUid}_w1`].task1Answer = Array(20).fill('word').join(' ')
+  seed[`writingSubmissions/${studentUid}_w1`].task2Answer = Array(20).fill('word').join(' ')
   let calls=0
   const fx=fixture({seed,provider:async()=>{calls++;throw Error('No call permitted')}})
   await assert.rejects(fx.service.evaluate(fx.homework),{code:'failed-precondition'})
@@ -339,39 +350,40 @@ await test('P5C: blank Writing remains submittable but has no paid report',async
   await assert.rejects(fx.service.evaluate(fx.homework),{code:'failed-precondition'})
   assert.equal(balance(fx),5);assert.equal(jobs(fx).length,0)
 })
-await test('P5C: 50-word Task1 only earns feedback, one credit, no numeric band',async()=>{
-  const seed=baseSeed();seed[`writingSubmissions/${studentUid}_w1`].task1Answer=Array(50).fill('word').join(' ')
-  seed[`writingSubmissions/${studentUid}_w1`].task2Answer=Array(99).fill('word').join(' ')
-  const fx=fixture({seed});const r=await fx.service.evaluate(fx.homework)
-  assert.equal(r.status,'completed');assert.equal(r.report.estimatedBand,null)
-  assert.equal(r.report.task1.estimatedBand,null);assert.equal(r.report.task2,null)
-  assert.equal(r.report.task1.criteria.lexicalResource.band,null)
-  assert.equal(balance(fx),4);assert.equal(monthly(fx).requestCount,1)
+await test('Current 21-word Task1 receives a band; Task2 at20 remains ungraded',async()=>{
+ const seed=baseSeed();const sub=seed[`writingSubmissions/${studentUid}_w1`]
+ sub.task1Answer=Array(21).fill('word').join(' ');sub.task2Answer=Array(20).fill('word').join(' ')
+ const fx=fixture({seed});const r=await fx.service.evaluate(fx.homework)
+ assert.equal(r.status,'completed');assert.equal(r.report.estimatedBand,null)
+ assert.equal(r.report.task1.estimatedBand,6.5);assert.equal(r.report.task2,null)
+ assert.equal(r.report.task1.belowRecommendedLength,true)
+ assert.equal(balance(fx),4);assert.equal(monthly(fx).requestCount,1)
 })
-await test('P5C: 149/249 words earn development feedback, not any bands',async()=>{
+await test('Current 149/249-word answers receive numeric bands and length warnings',async()=>{
   const seed=baseSeed();const s=seed[`writingSubmissions/${studentUid}_w1`]
   s.task1Answer=Array(149).fill('word').join(' ')
   s.task2Answer=Array(249).fill('word').join(' ')
   const fx=fixture({seed});const r=await fx.service.evaluate(fx.homework)
-  assert.equal(r.status,'completed');assert.equal(r.report.feedbackOnly,true)
-  assert.equal(r.report.task1.estimatedBand,null);assert.equal(r.report.task2.estimatedBand,null)
-  assert.equal(r.report.task2.criteria.grammaticalRangeAndAccuracy.band,null)
+  assert.equal(r.status,'completed');assert.equal(r.report.feedbackOnly,false)
+  assert.equal(r.report.estimatedBand,6.5)
+  for(const task of [r.report.task1,r.report.task2]) {assert.equal(task.estimatedBand,6.5);assert.equal(task.belowRecommendedLength,true)}
+  assert.equal(r.report.task2.criteria.grammaticalRangeAndAccuracy.band,6.5)
   assert.equal(balance(fx),4)
 })
-await test('P5C: Task1 full and Task2 short cannot create a combined band',async()=>{
+await test('P5C: Task1 full and Task2 at20 words cannot create a combined band',async()=>{
   const seed=baseSeed();const s=seed[`writingSubmissions/${studentUid}_w1`]
   s.task1Answer=Array(150).fill('word').join(' ')
-  s.task2Answer=Array(99).fill('word').join(' ')
+  s.task2Answer=Array(20).fill('word').join(' ')
   const fx=fixture({seed});const r=await fx.service.evaluate(fx.homework)
   assert.equal(r.status,'completed');assert.equal(r.report.task1.estimatedBand,6.5)
   assert.equal(r.report.task2,null);assert.equal(r.report.estimatedBand,null)
 })
-await test('P5C: forged numeric band during feedback is rejected and refunded',async()=>{
+await test('Inconsistent numeric band is rejected and refunded',async()=>{
   const seed=baseSeed();const s=seed[`writingSubmissions/${studentUid}_w1`]
   s.task1Answer=Array(50).fill('word').join(' ')
   s.task2Answer=Array(99).fill('word').join(' ')
   const fx=fixture({seed,provider:async prep=>{
-    const report=reportFor(prep);report.task1.estimatedBand=6.5
+    const report=reportFor(prep);report.task1.estimatedBand=9
     return {report,model:PILOT_MODEL}
   }})
   await assert.rejects(fx.service.evaluate(fx.homework),{code:'unavailable'})
@@ -407,26 +419,28 @@ await test('Different attempt number produces distinct job and preserved old rep
   assert.equal(second.attemptNumber, 2)
   assert.equal(balance(fx), 3); assert.equal(used(fx), 2); assert.equal(jobs(fx).length, 2)
 })
-await test('Mock Writing AI score remains provisional; teacher mock score untouched', async () => {
-  const fx = fixture()
-  const out = await fx.service.evaluate(fx.mock)
-  assert.equal(out.status, 'completed')
-  assert.equal(out.report.isProvisionalMockEstimate, true)
-  assert.equal(out.report.teacherFinalScore, null)
-  assert.deepEqual(fx.db.snapshot('scores/stu00001_m1').data(), baseSeed()['scores/stu00001_m1'])
-  assert.deepEqual(fx.db.snapshot(`mockSubmissions/${studentUid}_m1`).data().result,
-    baseSeed()[`mockSubmissions/${studentUid}_m1`].result)
+await test('Mock personal-credit evaluation is denied and teacher grades remain untouched',async()=>{
+ let calls=0;const fx=fixture({provider:async()=>{calls++;throw Error('No personal-credit Mock call')}})
+ await assert.rejects(fx.service.evaluate(fx.mock),{code:'permission-denied'})
+ assert.equal(calls,0);assert.equal(balance(fx),5);assert.equal(jobs(fx).length,0)
+ const seed=baseSeed()
+ const prepared=grading.prepareAiWritingEvaluation({source:seed['writingHomeworks/w1'],submission:{task1Answer:t1,task2Answer:t2},context:'mock'})
+ const report=reportFor(prepared);assert.equal(report.isProvisionalMockEstimate,true);assert.equal(report.teacherFinalScore,null)
+ assert.deepEqual(fx.db.snapshot('scores/stu00001_m1').data(),seed['scores/stu00001_m1'])
+ assert.deepEqual(fx.db.snapshot(`mockSubmissions/${studentUid}_m1`).data().result,seed[`mockSubmissions/${studentUid}_m1`].result)
 })
 await test('Mock without enabled Writing section is denied without credit', async () => {
   const seed = baseSeed(); seed['mockTests/m1'].enabledSections.writing = false
   const fx = fixture({ seed })
-  await assert.rejects(fx.service.evaluate(fx.mock), { code: 'failed-precondition' })
+  await assert.rejects(fx.service.evaluate(fx.mock), { code: 'permission-denied' })
+  await assert.rejects(fx.service.getReport(fx.mock), { code: 'failed-precondition' })
   assert.equal(balance(fx), 5)
 })
 await test('Mock linked Writing source must share the school', async () => {
   const seed = baseSeed(); seed['writingHomeworks/w1'].schoolId = 'foreign'
   const fx = fixture({ seed })
-  await assert.rejects(fx.service.evaluate(fx.mock), { code: 'failed-precondition' })
+  await assert.rejects(fx.service.evaluate(fx.mock), { code: 'permission-denied' })
+  await assert.rejects(fx.service.getReport(fx.mock), { code: 'failed-precondition' })
   assert.equal(balance(fx), 5)
 })
 await test('Institution disabled during provider call: score not stored and credit returned', async () => {

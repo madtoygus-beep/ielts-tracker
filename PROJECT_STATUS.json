@@ -1,6 +1,6 @@
 {
   "sourceRelease": "2026-11-03",
-  "productionDeployment": "dpl_EkcQbvBCrQEpR3aK8Z56Z55yWGLQ",
+  "productionDeployment": "dpl_Ff2zpZCzAWf7eAKVSeiNLD5vwm8T",
   "releaseSource": "/Users/turhanemretoygus_1/Desktop/MAXIMA_IELTS_TRACKER/02_GUNCEL_SURUMLER_VE_YAMALAR/MAXIMA_MEDIA_AI_RELEASE_20261103/app",
   "backupBeforeSync": "/Users/turhanemretoygus_1/Desktop/MAXIMA_IELTS_TRACKER/03_PRODUCTION_YEDEKLERI/MAXIMA_VSCODE_SYNC_20261103_184700",
   "productionChangedByThisSync": false,
@@ -25,8 +25,13 @@
     ]
   },
   "nextWork": [
-    "Retain isolated emulator requirement for integration tests",
-    "Review3 pre-existing P5B3B teacher UI static assertions: assigned-student parameters, wording and old not-yet-live message"
+    "Isolated Firestore emulator integration tests",
+    "Two Test2 audio files missing; three Test1 audio and two maps prepared, waiting specific production-upload approval",
+    "KVKK legal bases, transfer mechanism, retention and notice implementation",
+    "AI score calibration: both November5 candidates rejected; live grader unchanged",
+    "Load/concurrency testing and backup restoration exercise",
+    "Google Search Console setup and affected-student network verification",
+    "Admin query scale and subscription error handling review"
   ],
   "archivePolicy": "Old experiments are preserved outside the active app in backup/LOCAL_EXPERIMENTS; original dirty worktree and Git history are backed up.",
   "gitPublication": {
@@ -60,5 +65,35 @@
     "saveInProgress": "Escape consumed without dismissing; async locks protect reviews and password changes",
     "keyboard": "One visible layer per press; repeated/composing/already-handled events ignored",
     "unrelatedTeacherUiBaseline": "79/82; same3 failures before and after; outdated assignment-panel source assertions, not changed here"
+  },
+  "statusReviewedOn": "2026-11-06",
+  "frontendReleaseDate": "2026-11-05",
+  "backendReleaseDate": "2026-11-03",
+  "primaryUrl": "https://www.maximatracker.com/login",
+  "testMaintenance20261106": {
+    "offlineChecksPassed": 278,
+    "aiEvaluation": 45,
+    "teacherAssignmentUi": 82,
+    "pureGrading": 66,
+    "institutionSponsoredAi": 85,
+    "paidAiCalls": 0,
+    "runtimeSourceChanged": false,
+    "studentRecordsChanged": false,
+    "oldTeacherUiAssertionsResolved": 3,
+    "aiEvaluationFixturesUpdated": true
+  },
+  "privacyPreparation": {
+    "controller": "MAK SİMA EĞİTİM KURUMLARI İTHALAT İHRACAT SANAYİ VE TİCARET LİMİTED ŞİRKETİ",
+    "contact": "info@maximaegitim.com",
+    "status": "LOCAL_DRAFT_NOT_PUBLISHED",
+    "legalReviewComplete": false
+  },
+  "writingCalibration": {
+    "status": "NOT_COMPLETE",
+    "lastCandidateReleaseDecision": "REJECTED",
+    "productionGradingChanged": false,
+    "underlengthNoticePublished": true,
+    "noMinimumBand5": true,
+    "studentSavedGradesChanged": false
   }
 }
