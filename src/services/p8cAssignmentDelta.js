@@ -11,3 +11,13 @@ export function buildP8CAssignmentDelta(contentType, contentId, before, after) {
   ]
   return { contentType, contentId, changes }
 }
+
+// Hidden learners are outside the current editor's roster. Retain only their
+// existing memberships; never introduce an unavailable learner as a new grant.
+export function retainUnavailableAssignments(before, selected, unavailableStudentIds) {
+  const unavailable = new Set(unavailableStudentIds)
+  return [...new Set([
+    ...selected.filter(studentId => !unavailable.has(studentId)),
+    ...before.filter(studentId => unavailable.has(studentId))
+  ])]
+}

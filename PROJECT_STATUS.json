@@ -151,5 +151,15 @@
       "pendingPublicPagesChecked": 7,
       "allPendingPagesHttp200": true
     }
+  },
+  "assignmentVisibilityFix20261107": {
+    "status": "TESTED_RELEASE_APPROVED",
+    "affectedExample": "C151W12",
+    "cause": "Existing assignment references a learner outside the teacher active-class roster",
+    "behavior": "Preserve unavailable memberships and allow scoped edits to visible learners; full AI policy edits locked while roster is incomplete",
+    "studentDataChanged": false,
+    "tests": "16/16 targeted checks passed; production build passed",
+    "deployment": "Explicit user approval received; Git main triggers Vercel production",
+    "approvalDate": "2026-11-07"
   }
 }

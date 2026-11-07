@@ -24,7 +24,7 @@ import { signOut, onAuthStateChanged, updatePassword } from 'firebase/auth'
 import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage'
 import { useNavigate } from 'react-router-dom'
 import { httpsCallable } from 'firebase/functions'
-import { buildP8CAssignmentDelta } from '../services/p8cAssignmentDelta'
+import { buildP8CAssignmentDelta, retainUnavailableAssignments } from '../services/p8cAssignmentDelta'
 import { useEscapeDismiss } from '../hooks/useEscapeDismiss'
 import { runWithDismissLock } from '../services/escapeDismissPolicy'
 import AiWritingTeacherPanel from '../components/AiWritingTeacherPanel'
@@ -660,7 +660,7 @@ export default function TeacherDashboard() {
   const [selectedHomeworkType, setSelectedHomeworkType] = useState(null)
   const [assignmentDraft, setAssignmentDraft] = useState([])
   const [assignmentBaseline, setAssignmentBaseline] = useState([])
-  const [assignmentUnknownStudentIds, setAssignmentUnknownStudentIds] = useState([])
+  const [assignmentInitiallyUnavailableIds, setAssignmentInitiallyUnavailableIds] = useState([])
   const [assignmentSaving, setAssignmentSaving] = useState(false)
   const [assignmentAiDraft, setAssignmentAiDraft] = useState(emptyAiSponsoredSelection)
   const [assignmentAiStatus, setAssignmentAiStatus] = useState('unavailable')
@@ -2628,6 +2628,13 @@ export default function TeacherDashboard() {
     'full_mock'
   )
 
+  // Protect both initially unavailable learners and memberships revoked while
+  // this editor is open. Reopening starts a fresh, fully verified roster.
+  const assignmentUnknownStudentIds = uniqueCleanValues([
+    ...assignmentInitiallyUnavailableIds,
+    ...assignmentBaseline.filter(uid => !getStudentByAnyId(uid))
+  ])
+
   const aiSupportedAssignmentType = type => type === 'writing' || type === 'mock'
 
   // A teacher can fund only their students in real, active teacher-owned
@@ -2648,7 +2655,7 @@ export default function TeacherDashboard() {
     setSelectedHomeworkType(null)
     setAssignmentDraft([])
     setAssignmentBaseline([])
-    setAssignmentUnknownStudentIds([])
+    setAssignmentInitiallyUnavailableIds([])
     setAssignmentAiDraft(emptyAiSponsoredSelection())
     setAssignmentAiStatus('unavailable')
     setAssignmentAiError('')
@@ -2681,14 +2688,11 @@ export default function TeacherDashboard() {
         .map(studentUid => getStudentByAnyId(studentUid)?.id)
         .filter(Boolean)
 
-      // Check the original canonical UIDs, not a legacy student.uid alias.
-      const unknownIds = canonicalStudentIds.filter(uid => !getStudentByAnyId(uid))
-
       setSelectedHomework(homework)
       setSelectedHomeworkType(type)
       setAssignmentDraft(Array.from(new Set(draftStudentIds)))
       setAssignmentBaseline(canonicalStudentIds)
-      setAssignmentUnknownStudentIds(unknownIds)
+      setAssignmentInitiallyUnavailableIds(canonicalStudentIds.filter(uid => !getStudentByAnyId(uid)))
       setAssignmentAiDraft(emptyAiSponsoredSelection())
       setAssignmentAiError('')
 
@@ -2787,28 +2791,23 @@ export default function TeacherDashboard() {
     if (!selectedHomework || !selectedHomeworkType || assignmentSaving ||
         assignmentAiStatus === 'loading') return
 
-    if (assignmentUnknownStudentIds.length > 0) {
-      alert(
-        'Some existing students are not available in this teacher account. ' +
-        'Assignments were NOT saved. Ask the school admin to verify the class and student links, ' +
-        'so no existing assignment is silently removed.'
-      )
-      return
-    }
-
     const visibleStudentIds = new Set(students.map(student => student.id))
     const selectedStudents = assignmentDraft
       .filter(studentId => visibleStudentIds.has(studentId))
       .map(studentId => students.find(student => student.id === studentId))
       .filter(Boolean)
 
-    const finalAssignment = uniqueCleanValues(
-      selectedStudents.map(student => getStudentPrimaryAssignmentId(student))
+    const finalAssignment = retainUnavailableAssignments(
+      assignmentBaseline,
+      uniqueCleanValues(selectedStudents.map(student => getStudentPrimaryAssignmentId(student))),
+      assignmentUnknownStudentIds
     )
 
     const aiSupported = aiSupportedAssignmentType(selectedHomeworkType) &&
       assignmentAiEnabledForSchool()
-    const aiReady = aiSupported && assignmentAiStatus === 'ready'
+    // AI policies replace a selection; do not rewrite invisible learners' grants.
+    const aiReady = aiSupported && assignmentAiStatus === 'ready' &&
+      assignmentUnknownStudentIds.length === 0
     const aiAllowedIds = aiReady ? eligibleAiSponsoredStudents(
       students, assignmentDraft, activeAiClassStudents()
     ).map(student => student.id) : []
@@ -2900,7 +2899,7 @@ export default function TeacherDashboard() {
     setSelectedHomeworkType(null)
     setAssignmentDraft([])
     setAssignmentBaseline([])
-    setAssignmentUnknownStudentIds([])
+    setAssignmentInitiallyUnavailableIds([])
     setAssignmentAiDraft(emptyAiSponsoredSelection())
     setAssignmentAiStatus('unavailable')
     setAssignmentAiError('')
@@ -9420,8 +9419,9 @@ export default function TeacherDashboard() {
 
             {assignmentUnknownStudentIds.length > 0 && (
               <p role="alert" className="rounded-xl bg-amber-50 border border-amber-200 p-3 text-xs text-amber-900 mb-4">
-                {assignmentUnknownStudentIds.length} existing assignment(s) are not visible to your account.
-                Saving is blocked to prevent silently removing these learners. Ask the school administrator to check class/teacher links.
+                {assignmentUnknownStudentIds.length} existing assignment(s) are protected because their learners were unavailable when this editor opened or left your current roster.
+                These assignments will be kept. You can save changes to the other students shown below.
+                Reopen this editor after the school administrator reviews the class/teacher links.
               </p>
             )}
 
@@ -9549,7 +9549,8 @@ export default function TeacherDashboard() {
                         type="checkbox"
                         checked={assignmentDraft.includes(student.id)}
                         onChange={() => toggleAssignment(student.id)}
-                        disabled={assignmentSaving}
+                        disabled={assignmentSaving || assignmentUnknownStudentIds.some(uid =>
+                          getStudentAssignmentValues(student).includes(uid))}
                         className="accent-purple-600 disabled:opacity-40"
                       />
 
@@ -9612,8 +9613,14 @@ export default function TeacherDashboard() {
                   status={assignmentAiStatus}
                   hasWriting={selectedHomeworkType === 'writing' ||
                     (getMockEnabledSections(selectedHomework).writing && Boolean(selectedHomework.writingId))}
-                  disabled={assignmentSaving}
+                  disabled={assignmentSaving || assignmentUnknownStudentIds.length > 0}
                 />
+                {assignmentUnknownStudentIds.length > 0 && (
+                  <p role="status" className="mt-3 rounded-xl bg-amber-50 border border-amber-200 p-3 text-xs text-amber-900">
+                    AI funding controls are read-only while existing learners are outside your visible roster.
+                    Their funding settings will not be replaced. Removing a visible learner still revokes that learner's assignment and related AI funding.
+                  </p>
+                )}
                 {assignmentAiError && (
                   <p role="alert" className="mt-3 rounded-xl bg-red-50 border border-red-200 p-3 text-xs text-red-800">
                     {assignmentAiError}
@@ -9634,7 +9641,7 @@ export default function TeacherDashboard() {
 
             <button
               onClick={saveAssignments}
-              disabled={assignmentSaving || assignmentAiStatus === 'loading' || assignmentUnknownStudentIds.length > 0}
+              disabled={assignmentSaving || assignmentAiStatus === 'loading'}
               className="w-full bg-purple-600 text-white rounded-xl py-3 text-sm font-medium hover:bg-purple-700 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {assignmentSaving ? 'Saving assignments...' : 'Save assignments'}
