@@ -161,5 +161,15 @@
     "tests": "16/16 targeted checks passed; production build passed",
     "deployment": "Explicit user approval received; Git main triggers Vercel production",
     "approvalDate": "2026-11-07"
+  },
+  "mockListeningRecovery20261110": {
+    "status": "PREPARED_TESTED_NOT_DEPLOYED",
+    "confirmed": "Source reload could overwrite or display zero audio position; interrupted private streams lacked retry; frequent updates could starve debounced saves",
+    "behavior": "Resume last-heard checkpoint; preserve exam wall-clock timer; retry authorized private audio with a fully seekable file; retain replay and expired-section locks",
+    "tests": "12 audio checks plus 16 assignment regressions passed; production build passed",
+    "browserEvidence": "Native audio fixture restored 42.259569 seconds after reload; timer continued; blocked autoplay retained checkpoint",
+    "limitations": "Synthetic local browser fixture; no production student exam or private media API exercised",
+    "studentDataWrites": 0,
+    "approval": "Production release approval pending"
   }
 }

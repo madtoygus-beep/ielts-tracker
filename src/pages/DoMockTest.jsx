@@ -1,3 +1,4 @@
+import { mockAudioCheckpoint, savedMockAudioPosition, shouldUseProgressiveMockAudio } from '../services/mockAudioRecovery'
 import PartialWritingNotice from '../components/PartialWritingNotice'
 import { partialWritingSummary } from '../services/partialWritingPresentation'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -922,6 +923,7 @@ export default function DoMockTest() {
   const [readings, setReadings] = useState([])
   const [writing, setWriting] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [progressHydrated, setProgressHydrated] = useState(false)
   const [loadError, setLoadError] = useState('')
   const [reloadCount, setReloadCount] = useState(0)
   const [alreadySubmitted, setAlreadySubmitted] = useState(false)
@@ -959,6 +961,9 @@ export default function DoMockTest() {
   const loadingRef = useRef(true)
   const audioRef = useRef(null)
   const audioLastTimeRef = useRef(0)
+  const audioPlaybackStartedRef = useRef(false)
+  const audioStreamFailedRef = useRef(false)
+  const progressWriteAtRef = useRef(0)
   const audioSeekLockRef = useRef(false)
   const pendingAudioRestoreRef = useRef(null)
   const activeAudioKeyRef = useRef('')
@@ -970,6 +975,7 @@ export default function DoMockTest() {
   const readingPassageScrollRef = useRef(null)
   const readingQuestionsScrollRef = useRef(null)
 
+  const [audioReloadCount, setAudioReloadCount] = useState(0)
   const [audioStarted, setAudioStarted] = useState(false)
   const [audioLocked, setAudioLocked] = useState(false)
   const [audioWarning, setAudioWarning] = useState('')
@@ -1013,6 +1019,7 @@ export default function DoMockTest() {
       const isCurrent = () => isActive && version === loadVersion
 
       setLoading(true)
+      setProgressHydrated(false)
       setStudentProfile(null)
       setLoadError('')
       setAttemptState(null)
@@ -1038,6 +1045,8 @@ export default function DoMockTest() {
       restoredRef.current = false
       pendingAudioRestoreRef.current = null
       audioLastTimeRef.current = 0
+      audioPlaybackStartedRef.current = false
+      audioStreamFailedRef.current = false
       activeAudioKeyRef.current = ''
       tabSwitchCountRef.current = 0
 
@@ -1187,6 +1196,8 @@ export default function DoMockTest() {
           setAudioResumePending(false)
           pendingAudioRestoreRef.current = null
           audioLastTimeRef.current = 0
+          audioPlaybackStartedRef.current = false
+          audioStreamFailedRef.current = false
           activeAudioKeyRef.current = ''
           tabSwitchCountRef.current = 0
         }
@@ -1390,13 +1401,14 @@ export default function DoMockTest() {
   }, [id, navigate, reloadCount])
 
   useEffect(() => {
-    if (!storageKey || restoredRef.current || loading) return
+    if (!storageKey || restoredRef.current || loading || !mock) return
     if (alreadySubmitted || finalResult) return
 
     const saved = getSavedMockState(storageKey)
 
     if (!saved) {
       restoredRef.current = true
+      setProgressHydrated(true)
       return
     }
 
@@ -1478,29 +1490,10 @@ export default function DoMockTest() {
     setReadingLocked(savedReadingLocked || restoredReadingTime <= 0)
     setWritingLocked(savedWritingLocked || restoredWritingTime <= 0)
 
-    const savedAudioTime = Math.max(0, Number(saved.audioCurrentTime) || 0)
-    const savedAudioDuration = Math.max(0, Number(saved.audioDuration) || 0)
+    const { time: restoredAudioTime, duration: savedAudioDuration } = savedMockAudioPosition(saved)
     const hadAudioStarted = Boolean(saved.audioStarted)
-    const baseAudioLocked =
-      Boolean(saved.audioLocked) ||
-      savedListeningLocked ||
-      restoredListeningTime <= 0
-
-    let restoredAudioTime = savedAudioTime
-
-    if (hadAudioStarted && !baseAudioLocked) {
-      restoredAudioTime += elapsedSinceSave
-    }
-
-    const reachedSavedAudioEnd =
-      savedAudioDuration > 0 &&
-      restoredAudioTime >= Math.max(savedAudioDuration - 0.25, 0)
-
-    if (reachedSavedAudioEnd) {
-      restoredAudioTime = savedAudioDuration
-    }
-
-    const restoredAudioLocked = baseAudioLocked || reachedSavedAudioEnd
+    const restoredAudioLocked = Boolean(saved.audioLocked) ||
+      savedListeningLocked || restoredListeningTime <= 0
 
     pendingAudioRestoreRef.current = hadAudioStarted
       ? {
@@ -1515,15 +1508,16 @@ export default function DoMockTest() {
       : null
 
     audioLastTimeRef.current = restoredAudioTime
+    audioPlaybackStartedRef.current = hadAudioStarted
     setAudioCurrentTime(restoredAudioTime)
     setAudioDuration(savedAudioDuration)
     setAudioStarted(hadAudioStarted)
     setAudioLocked(restoredAudioLocked)
     setAudioResumePending(hadAudioStarted && !restoredAudioLocked)
 
-    if (reachedSavedAudioEnd) {
+    if (Boolean(saved.audioLocked)) {
       setAudioWarning(
-        'Listening audio finished while you were away. You cannot replay it.'
+        'Listening audio finished. You cannot replay it.'
       )
     } else if (hadAudioStarted && !restoredAudioLocked) {
       setAudioWarning(
@@ -1534,10 +1528,11 @@ export default function DoMockTest() {
     tabSwitchCountRef.current = Number(saved.tabSwitchCount) || 0
 
     restoredRef.current = true
+    setProgressHydrated(true)
   }, [storageKey, loading, alreadySubmitted, finalResult, mock])
 
   useEffect(() => {
-    if (!storageKey || loading || alreadySubmitted || finalResult) return
+    if (!storageKey || loading || !progressHydrated || !mock || alreadySubmitted || finalResult) return
 
     const persistProgress = () => {
       const mediaTime = Number(audioRef.current?.currentTime)
@@ -1561,10 +1556,9 @@ export default function DoMockTest() {
         audioStarted,
         audioLocked,
         audioResumePending,
-        audioCurrentTime:
-          Number.isFinite(mediaTime) && mediaTime >= 0
-            ? mediaTime
-            : Math.max(0, Number(audioCurrentTime) || 0),
+        audioCurrentTime: mockAudioCheckpoint(
+          mediaTime, audioLastTimeRef.current, pendingAudioRestoreRef.current?.time
+        ),
         audioDuration:
           Number.isFinite(mediaDuration) && mediaDuration > 0
             ? mediaDuration
@@ -1579,22 +1573,33 @@ export default function DoMockTest() {
         updatedAt: new Date().toISOString()
       }
 
-      localStorage.setItem(storageKey, JSON.stringify(data))
+      try {
+        localStorage.setItem(storageKey, JSON.stringify(data))
+        progressWriteAtRef.current = Date.now()
+      } catch {
+        // Storage may be unavailable; never crash an active exam.
+      }
     }
 
+    // timeupdate can fire faster than the debounce. Keep a periodic checkpoint
+    // even during uninterrupted playback, plus a final write on interruption.
+    if (Date.now() - progressWriteAtRef.current >= 1000) persistProgress()
     const timeout = setTimeout(persistProgress, 300)
 
     // A debounced save can be cancelled by a fast refresh/navigation.
     // pagehide gives us one final synchronous localStorage write.
     window.addEventListener('pagehide', persistProgress)
+    window.addEventListener('offline', persistProgress)
 
     return () => {
       clearTimeout(timeout)
       window.removeEventListener('pagehide', persistProgress)
+      window.removeEventListener('offline', persistProgress)
     }
   }, [
     storageKey,
     loading,
+    progressHydrated,
     alreadySubmitted,
     finalResult,
     sectionIndex,
@@ -1766,6 +1771,37 @@ export default function DoMockTest() {
     ? (privateAudio.listeningId === activePrivateListeningId ? privateAudio.url : '')
     : (activeListeningPart?.listeningAudioUrl || '')
 
+  const checkpointInterruptedAudio = () => {
+    const time = mockAudioCheckpoint(
+      audioRef.current?.currentTime, audioLastTimeRef.current,
+      pendingAudioRestoreRef.current?.time
+    )
+    audioLastTimeRef.current = time
+    const shouldResume = audioPlaybackStartedRef.current && !listeningLocked && !audioLocked
+    pendingAudioRestoreRef.current = {
+      sourceUrl: activePrivateListeningId
+        ? `private:${activePrivateListeningId}`
+        : activeListeningPart?.listeningAudioUrl || '',
+      time, duration: audioDuration, shouldResume
+    }
+    setAudioCurrentTime(time)
+    setAudioResumePending(shouldResume)
+  }
+
+  const retryInterruptedAudio = () => {
+    if (!audioStreamFailedRef.current || listeningLocked || audioLocked ||
+        !activeSection.key?.startsWith('listening-')) return
+    checkpointInterruptedAudio()
+    audioStreamFailedRef.current = false
+    if (activePrivateListeningId) setAudioReloadCount(count => count + 1)
+    else audioRef.current?.load()
+  }
+
+  useEffect(() => {
+    window.addEventListener('online', retryInterruptedAudio)
+    return () => window.removeEventListener('online', retryInterruptedAudio)
+  }, [activeListeningAudioKey, audioDuration, listeningLocked, audioLocked])
+
   // Load protected audio only for the active Listening source. Keep Blob URLs
   // session-local, and retain the same audio object while moving between parts.
   useEffect(() => {
@@ -1775,12 +1811,15 @@ export default function DoMockTest() {
     if (activePrivateListeningId) {
       loadPrivateListeningMedia({
         listeningId: activePrivateListeningId, mockTestId: id,
-        asset: 'audio', parallelChunks: 3, progressive: true,
+        asset: 'audio', parallelChunks: 3,
+        progressive: shouldUseProgressiveMockAudio(audioLastTimeRef.current, pendingAudioRestoreRef.current),
           onStreamError: error => {
             if (controller.signal.aborted) return
+            audioStreamFailedRef.current = true
+            checkpointInterruptedAudio()
             console.error('Protected Mock Listening stream:', error)
             setPrivateAudio(previous => previous.listeningId === activePrivateListeningId
-              ? { ...previous, error: 'Secure audio stream was interrupted. Please retry.' }
+              ? { ...previous, error: 'Audio connection was interrupted. Reconnect and select Retry Audio to continue from the saved position. The exam timer continues.' }
               : previous)
           },
           signal: controller.signal
@@ -1789,13 +1828,15 @@ export default function DoMockTest() {
         else { createdUrl = url; setPrivateAudio({ listeningId: activePrivateListeningId, url, error: '' }) }
       }).catch(error => {
         if (!controller.signal.aborted) {
+          audioStreamFailedRef.current = true
+          checkpointInterruptedAudio()
           console.error('Protected Mock Listening audio:', error)
-          setPrivateAudio({ listeningId: activePrivateListeningId, url: '', error: 'Secure audio could not be loaded. Please retry.' })
+          setPrivateAudio({ listeningId: activePrivateListeningId, url: '', error: 'Secure audio could not be loaded. Reconnect and select Retry Audio. The exam timer continues.' })
         }
       })
     }
     return () => { controller.abort(); if (createdUrl) URL.revokeObjectURL(createdUrl) }
-  }, [id, activePrivateListeningId, activeListeningPart?.listeningAudioStoragePath])
+  }, [id, activePrivateListeningId, activeListeningPart?.listeningAudioStoragePath, audioReloadCount])
 
   // Mock question IDs are namespaced. Authorization requires the ORIGINAL
   // Listening question and part IDs, not the Mock rendering IDs.
@@ -2189,6 +2230,8 @@ export default function DoMockTest() {
     }
 
     pendingAudioRestoreRef.current = null
+    audioPlaybackStartedRef.current = false
+    audioStreamFailedRef.current = false
     setAudioStarted(false)
     setAudioLocked(false)
     setAudioResumePending(false)
@@ -3152,6 +3195,12 @@ export default function DoMockTest() {
       return
     }
 
+    if (audioStreamFailedRef.current) {
+      retryInterruptedAudio()
+      return
+    }
+    // Metadata restoration must seek before any playback is permitted.
+    if (pendingAudioRestoreRef.current) return
     audioRef.current.play().catch(() => {
       setAudioWarning(
         audioResumePending
@@ -3167,13 +3216,19 @@ export default function DoMockTest() {
       return
     }
 
+    if (pendingAudioRestoreRef.current) {
+      audioRef.current?.pause()
+      return
+    }
+    audioPlaybackStartedRef.current = true
     setAudioStarted(true)
     setAudioResumePending(false)
     setAudioWarning('')
   }
 
   const handleAudioPause = () => {
-    if (!audioStarted || listeningLocked || audioLocked) return
+    if (!audioStarted || listeningLocked || audioLocked || audioStreamFailedRef.current ||
+        audioSeekLockRef.current || pendingAudioRestoreRef.current) return
 
     setAudioWarning('Audio cannot be paused during the listening section.')
 
@@ -3229,7 +3284,10 @@ export default function DoMockTest() {
 
     const duration = Number(audioRef.current.duration)
     const safeDuration = Number.isFinite(duration) ? duration : 0
-    const pendingRestore = pendingAudioRestoreRef.current
+    const pendingRestore = pendingAudioRestoreRef.current ||
+      (audioPlaybackStartedRef.current && audioLastTimeRef.current > 0
+        ? { time: audioLastTimeRef.current, shouldResume: !listeningLocked && !audioLocked }
+        : null)
 
     setAudioDuration(safeDuration)
 
@@ -3245,7 +3303,13 @@ export default function DoMockTest() {
 
       audioSeekLockRef.current = true
       audioLastTimeRef.current = targetTime
-      audioRef.current.currentTime = targetTime
+      try {
+        audioRef.current.currentTime = targetTime
+      } catch {
+        // Keep the pending checkpoint if this browser is not seekable yet.
+        audioSeekLockRef.current = false
+        return
+      }
       setAudioCurrentTime(targetTime)
       pendingAudioRestoreRef.current = null
 
@@ -3254,7 +3318,7 @@ export default function DoMockTest() {
         setAudioResumePending(false)
         setAudioStarted(true)
         setAudioWarning(
-          'Listening audio finished while you were away. You cannot replay it.'
+          'Listening audio finished. You cannot replay it.'
         )
       } else if (shouldResume && !listeningLocked && !audioLocked) {
         setAudioResumePending(true)
@@ -3283,7 +3347,16 @@ export default function DoMockTest() {
     setAudioCurrentTime(audioRef.current.currentTime || 0)
   }
 
+  const handleAudioError = () => {
+    if (!activeListeningAudioSrc || !activeSection.key?.startsWith('listening-')) return
+    audioStreamFailedRef.current = true
+    checkpointInterruptedAudio()
+    setAudioWarning('Audio connection was interrupted. Reconnect and retry from the saved position. The exam timer continues.')
+  }
+
   const handleAudioEnded = () => {
+    // A failed progressive stream can emit ended with only a partial buffer.
+    if (audioStreamFailedRef.current || pendingAudioRestoreRef.current) return
     if (audioDuration > 0) {
       setAudioCurrentTime(audioDuration)
     }
@@ -4170,7 +4243,14 @@ ${previousLabel} will be permanently locked and you will not be able to return t
         )}
 
         {activePrivateListeningId && privateAudio.listeningId === activePrivateListeningId && privateAudio.error && (
-          <p role="alert" className="text-sm text-red-600 mb-3">{privateAudio.error}</p>
+          <div role="alert" className="text-sm text-red-600 mb-3">
+            <p>{privateAudio.error}</p>
+            <button type="button" onClick={retryInterruptedAudio}
+              disabled={listeningLocked || audioLocked}
+              className="mt-2 rounded-lg border border-red-200 px-3 py-2 disabled:opacity-50">
+              Retry Audio
+            </button>
+          </div>
         )}
         {activePrivateListeningId && !activeListeningAudioSrc && !privateAudio.error && (
           <p className="text-sm text-gray-500 mb-3">Loading secure Listening audio...</p>
@@ -4246,7 +4326,11 @@ ${previousLabel} will be permanently locked and you will not be able to return t
           src={activeListeningAudioSrc || undefined}
           className="hidden"
           onLoadedMetadata={handleAudioLoadedMetadata}
-            onDurationChange={handleAudioDurationChange}
+          onCanPlay={() => {
+            if (pendingAudioRestoreRef.current) handleAudioLoadedMetadata()
+          }}
+          onError={handleAudioError}
+          onDurationChange={handleAudioDurationChange}
           onPlay={handleAudioPlay}
           onPause={handleAudioPause}
           onSeeking={handleAudioSeeking}
