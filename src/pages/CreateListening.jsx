@@ -2043,11 +2043,6 @@ export default function CreateListening() {
       return
     }
 
-    if (!isEditMode && assignTo.length === 0) {
-      alert('Please assign at least one student.')
-      return
-    }
-
     if (!validateQuestions()) return
 
     setSaving(true)
@@ -3496,11 +3491,11 @@ export default function CreateListening() {
 
           <div className="bg-white border border-gray-100 rounded-2xl p-6 h-fit xl:sticky xl:top-6 min-w-0 w-full">
             <h2 className="font-semibold text-gray-800 mb-2">
-              Assign Students
+              Assign Students (optional)
             </h2>
 
             <p className="text-xs text-gray-400 mb-4">
-              Selected students will receive this listening homework.
+              Selected students will receive this listening homework. You can save without selecting students and assign it later from Content Library.
             </p>
 
             {classes.length > 0 && (

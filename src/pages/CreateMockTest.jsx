@@ -736,7 +736,6 @@ export default function CreateMockTest() {
     validReadingSelection &&
     !hasDuplicateReadings &&
     validWritingSelection &&
-    (isEditMode || assignTo.length > 0) &&
     !saving &&
     !loadingExisting
 
@@ -1004,11 +1003,6 @@ export default function CreateMockTest() {
           ? MINI_MOCK_TIMES.writing
           : FULL_MOCK_TIMES.writing
       )
-    }
-
-    if (!isEditMode && assignTo.length === 0) {
-      alert('Please assign at least one student.')
-      return
     }
 
     if (!user) {
@@ -1671,11 +1665,11 @@ export default function CreateMockTest() {
 
           <div className="bg-white border border-gray-100 rounded-2xl p-6 h-fit sticky top-6">
             <h2 className="font-semibold text-gray-800 mb-2">
-              Assign Students
+              Assign Students (optional)
             </h2>
 
             <p className="text-xs text-gray-400 mb-4">
-              Selected students will receive this {mockTypeLabel}.
+              Selected students will receive this {mockTypeLabel}. You can save without selecting students and assign it later from Content Library.
             </p>
 
             {classes.length > 0 && (

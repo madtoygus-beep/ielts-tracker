@@ -4279,10 +4279,10 @@ export default function CreateReading() {
               <div className="flex items-center justify-between gap-3 mb-4">
                 <div>
                   <h2 className="font-semibold text-gray-800">
-                    Assign Students
+                    Assign Students (optional)
                   </h2>
                   <p className="text-xs text-gray-400 mt-1">
-                    Select individual students.
+                    You can save without selecting students and assign it later from Content Library.
                   </p>
                 </div>
 

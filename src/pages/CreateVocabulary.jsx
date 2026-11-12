@@ -1143,11 +1143,6 @@ export default function CreateVocabulary() {
       }
     }
 
-    if (assignTo.length === 0) {
-      alert('Please assign this vocabulary practice to at least one student or class.')
-      return false
-    }
-
     return true
   }
 
@@ -2420,8 +2415,8 @@ export default function CreateVocabulary() {
             <div className="bg-white border border-gray-100 rounded-2xl p-5">
               <div className="flex items-center justify-between gap-3 mb-4">
                 <div>
-                  <h2 className="font-semibold text-gray-800">Assign Students</h2>
-                  <p className="text-xs text-gray-400 mt-1">Select individual students.</p>
+                  <h2 className="font-semibold text-gray-800">Assign Students (optional)</h2>
+                  <p className="text-xs text-gray-400 mt-1">You can save without selecting students and assign it later from Content Library.</p>
                 </div>
 
                 {assignTo.length > 0 && (

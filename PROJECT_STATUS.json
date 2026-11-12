@@ -171,5 +171,20 @@
     "limitations": "Synthetic local browser fixture; no production student exam or private media API exercised",
     "studentDataWrites": 0,
     "approval": "Production release approval pending"
+  },
+  "optionalAssignments20261112": {
+    "status": "PREPARED_TESTED_NOT_DEPLOYED",
+    "before": {
+      "Reading": "optional",
+      "Listening": "required on create",
+      "Writing": "required on create and edit",
+      "Vocabulary": "required",
+      "MockTest": "required on create and button gate"
+    },
+    "after": "All five content editors allow saving valid content without student assignment; assignment can be added from Content Library",
+    "studentAccess": "No access mutation when creating unassigned content; existing scoped delta logic and AI eligibility validation unchanged",
+    "tests": "20 handler/button/validation checks plus 8 assignment regressions passed; production build passed",
+    "limitations": "Save handlers executed with synthetic service adapters; no production content or student records created",
+    "release": "Awaiting production approval"
   }
 }

@@ -587,11 +587,6 @@ export default function CreateWriting() {
       return
     }
 
-    if (assignTo.length === 0) {
-      alert('Please assign at least one student.')
-      return
-    }
-
     if (sponsoredSchool && sponsoredStatus === 'loading') {
       alert('Please wait for existing AI settings to finish loading.')
       return
@@ -956,11 +951,11 @@ export default function CreateWriting() {
 
           <div className="bg-white border border-gray-100 rounded-2xl p-6 h-fit sticky top-6">
             <h2 className="font-semibold text-gray-800 mb-2">
-              Assign Students
+              Assign Students (optional)
             </h2>
 
             <p className="text-xs text-gray-400 mb-4">
-              Search by name or email. Selected students will receive this writing homework.
+              Search by name or email. Selected students will receive this writing homework. You can save without selecting students and assign it later from Content Library.
             </p>
 
             {classes.length > 0 && (
