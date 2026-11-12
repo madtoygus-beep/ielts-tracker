@@ -195,5 +195,15 @@
     "productionStudentWrites": 0,
     "limitations": "Metadata-only production audit; synthetic transaction adapter tests, no actual student removal performed",
     "release": "Pending production approval"
+  },
+  "readingTabletHighlight20261112": {
+    "status": "PREPARED_TESTED_NOT_DEPLOYED",
+    "scope": "Reading homework only; Mock has no highlight implementation on desktop or tablet",
+    "issue": "Native selection updates were not observed after touchend; toolbar focus can collapse a selection before click",
+    "fix": "Observe document selectionchange; preserve pending selection during toolbar activation; explicit Webkit text selection",
+    "tests": "11 synthetic interaction/lifecycle checks passed; production build passed",
+    "limitations": "No physical iPad or Android confirmation; student supplied only tablet information",
+    "dataChanges": false,
+    "release": "Awaiting production approval"
   }
 }

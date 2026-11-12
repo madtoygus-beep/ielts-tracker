@@ -1,3 +1,4 @@
+import { watchReadingHighlightSelection } from '../services/readingHighlightSelection'
 import { useState, useEffect, useRef, useLayoutEffect } from 'react'
 import { auth, db, functions } from '../firebase'
 import { doc, getDoc, getDocFromServer } from 'firebase/firestore'
@@ -105,6 +106,8 @@ export default function DoReading() {
   const restoredRef = useRef(false)
   const questionRefs = useRef({})
   const highlightMessageTimerRef = useRef(null)
+  const highlightToolbarRef = useRef(null)
+  const highlightSelectionWatcherRef = useRef(null)
   const navigate = useNavigate()
 
   const activeDraftAttemptNumber = attemptState?.open
@@ -951,6 +954,20 @@ export default function DoReading() {
       text: sourceText.slice(start, end)
     })
   }
+
+  useEffect(() => {
+    const watcher = watchReadingHighlightSelection({
+      document,
+      capture: captureHighlightSelection,
+      toolbar: () => highlightToolbarRef.current,
+      enabled: Boolean(reading) && !submitted
+    })
+    highlightSelectionWatcherRef.current = watcher
+    return () => {
+      watcher.dispose()
+      if (highlightSelectionWatcherRef.current === watcher) highlightSelectionWatcherRef.current = null
+    }
+  }, [reading, submitted])
 
   const addPendingHighlight = () => {
     if (!pendingHighlight) {
@@ -2564,10 +2581,14 @@ export default function DoReading() {
                   </p>
                 </div>
 
-                <div className="flex items-center gap-2 flex-wrap">
+                <div ref={highlightToolbarRef} className="flex items-center gap-2 flex-wrap">
                   <button
                     type="button"
-                    onClick={addPendingHighlight}
+                    onPointerDown={event => highlightSelectionWatcherRef.current?.beginAction(event)}
+                    onClick={() => {
+                      addPendingHighlight()
+                      highlightSelectionWatcherRef.current?.finishAction()
+                    }}
                     disabled={!pendingHighlight}
                     className="text-xs bg-yellow-100 text-yellow-800 px-3 py-2 rounded-xl hover:bg-yellow-200 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
@@ -2594,6 +2615,7 @@ export default function DoReading() {
             </div>
 
             <div
+              style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
               onMouseUp={captureHighlightSelection}
               onTouchEnd={() => setTimeout(captureHighlightSelection, 0)}
               className="p-5 md:p-7 pb-24 md:pb-28 flex-1 min-h-0 overflow-y-auto overscroll-contain scroll-pb-24 select-text"
