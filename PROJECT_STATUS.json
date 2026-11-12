@@ -186,5 +186,14 @@
     "tests": "20 handler/button/validation checks plus 8 assignment regressions passed; production build passed",
     "limitations": "Save handlers executed with synthetic service adapters; no production content or student records created",
     "release": "Awaiting production approval"
+  },
+  "assignmentRemovalUidFix20261112": {
+    "status": "PREPARED_TESTED_NOT_DEPLOYED",
+    "cause": "Single-student removal lowercased case-sensitive Firebase UID; affected student metadata confirmed mismatch",
+    "fix": "Preserve exact canonical UID in server request and optimistic roster filtering",
+    "tests": "8 removal cases plus 16 assignment regressions passed; build passed",
+    "productionStudentWrites": 0,
+    "limitations": "Metadata-only production audit; synthetic transaction adapter tests, no actual student removal performed",
+    "release": "Pending production approval"
   }
 }

@@ -3373,7 +3373,8 @@ export default function TeacherDashboard() {
     if (!confirmed) return
 
     const assignmentKey = assignmentAccessKey(type, homework.id)
-    const targetUid = normalizeAssignmentId(getStudentPrimaryAssignmentId(student))
+    // Firebase UIDs are case-sensitive. Normalization is for display lookup only.
+    const targetUid = getStudentPrimaryAssignmentId(student)
 
     if (!targetUid) {
       alert('Could not identify this student. Please refresh and try again.')
@@ -3391,7 +3392,7 @@ export default function TeacherDashboard() {
       return {
         ...previous,
         [assignmentKey]: currentStudentIds.filter(
-          uid => normalizeAssignmentId(uid) !== targetUid
+          uid => uid !== targetUid
         )
       }
     })
