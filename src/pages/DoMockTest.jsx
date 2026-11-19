@@ -1,3 +1,5 @@
+import SpeakingSession from '../components/speaking/SpeakingSession'
+import SpeakingReport from '../components/speaking/SpeakingReport'
 import { mockAudioCheckpoint, savedMockAudioPosition, shouldUseProgressiveMockAudio } from '../services/mockAudioRecovery'
 import PartialWritingNotice from '../components/PartialWritingNotice'
 import { partialWritingSummary } from '../services/partialWritingPresentation'
@@ -922,6 +924,7 @@ export default function DoMockTest() {
   const [listenings, setListenings] = useState([])
   const [readings, setReadings] = useState([])
   const [writing, setWriting] = useState(null)
+  const [speakingAttempt, setSpeakingAttempt] = useState(null)
   const [loading, setLoading] = useState(true)
   const [progressHydrated, setProgressHydrated] = useState(false)
   const [loadError, setLoadError] = useState('')
@@ -1039,6 +1042,7 @@ export default function DoMockTest() {
       setAudioLocked(false)
       setAudioWarning('')
       setAudioCurrentTime(0)
+      setSpeakingAttempt(null)
       setAudioDuration(0)
       setAudioResumePending(false)
       setTabWarning('')
@@ -1418,6 +1422,7 @@ export default function DoMockTest() {
     setListeningAnswers(saved.listeningAnswers || {})
     setReadingAnswers(saved.readingAnswers || {})
     setWritingAnswers(saved.writingAnswers || { task1: '', task2: '' })
+    setSpeakingAttempt(saved.speakingAttempt || null)
 
     const restoredListeningStarted = Boolean(saved.listeningStarted)
     const restoredReadingStarted = Boolean(saved.readingStarted)
@@ -1540,6 +1545,7 @@ export default function DoMockTest() {
 
       const data = {
         sectionIndex,
+        speakingAttempt,
         maxUnlockedSectionIndex,
         listeningAnswers,
         readingAnswers,
@@ -1620,7 +1626,8 @@ export default function DoMockTest() {
     audioLocked,
     audioResumePending,
     audioCurrentTime,
-    audioDuration
+    audioDuration,
+    speakingAttempt
   ])
 
   useEffect(() => {
@@ -1746,6 +1753,7 @@ export default function DoMockTest() {
       }
     }
 
+    if (mock?.speakingConfig?.enabled === true) flow.push({ key: 'speaking', label: 'Speaking' })
     flow.push({ key: 'review', label: 'Review' })
 
     return flow
@@ -1754,10 +1762,17 @@ export default function DoMockTest() {
     listeningParts,
     enabledSections,
     hasWritingTask1,
-    hasWritingTask2
+    hasWritingTask2,
+    mock?.speakingConfig?.enabled
   ])
 
   const activeSection = sections[sectionIndex] || sections[0]
+  useEffect(() => {
+    if (activeSection.key !== 'speaking') return
+    setListeningLocked(true); setAudioLocked(true); setReadingLocked(true); setWritingLocked(true)
+    audioRef.current?.pause()
+  }, [activeSection.key])
+
   const activeListeningPart = activeSection.key?.startsWith('listening-')
     ? activeSection.listeningPart
     : null
@@ -3469,6 +3484,7 @@ export default function DoMockTest() {
 
       const response = await submitMockSecureCall({
         mockTestId: mock.id,
+        speakingAttemptId: speakingAttempt?.id || null,
         listeningAnswers: listeningAnswers || {},
         readingAnswers: readingAnswers || {},
         writingAnswers: {
@@ -3510,7 +3526,8 @@ export default function DoMockTest() {
           task1: writingAnswers?.task1 || '',
           task2: writingAnswers?.task2 || ''
         },
-        result
+        result,
+        speakingAttemptId: speakingAttempt?.id || null
       }
 
       if (payload.alreadySubmitted) {
@@ -3636,7 +3653,8 @@ export default function DoMockTest() {
     hasWritingTask1,
     hasWritingTask2,
     enabledSections,
-    mockTypeLabel
+    mockTypeLabel,
+    speakingAttempt
   ])
 
   useEffect(() => {
@@ -3681,6 +3699,11 @@ export default function DoMockTest() {
       (!enabledSections.writing || writingLocked)
 
     if (allEnabledSectionsLocked) {
+      if (mock?.speakingConfig?.enabled && !speakingAttempt) {
+        const index = sections.findIndex(s => s.key === 'speaking')
+        if (index >= 0) { setSectionIndex(index); setMaxUnlockedSectionIndex(v => Math.max(v,index)) }
+        return
+      }
       handleSubmitMockRef.current?.({ auto: true })
     }
   }, [
@@ -3693,7 +3716,8 @@ export default function DoMockTest() {
     listeningLocked,
     readingLocked,
     writingLocked,
-    enabledSections
+    enabledSections,
+    speakingAttempt, mock?.speakingConfig?.enabled, sections
   ])
 
   const handleExitMock = () => {
@@ -3719,6 +3743,8 @@ export default function DoMockTest() {
 
     if (!key) return false
 
+    if (key === 'speaking' && speakingAttempt) return false
+    if (activeSection.key === 'speaking' && !speakingAttempt && key !== 'speaking') return false
     if (key === 'prepare-reading' || key === 'prepare-writing') {
       return index === sectionIndex
     }
@@ -6563,7 +6589,8 @@ ${previousLabel} will be permanently locked and you will not be able to return t
     const pendingWritingScore = enabledSections.writing &&
       Boolean(mockAiGateOutcome) &&
       !savedMockWritingScoreReady(finalResult, completedSubmission)
-    const displayedOverall = pendingWritingScore ? '-' :
+    const pendingSpeakingScore = finalResult?.speaking?.enabled === true && finalResult?.speaking?.band == null
+    const displayedOverall = pendingWritingScore || pendingSpeakingScore ? '-' :
       (finalResult?.finalOverall ||
         finalResult?.overall ||
         finalResult?.overallEstimate ||
@@ -6574,7 +6601,7 @@ ${previousLabel} will be permanently locked and you will not be able to return t
       ? 'Teacher band (takes priority)'
       : hasAiBand ? 'AI estimate · Teacher may review' : partialWritingSummary(writingPresentationSubmission) ? 'Partial AI feedback ready · Combined band unavailable' : 'Not yet graded'
 
-    const overallLabel = pendingWritingScore
+    const overallLabel = pendingSpeakingScore ? 'Overall unavailable until Speaking is reviewed' : pendingWritingScore
       ? 'Overall unavailable until Writing receives a valid band'
       : enabledSections.writing
         ? writingReviewed
@@ -6611,7 +6638,7 @@ ${previousLabel} will be permanently locked and you will not be able to return t
                   ? 'bg-blue-50 text-blue-700'
                   : 'bg-purple-50 text-purple-700'
               }`}>
-                {mockTypeLabel}
+                {mockTypeLabel}{mock?.speakingConfig?.enabled === true ? ' + Speaking' : ''}
               </span>
 
               <span className="text-xs bg-gray-100 text-gray-600 px-3 py-1.5 rounded-full">
@@ -6782,6 +6809,7 @@ ${previousLabel} will be permanently locked and you will not be able to return t
           )}
 
           {/* Teacher comments are distinct from AI feedback and sit beneath it. */}
+          {completedSubmission?.speakingAttemptId && <SpeakingReport key={completedSubmission.speakingAttemptId} attemptId={completedSubmission.speakingAttemptId} />}
           {enabledSections.writing && writingReviewed && (
             <section className="mt-5 bg-white border border-gray-200 rounded-2xl p-5 sm:p-6" aria-label="Teacher Writing feedback">
               <h3 className="text-base font-semibold text-gray-900 mb-3">Teacher feedback</h3>
@@ -6921,7 +6949,7 @@ ${previousLabel} will be permanently locked and you will not be able to return t
                   ? 'bg-blue-50 text-blue-700'
                   : 'bg-purple-50 text-purple-700'
               }`}>
-                {mockTypeLabel}
+                {mockTypeLabel}{mock?.speakingConfig?.enabled === true ? ' + Speaking' : ''}
               </span>
 
               <span className="text-xs bg-gray-100 text-gray-600 px-3 py-1.5 rounded-full">
@@ -6931,8 +6959,8 @@ ${previousLabel} will be permanently locked and you will not be able to return t
 
             <p className="text-gray-500 mb-6">
               {isMiniMock
-                ? `This Mini Mock runs in order: ${mockFlowLabel} → Review.`
-                : `This Full Mock runs in order: selected Listening part(s) → three Reading passages → ${getWritingModeLabel(writingMode)} → Review.`}
+                ? `This Mini Mock runs in order: ${mockFlowLabel}${mock?.speakingConfig?.enabled === true ? ' → Speaking' : ''} → Review.`
+                : `This Full Mock runs in order: selected Listening part(s) → three Reading passages → ${getWritingModeLabel(writingMode)}${mock?.speakingConfig?.enabled === true ? ' → Speaking' : ''} → Review.`}
             </p>
 
             <div className={`grid grid-cols-1 ${
@@ -6999,9 +7027,15 @@ ${previousLabel} will be permanently locked and you will not be able to return t
 
         {activeSection.key === 'writing-task2' && renderWritingTask2()}
 
+        {activeSection.key === 'speaking' && <SpeakingSession mockId={mock.id} onComplete={value => {
+          setSpeakingAttempt(value)
+          lockListeningSection(); lockReadingSection(); setWritingLocked(true)
+          const index = sections.findIndex(s => s.key === 'review')
+          setSectionIndex(index); setMaxUnlockedSectionIndex(v => Math.max(v,index))
+        }} />}
         {activeSection.key === 'review' && renderReview()}
 
-        {activeSection.key !== 'intro' && activeSection.key !== 'review' && activeSection.key !== 'prepare-reading' && activeSection.key !== 'prepare-writing' && (
+        {activeSection.key !== 'speaking' && activeSection.key !== 'intro' && activeSection.key !== 'review' && activeSection.key !== 'prepare-reading' && activeSection.key !== 'prepare-writing' && (
           <div className="flex justify-between mt-8">
             <button
               onClick={prevSection}

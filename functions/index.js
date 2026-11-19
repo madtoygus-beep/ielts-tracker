@@ -74,6 +74,7 @@ const MANAGED_CLASS_COLORS = new Set([
 // are deleted, user-scoped mock resource access is cleaned, and known Storage
 // objects are removed. Deactivate remains the non-destructive alternative.
 const SCHOOL_CASCADE_COLLECTIONS = [
+  'speakingTasks', 'speakingAttempts', 'speakingAiUsage', 'speakingAttemptUsage',
   'classes',
   'readings',
   'listenings',
@@ -107,6 +108,7 @@ const SCHOOL_CASCADE_COLLECTIONS = [
 ]
 
 const SCHOOL_STORAGE_PATH_COLLECTIONS = [
+  'speakingAttempts',
   'listenings',
   'materials'
 ]
@@ -914,7 +916,9 @@ async function deleteStorageForUsers(userIds) {
   let deletedObjects = 0
 
   for (const uid of userIds) {
-    for (const prefixRoot of USER_STORAGE_PREFIXES) {
+    const profile=(await db.doc(`users/${uid}`).get()).data()
+    const roots=[...USER_STORAGE_PREFIXES,`speaking-private/${schoolIdOf(profile)}`]
+    for (const prefixRoot of roots) {
       const prefix = `${prefixRoot}/${uid}/`
       const [files] = await bucket.getFiles({ prefix })
 
@@ -952,6 +956,8 @@ async function deleteStorageForSchool(schoolId, userIds, storagePaths) {
     deletedObjects += brandingFiles.length
   }
 
+  const [speakingFiles]=await bucket.getFiles({prefix:`speaking-private/${schoolId}/`})
+  for(const file of speakingFiles){await file.delete({ignoreNotFound:true});deletedObjects++}
   deletedObjects += await deleteStorageForUsers(userIds)
   return deletedObjects
 }
@@ -2752,6 +2758,8 @@ exports.restoreManagedUser = onCall({ invoker: 'public' }, async request => {
 // identity/profile and active ownership links while preserving shared school content
 // and historical academic records.
 const STUDENT_PERMANENT_DELETE_COLLECTIONS = [
+  { name: 'speakingAttempts', fields: ['studentId'] },
+  { name: 'speakingAttemptUsage', fields: ['studentId'] },
   { name: 'studentAccess', fields: ['uid', 'studentId'] },
   { name: 'readingSubmissions', fields: ['uid', 'studentId'] },
   { name: 'listeningSubmissions', fields: ['uid', 'studentId'] },
@@ -2775,6 +2783,7 @@ const STUDENT_PERMANENT_DELETE_COLLECTIONS = [
 // documents may still contain student arrays from earlier tracker versions. Hard
 // deletion removes those stale references without deleting shared content.
 const STUDENT_LEGACY_REFERENCE_COLLECTIONS = [
+  'speakingTasks',
   'classes',
   'readings',
   'listenings',
@@ -2785,6 +2794,7 @@ const STUDENT_LEGACY_REFERENCE_COLLECTIONS = [
 ]
 
 const STUDENT_LEGACY_REFERENCE_FIELDS = [
+  'assignedTo',
   'studentIds',
   'assignedStudentIds',
   'assignedStudents'
@@ -2922,7 +2932,8 @@ async function getUserStorageObjectCount(userId) {
   const bucket = getStorage().bucket(STORAGE_BUCKET_NAME)
   let count = 0
 
-  for (const prefixRoot of USER_STORAGE_PREFIXES) {
+  const profile=(await db.doc(`users/${userId}`).get()).data()
+  for (const prefixRoot of [...USER_STORAGE_PREFIXES,`speaking-private/${schoolIdOf(profile)}`]) {
     const [files] = await bucket.getFiles({ prefix: `${prefixRoot}/${userId}/` })
     count += files.length
   }
@@ -6792,6 +6803,13 @@ exports.submitMockSecure = onCall(async request => {
     writingAnswers
   })
 
+  const speakingLink = await require('./lib/speaking/mockLink').mockSpeakingLink({
+    db, mock, student, mockId:mockTestId, existing, autoSubmitted, HttpsError
+  })
+  if (speakingLink) {
+    result.speaking = speakingLink.result
+    result.overallEstimate = null // No incomplete four-skill average.
+  }
   const enabledSections = getMockEnabledSections(mock)
   const writingMode = getMockWritingMode(mock, sources.writing)
   const teacherIds = teacherIdsOf(mock)
@@ -6804,6 +6822,7 @@ exports.submitMockSecure = onCall(async request => {
     submittedAt,
     mockTestId,
     title: mock.title || 'Untitled Mock Test',
+    ...(speakingLink ? {speakingAttemptId:speakingLink.attemptId} : {}),
     mockType: mock.mockType || mock.contentType || 'full_mock',
     contentType: mock.mockType || mock.contentType || 'full_mock',
     enabledSections,
@@ -6989,7 +7008,7 @@ function studentSummaryResult(value) {
       gradingBreakdown: studentSummaryResult({ gradingBreakdown: item?.gradingBreakdown })?.gradingBreakdown || {}
     }))
   }
-  for (const section of ['reading','listening','writing']) {
+  for (const section of ['reading','listening','writing','speaking']) {
     if (raw[section] && typeof raw[section] === 'object' && !Array.isArray(raw[section])) {
       safe[section] = studentSummaryResult(raw[section])
       // A review is teacher-written rubric/feedback, not an answer key.
@@ -7090,7 +7109,7 @@ function studentResultOwnDetail(id, data, category) {
     'task1Answer', 'task2Answer', 'readingAnswers', 'listeningAnswers',
     'writingAnswers', 'matchingViewVersion', 'tabSwitchCount', 'timing',
     'sectionTimeLimits', 'readingIds', 'listeningIds', 'task1Enabled',
-    'task2Enabled', 'reopenMode'
+    'task2Enabled', 'reopenMode', 'speakingAttemptId'
   ]) {
     if (Object.prototype.hasOwnProperty.call(data, field)) safe[field] = toPlain(data[field])
   }
@@ -7714,3 +7733,15 @@ exports.syncMockOverallAfterAiWriting = onDocumentWritten({
   region: 'europe-west1',
   document: 'aiWritingEvaluations/{id}'
 }, event => aiMockOverallSync.onAiReport(event))
+
+// Speaking local candidate: server-only documents and private audio. Not deployed.
+const { createSpeakingService } = require('./lib/speaking/service')
+const { gradeSpeaking } = require('./lib/speaking/provider')
+const speakingService = createSpeakingService({
+  db, bucket:getStorage().bucket(STORAGE_BUCKET_NAME), HttpsError,
+  requireStudent, requireAssignmentManager, requireAssignedMock,
+  requireCurrentTeacherAcademicStudent, schoolIdOf,
+  aiEnabled:()=>process.env.MAXIMA_SPEAKING_AI_ENABLED === 'true' && Boolean(process.env.MAXIMA_SPEAKING_AUDIO_MODEL),
+  provider:recordings=>gradeSpeaking(recordings,{apiKey:maximaOpenAiKey.value(),model:process.env.MAXIMA_SPEAKING_AUDIO_MODEL})
+})
+exports.speakingWorkspace = onCall({secrets:[maximaOpenAiKey],timeoutSeconds:180,memory:'1GiB',maxInstances:3,concurrency:2},request=>speakingService.call(request))

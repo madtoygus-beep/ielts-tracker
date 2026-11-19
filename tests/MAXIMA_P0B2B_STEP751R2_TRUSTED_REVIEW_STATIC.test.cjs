@@ -14,7 +14,7 @@ test('teacher can no longer directly update Mock submissions in browser',()=>{
 })
 test('UI sends only human review plus immutable attempt locator to trusted callable',()=>{
   assert.match(ui,/const saveMockWritingReviewSecureCall = httpsCallable\(functions, 'saveMockWritingReviewSecure'\)/)
-  const start=ui.indexOf('const saveMockWritingReview = async () => {')
+  const start=ui.indexOf('const saveMockWritingReview =')
   const end=ui.indexOf('const getMockSubmittedCount',start)
   assert.ok(start>=0&&end>start)
   const body=ui.slice(start,end)

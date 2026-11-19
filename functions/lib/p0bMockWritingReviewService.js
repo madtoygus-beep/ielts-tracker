@@ -74,7 +74,9 @@ function computeOverall(submission, result, teacherBand) {
     const band = Number(result[name]?.band)
     return Number.isFinite(band) && band > 0 && band <= 9 ? band : null
   }
-  const parts = [enabledBand('listening'), enabledBand('reading'), teacherBand]
+  if (result.speaking?.enabled === true && typeof result.speaking.band !== 'number') return null
+  const parts = [enabledBand('listening'), enabledBand('reading'), teacherBand,
+    result.speaking?.enabled === true ? result.speaking.band : null]
     .filter(value => value !== null)
   return parts.length ? Math.round(parts.reduce((sum, value) => sum + value, 0) /
     parts.length * 2) / 2 : teacherBand
@@ -224,7 +226,7 @@ function createMockWritingReviewService({db, HttpsError, requireAssignmentManage
             ? '' : (result.listening?.band ?? ''),
           reading: sections.reading === false || result.reading?.enabled === false
             ? '' : (result.reading?.band ?? ''),
-          speaking: '',
+          speaking: result.speaking?.band ?? '',
           aiEstimatedWritingBand: result.writing.aiEstimatedBand ?? null,
           createdAt: submittedAt,
           gradedByServer: submission.gradedByServer === true,

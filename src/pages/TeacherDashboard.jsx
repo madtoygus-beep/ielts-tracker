@@ -388,6 +388,7 @@ const TEACHER_CONTENT_TABS = [
 ]
 
 const TEACHER_CREATION_ROUTES = [
+  { label: 'Speaking practice', path: '/speaking', icon: 'book' },
   { label: 'Reading homework', path: '/create-reading', icon: 'book' },
   { label: 'Listening homework', path: '/create-listening', icon: 'book' },
   { label: 'Writing homework', path: '/create-writing', icon: 'book' },

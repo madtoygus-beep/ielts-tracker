@@ -12,13 +12,15 @@ export function mockBand(value) {
 
 export function savedMockWritingScoreReady(result, submission = null) {
   if (!result || typeof result !== 'object') return false
-  if ((mockBand(result.finalOverall) ?? mockBand(result.overall) ??
+  const speakingPending=result.speaking?.enabled===true && mockBand(result.speaking.band)===null
+  if (!speakingPending && (mockBand(result.finalOverall) ?? mockBand(result.overall) ??
     mockBand(result.overallEstimate)) === null) return false
   const writing = result.writing || {}
   const effective = mockBand(writing.effectiveBand)
   if (writing.effectiveBandSource === 'ai') {
     if (effective === null || effective !== mockBand(writing.aiEstimatedBand)) return false
 
+    if(speakingPending)return true // Writing may be ready while teacher Speaking is still pending.
     // Match the saved server-side Mock Overall calculation before release.
     const sections = submission?.enabledSections || result.enabledSections || {}
     const included = section =>
@@ -29,7 +31,8 @@ export function savedMockWritingScoreReady(result, submission = null) {
     const bands = [
       included('listening') ? mockBand(result.listening?.band) : null,
       included('reading') ? mockBand(result.reading?.band) : null,
-      effective
+      effective,
+      result.speaking?.enabled===true?mockBand(result.speaking.band):null
     ].filter(band => band !== null)
 
     const expectedOverall = Math.round(
@@ -87,6 +90,7 @@ export function dashboardMockOverall(submission) {
   const result = submission?.result
   if (!result || typeof result !== 'object') return null
 
+  if(result.speaking?.enabled===true && mockBand(result.speaking.band)===null)return null
   const writing = result.writing || {}
   const sections = submission?.enabledSections || result.enabledSections || {}
 

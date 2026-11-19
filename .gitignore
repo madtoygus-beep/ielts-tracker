@@ -25,3 +25,6 @@ dist-ssr
 .vercel
 firebase-debug.log
 .env*
+
+.vite-cache/
+artifacts/speaking/

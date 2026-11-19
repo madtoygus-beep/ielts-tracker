@@ -1,3 +1,5 @@
+import SpeakingEditor from '../components/speaking/SpeakingEditor'
+import { defaultMockSpeakingConfig as defaultSpeakingConfig, validateSpeakingConfig } from '../services/speakingApi'
 import { useEffect, useMemo, useState } from 'react'
 import { auth, db, functions } from '../firebase'
 import {
@@ -327,6 +329,7 @@ export default function CreateMockTest() {
 
   const [listeningIds, setListeningIds] = useState(['', '', '', ''])
   const [readingIds, setReadingIds] = useState(['', '', ''])
+  const [speakingConfig, setSpeakingConfig] = useState(defaultSpeakingConfig)
   const [writingId, setWritingId] = useState('')
   const [enabledSections, setEnabledSections] = useState({
     ...ALL_MOCK_SECTIONS
@@ -496,6 +499,7 @@ export default function CreateMockTest() {
 
         setListeningIds([...loadedListeningIds, '', '', '', ''].slice(0, 4))
         setReadingIds([...loadedReadingIds, '', '', ''].slice(0, 3))
+        setSpeakingConfig(data.speakingConfig || defaultSpeakingConfig())
         setWritingId(data.writingId || '')
 
         const assignmentResult = await getContentStudentAccessCall({
@@ -718,12 +722,14 @@ export default function CreateMockTest() {
   const totalTimeMinutes =
     (activeSections.listening ? Number(sectionTimeLimits.listening || 0) : 0) +
     (activeSections.reading ? Number(sectionTimeLimits.reading || 0) : 0) +
-    (activeSections.writing ? Number(sectionTimeLimits.writing || 0) : 0)
+    (activeSections.writing ? Number(sectionTimeLimits.writing || 0) : 0) +
+    (speakingConfig.enabled ? Math.ceil(speakingConfig.questions.reduce((sum,q)=>sum+(q.part===2?188:Number(q.seconds||40)+8),0)/60) : 0)
 
   const enabledSectionLabels = [
     activeSections.listening ? 'Listening' : null,
     activeSections.reading ? 'Reading' : null,
-    activeSections.writing ? selectedWritingLabel : null
+    activeSections.writing ? selectedWritingLabel : null,
+    speakingConfig.enabled ? 'Speaking' : null
   ].filter(Boolean)
 
   const flowSummary = enabledSectionLabels.join(' → ')
@@ -736,6 +742,7 @@ export default function CreateMockTest() {
     validReadingSelection &&
     !hasDuplicateReadings &&
     validWritingSelection &&
+    !validateSpeakingConfig(speakingConfig, true) &&
     !saving &&
     !loadingExisting
 
@@ -898,6 +905,8 @@ export default function CreateMockTest() {
   }
 
   const handleSave = async () => {
+    const speakingError = validateSpeakingConfig(speakingConfig, true)
+    if (speakingError) { alert(speakingError); return }
     if (saving) return
 
     const cleanTitle = title.trim()
@@ -1043,7 +1052,8 @@ export default function CreateMockTest() {
     const savedTotalTimeMinutes =
       (activeSections.listening ? cleanSectionTimeLimits.listening : 0) +
       (activeSections.reading ? cleanSectionTimeLimits.reading : 0) +
-      (activeSections.writing ? cleanSectionTimeLimits.writing : 0)
+      (activeSections.writing ? cleanSectionTimeLimits.writing : 0) +
+      (speakingConfig.enabled ? Math.ceil(speakingConfig.questions.reduce((sum,q)=>sum+(q.part===2?188:Number(q.seconds||40)+8),0)/60) : 0)
 
     const payload = {
       title: cleanTitle,
@@ -1051,6 +1061,7 @@ export default function CreateMockTest() {
       contentType,
       mockType: contentType,
       enabledSections: { ...activeSections },
+      speakingConfig,
       fullMockListeningMode: isMiniMock ? '' : fullMockListeningMode,
       miniSectionCounts: isMiniMock
         ? {
@@ -1835,6 +1846,7 @@ export default function CreateMockTest() {
               )}
             </div>
 
+            <SpeakingEditor optional full value={speakingConfig} onChange={setSpeakingConfig} />
             {sponsoredSchool && (
               <AiWritingSponsoredAssignmentPanel
                 contentType="mock"

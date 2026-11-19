@@ -1,0 +1,71 @@
+{
+  "date": "2026-11-19",
+  "status": "local_review_candidate_not_deployed",
+  "branch": "feature/speaking-local-20261119",
+  "base_commit": "12e2be9a422d1f08db0574c783aa3d346a1547fb",
+  "user_release_rule": "Only publish after the user reviews and explicitly says yayinla. No push or deployment authorised for this work.",
+  "preview": "http://127.0.0.1:5180/speaking-preview",
+  "implemented": [
+    "Standalone teacher question creation, editing and optional assignment; unassigned tasks stay in the library",
+    "Practice: mic test, manual record/stop, preview, rerecord before saving, session resume",
+    "Optional full/mini Mock Speaking: Part 1/2/3, server-owned deadlines, automatic progression; Part 2 has 60 seconds preparation and 120 seconds recording",
+    "Private recording transport via authenticated callable; token-free storage paths excluded from client responses",
+    "Local IndexedDB recovery queue and idempotent save retry; Mock time continues",
+    "Four-criterion teacher review, separate AI estimate, transcripts, evidence-checked corrections and priorities; no tutor chatbot",
+    "Teacher class authorisation rechecked in Firestore transactions; retake isolation and bounded daily usage",
+    "Four-skill Overall withheld until Speaking is graded; old three-skill Mock behaviour preserved",
+    "Student/institution permanent-deletion hooks cover Speaking attempts, assignments and recording objects"
+  ],
+  "verification": {
+    "automated_tests": 84,
+    "automated_tests_passed": 84,
+    "build": "passed: npm run build -- --configLoader runner",
+    "speaking_frontend_lint": "passed",
+    "backend_syntax": "passed",
+    "browser": "isolated Chrome, synthetic microphone only, no runtime errors",
+    "browser_flows": [
+      "manual practice record/save/submit",
+      "one deliberately failed upload followed by recovery/retry",
+      "automatic three-part Mock including preparation and submission",
+      "audio playback and teacher grade form",
+      "768px tablet report: no horizontal overflow"
+    ],
+    "screenshots": "artifacts/speaking/"
+  },
+  "ai": {
+    "enabled": false,
+    "paid_calls": 0,
+    "real_student_audio_used": false,
+    "transcription_and_scoring": "one explicitly configured audio-capable model request; no text-only pronunciation inference",
+    "enablement_requires": [
+      "MAXIMA_SPEAKING_AI_ENABLED=true",
+      "MAXIMA_SPEAKING_AUDIO_MODEL explicitly set",
+      "existing OpenAI secret bound to callable"
+    ],
+    "limits": {
+      "practice_attempts_per_student_day": 20,
+      "ai_requests_per_school_day": 20,
+      "questions_per_task": 20,
+      "audio_bytes_per_question": 6291456,
+      "audio_bytes_per_ai_assessment": 41943040
+    },
+    "failed_assessments": "no automatic second paid request; administrator recovery workflow not yet implemented"
+  },
+  "before_release": [
+    "User review and explicit publication approval",
+    "Real Chrome, iPad Safari and Android microphone/codec checks; interruption, reload and offline testing on real devices",
+    "Isolated Firebase emulator/end-to-end review with production-equivalent roles and Storage/IAM verification; current tests use in-memory transactional fixtures, not a deployed backend",
+    "Read-only verification of the existing Firestore database edition and Storage bucket anonymous access/PAP/IAM; confirm new recording prefix remains private",
+    "Explicitly approved paid audio evaluation against teacher-scored examples before enabling AI; current tests validate request/output mechanics, not scoring accuracy",
+    "Confirm institution quota/billing, retention/deletion period, KVKK notice and overseas audio processing arrangements",
+    "Decide whether Mock Speaking AI estimates should contribute to Overall; this candidate uses teacher Speaking band for Overall",
+    "Deployment must coordinate new speakingWorkspace callable with submitMockSecure, Writing Overall sync/review functions and frontend; no deployments performed"
+  ],
+  "known_limits": [
+    "List screens currently cap at the first 100 records; cursor pagination deferred",
+    "Browser question voice is device TTS, not an AI examiner; question reading window is 8 seconds",
+    "Audio recording recovered from an interrupted browser depends on codec support; real-device reload recovery remains unverified",
+    "AI completed report is cached and separate from teacher grade; failed jobs require support and cannot self-retry",
+    "No automatic retention purge is configured; permanent deletion is integrated but must be verified in emulator before release"
+  ]
+}

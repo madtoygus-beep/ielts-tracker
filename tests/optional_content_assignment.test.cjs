@@ -11,11 +11,12 @@ function expression(type,name) {
  visit(ast);assert.ok(found,`${type}.${name}`);return src.slice(found.start,found.end)
 }
 async function fixture(type,extra={}) {
+ const speakingPolicy=await import('../src/services/speakingPolicy.js')
  const delta=await import('../src/services/p8cAssignmentDelta.js')
  const policy=await import('../src/services/aiWritingSponsoredAssignmentPolicy.js')
  const calls={content:[],access:[],ai:[],alerts:[],saved:false}
  const question={id:'Q1',type:'mcq',question:'Pick the synonym.',options:['small','large'],answer:'A'}
- const c={...delta,...policy,console:{error:(...x)=>calls.alerts.push(x.map(String).join(' '))},structuredClone,Date,Set,Array,Number,
+ const c={...delta,...policy,...speakingPolicy,speakingConfig:{enabled:false,questions:[]},console:{error:(...x)=>calls.alerts.push(x.map(String).join(' '))},structuredClone,Date,Set,Array,Number,
  title:'Library content',safeTimeLimit:40,timeLimit:40,instructions:'Instructions',dueDate:'',contentType:type==='MockTest'?'mini_mock':'homework',visibility:'private',
  user:{uid:'Teacher001'},profile:{role:'teacher',schoolId:'maxima'},id:'',isEditMode:false,saving:false,loadingExisting:false,readingLoading:false,loadedReadingId:'',readingLoadError:'',selectedWritingMode:'task2',
  assignTo:[],assignmentBaseline:[],students:[],aiActiveClassStudentIds:new Set(),teacherAcademicMembershipReady:true,

@@ -43,8 +43,11 @@ function effectiveMockOverall(submission, aiEstimatedBand = null) {
   const writingSource = teacherBand !== null ? 'teacher' : aiBand !== null ? 'ai' : 'none'
   const listeningBand = included('listening') ? numericBand(result.listening?.band) : null
   const readingBand = included('reading') ? numericBand(result.reading?.band) : null
-  const bands = [listeningBand, readingBand, effectiveWritingBand].filter(band => band !== null)
-  const overall = bands.length
+  const hasSpeaking = result.speaking?.enabled === true
+  const speakingBand = hasSpeaking ? numericBand(result.speaking.band) : null
+  const waitingForSpeaking = hasSpeaking && speakingBand === null
+  const bands = [listeningBand, readingBand, effectiveWritingBand, speakingBand].filter(band => band !== null)
+  const overall = !waitingForSpeaking && bands.length
     ? Math.round((bands.reduce((sum, band) => sum + band, 0) / bands.length) * 2) / 2
     : null
   return { teacherBand, aiBand, effectiveWritingBand, writingSource, overall }

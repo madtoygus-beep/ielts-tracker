@@ -11,6 +11,9 @@ const SelfStudyManagerDashboard = lazy(() => import('./pages/SelfStudyManagerDas
 const TeacherDashboard = lazy(() => import('./pages/TeacherDashboard'))
 const AdminDashboard = lazy(() => import('./pages/AdminDashboard'))
 
+const SpeakingPreview = import.meta.env.DEV ? lazy(() => import('./pages/SpeakingPreview')) : null
+const SpeakingWorkspace = lazy(() => import('./pages/SpeakingWorkspace'))
+
 const CreateReading = lazy(() => import('./pages/CreateReading'))
 const DoReading = lazy(() => import('./pages/DoReading'))
 
@@ -66,6 +69,8 @@ function App() {
           <Route path="/teacher" element={<TeacherDashboard />} />
           <Route path="/admin" element={<AdminDashboard />} />
 
+          {import.meta.env.DEV && <Route path="/speaking-preview" element={<SpeakingPreview />} />}
+          <Route path="/speaking" element={<SpeakingWorkspace />} />
           <Route path="/create-reading" element={<CreateReading />} />
           <Route path="/edit-reading/:id" element={<CreateReading />} />
           <Route path="/do-reading/:id" element={<DoReading />} />
