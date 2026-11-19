@@ -14,23 +14,37 @@
     "Four-criterion teacher review, separate AI estimate, transcripts, evidence-checked corrections and priorities; no tutor chatbot",
     "Teacher class authorisation rechecked in Firestore transactions; retake isolation and bounded daily usage",
     "Four-skill Overall withheld until Speaking is graded; old three-skill Mock behaviour preserved",
-    "Student/institution permanent-deletion hooks cover Speaking attempts, assignments and recording objects"
+    "Student/institution permanent-deletion hooks cover Speaking attempts, assignments and recording objects",
+    "Role-specific workspaces with entry buttons in teacher/admin/student dashboards and correct return routes",
+    "Teacher current-class assignment shortcuts and preservation warning for older unavailable assignments",
+    "Archive/restore with optimistic version checks; staff recordings preserved",
+    "Admin institution-wide set/recording visibility with owner names and failed-AI status",
+    "Cursor pagination beyond 100 records; student task responses exclude other assignment identities",
+    "Admin release of failed AI assessment, audited reason and maximum three releases; student must consent again; no automatic paid call",
+    "Retry final submission after all question recordings are acknowledged; silence warning during microphone check; explicit recovery/rerecord/continue-without-audio controls",
+    "Clean acknowledged question recordings from the device recovery queue on resume"
   ],
   "verification": {
-    "automated_tests": 84,
-    "automated_tests_passed": 84,
+    "automated_tests": 96,
+    "automated_tests_passed": 96,
     "build": "passed: npm run build -- --configLoader runner",
-    "speaking_frontend_lint": "passed",
+    "speaking_frontend_lint": "passed, no warnings",
     "backend_syntax": "passed",
     "browser": "isolated Chrome, synthetic microphone only, no runtime errors",
     "browser_flows": [
-      "manual practice record/save/submit",
-      "one deliberately failed upload followed by recovery/retry",
-      "automatic three-part Mock including preparation and submission",
+      "manual practice, failed-save recovery and submission",
+      "automatic three-part Mock including 60 second preparation; final-send failure followed by retry",
       "audio playback and teacher grade form",
-      "768px tablet report: no horizontal overflow"
+      "teacher creates and assigns a set to a class",
+      "archive and restore a teacher set",
+      "admin monitors another teacher and releases failed AI without paid call",
+      "student assigned-only workspace without staff controls",
+      "768px tablet report and student workspace: no horizontal overflow"
     ],
-    "screenshots": "artifacts/speaking/"
+    "screenshots": "artifacts/speaking/",
+    "unit_and_regression_tests": 90,
+    "firestore_emulator_tests": 6,
+    "firestore_emulator": "demo-maxima-speaking-local, loopback 127.0.0.1:8280, STANDARD edition, existing firestore.rules and production canonical academic membership helper; no production database"
   },
   "ai": {
     "enabled": false,
@@ -49,23 +63,31 @@
       "audio_bytes_per_question": 6291456,
       "audio_bytes_per_ai_assessment": 41943040
     },
-    "failed_assessments": "no automatic second paid request; administrator recovery workflow not yet implemented"
+    "failed_assessments": "Administrator can release a failed request with audit reason (max 3). No model call or quota reset on release. The student must consent to a new assessment. Processing jobs are not released to avoid duplicate paid calls."
   },
   "before_release": [
     "User review and explicit publication approval",
     "Real Chrome, iPad Safari and Android microphone/codec checks; interruption, reload and offline testing on real devices",
-    "Isolated Firebase emulator/end-to-end review with production-equivalent roles and Storage/IAM verification; current tests use in-memory transactional fixtures, not a deployed backend",
+    "Local service transactions, production Firestore rules and role checks passed emulator tests; deployed callable transport, Storage/IAM and full parent-Mock integration still require a coordinated preview/staging check.",
     "Read-only verification of the existing Firestore database edition and Storage bucket anonymous access/PAP/IAM; confirm new recording prefix remains private",
     "Explicitly approved paid audio evaluation against teacher-scored examples before enabling AI; current tests validate request/output mechanics, not scoring accuracy",
+    "Current grading policy for review: AI report is an unofficial estimate; Mock Overall uses teacher Speaking band. Changing this to an AI-based combined estimate is a separate decision.",
     "Confirm institution quota/billing, retention/deletion period, KVKK notice and overseas audio processing arrangements",
-    "Decide whether Mock Speaking AI estimates should contribute to Overall; this candidate uses teacher Speaking band for Overall",
     "Deployment must coordinate new speakingWorkspace callable with submitMockSecure, Writing Overall sync/review functions and frontend; no deployments performed"
   ],
   "known_limits": [
-    "List screens currently cap at the first 100 records; cursor pagination deferred",
     "Browser question voice is device TTS, not an AI examiner; question reading window is 8 seconds",
     "Audio recording recovered from an interrupted browser depends on codec support; real-device reload recovery remains unverified",
-    "AI completed report is cached and separate from teacher grade; failed jobs require support and cannot self-retry",
-    "No automatic retention purge is configured; permanent deletion is integrated but must be verified in emulator before release"
-  ]
+    "No automatic retention purge is configured; permanent deletion is integrated but must be verified in emulator before release",
+    "Failed AI recovery UI is implemented; jobs still processing cannot be released manually",
+    "Question recording files are private by application/rules design; actual bucket IAM and anonymous read denial must be checked before deployment",
+    "Local demo uses synthetic audio and illustrative reports only. Role selection and simulated server API are DEV-only and absent from production bundles."
+  ],
+  "workflow": {
+    "set_preparation": "teacher only",
+    "teacher": "Own question sets, optional individual/current-class assignment, archive/restore, own eligible students recordings and four-criterion teacher review",
+    "student": "Assigned sets and own reports only; practice resume and return to parent Mock for unfinished Mock Speaking",
+    "admin": "Institution monitoring across teachers, archive/restore and support review; no new-set creation; failed AI release without model call or quota reset",
+    "publishing": "User review and explicit publication instruction required. No push or deployment performed."
+  }
 }

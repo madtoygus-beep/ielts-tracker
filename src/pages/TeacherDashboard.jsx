@@ -6562,6 +6562,7 @@ export default function TeacherDashboard() {
                 <span className="rounded-md bg-indigo-50 px-2 py-1 text-[11px] font-semibold text-indigo-700">TEACHER</span>
               </div>
               <div className="flex items-center gap-2 sm:gap-4 shrink-0">
+                <button type="button" onClick={()=>navigate('/speaking')} className="rounded-lg bg-indigo-50 px-3 py-2 text-sm text-indigo-800">Speaking</button>
                 <span className="hidden xl:block text-xs text-slate-500 max-w-[200px] truncate" title={user?.email}>{user?.email}</span>
                 <button type="button" onClick={() => setShowPasswordModal(true)} className="inline-flex items-center gap-2 text-xs sm:text-sm text-slate-600 hover:text-slate-900 rounded-lg px-2 py-1 focus-visible:ring-2 focus-visible:ring-indigo-500">
                   <TeacherIcon name="lock" className="h-4 w-4" /> <span className="hidden sm:inline">Password</span>

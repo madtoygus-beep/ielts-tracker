@@ -44,3 +44,11 @@ function accessOutbox(key, value) {
     }
   })
 }
+
+export async function wavHasSignal(blob){
+  const bytes=await blob.arrayBuffer(),view=new DataView(bytes)
+  if(bytes.byteLength<46)return false
+  let energy=0,count=0
+  for(let i=44;i+1<bytes.byteLength;i+=2){energy+=(view.getInt16(i,true)/32768)**2;count++}
+  return count>0&&Math.sqrt(energy/count)>0.001
+}

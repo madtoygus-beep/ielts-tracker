@@ -51,9 +51,10 @@ function createSpeakingService({db,bucket,requireStudent,requireAssignmentManage
   }
   const publicAttempt=a=>({id:a.id,title:a.title,mode:a.mode,questions:a.questions,status:a.status,nextIndex:a.nextIndex,
     current:a.current||null,answers:(a.answers||[]).map(({storagePath,sha256,...v})=>v),report:a.report||null,review:a.review||null,
-    mockId:a.mockId||'',taskId:a.taskId||'',studentName:a.studentName||'Student',startedAt:a.startedAt,serverNow:now(),submittedAt:a.submittedAt||null,aiStatus:a.aiStatus||'not_requested',aiAvailable:aiEnabled()})
+    mockId:a.mockId||'',taskId:a.taskId||'',studentName:a.studentName||'Student',startedAt:a.startedAt,serverNow:now(),submittedAt:a.submittedAt||null,aiStatus:a.aiStatus||'not_requested',aiRequestedAt:a.aiRequestedAt||null,aiRecoveryCount:(a.aiRecovery||[]).length,aiAvailable:aiEnabled()})
   async function saveTask(request) {
     const staff=await requireAssignmentManager(request),data=request.data||{}
+    if(!data.id&&staff.profile.role!=='teacher')fail('permission-denied','Speaking sets are created by teachers.')
     let schoolId=schoolIdOf(staff.profile)
     if(!schoolId||schoolId.startsWith('__'))fail('failed-precondition','Select an institution account.')
     const title=String(data.title||'').trim()
@@ -62,6 +63,7 @@ function createSpeakingService({db,bucket,requireStudent,requireAssignmentManage
     let assignedTo=[...new Set(Array.isArray(data.assignedTo)?data.assignedTo:[])]
     const original=data.id?await read(`speakingTasks/${id(data.id)}`):null
     if(original)schoolId=original.schoolId
+    if(original&&data.expectedUpdatedAt!==undefined&&data.expectedUpdatedAt!==original.updatedAt)fail('aborted','This set changed while you were editing. Reload it before saving.')
     if(original&&!staffAccess(staff,original))fail('permission-denied','Only the owner can edit this task.')
     const protectedIds=[]
     for(const sid of original?.assignedTo||[]){try{await requireCurrentTeacherAcademicStudent({db,HttpsError,manager:staff,studentId:sid,schoolId})}catch(e){if(e.code!=='permission-denied')throw e;protectedIds.push(sid)}}
@@ -78,21 +80,81 @@ function createSpeakingService({db,bucket,requireStudent,requireAssignmentManage
       for(const sid of assignedTo.filter(sid=>!protectedIds.includes(sid)))await requireCurrentTeacherAcademicStudent({db,HttpsError,manager:{uid:staff.uid,profile:user},studentId:sid,schoolId,tx})
       tx.set(ref,{title,schoolId,teacherId:original?.teacherId||staff.uid,config:validated,assignedTo,updatedAt:now(),archived:false},{merge:true})
     })
-    return {id:taskId}
+    return {id:taskId,task:await read(ref.path)}
   }
   async function list(request) {
     const staff=request.data?.staff===true
     const actor=staff?await requireAssignmentManager(request):await requireStudent(request)
-    let query=db.collection('speakingTasks')
-    // One equality/array filter only: no new composite index required.
-    query=staff?query.where('teacherId','==',actor.uid):query.where('assignedTo','array-contains',actor.uid)
-    const snap=await query.limit(101).get()
-    const tasks=[]
-    for(const s of snap.docs){const v={id:s.id,...s.data()};if(v.schoolId===schoolIdOf(actor.profile)&&v.archived!==true){try{if(!staff)await studentAccess(actor,v);tasks.push(v)}catch(e){if(e.code!=='permission-denied')throw e}}}
-    const attemptsSnap=await db.collection('speakingAttempts').where(staff?'teacherId':'studentId','==',actor.uid).limit(101).get()
-    const attempts=[]
-    for(const doc of attemptsSnap.docs){try{const {attempt}=await attemptAccess(request,doc.id,staff);attempts.push({id:attempt.id,title:attempt.title,mode:attempt.mode,status:attempt.status,taskId:attempt.taskId,mockId:attempt.mockId,studentName:attempt.studentName,startedAt:attempt.startedAt,review:attempt.review?{band:attempt.review.band}:null,report:attempt.report?{estimatedBand:attempt.report.estimatedBand}:null})}catch(e){if(!['permission-denied','not-found','failed-precondition'].includes(e.code))throw e}}
-    return {tasks:tasks.slice(0,100),attempts:attempts.slice(0,100),hasMore:snap.size>100||attemptsSnap.size>100,aiAvailable:aiEnabled()}
+    const admin=staff&&actor.profile.role==='admin',kind=request.data?.kind||'both'
+    if(!['both','tasks','attempts'].includes(kind))fail('invalid-argument','Invalid list selection.')
+    const result={tasks:[],attempts:[],cursors:{tasks:null,attempts:null},aiAvailable:aiEnabled()}
+    const names=new Map()
+    const teacherName=async uid=>{
+      if(!names.has(uid)){const snap=await db.doc(`users/${id(uid)}`).get();names.set(uid,snap.data()?.name||snap.data()?.displayName||'Teacher')}
+      return names.get(uid)
+    }
+    for(const type of ['tasks','attempts']){
+      if(kind!=='both'&&kind!==type)continue
+      const collection=type==='tasks'?'speakingTasks':'speakingAttempts'
+      let query=db.collection(collection)
+      if(admin)query=query.where('schoolId','==',schoolIdOf(actor.profile))
+      else if(staff)query=query.where('teacherId','==',actor.uid)
+      else query=type==='tasks'?query.where('assignedTo','array-contains',actor.uid):query.where('studentId','==',actor.uid)
+      query=query.orderBy('__name__')
+      const cursor=request.data?.cursors?.[type]
+      if(cursor)query=query.startAfter(db.doc(`${collection}/${id(cursor)}`))
+      const snap=await query.limit(26).get(),page=snap.docs.slice(0,25)
+      if(snap.size>25)result.cursors[type]=page.at(-1).id
+      for(const item of page){
+        try{
+          const value={...item.data(),id:item.id}
+          if(value.schoolId!==schoolIdOf(actor.profile))continue
+          if(type==='tasks'){
+            if(!staff){await studentAccess(actor,value);result.tasks.push({id:value.id,title:value.title,config:value.config})}
+            else result.tasks.push({...value,teacherName:await teacherName(value.teacherId)})
+          }else{
+            const {attempt}=await attemptAccess(request,item.id,staff)
+            result.attempts.push({id:attempt.id,title:attempt.title,mode:attempt.mode,status:attempt.status,
+              taskId:attempt.taskId,mockId:attempt.mockId,studentName:attempt.studentName,
+              ...(staff?{teacherName:await teacherName(attempt.teacherId)}:{}),
+              startedAt:attempt.startedAt,aiStatus:attempt.aiStatus,
+              review:attempt.review?{band:attempt.review.band}:null,
+              report:attempt.report?{estimatedBand:attempt.report.estimatedBand}:null})
+          }
+        }catch(e){if(!['permission-denied','not-found','failed-precondition'].includes(e.code))throw e}
+      }
+    }
+    result.hasMore=Boolean(result.cursors.tasks||result.cursors.attempts)
+    return result
+  }
+  async function archiveTask(request){
+    const actor=await requireAssignmentManager(request),data=request.data||{},taskId=id(data.taskId)
+    if(typeof data.archived!=='boolean')fail('invalid-argument','Select archive or restore.')
+    return db.runTransaction(async tx=>{
+      const ref=db.doc(`speakingTasks/${taskId}`),[u,t]=await tx.getAll(db.doc(`users/${actor.uid}`),ref)
+      const user=u.data(),task=t.data()
+      if(!task)fail('not-found','Speaking task not found.')
+      if(!user||user.status!=='approved'||user.archived||user.deleted||user.permanentDeleteInProgress||!['teacher','admin'].includes(user.role)||!staffAccess({uid:actor.uid,profile:user},task))fail('permission-denied','This task is not available for management.')
+      if(task.updatedAt!==data.expectedUpdatedAt)fail('aborted','Task changed. Refresh before archiving or restoring.')
+      tx.update(ref,{archived:data.archived,updatedAt:now(),updatedBy:actor.uid})
+      return {id:taskId,archived:data.archived}
+    })
+  }
+  async function allowAiRetry(request){
+    const {actor,attempt}=await attemptAccess(request,request.data?.attemptId,true)
+    if(actor.profile.role!=='admin')fail('permission-denied','Only an administrator may release a failed assessment.')
+    const reason=String(request.data?.reason||'').trim()
+    if(reason.length<5||reason.length>1000)fail('invalid-argument','Enter a short recovery reason (5–1000 characters).')
+    return db.runTransaction(async tx=>{
+      const ref=db.doc(`speakingAttempts/${attempt.id}`),live=(await tx.get(ref)).data()
+      await writeAccess(tx,actor,live,true)
+      if((await tx.get(db.doc(`users/${actor.uid}`))).data()?.role!=='admin')fail('permission-denied','Administrator role changed.')
+      if(live.aiStatus!=='failed'||live.report||live.aiRequestedAt!==request.data.expectedAiRequestedAt)fail('failed-precondition','The failed assessment changed. Refresh the report.')
+      const history=live.aiRecovery||[]
+      if(history.length>=3)fail('resource-exhausted','Recovery limit reached; technical review is required.')
+      tx.update(ref,{aiStatus:'not_requested',aiRecovery:[...history,{at:now(),by:actor.uid,reason}]})
+      return {aiStatus:'not_requested'} // No model call or quota reset; student must consent again.
+    })
   }
   async function start(request) {
     const student=await requireStudent(request),data=request.data||{}
@@ -251,7 +313,7 @@ function createSpeakingService({db,bucket,requireStudent,requireAssignmentManage
     }catch(_){await db.doc(`speakingAttempts/${attempt.id}`).update({aiStatus:'failed'});fail('unavailable','AI assessment failed. Recordings are saved for teacher review; no automatic retry was made.')}
   }
   async function call(request) {
-    const operations={list,saveTask,start,beginQuestion,saveAnswer,submit,audio,review,evaluate,
+    const operations={list,saveTask,archiveTask,allowAiRetry,start,beginQuestion,saveAnswer,submit,audio,review,evaluate,
       get:async req=>publicAttempt((await attemptAccess(req,req.data?.attemptId,req.data?.staff===true)).attempt)}
     const op=request.data?.op
     if(!Object.hasOwn(operations,op))fail('invalid-argument','Unknown Speaking operation.')

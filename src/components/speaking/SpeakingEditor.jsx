@@ -1,10 +1,11 @@
 import { defaultSpeakingConfig, validateSpeakingConfig } from '../../services/speakingApi'
 export default function SpeakingEditor({value,onChange,optional=false,full=false}) {
-  const current=value||defaultSpeakingConfig()
+  const base=value||defaultSpeakingConfig()
+  const current=optional?base:{...base,enabled:true}
   const change=(index,patch)=>onChange({...current,questions:current.questions.map((q,i)=>i===index?{...q,...patch}:q)})
   const error=validateSpeakingConfig(current,full)
   return <section className="rounded-2xl border border-indigo-200 bg-indigo-50/40 p-5 my-5">
-    <label className="flex items-center gap-3 font-semibold text-slate-900"><input type="checkbox" checked={current.enabled} onChange={e=>onChange({...current,enabled:e.target.checked})}/>Speaking {optional?'(optional)':''}</label>
+    {optional?<label className="flex items-center gap-3 font-semibold text-slate-900"><input type="checkbox" checked={current.enabled} onChange={e=>onChange({...current,enabled:e.target.checked})}/>Speaking (optional)</label>:<h3 className="font-semibold text-slate-900">Speaking questions</h3>}
     <p className="mt-2 text-sm text-slate-600">{full?'Automatically paced Parts 1–3. One minute preparation and up to two minutes speaking for Part 2.':'Students start and stop each answer, then move on when ready.'}</p>
     {current.enabled&&<><div className="space-y-4 mt-4">{current.questions.map((q,i)=><div key={i} className="rounded-xl border bg-white p-4">
       <div className="flex items-center justify-between gap-2 mb-3"><label className="text-sm">Question {i+1} · <select aria-label={`Question ${i+1} part`} value={q.part} onChange={e=>change(i,{part:Number(e.target.value),seconds:Number(e.target.value)===2?120:40})}>{[1,2,3].map(p=><option key={p} value={p}>Part {p}</option>)}</select></label><button type="button" className="text-sm text-red-700" onClick={()=>onChange({...current,questions:current.questions.filter((_,n)=>n!==i)})}>Remove</button></div>

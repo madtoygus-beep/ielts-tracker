@@ -2723,9 +2723,9 @@ export default function AdminDashboard() {
                 <span className="text-sm font-semibold text-slate-800 truncate hidden sm:block">Platform administration</span>
                 <span className="rounded-md bg-indigo-50 px-2 py-1 text-[11px] font-semibold text-indigo-700">ADMIN</span>
               </div>
-              <button type="button" onClick={handleLogout} className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 rounded-lg px-2 py-1">
+              <div className="flex items-center gap-3"><button type="button" onClick={()=>navigate('/speaking')} className="rounded-lg bg-indigo-50 px-3 py-2 text-sm text-indigo-800">Speaking</button><button type="button" onClick={handleLogout} className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 rounded-lg px-2 py-1">
                 <AdminIcon name="exit" className="w-4 h-4" /> Sign out
-              </button>
+              </button></div>
             </div>
             <nav className="lg:hidden flex gap-1 px-3 pb-3 overflow-x-auto" aria-label="Mobile admin navigation">
               {ADMIN_NAV_ITEMS.map(item => (

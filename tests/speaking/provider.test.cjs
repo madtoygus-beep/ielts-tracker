@@ -21,3 +21,11 @@ test('Writing AI result can be shown while Speaking awaits review, but full Over
  assert.equal(savedMockWritingScoreReady(reviewed),true);assert.equal(dashboardMockOverall({result:reviewed}),6.5)
  assert.equal(savedMockWritingScoreReady({...reviewed,overall:6}),false)
 })
+test('microphone check rejects a silent PCM recording but accepts a measurable signal',async()=>{
+ const {wavHasSignal}=await import('../../src/services/speakingAudio.js')
+ const bytes=new ArrayBuffer(32044),view=new DataView(bytes)
+ assert.equal(await wavHasSignal(new Blob([bytes])),false)
+ for(let i=44;i<32044;i+=2)view.setInt16(i,Math.round(Math.sin(i)*2000),true)
+ assert.equal(await wavHasSignal(new Blob([bytes])),true)
+ assert.equal(await wavHasSignal(new Blob([new Uint8Array(20)])),false)
+})

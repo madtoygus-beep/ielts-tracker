@@ -2,7 +2,7 @@ import { useEffect, useEffectEvent, useRef, useState } from 'react'
 import { auth } from '../../firebase'
 import { speakingApi, speakingTime } from '../../services/speakingApi'
 import { browserSpeakingRuntime } from '../../services/speakingRecorderRuntime'
-import { wavFromBlob, blobBase64, outbox } from '../../services/speakingAudio'
+import { wavFromBlob, wavHasSignal, blobBase64, outbox } from '../../services/speakingAudio'
 
 export default function SpeakingSession({taskId,mockId,onComplete,api=speakingApi,runtime=browserSpeakingRuntime,encode=wavFromBlob}) {
   const [attempt,setAttempt]=useState(null),[phase,updatePhase]=useState('check'),[error,setError]=useState('')
@@ -55,10 +55,10 @@ chunks.current=[];recordingStarted.current=runtime.now();interrupted.current=fal
         const wav=await encode(raw)
         if(!live.current)return
         setBlob(wav)
-        if(test){setChecked(true);setPhase('check');return}
+        if(test){if(!await wavHasSignal(wav)){setChecked(false);throw Error('No audible sound was captured. Speak during the microphone test and check the selected input.')}setChecked(true);setPhase('check');return}
         if(attemptRef.current.mode==='mock')await upload(wav,interrupted.current)
         else setPhase('preview')
-      }catch(e){if(live.current){setError(e.message);setPhase('recovery')}}
+      }catch(e){if(live.current){setError(e.message);setPhase(test?'check':'recovery')}}
     }
     setBlob(null);setPhase(test?'testing':'recording');instance.start(1000)
   }
@@ -109,6 +109,8 @@ chunks.current=[];recordingStarted.current=runtime.now();interrupted.current=fal
     try{
       await getMic()
       const a=await api('start',mockId?{mockId}:{taskId,attemptId:sessionStorage.getItem(`speaking-active-${auth.currentUser?.uid}-${taskId}`)||null});setAttempt(a);attemptRef.current=a
+      // Remove local copies already acknowledged by the server, including a lost save response.
+      for(let index=0;index<a.nextIndex;index++)await outbox(`${auth.currentUser?.uid||'local-demo'}:${a.id}:${index}`,null).catch(()=>{})
       if(a.serverNow)offset.current=a.serverNow-runtime.now()
       if(!mockId) sessionStorage.setItem(`speaking-active-${auth.currentUser?.uid}-${taskId}`,a.id)
       if(a.status!=='recording'){setPhase('done');onComplete?.(a);busy.current=false;return}
@@ -119,7 +121,7 @@ chunks.current=[];recordingStarted.current=runtime.now();interrupted.current=fal
     }catch(e){setError(e.message||'Could not start Speaking.');setPhase('check')}
     finally{busy.current=false}
   }
-  const retry=async()=>{setError('');try{if(blob)await upload(blob,true);else if(attempt){if(!await recover(attempt))await upload(null,true)}}catch(e){setError(e.message)}}
+  const retry=async()=>{setError('');try{if(attempt?.nextIndex>=attempt?.questions.length){if(busy.current)return;busy.current=true;setPhase('uploading');try{await finish(attempt)}finally{busy.current=false}return}if(blob)await upload(blob,true);else if(attempt){if(!await recover(attempt))await upload(null,true)}}catch(e){setError(e.message);setPhase('recovery')}}
   const startPractice=async()=>{
     try{setError('');if(!current)await begin(attempt);await record(false)}catch(e){setError(e.message)}
   }
@@ -128,6 +130,7 @@ chunks.current=[];recordingStarted.current=runtime.now();interrupted.current=fal
     const a=attemptRef.current,c=currentRef.current,p=phaseRef.current
     if(p==='testing'){setSeconds(Math.floor((runtime.now()-recordingStarted.current)/1000));if(runtime.now()-recordingStarted.current>3000)stop();return}
     if(!a)return
+    if(a.mode==='mock'&&c&&p==='recovery'){setSeconds(Math.ceil(Math.max(0,c.deadline-clock())/1000));return}
     if(a.mode==='mock'&&c&&['prompt','preparing','recording'].includes(p)){
       const t=clock()
       if(t>=c.deadline){
@@ -170,7 +173,10 @@ chunks.current=[];recordingStarted.current=runtime.now();interrupted.current=fal
       {!mockId&&phase==='ready'&&<button type="button" onClick={startPractice} className="bg-indigo-700 text-white px-6 py-3 rounded-xl">● Start recording</button>}
       {!mockId&&phase==='recording'&&<button type="button" onClick={()=>{setPhase('processing');stop()}} className="bg-red-600 text-white px-6 py-3 rounded-xl">■ Stop recording</button>}
       {!mockId&&phase==='preview'&&<div className="flex gap-3 mt-5"><button type="button" className="border rounded-xl px-5 py-3" onClick={startPractice}>Record again</button><button type="button" className="bg-indigo-700 text-white rounded-xl px-5 py-3" onClick={()=>upload(blob)}>Save answer & continue</button></div>}
+      {phase==='recovery'&&mockId&&current&&<p className="mt-3 text-sm text-amber-900">The question timer continues: {speakingTime(seconds)}. Retry saving the recovered recording, or continue without audio after the timer ends.</p>}
       {phase==='recovery'&&<button type="button" className="bg-indigo-700 text-white rounded-xl px-5 py-3" onClick={retry}>Retry saving / resume</button>}
+      {phase==='recovery'&&!mockId&&attempt&&attempt.nextIndex<attempt.questions.length&&<button type="button" className="ml-3 border rounded-xl px-5 py-3" onClick={async()=>{if(!window.confirm('Discard this unsaved recording and record this question again?'))return;try{await outbox(key(attempt),null);setBlob(null);setError('');setPhase('ready')}catch(e){setError(e.message)}}}>Record this question again</button>}
+      {phase==='recovery'&&mockId&&attempt&&attempt.nextIndex<attempt.questions.length&&<button type="button" disabled={seconds>0} className="mt-3 sm:ml-3 border rounded-xl px-5 py-3 disabled:opacity-50" onClick={()=>{if(window.confirm('Continue without audio for this question? Your teacher will see that no recording was submitted.'))upload(null,true)}}>Continue without audio</button>}
     </>}
   </section>
 }
