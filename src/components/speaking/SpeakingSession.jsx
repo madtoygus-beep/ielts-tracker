@@ -85,11 +85,11 @@ export default function SpeakingSession({taskId,mockId,onComplete,api=speakingAp
       busy.current=false;await next(result)
     } catch(e){busy.current=false;if(live.current){setError(e.message||'Could not save. Your recording is retained on this device.');setPhase('recovery')}}
   }
-  const begin=async a=>{
-    const value=await api('beginQuestion',{attemptId:a.id})
+  const begin=async(a,restartPreparation=false)=>{
+    const value=await api('beginQuestion',{attemptId:a.id,restartPreparation})
     if(!live.current)return
     if(value.serverNow)offset.current=value.serverNow-runtime.now()
-    currentRef.current=value;setCurrent(value);setAttempt({...a,current:value});attemptRef.current={...a,current:value};setPhase(a.mode==='mock'?'prompt':'ready')
+    currentRef.current=value;setCurrent(value);setAttempt({...a,current:value});attemptRef.current={...a,current:value};setPhase(a.mode==='mock'?'prompt':a.timedPart2?'preparing':'ready')
     if(a.mode==='mock'&&readQuestions&&window.speechSynthesis){
       window.speechSynthesis.cancel();const utterance=new SpeechSynthesisUtterance(a.questions[a.nextIndex].text)
       utterance.lang='en-GB';utterance.rate=1;window.speechSynthesis.speak(utterance)
@@ -116,7 +116,7 @@ export default function SpeakingSession({taskId,mockId,onComplete,api=speakingAp
       if(!mockId) sessionStorage.setItem(`speaking-active-${auth.currentUser?.uid}-${taskId}`,a.id)
       if(a.status!=='recording'){setPhase('done');onComplete?.(a);busy.current=false;return}
       if(await recover(a)){busy.current=false;return}
-      if(a.current){currentRef.current=a.current;setCurrent(a.current);setPhase(a.mode==='mock'?'prompt':'ready')}
+      if(a.current){currentRef.current=a.current;setCurrent(a.current);setPhase(a.mode==='mock'?'prompt':a.timedPart2?'preparing':'ready')}
       else if(a.mode==='mock')await begin(a)
       else setPhase('ready')
     }catch(e){setError(e.message||'Could not start Speaking.');setPhase('check')}
@@ -124,15 +124,15 @@ export default function SpeakingSession({taskId,mockId,onComplete,api=speakingAp
   }
   const retry=async()=>{setError('');try{if(attempt?.nextIndex>=attempt?.questions.length){if(busy.current)return;busy.current=true;setPhase('uploading');try{await finish(attempt)}finally{busy.current=false}return}if(blob)await upload(blob,true,finishedEarly.current);else if(attempt){if(!await recover(attempt))await upload(null,true)}}catch(e){setError(e.message);setPhase('recovery')}}
   const startPractice=async()=>{
-    try{setError('');if(!current)await begin(attempt);await record(false)}catch(e){setError(e.message)}
+    try{setError('');if(attempt.timedPart2){await outbox(key(attempt),null).catch(()=>{});finishedEarly.current=false;setBlob(null);await begin(attempt,true);return}if(!current)await begin(attempt);await record(false)}catch(e){setError(e.message)}
   }
   const tick=useEffectEvent(async()=>{
     if(busy.current)return
     const a=attemptRef.current,c=currentRef.current,p=phaseRef.current
     if(p==='testing'){setSeconds(Math.floor((runtime.now()-recordingStarted.current)/1000));if(runtime.now()-recordingStarted.current>3000)stop();return}
     if(!a)return
-    if(a.mode==='mock'&&c&&p==='recovery'){setSeconds(Math.ceil(Math.max(0,c.deadline-clock())/1000));return}
-    if(a.mode==='mock'&&c&&['prompt','preparing','recording'].includes(p)){
+    if((a.mode==='mock'||a.timedPart2)&&c&&p==='recovery'){setSeconds(Math.ceil(Math.max(0,c.deadline-clock())/1000));return}
+    if((a.mode==='mock'||a.timedPart2)&&c&&['prompt','preparing','recording'].includes(p)){
       const t=clock()
       if(p==='recording')setRecordedSeconds(Math.max(0,Math.floor((runtime.now()-recordingStarted.current)/1000)))
       if(t>=c.deadline){
@@ -169,13 +169,14 @@ export default function SpeakingSession({taskId,mockId,onComplete,api=speakingAp
       {mockId&&<><p className="text-sm text-slate-600">Questions advance automatically. Answers cannot be replaced after saving. Part 2 includes one minute preparation and up to two minutes recording. After 60 seconds of recording you may finish your answer early. Your recordings are private to you and authorised staff.</p><label className="flex gap-2 text-sm"><input type="checkbox" checked={readQuestions} onChange={e=>setReadQuestions(e.target.checked)}/>Read questions aloud using the browser voice</label></>}
       <button type="button" disabled={!checked||phase==='testing'} onClick={start} className="block w-full bg-indigo-700 text-white rounded-xl px-5 py-3 disabled:bg-slate-200 disabled:text-slate-500">{mockId?'Start / resume Mock Speaking':'Continue to questions'}</button>
     </div>:phase==='done'?<div className="mt-8 rounded-xl bg-emerald-50 p-6 text-emerald-900"><h3 className="font-semibold">Speaking submitted</h3><p className="mt-2 text-sm">Your recordings have been saved. Open the Speaking report to listen back or view teacher feedback.</p></div>:<>
+      {attempt?.timedPart2&&<p className="mt-4 rounded-xl bg-indigo-50 p-3 text-sm text-indigo-900">Start when ready. You get one minute to prepare, then 60–120 seconds to record. You can listen back or start a fresh preparation before saving.</p>}
       {q&&<div className="mt-6 rounded-xl bg-indigo-50 p-6"><span className="text-xs font-semibold text-indigo-700">PART {q.part}</span><p className="whitespace-pre-wrap text-lg leading-8 text-slate-900 mt-2">{q.text}</p></div>}
-      <div aria-live="polite" className="text-center my-8"><p className="font-semibold text-lg">{{ready:'Ready to record',prompt:'Listen / read the question',preparing:'Preparation time',recording:'Recording…',processing:'Preparing recording…',uploading:'Saving your answer…',preview:'Listen to your answer',recovery:'Recording needs attention'}[phase]}</p>{['recording','preparing','prompt','testing'].includes(phase)&&<p className="text-4xl font-mono text-indigo-800 mt-4">{speakingTime(seconds)}</p>}</div>
+      <div aria-live="polite" className="text-center my-8"><p className="font-semibold text-lg">{{ready:attempt?.timedPart2?'Ready to prepare':'Ready to record',prompt:'Listen / read the question',preparing:'Preparation time',recording:'Recording…',processing:'Preparing recording…',uploading:'Saving your answer…',preview:'Listen to your answer',recovery:'Recording needs attention'}[phase]}</p>{['recording','preparing','prompt','testing'].includes(phase)&&<p className="text-4xl font-mono text-indigo-800 mt-4">{speakingTime(seconds)}</p>}</div>
       {url&&<audio className="w-full" aria-label="Answer playback" controls src={url}/>}
-      {!mockId&&phase==='ready'&&<button type="button" onClick={startPractice} className="bg-indigo-700 text-white px-6 py-3 rounded-xl">● Start recording</button>}
-      {!mockId&&phase==='recording'&&<button type="button" onClick={()=>{setPhase('processing');stop()}} className="bg-red-600 text-white px-6 py-3 rounded-xl">■ Stop recording</button>}
-      {mockId&&q?.part===2&&phase==='recording'&&<div className="mt-4 text-center"><button type="button" disabled={recordedSeconds<60} className="rounded-xl bg-indigo-700 text-white px-6 py-3 disabled:bg-slate-200 disabled:text-slate-500" onClick={()=>{if(runtime.now()-recordingStarted.current<60000||recorder.current?.state!=='recording')return;finishedEarly.current=true;setPhase('processing');stop()}}>Finish my answer</button><p className="mt-3 text-sm text-slate-500">{recordedSeconds<60?`You can finish your answer in ${speakingTime(60-recordedSeconds)}.`:'You may finish now, or continue until the two-minute limit.'}</p></div>}
-      {!mockId&&phase==='preview'&&<div className="flex gap-3 mt-5"><button type="button" className="border rounded-xl px-5 py-3" onClick={startPractice}>Record again</button><button type="button" className="bg-indigo-700 text-white rounded-xl px-5 py-3" onClick={()=>upload(blob)}>Save answer & continue</button></div>}
+      {!mockId&&phase==='ready'&&<button type="button" onClick={startPractice} className="bg-indigo-700 text-white px-6 py-3 rounded-xl">{attempt.timedPart2?'Start preparation (1 minute)':'● Start recording'}</button>}
+      {!mockId&&!attempt?.timedPart2&&phase==='recording'&&<button type="button" onClick={()=>{setPhase('processing');stop()}} className="bg-red-600 text-white px-6 py-3 rounded-xl">■ Stop recording</button>}
+      {(mockId||attempt?.timedPart2)&&q?.part===2&&phase==='recording'&&<div className="mt-4 text-center"><button type="button" disabled={recordedSeconds<60} className="rounded-xl bg-indigo-700 text-white px-6 py-3 disabled:bg-slate-200 disabled:text-slate-500" onClick={()=>{if(runtime.now()-recordingStarted.current<60000||recorder.current?.state!=='recording')return;finishedEarly.current=true;setPhase('processing');stop()}}>Finish my answer</button><p className="mt-3 text-sm text-slate-500">{recordedSeconds<60?`You can finish your answer in ${speakingTime(60-recordedSeconds)}.`:'You may finish now, or continue until the two-minute limit.'}</p></div>}
+      {!mockId&&phase==='preview'&&<div className="flex gap-3 mt-5"><button type="button" className="border rounded-xl px-5 py-3" onClick={startPractice}>Record again</button><button type="button" className="bg-indigo-700 text-white rounded-xl px-5 py-3" onClick={()=>upload(blob,interrupted.current,finishedEarly.current)}>Save answer & continue</button></div>}
       {phase==='recovery'&&mockId&&current&&<p className="mt-3 text-sm text-amber-900">The question timer continues: {speakingTime(seconds)}. Retry saving the recovered recording, or continue without audio after the timer ends.</p>}
       {phase==='recovery'&&<button type="button" className="bg-indigo-700 text-white rounded-xl px-5 py-3" onClick={retry}>Retry saving / resume</button>}
       {phase==='recovery'&&!mockId&&attempt&&attempt.nextIndex<attempt.questions.length&&<button type="button" className="ml-3 border rounded-xl px-5 py-3" onClick={async()=>{if(!window.confirm('Discard this unsaved recording and record this question again?'))return;try{await outbox(key(attempt),null);setBlob(null);setError('');setPhase('ready')}catch(e){setError(e.message)}}}>Record this question again</button>}

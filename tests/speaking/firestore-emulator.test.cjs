@@ -48,3 +48,11 @@ test('real Firestore: Part 2 advances early only after the recording minute, pre
  const next=await s.call('saveAnswer',body);assert.equal(next.nextIndex,2);assert.equal(next.answers[1].finishedEarly,true);assert.equal(next.answers[1].interrupted,false)
  const part3=await s.call('beginQuestion',{attemptId:a.id});assert.equal(part3.questionId,'q3')
 })
+test('real Firestore: standalone Part 2 uses 60 preparation seconds and only then starts its recording minute',async()=>{
+ let time=100000;const s=service(db,()=>time)
+ const task=await s.call('saveTask',{title:'Standalone cue card',config:{enabled:true,questions:[{part:2,text:'Describe a useful skill.',seconds:120}]},assignedTo:['S1']},'T1')
+ const a=await s.call('start',{taskId:task.id});assert.equal(a.timedPart2,true)
+ const timing=await s.call('beginQuestion',{attemptId:a.id});assert.equal(timing.recordAt-timing.startedAt,60000)
+ time=timing.recordAt+59999;const body={attemptId:a.id,index:0,audio:wav(60),finishEarly:true};await denied(s.call('saveAnswer',body),'failed-precondition')
+ time++;const next=await s.call('saveAnswer',body);assert.equal(next.answers[0].finishedEarly,true);assert.equal((await s.call('submit',{attemptId:a.id})).status,'submitted')
+})

@@ -49,7 +49,7 @@ function createSpeakingService({db,bucket,requireStudent,requireAssignmentManage
       else if(teacher.role!=='admin')fail('permission-denied','Assignment teacher is unavailable.')
     }
   }
-  const publicAttempt=a=>({id:a.id,title:a.title,mode:a.mode,questions:a.questions,status:a.status,nextIndex:a.nextIndex,
+  const publicAttempt=a=>({id:a.id,title:a.title,mode:a.mode,timedPart2:a.timedPart2===true,questions:a.questions,status:a.status,nextIndex:a.nextIndex,
     current:a.current||null,answers:(a.answers||[]).map(({storagePath,sha256,...v})=>v),report:a.report||null,review:a.review||null,
     mockId:a.mockId||'',taskId:a.taskId||'',studentName:a.studentName||'Student',startedAt:a.startedAt,serverNow:now(),submittedAt:a.submittedAt||null,aiStatus:a.aiStatus||'not_requested',aiRequestedAt:a.aiRequestedAt||null,aiRecoveryCount:(a.aiRecovery||[]).length,aiAvailable:aiEnabled()})
   async function saveTask(request) {
@@ -189,7 +189,7 @@ function createSpeakingService({db,bucket,requireStudent,requireAssignmentManage
       tx.set(quotaRef,{studentId:student.uid,schoolId:student.schoolId,attempts:count+1,day})
       const value={studentId:student.uid,teacherId:source.teacherId||source.createdBy,schoolId:student.schoolId,
         taskId:data.taskId||'',mockId,mockAttempt,title:source.title,studentName:student.profile.name||student.profile.displayName||'Student',mode,questions,
-        startedAt:now(),status:'recording',nextIndex:0,current:null,answers:[],aiStatus:'not_requested'}
+        timedPart2:mode==='practice'&&questions.every(q=>q.part===2),startedAt:now(),status:'recording',nextIndex:0,current:null,answers:[],aiStatus:'not_requested'}
       tx.create(ref,value);return {id:attemptId,...value}
     })
     return publicAttempt(output)
@@ -201,16 +201,16 @@ function createSpeakingService({db,bucket,requireStudent,requireAssignmentManage
       const current=(await tx.get(ref)).data()
       await writeAccess(tx,actor,current)
       if(current.status!=='recording')fail('failed-precondition','The attempt is already submitted.')
-      if(current.current)return {...current.current,serverNow:now()}
+      if(current.current&&!(current.timedPart2===true&&current.mode==='practice'&&request.data?.restartPreparation===true))return {...current.current,serverNow:now()}
       const q=current.questions[current.nextIndex]
       if(!q)fail('failed-precondition','No questions remain.')
-      const startedAt=now(),recordAt=startedAt+8000+q.preparationSeconds*1000
+      const startedAt=now(),recordAt=startedAt+(current.timedPart2===true?0:8000)+q.preparationSeconds*1000
       const value={index:current.nextIndex,questionId:q.id,startedAt,recordAt,deadline:recordAt+q.seconds*1000}
       tx.update(ref,{current:value});return {...value,serverNow:now()}
     })
   }
   const mockAnswerTiming=(attempt,question,data,audio)=>{
-    if(attempt.mode!=='mock')return false
+    if(attempt.mode!=='mock'&&attempt.timedPart2!==true)return false
     // Audio encoders may round packet boundaries; the server's 60-second clock remains strict.
     const early=data.finishEarly===true&&question.part===2&&audio?.duration>=59.75&&now()>=attempt.current.recordAt+60000
     if(now()<attempt.current.deadline-500&&!early)fail('failed-precondition','Part 2 can finish after at least 60 seconds of recording; other questions must run to the time limit.')
@@ -240,7 +240,7 @@ function createSpeakingService({db,bucket,requireStudent,requireAssignmentManage
       if(live.status!=='recording'||live.nextIndex!==index||live.current?.questionId!==question.id)fail('aborted','Question changed. Reload the saved attempt.')
       const finishedEarly=mockAnswerTiming(live,question,data,audio)
       const entry={index,questionId:question.id,storagePath:path,sha256:hash,duration:audio?.duration||0,audible:audio?.audible||false,
-        savedAt:now(),finishedEarly,interrupted:data.interrupted===true||now()>live.current.deadline+30000}
+        savedAt:now(),finishedEarly,interrupted:data.interrupted===true||(live.mode==='mock'&&now()>live.current.deadline+30000)}
       tx.update(ref,{answers:[...live.answers,entry],nextIndex:index+1,current:null})
     })
     return publicAttempt(await read(`speakingAttempts/${attempt.id}`))
