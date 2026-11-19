@@ -6,10 +6,10 @@ import SpeakingReport from './SpeakingReport'
 
 const unique=items=>[...new Map(items.map(item=>[item.id,item])).values()]
 const emptyData=()=>({tasks:[],attempts:[],cursors:{tasks:null,attempts:null},aiAvailable:false})
-export default function SpeakingWorkspaceView({profile,user,students=[],classes=[],api,onBack,onMock,runtime,encode}) {
+export default function SpeakingWorkspaceView({profile,user,students=[],classes=[],api,onBack,onMock,runtime,encode,initialTaskId=''}) {
   const admin=profile.role==='admin',teacher=profile.role==='teacher',staff=admin||teacher
   const [data,setData]=useState(emptyData),[loading,setLoading]=useState(true),[error,setError]=useState('')
-  const [tab,setTab]=useState('tasks'),[editor,setEditor]=useState(null),[session,setSession]=useState(null),[report,setReport]=useState(null)
+  const [tab,setTab]=useState('tasks'),[editor,setEditor]=useState(null),[session,setSession]=useState(()=>!staff&&/^[a-zA-Z0-9_-]{1,180}$/.test(initialTaskId)?{id:initialTaskId}:null),[report,setReport]=useState(null)
   const [busy,setBusy]=useState(false),[search,setSearch]=useState(''),[showArchived,setShowArchived]=useState(false),[partFilter,setPartFilter]=useState('all')
   const generation=useRef(0),alive=useRef(false)
   const fetchData=useCallback(async(kind='both',cursor=null)=>{

@@ -1,3 +1,6 @@
+import SpeakingHomeworkSection from '../components/speaking/SpeakingHomeworkSection'
+import { useSpeakingHomework } from '../hooks/useSpeakingHomework'
+import { openSpeakingHomework } from '../services/speakingHomework'
 import { dashboardMockOverall } from '../services/mockAiResultGatePolicy'
 import { formatHomeworkScore, savedObjectiveBand } from '../services/ieltsObjectiveScoring'
   import { useState, useEffect, useMemo, useRef } from 'react'
@@ -3708,6 +3711,7 @@ import { formatHomeworkScore, savedObjectiveBand } from '../services/ieltsObject
     const [writings, setWritings] = useState([])
     const [vocabularyTests, setVocabularyTests] = useState([])
     const [mocks, setMocks] = useState([])
+    const speakingHomework = useSpeakingHomework(user?.uid)
 
     const [readingSubmissions, setReadingSubmissions] = useState([])
     const [listeningSubmissions, setListeningSubmissions] = useState([])
@@ -3901,6 +3905,7 @@ import { formatHomeworkScore, savedObjectiveBand } from '../services/ieltsObject
       mockSubmissions.some(submission => submission.mockTestId === mockId)
 
     const todoItems = [
+      ...speakingHomework.pending,
       ...readings
         .filter(item => !hasReadingSubmission(item.id))
         .map(item => ({
@@ -3975,7 +3980,8 @@ import { formatHomeworkScore, savedObjectiveBand } from '../services/ieltsObject
       listenings.length +
       writings.length +
       vocabularyTests.length +
-      mocks.length
+      mocks.length +
+      speakingHomework.total
 
     const completedCount = Math.max(totalAssigned - todoItems.length, 0)
     const completionRate = totalAssigned
@@ -3989,6 +3995,7 @@ import { formatHomeworkScore, savedObjectiveBand } from '../services/ieltsObject
       if (type === 'Listening') return 'bg-purple-50 text-purple-600'
       if (type === 'Writing') return 'bg-amber-50 text-amber-600'
       if (type === 'Vocabulary') return 'bg-violet-50 text-violet-600'
+      if (type === 'Speaking') return 'bg-indigo-50 text-indigo-700'
       return 'bg-green-50 text-green-600'
     }
 
@@ -4027,7 +4034,7 @@ import { formatHomeworkScore, savedObjectiveBand } from '../services/ieltsObject
             </p>
 
             <p className="text-xs text-gray-400 mt-2">
-              Reading, listening, writing, vocabulary and mock tests
+              Reading, listening, writing, speaking, vocabulary and mock tests
             </p>
           </div>
 
@@ -4070,7 +4077,9 @@ import { formatHomeworkScore, savedObjectiveBand } from '../services/ieltsObject
           </div>
         </div>
 
-        {todoItems.length === 0 ? (
+        {speakingHomework.loading && <p role="status" className="mb-4 text-sm text-slate-500">Loading Speaking assignments…</p>}
+        {speakingHomework.error && <p role="alert" className="mb-4 rounded-xl bg-amber-50 p-4 text-sm text-amber-900">Speaking homework could not be loaded. Open Speaking or refresh to retry.</p>}
+        {todoItems.length === 0 && (speakingHomework.loading || speakingHomework.error) ? null : todoItems.length === 0 ? (
           <div className="bg-green-50 text-green-700 rounded-xl p-4 text-sm">
             ✅ No remaining homework right now.
           </div>
@@ -4102,15 +4111,15 @@ import { formatHomeworkScore, savedObjectiveBand } from '../services/ieltsObject
                     <p className="text-xs text-gray-400 mt-0.5">
                       {item.isRetake
                         ? `Attempt ${item.retakeState?.nextAttemptNumber || 2} reopened by teacher`
-                        : 'Not completed yet'}
+                        : item.attemptId ? 'Practice in progress' : 'Not completed yet'}
                     </p>
                   </div>
 
                   <button
-                    onClick={() => navigate(item.path)}
+                    onClick={() => item.type === 'Speaking' ? openSpeakingHomework(item, user.uid, navigate) : navigate(item.path)}
                     className="shrink-0 self-start sm:self-auto bg-indigo-600 text-white px-4 py-2.5 rounded-xl text-xs font-semibold hover:bg-indigo-700"
                   >
-                    {item.isRetake ? 'Continue Retake →' : 'Start →'}
+                    {item.isRetake ? 'Continue Retake →' : item.attemptId ? 'Continue →' : 'Start →'}
                   </button>
                 </div>
               )
@@ -5031,6 +5040,7 @@ import { formatHomeworkScore, savedObjectiveBand } from '../services/ieltsObject
       reading: <path d="M4 19V5c3-1.5 5.5-1.5 8 0 2.5-1.5 5-1.5 8 0v14c-3-1.5-5.5-1.5-8 0-2.5-1.5-5-1.5-8 0ZM12 5v14"/>,
       listening: <><path d="M4 12v-2a8 8 0 0 1 16 0v2M4 12h3v7H5a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2ZM20 12h-3v7h2a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2Z"/></>,
       writing: <><path d="m4 16 11-11a3 3 0 0 1 4 4L8 20l-5 1 1-5Z"/><path d="m13 7 4 4"/></>,
+      speaking: <><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></>,
       vocabulary: <><path d="M5 4h14v16H5zM9 4v16M12 9h4M12 13h4M12 17h4"/></>,
       all: <><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 10h8M8 14h8"/></>,
       lock: <><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></>,
@@ -5051,7 +5061,7 @@ import { formatHomeworkScore, savedObjectiveBand } from '../services/ieltsObject
 
   const STUDENT_WORKSPACE_NAV = [
     { id: 'overview', label: 'My Dashboard', icon: 'overview', description: 'Your learning priorities and latest achievements' },
-    { id: 'todo', label: 'My Homework', icon: 'homework', description: 'All assignments, reading, listening, writing and vocabulary' },
+    { id: 'todo', label: 'My Homework', icon: 'homework', description: 'All assignments, reading, listening, writing, speaking and vocabulary' },
     { id: 'mock', label: 'Mock Tests', icon: 'mock', description: 'IELTS mock examinations and your test history' },
     { id: 'results', label: 'My Results', icon: 'results', description: 'Review completed work and teacher feedback' },
     { id: 'analytics', label: 'My Progress', icon: 'progress', description: 'Your IELTS skills, accuracy and writing development' },
@@ -5063,6 +5073,7 @@ import { formatHomeworkScore, savedObjectiveBand } from '../services/ieltsObject
     { id: 'reading', label: 'Reading', icon: 'reading' },
     { id: 'listening', label: 'Listening', icon: 'listening' },
     { id: 'writing', label: 'Writing', icon: 'writing' },
+    { id: 'speaking', label: 'Speaking', icon: 'speaking' },
     { id: 'vocabulary', label: 'Vocabulary', icon: 'vocabulary' },
   ]
 
@@ -5281,7 +5292,7 @@ import { formatHomeworkScore, savedObjectiveBand } from '../services/ieltsObject
     const todayText = new Date().toLocaleDateString('en-GB', {
       weekday: 'long', month: 'short', day: 'numeric'
     })
-    const homeworkSectionIds = ['todo', 'reading', 'listening', 'writing', 'vocabulary']
+    const homeworkSectionIds = ['todo', 'reading', 'listening', 'writing', 'speaking', 'vocabulary']
     const studentSectionId = homeworkSectionIds.includes(activeTab) ? 'todo' : activeTab
     const studentPage = STUDENT_WORKSPACE_NAV.find(item => item.id === studentSectionId) || STUDENT_WORKSPACE_NAV[0]
     const targetDisplay = Number.isFinite(targetBand) && targetBand > 0
@@ -5558,6 +5569,7 @@ import { formatHomeworkScore, savedObjectiveBand } from '../services/ieltsObject
               {activeTab === 'reading' && <ReadingHomeworkSection user={user} profile={profile} />}
               {activeTab === 'listening' && <ListeningHomeworkSection user={user} profile={profile} />}
               {activeTab === 'writing' && <WritingHomeworkSection user={user} profile={profile} />}
+              {activeTab === 'speaking' && <SpeakingHomeworkSection user={user} />}
               {activeTab === 'vocabulary' && <VocabularyHomeworkSection user={user} profile={profile} />}
 
               {activeTab === 'mock' && (
