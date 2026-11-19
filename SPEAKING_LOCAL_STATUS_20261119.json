@@ -23,11 +23,12 @@
     "Admin release of failed AI assessment, audited reason and maximum three releases; student must consent again; no automatic paid call",
     "Retry final submission after all question recordings are acknowledged; silence warning during microphone check; explicit recovery/rerecord/continue-without-audio controls",
     "Clean acknowledged question recordings from the device recovery queue on resume",
-    "Mock Part 2 allows voluntary completion after one recording minute; server timing and minimum audio duration validated, early-finish intent retained on retry and visible in report"
+    "Mock Part 2 allows voluntary completion after one recording minute; server timing and minimum audio duration validated, early-finish intent retained on retry and visible in report",
+    "Part 1-only, Part 2-only and Part 3-only practice presets and role workspace filters; full Mock still requires all three parts"
   ],
   "verification": {
-    "automated_tests": 99,
-    "automated_tests_passed": 99,
+    "automated_tests": 101,
+    "automated_tests_passed": 101,
     "build": "passed: npm run build -- --configLoader runner",
     "speaking_frontend_lint": "passed, no warnings",
     "backend_syntax": "passed",
@@ -41,10 +42,11 @@
       "admin monitors another teacher and releases failed AI without paid call",
       "student assigned-only workspace without staff controls",
       "768px tablet report and student workspace: no horizontal overflow",
-      "Part 2 finish button absent in preparation, disabled during first recording minute, then enabled and advances to Part 3; 120-second auto-finish preserved"
+      "Part 2 finish button absent in preparation, disabled during first recording minute, then enabled and advances to Part 3; 120-second auto-finish preserved",
+      "Teacher creates Part 2-only set; student filters out mixed sets and opens only Part 2 questions"
     ],
     "screenshots": "artifacts/speaking/",
-    "unit_and_regression_tests": 92,
+    "unit_and_regression_tests": 94,
     "firestore_emulator_tests": 7,
     "firestore_emulator": "demo-maxima-speaking-local, loopback 127.0.0.1:8280, STANDARD edition, existing firestore.rules and production canonical academic membership helper; no production database"
   },
@@ -103,5 +105,17 @@
     "automatic_finish": "Still stops at 120 seconds if student does not choose early completion",
     "recovery": "Early-finish intent is persisted in the local recovery outbox",
     "demo": "20x accelerated synthetic time, no real microphone or paid AI calls"
+  },
+  "single_part_practice": {
+    "teacher_choices": [
+      "Part 1 only",
+      "Part 2 only",
+      "Part 3 only",
+      "Mixed parts"
+    ],
+    "editor": "Create Speaking > Practice set type; keeps matching questions, supplies editable examples if missing, confirms before switching unsaved question content",
+    "student": "Part filters show only assigned matching sets; a selected single-part set opens only its own questions",
+    "full_mock": "Still requires Parts 1, 2 and 3; single-part practice does not bypass Mock validation",
+    "grading": "Single-part reports remain limited practice estimates, not a full official Speaking result"
   }
 }

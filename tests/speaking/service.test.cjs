@@ -134,3 +134,10 @@ test('early-finish flag cannot skip Mock Part 1 or its question order',async()=>
  const w=world(),a=await w.call('start',{mockId:'mock1'});await w.call('beginQuestion',{attemptId:a.id});w.advance(20000)
  await rejected(w.call('saveAnswer',{attemptId:a.id,index:0,audio:wav(),finishEarly:true}),'failed-precondition');assert.equal(w.objects.size,0)
 })
+test('teacher can assign and student can complete a standalone set for each individual Speaking part',async()=>{
+ for(const part of [1,2,3]){
+   const w=world(),task=await w.call('saveTask',{title:`Part ${part} practice`,config:{enabled:true,questions:[{...question,part}]},assignedTo:['S1']},'T1')
+   let a=await w.call('start',{taskId:task.id});assert(a.questions.every(q=>q.part===part));assert.equal(a.mode,'practice')
+   await w.call('beginQuestion',{attemptId:a.id});await w.call('saveAnswer',{attemptId:a.id,index:0,audio:wav()});a=await w.call('submit',{attemptId:a.id});assert.equal(a.status,'submitted')
+ }
+})

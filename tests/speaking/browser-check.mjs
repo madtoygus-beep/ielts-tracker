@@ -49,6 +49,7 @@ await send('Emulation.setDeviceMetricsOverride',{width:1365,height:950,deviceSca
 await click('Öğretmen / Admin / Öğrenci');await wait(has('+ Create Speaking'))
 await click('+ Create Speaking');await wait(`!!document.querySelector('[aria-label="Speaking title"]')`)
 await evaluate(`(()=>{const e=document.querySelector('[aria-label="Speaking title"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,'Teacher-created demo set');e.dispatchEvent(new Event('input',{bubbles:true}))})()`)
+await evaluate(`(()=>{const e=document.querySelector('[aria-label="Practice set type"]');e.value='part2';e.dispatchEvent(new Event('change',{bubbles:true}))})()`);await wait(`document.querySelectorAll('textarea').length===1`);if(!await evaluate(`document.querySelector('[aria-label="Question 1 part"]').value==='2'`))throw Error('Part 2-only preset failed');
 await click('Add class: IELTS Demo Class (2)');await click('Save Speaking');await wait(has('Teacher-created demo set'))
 if(!await evaluate(`document.body.textContent.includes('2 assigned')`))throw Error('Class assignment not saved')
 console.log('PASS: teacher creates and assigns a set to a class')
@@ -68,10 +69,12 @@ await click('Allow student to retry');await wait(`!document.body.textContent.inc
 console.log('PASS: admin monitors other teachers and releases failed AI without a paid call')
 await click('Öğrenci görünümü');await wait(has('My Speaking tasks'))
 if(await evaluate(`document.body.textContent.includes('Travel and culture')||document.body.textContent.includes('Edit / assign')`))throw Error('Student sees staff or unassigned content')
+await click('Part 2 only');await wait(has('Teacher-created demo set'));if(await evaluate(`document.body.textContent.includes('Learning and practical skills')`))throw Error('Part 2 filter included a mixed set');
 await send('Emulation.setDeviceMetricsOverride',{width:768,height:1024,deviceScaleFactor:1,mobile:true})
 png=await send('Page.captureScreenshot',{format:'png'});await fs.writeFile('artifacts/speaking/student-workspace-tablet.png',Buffer.from(png.data,'base64'))
 if(await evaluate('document.documentElement.scrollWidth>window.innerWidth+1'))throw Error('Student tablet horizontal overflow')
-console.log('PASS: student workspace shows assigned sets with no staff controls')
+console.log('PASS: student workspace shows assigned sets with no staff controls; Part 2-only filtering works')
+await click('Start practice');await click('Test microphone');await wait(`!!document.querySelector('audio')`);await click('Continue to questions');await wait(has('PART 2'));if(await evaluate(`document.body.textContent.includes('PART 1')||document.body.textContent.includes('PART 3')`))throw Error('Part 2-only practice contains another part');console.log('PASS: selected single-part set opens only its own questions')
 console.log(JSON.stringify({runtimeErrors:errors}))
 if(errors.length)process.exitCode=1
 ws.close()

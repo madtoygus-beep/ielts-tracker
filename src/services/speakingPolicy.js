@@ -42,3 +42,19 @@ export function defaultMockSpeakingConfig() {
     ].map(text=>({part:3,text,seconds:45}))
   ]}
 }
+
+export function speakingPracticeKind(config) {
+  const parts=[...new Set((config?.questions||[]).map(q=>q.part))]
+  return parts.length===1&&[1,2,3].includes(parts[0])?`part${parts[0]}`:'mixed'
+}
+export function speakingPracticePreset(config,kind) {
+  if(!['part1','part2','part3','mixed'].includes(kind))throw Error('Invalid Speaking practice type.')
+  const defaults=defaultSpeakingConfig().questions,current=config?.questions||[]
+  if(kind==='mixed'){
+    const parts=new Set(current.map(q=>q.part))
+    return {...config,enabled:true,questions:[...current,...defaults.filter(q=>!parts.has(q.part))].sort((a,b)=>a.part-b.part)}
+  }
+  const part=Number(kind.slice(-1)),existing=current.filter(q=>q.part===part)
+  return {...config,enabled:true,questions:existing.length?existing:defaults.filter(q=>q.part===part)}
+}
+export const speakingPracticeLabel = config => ({part1:'Part 1 only',part2:'Part 2 only',part3:'Part 3 only',mixed:'Mixed parts'})[speakingPracticeKind(config)]

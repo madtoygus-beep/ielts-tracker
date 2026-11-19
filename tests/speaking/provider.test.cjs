@@ -29,3 +29,17 @@ test('microphone check rejects a silent PCM recording but accepts a measurable s
  assert.equal(await wavHasSignal(new Blob([bytes])),true)
  assert.equal(await wavHasSignal(new Blob([new Uint8Array(20)])),false)
 })
+test('single-part practice presets support Parts 1, 2 and 3 without weakening full-Mock validation',async()=>{
+ const {defaultSpeakingConfig,speakingPracticePreset,speakingPracticeKind,validateSpeakingConfig}=await import('../../src/services/speakingPolicy.js')
+ const {config}=require('../../functions/lib/speaking/policy')
+ const original={...defaultSpeakingConfig(),enabled:true};original.questions[0].text='Teacher custom question'
+ for(const part of [1,2,3]){
+   const preset=speakingPracticePreset(original,`part${part}`)
+   assert(preset.questions.length>0);assert(preset.questions.every(q=>q.part===part));assert.equal(speakingPracticeKind(preset),`part${part}`)
+   assert.equal(validateSpeakingConfig(preset),'');assert.doesNotThrow(()=>config(preset));assert.throws(()=>config(preset,true));assert.notEqual(validateSpeakingConfig(preset,true),'')
+ }
+ assert.equal(speakingPracticePreset(original,'part1').questions[0].text,'Teacher custom question')
+ const p2=speakingPracticePreset(speakingPracticePreset(original,'part1'),'part2');assert.equal(p2.questions[0].part,2)
+ const mixed=speakingPracticePreset(p2,'mixed');assert.equal(speakingPracticeKind(mixed),'mixed');assert.equal(validateSpeakingConfig(mixed,true),'')
+ assert.equal(original.questions.length,5)
+})
