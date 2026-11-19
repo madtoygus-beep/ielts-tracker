@@ -1,9 +1,9 @@
 {
   "date": "2026-11-19",
-  "status": "local_review_candidate_not_deployed",
+  "status": "production_release_authorized",
   "branch": "feature/speaking-local-20261119",
   "base_commit": "12e2be9a422d1f08db0574c783aa3d346a1547fb",
-  "user_release_rule": "Only publish after the user reviews and explicitly says yayinla. No push or deployment authorised for this work.",
+  "user_release_rule": "User reviewed the local preview and explicitly authorised production publication: kontrol ettim sorun yok yayinla.",
   "preview": "http://127.0.0.1:5180/speaking-preview",
   "implemented": [
     "Standalone teacher question creation, editing and optional assignment; unassigned tasks stay in the library",
@@ -94,7 +94,7 @@
     "teacher": "Own question sets, optional individual/current-class assignment, archive/restore, own eligible students recordings and four-criterion teacher review",
     "student": "Assigned sets and own reports only; practice resume and return to parent Mock for unfinished Mock Speaking",
     "admin": "Institution monitoring across teachers, archive/restore and support review; no new-set creation; failed AI release without model call or quota reset",
-    "publishing": "User review and explicit publication instruction required. No push or deployment performed."
+    "publishing": "Production publication explicitly authorised after local review on 2026-11-19."
   },
   "part2_timing": {
     "preparation_seconds": 60,
@@ -121,5 +121,15 @@
     "grading": "Single-part reports remain limited practice estimates, not a full official Speaking result",
     "part2_timing": "New Part 2-only attempts: student starts 60 seconds preparation; recording starts automatically, can finish after 60 seconds and stops at 120 seconds. Playback and save remain student-controlled; rerecord starts fresh preparation. Existing attempts and mixed practice retain their original behaviour.",
     "preview_tab": "Tek Part 2 pratiği (20x accelerated synthetic clock)"
+  },
+  "release_checks": {
+    "production_base_commit": "12e2be9a422d1f08db0574c783aa3d346a1547fb",
+    "production_firebase_project": "maxima-tracker",
+    "production_vercel_project": "prj_blPV5wDgQ94fbQgGWQTNuzhBdLpj",
+    "latest_unit_regression_tests": 95,
+    "latest_build": "passed",
+    "live_security_rules": "match tested local rules",
+    "storage_privacy": "No public bucket IAM or default object ACL; anonymous direct GCS and Firebase reads of temporary synthetic canary denied with 403; canary deleted",
+    "ai_assessment_enabled": false
   }
 }
