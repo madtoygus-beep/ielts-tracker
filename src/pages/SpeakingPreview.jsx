@@ -6,19 +6,21 @@ import SpeakingReport from '../components/speaking/SpeakingReport'
 import { defaultMockSpeakingConfig, speakingLabels } from '../services/speakingPolicy'
 
 // Deliberately synthetic, DEV-only review screen. No microphone access or cloud calls.
-function tone(){
-  const b=new ArrayBuffer(32044),v=new DataView(b),s=(p,t)=>[...t].forEach((c,i)=>v.setUint8(p+i,c.charCodeAt(0)))
-  s(0,'RIFF');v.setUint32(4,32036,true);s(8,'WAVEfmt ');v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);v.setUint32(24,16000,true);v.setUint32(28,32000,true);v.setUint16(32,2,true);v.setUint16(34,16,true);s(36,'data');v.setUint32(40,32000,true)
-  for(let i=0;i<16000;i++)v.setInt16(44+i*2,Math.sin(i*2*Math.PI*440/16000)*2500,true)
+let demoRecordedDuration=1
+function tone(duration=1){
+  const frames=Math.ceil(Math.max(0.25,Math.min(130,duration))*16000)
+  const b=new ArrayBuffer(44+frames*2),v=new DataView(b),s=(p,t)=>[...t].forEach((c,i)=>v.setUint8(p+i,c.charCodeAt(0)))
+  s(0,'RIFF');v.setUint32(4,b.byteLength-8,true);s(8,'WAVEfmt ');v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);v.setUint32(24,16000,true);v.setUint32(28,32000,true);v.setUint16(32,2,true);v.setUint16(34,16,true);s(36,'data');v.setUint32(40,frames*2,true)
+  for(let i=0;i<frames;i++)v.setInt16(44+i*2,Math.sin(i*2*Math.PI*440/16000)*2500,true)
   return new Blob([b],{type:'audio/wav'})
 }
 const demoRuntime={
   now:()=>Date.now()*20,available:()=>true,
   getUserMedia:async()=>{const track={readyState:'live',stop(){this.readyState='ended'},addEventListener(){}};return {getAudioTracks:()=>[track],getTracks:()=>[track]}},
   enumerateDevices:async()=>[{deviceId:'simulation',kind:'audioinput',label:'Simulated microphone · no device access'}],
-  recorder:()=>({state:'inactive',mimeType:'audio/wav',start(){this.state='recording';this.timer=setInterval(()=>this.ondataavailable?.({data:tone()}),200)},stop(){if(this.state!=='recording')return;clearInterval(this.timer);this.ondataavailable?.({data:tone()});this.state='inactive';this.onstop?.()}})
+  recorder:()=>({state:'inactive',mimeType:'audio/wav',start(){this.state='recording';this.startedAt=demoRuntime.now();this.onstart?.();this.timer=setInterval(()=>this.ondataavailable?.({data:tone()}),200)},stop(){if(this.state!=='recording')return;clearInterval(this.timer);demoRecordedDuration=(demoRuntime.now()-this.startedAt)/1000;this.ondataavailable?.({data:tone()});this.state='inactive';this.onstop?.()}})
 }
-const encodeDemo=async()=>tone()
+const encodeDemo=async()=>tone(demoRecordedDuration)
 function createDemo(){
   let attempt,failSave=false,failSubmit=false
   const questions=[{id:'q1',part:1,text:'What do you enjoy learning in your free time?',seconds:30,preparationSeconds:0},{id:'q2',part:2,text:'Describe a useful skill you learned.\nSay what it is, how you learned it and why it matters to you.',seconds:120,preparationSeconds:60},{id:'q3',part:3,text:'How could schools prepare students for lifelong learning?',seconds:45,preparationSeconds:0}]
@@ -37,7 +39,7 @@ function createDemo(){
 
     if(op==='start'){attempt={id:'demo',title:'Local recording demonstration',mode:data.mockId?'mock':'practice',questions,answers:[],nextIndex:0,status:'recording',current:null,startedAt:demoRuntime.now(),serverNow:demoRuntime.now()};return structuredClone(attempt)}
     if(op==='beginQuestion'){const q=attempt.questions[attempt.nextIndex],startedAt=demoRuntime.now();attempt.current={startedAt,recordAt:startedAt+8000+q.preparationSeconds*1000,deadline:startedAt+8000+(q.preparationSeconds+q.seconds)*1000};return {...attempt.current,serverNow:demoRuntime.now()}}
-    if(op==='saveAnswer'){if(failSave){failSave=false;throw Error('Simulated connection failure. Your recording is retained on this device.')}attempt.answers.push({questionId:questions[attempt.nextIndex].id,duration:1});attempt.nextIndex++;attempt.current=null;return structuredClone(attempt)}
+    if(op==='saveAnswer'){if(failSave){failSave=false;throw Error('Simulated connection failure. Your recording is retained on this device.')}attempt.answers.push({questionId:questions[attempt.nextIndex].id,duration:data.audio?(atob(data.audio).length-44)/32000:0,finishedEarly:data.finishEarly===true});attempt.nextIndex++;attempt.current=null;return structuredClone(attempt)}
     if(op==='submit'){if(failSubmit){failSubmit=false;throw Error('Simulated final submission failure. Your saved answers are retained.')}attempt.status='submitted';return structuredClone(attempt)}
     if(op==='get')return data.attemptId==='failed-demo'?{...structuredClone(sample),id:'failed-demo',title:'Audio assessment awaiting support',report:null,aiStatus:failed?'failed':'not_requested',aiRequestedAt:1700,aiRecoveryCount:0}:structuredClone(sample)
     if(op==='audio'){const bytes=new Uint8Array(await tone().arrayBuffer());return {audio:btoa(Array.from(bytes,c=>String.fromCharCode(c)).join('')),mimeType:'audio/wav'}}

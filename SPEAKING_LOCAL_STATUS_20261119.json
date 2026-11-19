@@ -22,11 +22,12 @@
     "Cursor pagination beyond 100 records; student task responses exclude other assignment identities",
     "Admin release of failed AI assessment, audited reason and maximum three releases; student must consent again; no automatic paid call",
     "Retry final submission after all question recordings are acknowledged; silence warning during microphone check; explicit recovery/rerecord/continue-without-audio controls",
-    "Clean acknowledged question recordings from the device recovery queue on resume"
+    "Clean acknowledged question recordings from the device recovery queue on resume",
+    "Mock Part 2 allows voluntary completion after one recording minute; server timing and minimum audio duration validated, early-finish intent retained on retry and visible in report"
   ],
   "verification": {
-    "automated_tests": 96,
-    "automated_tests_passed": 96,
+    "automated_tests": 99,
+    "automated_tests_passed": 99,
     "build": "passed: npm run build -- --configLoader runner",
     "speaking_frontend_lint": "passed, no warnings",
     "backend_syntax": "passed",
@@ -39,11 +40,12 @@
       "archive and restore a teacher set",
       "admin monitors another teacher and releases failed AI without paid call",
       "student assigned-only workspace without staff controls",
-      "768px tablet report and student workspace: no horizontal overflow"
+      "768px tablet report and student workspace: no horizontal overflow",
+      "Part 2 finish button absent in preparation, disabled during first recording minute, then enabled and advances to Part 3; 120-second auto-finish preserved"
     ],
     "screenshots": "artifacts/speaking/",
-    "unit_and_regression_tests": 90,
-    "firestore_emulator_tests": 6,
+    "unit_and_regression_tests": 92,
+    "firestore_emulator_tests": 7,
     "firestore_emulator": "demo-maxima-speaking-local, loopback 127.0.0.1:8280, STANDARD edition, existing firestore.rules and production canonical academic membership helper; no production database"
   },
   "ai": {
@@ -89,5 +91,17 @@
     "student": "Assigned sets and own reports only; practice resume and return to parent Mock for unfinished Mock Speaking",
     "admin": "Institution monitoring across teachers, archive/restore and support review; no new-set creation; failed AI release without model call or quota reset",
     "publishing": "User review and explicit publication instruction required. No push or deployment performed."
+  },
+  "part2_timing": {
+    "preparation_seconds": 60,
+    "minimum_recording_seconds_before_finish": 60,
+    "maximum_recording_seconds": 120,
+    "button": "Finish my answer",
+    "preparation_counts_toward_minimum": false,
+    "enforcement": "UI recording elapsed time and server-owned recordAt deadline; encoded audio permits 250ms packet rounding only",
+    "early_finish": "Recording stops, answer is locked and saved, then automatic Part 3 progression; chosen early completion is visible in the report",
+    "automatic_finish": "Still stops at 120 seconds if student does not choose early completion",
+    "recovery": "Early-finish intent is persisted in the local recovery outbox",
+    "demo": "20x accelerated synthetic time, no real microphone or paid AI calls"
   }
 }

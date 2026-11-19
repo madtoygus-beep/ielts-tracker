@@ -7,11 +7,11 @@ import { wavFromBlob, wavHasSignal, blobBase64, outbox } from '../../services/sp
 export default function SpeakingSession({taskId,mockId,onComplete,api=speakingApi,runtime=browserSpeakingRuntime,encode=wavFromBlob}) {
   const [attempt,setAttempt]=useState(null),[phase,updatePhase]=useState('check'),[error,setError]=useState('')
   const [devices,setDevices]=useState([]),[deviceId,setDeviceId]=useState(''),[checked,setChecked]=useState(false)
-  const [blob,setBlob]=useState(null),[url,setUrl]=useState(''),[seconds,setSeconds]=useState(0)
+  const [blob,setBlob]=useState(null),[url,setUrl]=useState(''),[seconds,setSeconds]=useState(0),[recordedSeconds,setRecordedSeconds]=useState(0)
   const [current,setCurrent]=useState(null),[readQuestions,setReadQuestions]=useState(runtime===browserSpeakingRuntime),[notice,setNotice]=useState('')
   const recorder=useRef(null),stream=useRef(null),chunks=useRef([]),recordingStarted=useRef(0)
   const live=useRef(true),busy=useRef(false),offset=useRef(0),phaseRef=useRef(phase),attemptRef=useRef(attempt)
-  const currentRef=useRef(current),rawKey=useRef(null),interrupted=useRef(false)
+  const currentRef=useRef(current),rawKey=useRef(null),interrupted=useRef(false),finishedEarly=useRef(false)
   const setPhase=value=>{phaseRef.current=value;updatePhase(value)}
   useEffect(()=>{phaseRef.current=phase;attemptRef.current=attempt;currentRef.current=current},[phase,attempt,current])
   const key=a=>`${auth.currentUser?.uid||'local-demo'}:${a.id}:${a.nextIndex}`
@@ -39,12 +39,13 @@ export default function SpeakingSession({taskId,mockId,onComplete,api=speakingAp
     let mic
     try{mic=await getMic()}finally{micStarting.current=false}
     if(!live.current)return
-chunks.current=[];recordingStarted.current=runtime.now();interrupted.current=false
+    chunks.current=[];recordingStarted.current=runtime.now();interrupted.current=false;finishedEarly.current=false;setRecordedSeconds(0)
     const instance=runtime.recorder(mic);recorder.current=instance
     const a=attemptRef.current;rawKey.current=!test&&a?key(a):null
+    instance.onstart=()=>{recordingStarted.current=runtime.now()}
     instance.ondataavailable=e=>{
       if(e.data.size)chunks.current.push(e.data)
-      if(rawKey.current&&chunks.current.length)outbox(rawKey.current,{kind:'raw',blob:new Blob(chunks.current,{type:instance.mimeType}),interrupted:true}).catch(()=>{if(live.current)setNotice('Recovery storage is unavailable. Keep this page open until the recording is saved.')})
+      if(rawKey.current&&chunks.current.length)outbox(rawKey.current,{kind:'raw',blob:new Blob(chunks.current,{type:instance.mimeType}),interrupted:true,finishEarly:finishedEarly.current}).catch(()=>{if(live.current)setNotice('Recovery storage is unavailable. Keep this page open until the recording is saved.')})
     }
     instance.onerror=()=>{interrupted.current=true;setError('Microphone recording was interrupted. The recorded portion will be preserved.');stop()}
     instance.onstop=async()=>{
@@ -56,7 +57,7 @@ chunks.current=[];recordingStarted.current=runtime.now();interrupted.current=fal
         if(!live.current)return
         setBlob(wav)
         if(test){if(!await wavHasSignal(wav)){setChecked(false);throw Error('No audible sound was captured. Speak during the microphone test and check the selected input.')}setChecked(true);setPhase('check');return}
-        if(attemptRef.current.mode==='mock')await upload(wav,interrupted.current)
+        if(attemptRef.current.mode==='mock')await upload(wav,interrupted.current,finishedEarly.current)
         else setPhase('preview')
       }catch(e){if(live.current){setError(e.message);setPhase(test?'check':'recovery')}}
     }
@@ -72,12 +73,12 @@ chunks.current=[];recordingStarted.current=runtime.now();interrupted.current=fal
     if(a.mode==='mock')await begin(a)
     else setPhase('ready')
   }
-  const upload=async(wav,wasInterrupted=false)=>{
+  const upload=async(wav,wasInterrupted=false,finishEarly=false)=>{
     if(busy.current)return
     busy.current=true;setError('');setPhase('uploading')
     const a=attemptRef.current
     try {
-      const body={attemptId:a.id,index:a.nextIndex,audio:wav?await blobBase64(wav):'',interrupted:wasInterrupted}
+      const body={attemptId:a.id,index:a.nextIndex,audio:wav?await blobBase64(wav):'',interrupted:wasInterrupted,finishEarly}
       await outbox(key(a),{kind:'ready',body}).catch(()=>setNotice('Local recovery storage is unavailable; keep this page open while saving.'))
       const result=await api('saveAnswer',body)
       await outbox(key(a),null).catch(()=>{})
@@ -100,7 +101,7 @@ chunks.current=[];recordingStarted.current=runtime.now();interrupted.current=fal
       setPhase('uploading');const result=await api('saveAnswer',saved.body);await outbox(key(a),null);await next(result);return true
     }
     if(saved?.kind==='raw'){
-      const wav=await encode(saved.blob);setBlob(wav);setPhase('recovery');setNotice('Recovered a recording from this device. Save it before continuing.');return true
+      const wav=await encode(saved.blob);finishedEarly.current=saved.finishEarly===true;setBlob(wav);setPhase('recovery');setNotice('Recovered a recording from this device. Save it before continuing.');return true
     }
     return false
   }
@@ -121,7 +122,7 @@ chunks.current=[];recordingStarted.current=runtime.now();interrupted.current=fal
     }catch(e){setError(e.message||'Could not start Speaking.');setPhase('check')}
     finally{busy.current=false}
   }
-  const retry=async()=>{setError('');try{if(attempt?.nextIndex>=attempt?.questions.length){if(busy.current)return;busy.current=true;setPhase('uploading');try{await finish(attempt)}finally{busy.current=false}return}if(blob)await upload(blob,true);else if(attempt){if(!await recover(attempt))await upload(null,true)}}catch(e){setError(e.message);setPhase('recovery')}}
+  const retry=async()=>{setError('');try{if(attempt?.nextIndex>=attempt?.questions.length){if(busy.current)return;busy.current=true;setPhase('uploading');try{await finish(attempt)}finally{busy.current=false}return}if(blob)await upload(blob,true,finishedEarly.current);else if(attempt){if(!await recover(attempt))await upload(null,true)}}catch(e){setError(e.message);setPhase('recovery')}}
   const startPractice=async()=>{
     try{setError('');if(!current)await begin(attempt);await record(false)}catch(e){setError(e.message)}
   }
@@ -133,6 +134,7 @@ chunks.current=[];recordingStarted.current=runtime.now();interrupted.current=fal
     if(a.mode==='mock'&&c&&p==='recovery'){setSeconds(Math.ceil(Math.max(0,c.deadline-clock())/1000));return}
     if(a.mode==='mock'&&c&&['prompt','preparing','recording'].includes(p)){
       const t=clock()
+      if(p==='recording')setRecordedSeconds(Math.max(0,Math.floor((runtime.now()-recordingStarted.current)/1000)))
       if(t>=c.deadline){
         window.speechSynthesis?.cancel()
         if(p==='recording'&&recorder.current?.state==='recording'){setPhase('processing');stop()}
@@ -164,7 +166,7 @@ chunks.current=[];recordingStarted.current=runtime.now();interrupted.current=fal
       <label className="block text-sm">Microphone<select aria-label="Microphone" className="block w-full border rounded-xl p-3 mt-2" value={deviceId} onChange={e=>{stream.current?.getTracks().forEach(t=>t.stop());stream.current=null;setDeviceId(e.target.value);setChecked(false)}}><option value="">Default microphone</option>{devices.map(d=><option key={d.deviceId} value={d.deviceId}>{d.label||'Microphone'}</option>)}</select></label>
       <button type="button" disabled={phase==='testing'} className="rounded-xl bg-indigo-700 text-white px-5 py-3 disabled:opacity-50" onClick={()=>record(true).catch(e=>setError(e.message))}>{phase==='testing'?'Recording microphone test…':'Test microphone'}</button>
       {url&&<audio aria-label="Microphone test playback" controls src={url}/>}
-      {mockId&&<><p className="text-sm text-slate-600">Questions advance automatically. Answers cannot be replaced after saving. Part 2 includes one minute preparation. Your recordings are private to you and authorised staff.</p><label className="flex gap-2 text-sm"><input type="checkbox" checked={readQuestions} onChange={e=>setReadQuestions(e.target.checked)}/>Read questions aloud using the browser voice</label></>}
+      {mockId&&<><p className="text-sm text-slate-600">Questions advance automatically. Answers cannot be replaced after saving. Part 2 includes one minute preparation and up to two minutes recording. After 60 seconds of recording you may finish your answer early. Your recordings are private to you and authorised staff.</p><label className="flex gap-2 text-sm"><input type="checkbox" checked={readQuestions} onChange={e=>setReadQuestions(e.target.checked)}/>Read questions aloud using the browser voice</label></>}
       <button type="button" disabled={!checked||phase==='testing'} onClick={start} className="block w-full bg-indigo-700 text-white rounded-xl px-5 py-3 disabled:bg-slate-200 disabled:text-slate-500">{mockId?'Start / resume Mock Speaking':'Continue to questions'}</button>
     </div>:phase==='done'?<div className="mt-8 rounded-xl bg-emerald-50 p-6 text-emerald-900"><h3 className="font-semibold">Speaking submitted</h3><p className="mt-2 text-sm">Your recordings have been saved. Open the Speaking report to listen back or view teacher feedback.</p></div>:<>
       {q&&<div className="mt-6 rounded-xl bg-indigo-50 p-6"><span className="text-xs font-semibold text-indigo-700">PART {q.part}</span><p className="whitespace-pre-wrap text-lg leading-8 text-slate-900 mt-2">{q.text}</p></div>}
@@ -172,6 +174,7 @@ chunks.current=[];recordingStarted.current=runtime.now();interrupted.current=fal
       {url&&<audio className="w-full" aria-label="Answer playback" controls src={url}/>}
       {!mockId&&phase==='ready'&&<button type="button" onClick={startPractice} className="bg-indigo-700 text-white px-6 py-3 rounded-xl">● Start recording</button>}
       {!mockId&&phase==='recording'&&<button type="button" onClick={()=>{setPhase('processing');stop()}} className="bg-red-600 text-white px-6 py-3 rounded-xl">■ Stop recording</button>}
+      {mockId&&q?.part===2&&phase==='recording'&&<div className="mt-4 text-center"><button type="button" disabled={recordedSeconds<60} className="rounded-xl bg-indigo-700 text-white px-6 py-3 disabled:bg-slate-200 disabled:text-slate-500" onClick={()=>{if(runtime.now()-recordingStarted.current<60000||recorder.current?.state!=='recording')return;finishedEarly.current=true;setPhase('processing');stop()}}>Finish my answer</button><p className="mt-3 text-sm text-slate-500">{recordedSeconds<60?`You can finish your answer in ${speakingTime(60-recordedSeconds)}.`:'You may finish now, or continue until the two-minute limit.'}</p></div>}
       {!mockId&&phase==='preview'&&<div className="flex gap-3 mt-5"><button type="button" className="border rounded-xl px-5 py-3" onClick={startPractice}>Record again</button><button type="button" className="bg-indigo-700 text-white rounded-xl px-5 py-3" onClick={()=>upload(blob)}>Save answer & continue</button></div>}
       {phase==='recovery'&&mockId&&current&&<p className="mt-3 text-sm text-amber-900">The question timer continues: {speakingTime(seconds)}. Retry saving the recovered recording, or continue without audio after the timer ends.</p>}
       {phase==='recovery'&&<button type="button" className="bg-indigo-700 text-white rounded-xl px-5 py-3" onClick={retry}>Retry saving / resume</button>}

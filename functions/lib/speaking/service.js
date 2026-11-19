@@ -209,6 +209,13 @@ function createSpeakingService({db,bucket,requireStudent,requireAssignmentManage
       tx.update(ref,{current:value});return {...value,serverNow:now()}
     })
   }
+  const mockAnswerTiming=(attempt,question,data,audio)=>{
+    if(attempt.mode!=='mock')return false
+    // Audio encoders may round packet boundaries; the server's 60-second clock remains strict.
+    const early=data.finishEarly===true&&question.part===2&&audio?.duration>=59.75&&now()>=attempt.current.recordAt+60000
+    if(now()<attempt.current.deadline-500&&!early)fail('failed-precondition','Part 2 can finish after at least 60 seconds of recording; other questions must run to the time limit.')
+    return Boolean(early&&audio.duration<question.seconds)
+  }
   async function saveAnswer(request) {
     const {actor,attempt}=await attemptAccess(request,request.data?.attemptId)
     const data=request.data||{},index=data.index
@@ -223,7 +230,7 @@ function createSpeakingService({db,bucket,requireStudent,requireAssignmentManage
     const previous=(attempt.answers||[]).find(a=>a.index===index)
     if(previous?.sha256===hash)return publicAttempt(attempt)
     if(attempt.status!=='recording'||index!==attempt.nextIndex||!attempt.current)fail('failed-precondition','This question is already locked.')
-    if(attempt.mode==='mock' && now()<attempt.current.deadline-500)fail('failed-precondition','The question is still running.')
+    mockAnswerTiming(attempt,question,data,audio)
     if(audio)await bucket.file(path).save(audio.bytes,{resumable:false,validation:'crc32c',preconditionOpts:{ifGenerationMatch:0},metadata:{contentType:'audio/wav',cacheControl:'private, no-store',metadata:{attemptId:attempt.id}}}).catch(e=>{if(Number(e.code)!==412)throw e})
     await db.runTransaction(async tx=>{
       const ref=db.doc(`speakingAttempts/${attempt.id}`),live=(await tx.get(ref)).data()
@@ -231,8 +238,9 @@ function createSpeakingService({db,bucket,requireStudent,requireAssignmentManage
       const saved=live.answers.find(a=>a.index===index)
       if(saved?.sha256===hash)return
       if(live.status!=='recording'||live.nextIndex!==index||live.current?.questionId!==question.id)fail('aborted','Question changed. Reload the saved attempt.')
+      const finishedEarly=mockAnswerTiming(live,question,data,audio)
       const entry={index,questionId:question.id,storagePath:path,sha256:hash,duration:audio?.duration||0,audible:audio?.audible||false,
-        savedAt:now(),interrupted:data.interrupted===true||now()>live.current.deadline+30000}
+        savedAt:now(),finishedEarly,interrupted:data.interrupted===true||now()>live.current.deadline+30000}
       tx.update(ref,{answers:[...live.answers,entry],nextIndex:index+1,current:null})
     })
     return publicAttempt(await read(`speakingAttempts/${attempt.id}`))

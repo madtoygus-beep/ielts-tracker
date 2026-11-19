@@ -117,3 +117,20 @@ test('admin recovery makes no paid call, preserves quota and requires student co
  await rejected(w.call('allowAiRetry',data,'A1'),'failed-precondition');await rejected(w.call('evaluate',{attemptId:a.id,consent:false}),'failed-precondition')
  await w.call('evaluate',{attemptId:a.id,consent:true});assert.equal(w.calls(),1);assert.equal(w.docs.get('speakingAiUsage/maxima_1970-01-01').requests,8)
 })
+test('Mock Part 2 early finish has a strict 60-second clock and rejects materially short audio',async()=>{
+ const w=world(),a=await w.call('start',{mockId:'mock1'})
+ await w.call('beginQuestion',{attemptId:a.id});w.advance(40000);await w.call('saveAnswer',{attemptId:a.id,index:0,audio:wav()})
+ const p2=await w.call('beginQuestion',{attemptId:a.id}),body={attemptId:a.id,index:1,audio:wav(60),finishEarly:true}
+ w.advance(p2.recordAt-p2.startedAt+59999)
+ await rejected(w.call('saveAnswer',body),'failed-precondition');assert.equal(w.objects.size,1)
+ w.advance(1)
+ await rejected(w.call('saveAnswer',{...body,audio:wav(59)}),'failed-precondition')
+ await rejected(w.call('saveAnswer',{...body,finishEarly:false}),'failed-precondition')
+ const saved=await w.call('saveAnswer',body);assert.equal(saved.nextIndex,2);assert.equal(saved.answers[1].finishedEarly,true);assert.equal(saved.answers[1].interrupted,false)
+ const again=await w.call('saveAnswer',body);assert.equal(again.nextIndex,2);assert.equal(w.objects.size,2)
+ await rejected(w.call('saveAnswer',{...body,audio:wav(61)}),'failed-precondition')
+})
+test('early-finish flag cannot skip Mock Part 1 or its question order',async()=>{
+ const w=world(),a=await w.call('start',{mockId:'mock1'});await w.call('beginQuestion',{attemptId:a.id});w.advance(20000)
+ await rejected(w.call('saveAnswer',{attemptId:a.id,index:0,audio:wav(),finishEarly:true}),'failed-precondition');assert.equal(w.objects.size,0)
+})
