@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { speakingApi, speakingLabels, speakingTime } from '../../services/speakingApi'
-export default function SpeakingReport({attemptId,staff=false,admin=false,aiAvailable=false,api=speakingApi}) {
+export default function SpeakingReport({attemptId,staff=false,admin=false,aiAvailable=false,api=speakingApi,onRetake}) {
   const [attempt,setAttempt]=useState(null),[error,setError]=useState(''),[busy,setBusy]=useState(false)
   const [consent,setConsent]=useState(false),[criteria,setCriteria]=useState({}),[feedback,setFeedback]=useState(''),[urls,setUrls]=useState({}),[recoveryReason,setRecoveryReason]=useState('')
   const created=useRef([]),alive=useRef(true),evaluationInFlight=useRef(false)
@@ -49,6 +49,10 @@ export default function SpeakingReport({attemptId,staff=false,admin=false,aiAvai
   return <section className="rounded-2xl border bg-white p-5 sm:p-8 space-y-6">
     <div className="flex flex-wrap justify-between gap-3"><div><h2 className="text-xl font-bold">{attempt.title}</h2><p className="text-sm text-slate-500 mt-1">{attempt.mode==='mock'?'Mock Speaking':'Speaking practice'} · {attempt.status}</p></div><div className="text-right"><p className="text-xs text-slate-500">Teacher band</p><p className="text-3xl font-bold text-indigo-800">{attempt.review?.band?.toFixed(1)||'Pending'}</p></div></div>
     <button type="button" disabled={busy} className="text-sm text-indigo-700 disabled:opacity-50" onClick={()=>action(async()=>{setAttempt(await api('get',{attemptId,staff}))})}>Refresh report</button>
+    {attempt.taskId&&!attempt.mockId&&attempt.status!=='recording'&&<div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+      <p className="text-sm text-slate-600">Submitted answers are locked. A new attempt requires your teacher’s permission.</p>
+      {staff?<button type="button" disabled={busy||attempt.retakeAvailable||attempt.isLatestAttempt===false} className="mt-3 rounded-xl border border-indigo-200 bg-white px-4 py-2 text-sm font-semibold text-indigo-700 disabled:opacity-50" onClick={()=>action(async()=>{await api('allowRetake',{attemptId});setAttempt(v=>({...v,retakeAvailable:true}))})}>{attempt.isLatestAttempt===false?'Open the latest report to allow a retake':attempt.retakeAvailable?'Retake available':'Allow retake'}</button>:attempt.retakeAvailable&&onRetake&&<button type="button" className="mt-3 rounded-xl bg-indigo-700 px-4 py-2 text-sm font-semibold text-white" onClick={()=>onRetake(attempt)}>Start teacher-approved retake</button>}
+    </div>}
     {error&&<p role="alert" className="bg-red-50 text-red-800 rounded-xl p-3">{error}</p>}
     {attempt.review?.feedback&&<p className="rounded-xl bg-emerald-50 p-4 whitespace-pre-wrap">{attempt.review.feedback}</p>}
     {report?<><div className="rounded-xl bg-indigo-50 p-5"><p className="text-xs font-semibold uppercase text-indigo-700">AI practice estimate · unofficial</p><p className="text-4xl font-bold text-indigo-900 my-3">{report.estimatedBand?.toFixed(1)||'Insufficient evidence'}</p><p className="text-sm leading-6">{report.summary}</p><p className="text-xs text-slate-500 mt-3">A limited practice sample is not an official full Speaking result. AI estimates do not replace the teacher's final band.</p></div>

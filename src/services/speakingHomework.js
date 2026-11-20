@@ -29,15 +29,18 @@ export function speakingHomeworkSummary({ tasks, attempts }) {
   const assigned = [...new Map(tasks.filter(t => !t.archived).map(t => [t.id, t])).values()]
   const pending = assigned.flatMap(task => {
     const attempt = latest.get(task.id)
-    if (['submitted', 'reviewed'].includes(attempt?.status)) return []
+    if (!task.retakeAvailable && (['submitted', 'reviewed'].includes(attempt?.status) || ['submitted', 'reviewed'].includes(task.latestAttemptStatus))) return []
     return [{ ...task, type: 'Speaking', icon: '🎙️', color: 'indigo',
       path: `/speaking?task=${encodeURIComponent(task.id)}`,
-      attemptId: attempt?.status === 'recording' ? attempt.id : null }]
+      isRetake: task.retakeAvailable === true,
+      retakeState: task.retakeAvailable ? { nextAttemptNumber: task.nextAttemptNumber || 2 } : null,
+      attemptId: !task.retakeAvailable && attempt?.status === 'recording' ? attempt.id : null }]
   })
   return { pending, total: assigned.length, completed: assigned.length - pending.length }
 }
 
 export function openSpeakingHomework(item, uid, navigate) {
-  if (item.attemptId) sessionStorage.setItem(`speaking-active-${uid}-${item.id}`, item.attemptId)
+  if (item.isRetake) sessionStorage.removeItem(`speaking-active-${uid}-${item.id}`)
+  else if (item.attemptId) sessionStorage.setItem(`speaking-active-${uid}-${item.id}`, item.attemptId)
   navigate(item.path)
 }

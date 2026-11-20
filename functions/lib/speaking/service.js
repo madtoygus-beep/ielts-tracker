@@ -6,6 +6,17 @@ function createSpeakingService({db,bucket,requireStudent,requireAssignmentManage
   const fail=(code,message)=>{throw new HttpsError(code,message)}
   const id=v=>{if(typeof v!=='string'||! /^[a-zA-Z0-9_-]{1,180}$/.test(v))fail('invalid-argument','Invalid Speaking identifier.');return v}
   const read=async path=>{const snap=await db.doc(path).get();if(!snap.exists)fail('not-found','Speaking record not found.');return {id:snap.id,...snap.data()}}
+  const attemptControlRef=(studentId,taskId)=>db.doc(`speakingAttemptControls/${createHash('sha256').update(`${studentId}\0${taskId}`).digest('hex')}`)
+  async function standaloneState(studentId,taskId){
+    const ref=attemptControlRef(studentId,taskId),head=await ref.get()
+    if(head.exists)return {ref,...head.data()}
+    // Existing recordings predate attempt controls. Resolve their current head without changing them.
+    const snap=await db.collection('speakingAttempts').where('studentId','==',studentId).where('taskId','==',taskId).get()
+    const rows=snap.docs.map(d=>({id:d.id,...d.data()})).filter(a=>!a.mockId)
+      .sort((a,b)=>Number(b.startedAt)-Number(a.startedAt)||b.id.localeCompare(a.id))
+    const latest=rows[0]
+    return {ref,latestAttemptId:latest?.id||'',attemptNumber:latest?.attemptNumber||rows.length,status:latest?.status||'',retakeOpen:false}
+  }
   const staffAccess=(staff,source)=>staff.profile.role==='admin' || (schoolIdOf(staff.profile)===source.schoolId && source.teacherId===staff.uid)
   const studentAccess=async(student,source)=>{
     if(source.archived===true||source.schoolId!==student.schoolId||!(source.assignedTo||[]).includes(student.uid))fail('permission-denied','This Speaking assignment is not available.')
@@ -24,7 +35,8 @@ function createSpeakingService({db,bucket,requireStudent,requireAssignmentManage
     } else {
       if(attempt.studentId!==actor.uid||attempt.schoolId!==actor.schoolId)fail('permission-denied','This Speaking attempt is not available.')
       if(attempt.mockId)await requireAssignedMock(attempt.mockId,actor)
-      else await studentAccess(actor,await read(`speakingTasks/${attempt.taskId}`))
+      else {await studentAccess(actor,await read(`speakingTasks/${attempt.taskId}`));if(attempt.status==='recording'&&(await standaloneState(actor.uid,attempt.taskId)).latestAttemptId!==attempt.id)fail('failed-precondition','A newer Speaking attempt exists. Resume the current assignment.')}
+
     }
     return {actor,attempt}
   }
@@ -49,7 +61,7 @@ function createSpeakingService({db,bucket,requireStudent,requireAssignmentManage
       else if(teacher.role!=='admin')fail('permission-denied','Assignment teacher is unavailable.')
     }
   }
-  const publicAttempt=a=>({id:a.id,title:a.title,mode:a.mode,timedPart2:a.timedPart2===true,questions:a.questions,status:a.status,nextIndex:a.nextIndex,
+  const publicAttempt=a=>({id:a.id,title:a.title,mode:a.mode,attemptNumber:a.attemptNumber||a.mockAttempt||1,timedPart2:a.timedPart2===true,questions:a.questions,status:a.status,nextIndex:a.nextIndex,
     current:a.current||null,answers:(a.answers||[]).map(({storagePath,sha256,...v})=>v),report:a.report||null,review:a.review||null,
     mockId:a.mockId||'',taskId:a.taskId||'',studentName:a.studentName||'Student',startedAt:a.startedAt,serverNow:now(),submittedAt:a.submittedAt||null,aiStatus:a.aiStatus||'not_requested',aiRequestedAt:a.aiRequestedAt||null,aiRecoveryCount:(a.aiRecovery||[]).length,aiAvailable:aiEnabled(a.studentId)})
   async function saveTask(request) {
@@ -110,7 +122,8 @@ function createSpeakingService({db,bucket,requireStudent,requireAssignmentManage
           const value={...item.data(),id:item.id}
           if(value.schoolId!==schoolIdOf(actor.profile))continue
           if(type==='tasks'){
-            if(!staff){await studentAccess(actor,value);result.tasks.push({id:value.id,title:value.title,config:value.config})}
+            if(!staff){await studentAccess(actor,value);const head=await standaloneState(actor.uid,value.id);result.tasks.push({id:value.id,title:value.title,config:value.config,
+              latestAttemptId:head.latestAttemptId,latestAttemptStatus:head.status,retakeAvailable:head.retakeOpen===true,nextAttemptNumber:(head.attemptNumber||0)+1})}
             else result.tasks.push({...value,teacherName:await teacherName(value.teacherId)})
           }else{
             const {attempt}=await attemptAccess(request,item.id,staff)
@@ -159,7 +172,7 @@ function createSpeakingService({db,bucket,requireStudent,requireAssignmentManage
   async function start(request) {
     const student=await requireStudent(request),data=request.data||{}
     if(data.attemptId && !data.mockId){const {attempt}=await attemptAccess(request,data.attemptId);if(attempt.taskId!==data.taskId)fail('permission-denied','Attempt does not match this task.');return publicAttempt(attempt)}
-    let source,questions,attemptId,mode='practice',mockId='',mockAttempt=0
+    let source,questions,attemptId,standalone,mode='practice',mockId='',mockAttempt=0
     if(data.mockId){
       mockId=id(data.mockId);source=await requireAssignedMock(mockId,student)
       let validated;try{validated=config(source.speakingConfig,true)}catch(e){fail('failed-precondition',e.message)}
@@ -177,19 +190,32 @@ function createSpeakingService({db,bucket,requireStudent,requireAssignmentManage
     }else{
       source=await read(`speakingTasks/${id(data.taskId)}`);await studentAccess(student,source)
       mode=source.mode==='mock'?'mock':'practice';questions=config(source.config,mode==='mock').questions;attemptId=randomUUID()
+      standalone=await standaloneState(student.uid,data.taskId)
     }
     const ref=db.doc(`speakingAttempts/${attemptId}`)
     const output=await db.runTransaction(async tx=>{
       const existing=await tx.get(ref)
       await writeAccess(tx,student,{studentId:student.uid,schoolId:student.schoolId,teacherId:source.teacherId||source.createdBy,taskId:data.taskId||'',mockId})
       if(existing.exists)return {id:attemptId,...existing.data()}
+      let control
+      if(standalone){
+        const saved=await tx.get(standalone.ref);control=saved.exists?saved.data():standalone
+        if(control.latestAttemptId){
+          const latest=await tx.get(db.doc(`speakingAttempts/${id(control.latestAttemptId)}`)),value=latest.data()
+          if(!value||value.studentId!==student.uid||value.taskId!==data.taskId)fail('failed-precondition','The current Speaking attempt is unavailable.')
+          if(value.status==='recording')return {id:latest.id,...value}
+          if(control.retakeOpen!==true)fail('failed-precondition','You have submitted this Speaking assignment. Your teacher must allow a retake.')
+        }
+      }
       const day=new Date(now()).toISOString().slice(0,10),quotaRef=db.doc(`speakingAttemptUsage/${student.uid}_${day}`)
       const quota=await tx.get(quotaRef),count=quota.data()?.attempts||0
       if(count>=20)fail('resource-exhausted','Daily Speaking practice limit reached. Resume an existing attempt or try tomorrow.')
       tx.set(quotaRef,{studentId:student.uid,schoolId:student.schoolId,attempts:count+1,day})
       const value={studentId:student.uid,teacherId:source.teacherId||source.createdBy,schoolId:student.schoolId,
         taskId:data.taskId||'',mockId,mockAttempt,title:source.title,studentName:student.profile.name||student.profile.displayName||'Student',mode,questions,
+        ...(standalone?{attemptNumber:(control.attemptNumber||0)+1,retakeApprovedBy:control.retakeOpen===true?control.openedBy||'':''}:{}),
         timedPart2:mode==='practice'&&questions.every(q=>q.part===2),startedAt:now(),status:'recording',nextIndex:0,current:null,answers:[],aiStatus:'not_requested'}
+      if(standalone)tx.set(standalone.ref,{studentId:student.uid,taskId:data.taskId,schoolId:student.schoolId,latestAttemptId:attemptId,attemptNumber:value.attemptNumber,status:'recording',retakeOpen:false,updatedAt:now()})
       tx.create(ref,value);return {id:attemptId,...value}
     })
     return publicAttempt(output)
@@ -252,8 +278,27 @@ function createSpeakingService({db,bucket,requireStudent,requireAssignmentManage
       await writeAccess(tx,actor,live)
       if(live.status!=='recording')return
       if(live.nextIndex!==live.questions.length)fail('failed-precondition','Finish all questions before submitting.')
+      let headRef,head
+      if(!live.mockId){headRef=attemptControlRef(live.studentId,live.taskId);head=await tx.get(headRef)}
       tx.update(ref,{status:'submitted',submittedAt:now()})
+      if(head?.exists&&head.data().latestAttemptId===attempt.id)tx.update(headRef,{status:'submitted',updatedAt:now()})
     });return publicAttempt(await read(`speakingAttempts/${attempt.id}`))
+  }
+  async function allowRetake(request){
+    const {actor,attempt}=await attemptAccess(request,request.data?.attemptId,true)
+    if(attempt.mockId)fail('failed-precondition','Use the parent Mock retake controls for this attempt.')
+    if(attempt.status==='recording')fail('failed-precondition','The student must submit before a retake can be opened.')
+    const fallback=await standaloneState(attempt.studentId,attempt.taskId)
+    return db.runTransaction(async tx=>{
+      const live=await tx.get(db.doc(`speakingAttempts/${attempt.id}`)),saved=await tx.get(fallback.ref)
+      await writeAccess(tx,actor,live.data(),true)
+      const control=saved.exists?saved.data():fallback
+      if(control.latestAttemptId!==attempt.id)fail('failed-precondition','Open the latest Speaking report to allow a retake.')
+      if(live.data().status==='recording')fail('failed-precondition','The current attempt has not been submitted.')
+      tx.set(fallback.ref,{studentId:attempt.studentId,taskId:attempt.taskId,schoolId:attempt.schoolId,latestAttemptId:attempt.id,
+        attemptNumber:control.attemptNumber||1,status:live.data().status,retakeOpen:true,openedBy:actor.uid,openedAt:now(),updatedAt:now()})
+      return {retakeAvailable:true,nextAttemptNumber:(control.attemptNumber||1)+1}
+    })
   }
   async function audio(request) {
     const {attempt}=await attemptAccess(request,request.data?.attemptId,request.data?.staff===true)
@@ -321,8 +366,8 @@ function createSpeakingService({db,bucket,requireStudent,requireAssignmentManage
     }catch(_){await db.doc(`speakingAttempts/${attempt.id}`).update({aiStatus:'failed'});fail('unavailable','AI assessment failed. Recordings are saved for teacher review; no automatic retry was made.')}
   }
   async function call(request) {
-    const operations={list,saveTask,archiveTask,allowAiRetry,start,beginQuestion,saveAnswer,submit,audio,review,evaluate,
-      get:async req=>publicAttempt((await attemptAccess(req,req.data?.attemptId,req.data?.staff===true)).attempt)}
+    const operations={list,saveTask,archiveTask,allowAiRetry,allowRetake,start,beginQuestion,saveAnswer,submit,audio,review,evaluate,
+      get:async req=>{const {attempt}=await attemptAccess(req,req.data?.attemptId,req.data?.staff===true);const head=!attempt.mockId?await standaloneState(attempt.studentId,attempt.taskId):null;return {...publicAttempt(attempt),attemptNumber:attempt.attemptNumber||1,isLatestAttempt:!head||head.latestAttemptId===attempt.id,retakeAvailable:head?.latestAttemptId===attempt.id&&head.retakeOpen===true}}}
     const op=request.data?.op
     if(!Object.hasOwn(operations,op))fail('invalid-argument','Unknown Speaking operation.')
     return operations[op](request)

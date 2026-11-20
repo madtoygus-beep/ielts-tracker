@@ -74,7 +74,7 @@ const MANAGED_CLASS_COLORS = new Set([
 // are deleted, user-scoped mock resource access is cleaned, and known Storage
 // objects are removed. Deactivate remains the non-destructive alternative.
 const SCHOOL_CASCADE_COLLECTIONS = [
-  'speakingTasks', 'speakingAttempts', 'speakingAiUsage', 'speakingAttemptUsage',
+  'speakingTasks', 'speakingAttempts', 'speakingAiUsage', 'speakingAttemptUsage', 'speakingAttemptControls',
   'classes',
   'readings',
   'listenings',
@@ -2760,6 +2760,7 @@ exports.restoreManagedUser = onCall({ invoker: 'public' }, async request => {
 const STUDENT_PERMANENT_DELETE_COLLECTIONS = [
   { name: 'speakingAttempts', fields: ['studentId'] },
   { name: 'speakingAttemptUsage', fields: ['studentId'] },
+  { name: 'speakingAttemptControls', fields: ['studentId'] },
   { name: 'studentAccess', fields: ['uid', 'studentId'] },
   { name: 'readingSubmissions', fields: ['uid', 'studentId'] },
   { name: 'listeningSubmissions', fields: ['uid', 'studentId'] },

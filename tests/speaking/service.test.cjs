@@ -66,7 +66,8 @@ test('unassigned old recipients are preserved when the teacher saves a library e
 })
 test('daily practice quota blocks new attempts but an existing attempt can resume',async()=>{
  const w=world(),a=await w.call('start',{taskId:'task1'});w.docs.set('speakingAttemptUsage/S1_1970-01-01',{attempts:20})
- await rejected(w.call('start',{taskId:'task1'}),'resource-exhausted');assert.equal((await w.call('start',{taskId:'task1',attemptId:a.id})).id,a.id)
+ w.docs.set('speakingTasks/task2',{...w.docs.get('speakingTasks/task1')})
+ await rejected(w.call('start',{taskId:'task2'}),'resource-exhausted');assert.equal((await w.call('start',{taskId:'task1'})).id,a.id);assert.equal((await w.call('start',{taskId:'task1',attemptId:a.id})).id,a.id)
 })
 test('Mock teacher review updates only the matching current score and four-skill Overall',async()=>{
  const w=world();let a=await w.call('start',{mockId:'mock1'})
@@ -188,4 +189,38 @@ test('a newly assigned student can request AI without manual enablement; other s
  await rejected(w.call('get',{attemptId:a.id},'S2'),'permission-denied')
  await rejected(w.call('evaluate',{attemptId:a.id,consent:true},'S2'),'permission-denied')
  assert.equal(w.calls(),1)
+})
+
+test('submitted Speaking is locked until the owner teacher allows one retake, preserving the old report',async()=>{
+ const w=world(),a=await complete(w);await w.call('evaluate',{attemptId:a.id,consent:true})
+ const original=structuredClone(w.docs.get(`speakingAttempts/${a.id}`))
+ await rejected(w.call('start',{taskId:'task1'}),'failed-precondition')
+ await rejected(w.call('allowRetake',{attemptId:a.id}),'permission-denied')
+ await rejected(w.call('allowRetake',{attemptId:a.id},'T2'),'permission-denied')
+ await w.call('allowRetake',{attemptId:a.id},'T1')
+ assert.equal((await w.call('get',{attemptId:a.id})).retakeAvailable,true)
+ const listed=await w.call('list');assert.equal(listed.tasks[0].retakeAvailable,true)
+ const attempts=await Promise.all([w.call('start',{taskId:'task1'}),w.call('start',{taskId:'task1'})])
+ assert.equal(attempts[0].id,attempts[1].id);assert.notEqual(attempts[0].id,a.id)
+ assert.equal(attempts[0].report,null);assert.equal(w.docs.get(`speakingAttempts/${attempts[0].id}`).attemptNumber,2)
+ assert.equal(w.docs.get('speakingAttemptUsage/S1_1970-01-01').attempts,2)
+ assert.deepEqual(w.docs.get(`speakingAttempts/${a.id}`),original);assert.equal(w.calls(),1)
+ await rejected(w.call('allowRetake',{attemptId:a.id},'T1'),'failed-precondition')
+ await w.call('beginQuestion',{attemptId:attempts[0].id});await w.call('saveAnswer',{attemptId:attempts[0].id,index:0,audio:wav()});await w.call('submit',{attemptId:attempts[0].id})
+ await rejected(w.call('start',{taskId:'task1'}),'failed-precondition')
+})
+test('legacy submissions without attempt controls are also locked and can receive a teacher-approved retake',async()=>{
+ const w=world(),a=await complete(w)
+ for(const key of w.docs.keys())if(key.startsWith('speakingAttemptControls/'))w.docs.delete(key)
+ await rejected(w.call('start',{taskId:'task1'}),'failed-precondition')
+ const listed=await w.call('list');assert.equal(listed.tasks[0].latestAttemptId,a.id);assert.equal(listed.tasks[0].latestAttemptStatus,'submitted')
+ await w.call('allowRetake',{attemptId:a.id},'T1')
+ const next=await w.call('start',{taskId:'task1'});assert.notEqual(next.id,a.id)
+})
+test('unsubmitted answers can resume but cannot receive a retake; parent Mock retakes remain separate',async()=>{
+ const w=world(),a=await w.call('start',{taskId:'task1'})
+ assert.equal((await w.call('start',{taskId:'task1'})).id,a.id)
+ await rejected(w.call('allowRetake',{attemptId:a.id},'T1'),'failed-precondition')
+ const m=await w.call('start',{mockId:'mock1'});w.docs.get(`speakingAttempts/${m.id}`).status='submitted'
+ await rejected(w.call('allowRetake',{attemptId:m.id},'T1'),'failed-precondition')
 })

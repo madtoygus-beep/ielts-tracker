@@ -38,3 +38,12 @@ test('a later submission removes an earlier unfinished practice from pending hom
   const result=speakingHomeworkSummary({tasks:[{id:'set'}],attempts:[{id:'old',taskId:'set',status:'recording',startedAt:1},{id:'done',taskId:'set',status:'submitted',startedAt:2}]})
   assert.equal(result.pending.length,0);assert.equal(result.completed,1)
 })
+
+test('only a teacher-opened retake returns completed Speaking to pending homework and clears the old resume ID',()=>{
+ const tasks=[{id:'set',retakeAvailable:true,nextAttemptNumber:2,latestAttemptStatus:'submitted'}]
+ const result=speakingHomeworkSummary({tasks,attempts:[{id:'old',taskId:'set',status:'submitted',startedAt:1}]})
+ assert.equal(result.pending.length,1);assert.equal(result.pending[0].isRetake,true);assert.equal(result.pending[0].attemptId,null);assert.equal(result.completed,0)
+ const calls=[];globalThis.sessionStorage={removeItem:key=>calls.push(key)}
+ try{openSpeakingHomework(result.pending[0],'student',path=>calls.push(path))}finally{delete globalThis.sessionStorage}
+ assert.deepEqual(calls,['speaking-active-student-set','/speaking?task=set'])
+})
