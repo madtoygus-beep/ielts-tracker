@@ -1,5 +1,5 @@
 import SpeakingHomeworkSection from '../components/speaking/SpeakingHomeworkSection'
-import { useCallback, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import SpeakingWorkspaceView from '../components/speaking/SpeakingWorkspaceView'
 import SpeakingEditor from '../components/speaking/SpeakingEditor'
 import SpeakingSession from '../components/speaking/SpeakingSession'
@@ -63,7 +63,32 @@ function HomeworkPreview({api}){
   const studentApi=useCallback((op,data={})=>api(op,{...data,demoRole:'student'}),[api])
   return task?<SpeakingWorkspaceView initialTaskId={task.id} profile={{role:'student',schoolId:'maxima'}} user={{uid:'demo-student'}} api={studentApi} runtime={demoRuntime} encode={encodeDemo} onBack={()=>setTask(null)} onMock={()=>{}}/>:<SpeakingHomeworkSection user={{uid:'demo-student'}} api={studentApi} onOpen={setTask}/>
 }
+function AssessmentScenario({api,scenario}){
+  const [calls,setCalls]=useState(0)
+  const simulated=useRef(null)
+  const assessmentApi=useCallback(async(op,data={})=>{
+    if(!simulated.current)simulated.current={status:scenario==='processing'?'processing':'not_requested',report:null,finishAt:scenario==='processing'?Date.now()+1000:0}
+    const state=simulated.current
+    const sample=await api('get',{attemptId:'sample'})
+    if(op==='get'){
+      if(state.status==='processing'&&state.finishAt&&Date.now()>=state.finishAt){state.status='completed';state.report=sample.report}
+      return {...sample,id:'assessment-demo',aiStatus:state.status,report:state.report,aiAvailable:true}
+    }
+    if(op==='evaluate'){
+      setCalls(v=>v+1);state.status='processing'
+      await new Promise(resolve=>setTimeout(resolve,1800))
+      if(scenario==='failure'){state.status='failed';throw Error('Simulated assessment failure. The saved recordings are retained.')}
+      state.status='completed';state.report=sample.report;return state.report
+    }
+    return api(op,data)
+  },[api,scenario])
+  return <><p className="mb-4 text-sm text-slate-500">Simulated AI requests: {calls}. No real assessment or student recording is used.</p><SpeakingReport attemptId="assessment-demo" api={assessmentApi} aiAvailable/></>
+}
+function AssessmentPreview({api}){
+  const [scenario,setScenario]=useState('success')
+  return <><div className="mb-5 flex flex-wrap gap-2">{[['success','New assessment'],['processing','Resume saved processing'],['failure','Simulate assessment failure']].map(([id,label])=><button type="button" key={id} className="rounded-xl border bg-white px-4 py-2 text-sm" onClick={()=>setScenario(id)}>{label}</button>)}</div><AssessmentScenario key={scenario} api={api} scenario={scenario}/></>
+}
 export default function SpeakingPreview(){
   const [tab,setTab]=useState('roles'),[config,setConfig]=useState(defaultMockSpeakingConfig),[api]=useState(createDemo),[finished,setFinished]=useState(false)
-  return <div className="min-h-screen bg-slate-50 text-slate-900"><header className="bg-white border-b px-5 py-5"><div className="max-w-5xl mx-auto"><p className="text-sm font-bold text-indigo-700">MAXIMA · LOCAL SPEAKING PREVIEW</p><h1 className="text-2xl font-bold mt-2">Speaking çalışma alanı</h1><p className="text-sm text-slate-600 mt-3">Yalnız yerel demo. Mikrofon açılmaz, sunucuya veri gönderilmez, kredi harcanmaz. Rapor örnek veridir. Zamanlayıcı inceleme için 20 kat hızlıdır; ses sorusu okuma kapalıdır.</p><div className="flex flex-wrap gap-2 mt-5">{[['roles','Öğretmen / Admin / Öğrenci'],['homework','Öğrenci · ödevler'],['editor','Öğretmen · Mock ayarı'],['practice','Öğrenci · pratik'],['part2','Tek Part 2 pratiği'],['full-speaking','Tam Speaking denemesi'],['mock','Otomatik Mock'],['report','Rapor / öğretmen notu']].map(([id,label])=><button key={id} onClick={()=>{setTab(id);setFinished(false)}} className={`rounded-xl px-4 py-2 text-sm ${id===tab?'bg-indigo-700 text-white':'border'}`}>{label}</button>)}</div></div></header><main className="max-w-5xl mx-auto p-5 sm:p-8">{tab==='homework'?<HomeworkPreview api={api}/>:tab==='roles'?<RolePreview api={api}/>:tab==='editor'?<div className="rounded-2xl bg-white border p-5"><h2 className="text-lg font-semibold">Mock’a isteğe bağlı Speaking ekle</h2><p className="mt-2 text-sm text-slate-500">Kapalı bırakılan Mock’lar mevcut akışla çalışır. Soruları düzenleyebilir, ekleyebilir ve sürelerini belirleyebilirsin.</p><SpeakingEditor value={config} onChange={setConfig} optional full/></div>:tab==='report'?<SpeakingReport key="sample" attemptId="sample" staff api={api}/>:<><p className="rounded-xl bg-amber-50 text-amber-900 p-4 mb-4 text-sm">Bu ekrandaki “Test microphone” düğmesi yalnız sentetik bir ses üretir. Gerçek cihaz mikrofonuna erişmez.</p><button type="button" className="mb-4 border rounded-lg px-4 py-2 text-sm" onClick={()=>api.failNextSave()}>Sonraki kayıtta bağlantı hatası dene</button><button type="button" className="mb-4 ml-3 border rounded-lg px-4 py-2 text-sm" onClick={()=>api.failNextSubmit()}>Son gönderimde bağlantı hatası dene</button><SpeakingSession key={tab} taskId={tab==='part2'?'demo-part2-practice':tab==='full-speaking'?'demo-full-speaking':'demo-task'} mockId={tab==='mock'?'demo-mock':undefined} api={api} runtime={demoRuntime} encode={encodeDemo} onComplete={()=>setFinished(true)}/>{finished&&<p role="status" className="text-emerald-800 mt-4">Demo tamamlandı. Gerçek öğrenci kaydı oluşturulmadı.</p>}</>}</main></div>
+  return <div className="min-h-screen bg-slate-50 text-slate-900"><header className="bg-white border-b px-5 py-5"><div className="max-w-5xl mx-auto"><p className="text-sm font-bold text-indigo-700">MAXIMA · LOCAL SPEAKING PREVIEW</p><h1 className="text-2xl font-bold mt-2">Speaking çalışma alanı</h1><p className="text-sm text-slate-600 mt-3">Yalnız yerel demo. Mikrofon açılmaz, sunucuya veri gönderilmez, kredi harcanmaz. Rapor örnek veridir. Zamanlayıcı inceleme için 20 kat hızlıdır; ses sorusu okuma kapalıdır.</p><div className="flex flex-wrap gap-2 mt-5">{[['roles','Öğretmen / Admin / Öğrenci'],['homework','Öğrenci · ödevler'],['editor','Öğretmen · Mock ayarı'],['practice','Öğrenci · pratik'],['part2','Tek Part 2 pratiği'],['full-speaking','Tam Speaking denemesi'],['mock','Otomatik Mock'],['assessment','AI değerlendirme yüklemesi'],['report','Rapor / öğretmen notu']].map(([id,label])=><button key={id} onClick={()=>{setTab(id);setFinished(false)}} className={`rounded-xl px-4 py-2 text-sm ${id===tab?'bg-indigo-700 text-white':'border'}`}>{label}</button>)}</div></div></header><main className="max-w-5xl mx-auto p-5 sm:p-8">{tab==='assessment'?<AssessmentPreview api={api}/>:tab==='homework'?<HomeworkPreview api={api}/>:tab==='roles'?<RolePreview api={api}/>:tab==='editor'?<div className="rounded-2xl bg-white border p-5"><h2 className="text-lg font-semibold">Mock’a isteğe bağlı Speaking ekle</h2><p className="mt-2 text-sm text-slate-500">Kapalı bırakılan Mock’lar mevcut akışla çalışır. Soruları düzenleyebilir, ekleyebilir ve sürelerini belirleyebilirsin.</p><SpeakingEditor value={config} onChange={setConfig} optional full/></div>:tab==='report'?<SpeakingReport key="sample" attemptId="sample" staff api={api}/>:<><p className="rounded-xl bg-amber-50 text-amber-900 p-4 mb-4 text-sm">Bu ekrandaki “Test microphone” düğmesi yalnız sentetik bir ses üretir. Gerçek cihaz mikrofonuna erişmez.</p><button type="button" className="mb-4 border rounded-lg px-4 py-2 text-sm" onClick={()=>api.failNextSave()}>Sonraki kayıtta bağlantı hatası dene</button><button type="button" className="mb-4 ml-3 border rounded-lg px-4 py-2 text-sm" onClick={()=>api.failNextSubmit()}>Son gönderimde bağlantı hatası dene</button><SpeakingSession key={tab} taskId={tab==='part2'?'demo-part2-practice':tab==='full-speaking'?'demo-full-speaking':'demo-task'} mockId={tab==='mock'?'demo-mock':undefined} api={api} runtime={demoRuntime} encode={encodeDemo} onComplete={()=>setFinished(true)}/>{finished&&<p role="status" className="text-emerald-800 mt-4">Demo tamamlandı. Gerçek öğrenci kaydı oluşturulmadı.</p>}</>}</main></div>
 }
