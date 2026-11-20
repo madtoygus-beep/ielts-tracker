@@ -7,7 +7,7 @@ class Fault extends Error{constructor(code,message){super(message);this.code=cod
 const question={part:1,text:'What do you enjoy learning?',seconds:30}
 const full={enabled:true,questions:[question,{part:2,text:'Describe a skill you learned.',seconds:120},{part:3,text:'How should schools teach practical skills?',seconds:60}]}
 function wav(seconds=1,silent=false){const b=Buffer.alloc(44+seconds*32000);b.write('RIFF');b.writeUInt32LE(b.length-8,4);b.write('WAVEfmt ',8);b.writeUInt32LE(16,16);b.writeUInt16LE(1,20);b.writeUInt16LE(1,22);b.writeUInt32LE(16000,24);b.writeUInt32LE(32000,28);b.writeUInt16LE(2,32);b.writeUInt16LE(16,34);b.write('data',36);b.writeUInt32LE(b.length-44,40);if(!silent)for(let i=44;i<b.length;i+=2)b.writeInt16LE(Math.round(Math.sin(i/25)*4000),i);return b.toString('base64')}
-function world(){
+function world(options={}){
   let time=100000,providerCalls=0,allowed=true
   const docs=new Map([
     ['users/S1',{role:'student',status:'approved',schoolId:'maxima',name:'Synthetic learner'}],
@@ -30,7 +30,7 @@ function world(){
   }
   const bucket={file:path=>({save:async(bytes,opts)=>{assert.equal(opts.metadata.metadata.firebaseStorageDownloadTokens,undefined);objects.set(path,Buffer.from(bytes))},download:async()=>[objects.get(path)]})}
   const requireStudent=async req=>{if(!req.auth?.uid)throw new Fault('unauthenticated','Sign in');const profile=docs.get(`users/${req.auth.uid}`);if(profile?.role!=='student')throw new Fault('permission-denied','Student only');return {uid:req.auth.uid,schoolId:'maxima',profile}}
-  const service=createSpeakingService({db,bucket,HttpsError:Fault,requireStudent,requireAssignmentManager:async req=>{const profile=docs.get(`users/${req.auth?.uid}`);if(!['teacher','admin'].includes(profile?.role))throw new Fault('permission-denied','Staff only');return {uid:req.auth.uid,profile}},schoolIdOf:p=>p?.schoolId||'maxima',requireAssignedMock:async()=>({title:'Mock',teacherId:'T1',schoolId:'maxima',speakingConfig:full}),requireCurrentTeacherAcademicStudent:async({manager:m})=>{if(m.profile.role!=='admin'&&!allowed)throw new Fault('permission-denied','Revoked')},now:()=>time,aiEnabled:()=>true,provider:async()=>{providerCalls++;return {estimatedBand:5,summary:'Synthetic audio evaluation',criteria:{},answers:[]}}})
+  const service=createSpeakingService({db,bucket,HttpsError:Fault,requireStudent,requireAssignmentManager:async req=>{const profile=docs.get(`users/${req.auth?.uid}`);if(!['teacher','admin'].includes(profile?.role))throw new Fault('permission-denied','Staff only');return {uid:req.auth.uid,profile}},schoolIdOf:p=>p?.schoolId||'maxima',requireAssignedMock:async()=>({title:'Mock',teacherId:'T1',schoolId:'maxima',speakingConfig:full}),requireCurrentTeacherAcademicStudent:async({manager:m})=>{if(m.profile.role!=='admin'&&!allowed)throw new Fault('permission-denied','Revoked')},now:()=>time,aiEnabled:options.aiEnabled||(()=>true),provider:async()=>{providerCalls++;return {estimatedBand:5,summary:'Synthetic audio evaluation',criteria:{},answers:[]}}})
   const call=(op,data={},uid='S1')=>service.call({auth:{uid},data:{op,...data}})
   return {docs,objects,db,service,call,advance:ms=>{time+=ms},revoke:()=>{allowed=false},calls:()=>providerCalls,student:{uid:'S1',profile:{name:'Synthetic learner'},schoolId:'maxima'}}
 }
@@ -162,11 +162,30 @@ test('standalone full Speaking mock validates all three parts and uses automatic
  const p2=await w.call('beginQuestion',{attemptId:a.id});assert.equal(p2.recordAt-p2.startedAt,68000);assert.equal(p2.deadline-p2.recordAt,120000)
  w.advance(128000);const result=await w.call('saveAnswer',{attemptId:a.id,index:1,audio:wav(60),finishEarly:true});assert.equal(result.nextIndex,2)
 })
-test('Speaking AI is disabled by default and enabled only for the explicit pilot student',()=>{
+test('configured Speaking AI is available without a per-student pilot list and retains the global off switch',()=>{
  const {speakingAiEnabledFor}=require('../../functions/lib/speaking/aiAccess')
- const env={MAXIMA_SPEAKING_AI_ENABLED:'true',MAXIMA_SPEAKING_AUDIO_MODEL:'gpt-audio-1.5',MAXIMA_SPEAKING_AI_STUDENT_IDS:'S1'}
- assert.equal(speakingAiEnabledFor('S1',env),true);assert.equal(speakingAiEnabledFor('S2',env),false);assert.equal(speakingAiEnabledFor(undefined,env),false)
- assert.equal(speakingAiEnabledFor('S1',{...env,MAXIMA_SPEAKING_AI_STUDENT_IDS:''}),false)
+ const env={MAXIMA_SPEAKING_AI_ENABLED:'true',MAXIMA_SPEAKING_AUDIO_MODEL:'gpt-audio-1.5'}
+ assert.equal(speakingAiEnabledFor('S1',env),true);assert.equal(speakingAiEnabledFor('S2',env),true)
+ assert.equal(speakingAiEnabledFor('S2',{...env,MAXIMA_SPEAKING_AI_STUDENT_IDS:'S1'}),true)
+ assert.equal(speakingAiEnabledFor(undefined,env),false);assert.equal(speakingAiEnabledFor(' ',env),false)
+ assert.equal(speakingAiEnabledFor('S1',{}),false)
  assert.equal(speakingAiEnabledFor('S1',{...env,MAXIMA_SPEAKING_AI_ENABLED:'false'}),false)
  assert.equal(speakingAiEnabledFor('S1',{...env,MAXIMA_SPEAKING_AUDIO_MODEL:''}),false)
+})
+test('a newly assigned student can request AI without manual enablement; other students and removed assignments remain blocked',async()=>{
+ const {speakingAiEnabledFor}=require('../../functions/lib/speaking/aiAccess')
+ const env={MAXIMA_SPEAKING_AI_ENABLED:'true',MAXIMA_SPEAKING_AUDIO_MODEL:'gpt-audio-1.5'}
+ const w=world({aiEnabled:id=>speakingAiEnabledFor(id,env)})
+ await rejected(w.call('start',{taskId:'task1'},'S2'),'permission-denied')
+ w.docs.get('speakingTasks/task1').assignedTo.push('S2')
+ const a=await w.call('start',{taskId:'task1'},'S2');assert.equal(a.aiAvailable,true)
+ await w.call('beginQuestion',{attemptId:a.id},'S2')
+ await w.call('saveAnswer',{attemptId:a.id,index:0,audio:wav()},'S2')
+ await w.call('submit',{attemptId:a.id},'S2')
+ await rejected(w.call('evaluate',{attemptId:a.id,consent:true},'S1'),'permission-denied')
+ await w.call('evaluate',{attemptId:a.id,consent:true},'S2');assert.equal(w.calls(),1)
+ w.docs.get('speakingTasks/task1').assignedTo=['S1']
+ await rejected(w.call('get',{attemptId:a.id},'S2'),'permission-denied')
+ await rejected(w.call('evaluate',{attemptId:a.id,consent:true},'S2'),'permission-denied')
+ assert.equal(w.calls(),1)
 })
