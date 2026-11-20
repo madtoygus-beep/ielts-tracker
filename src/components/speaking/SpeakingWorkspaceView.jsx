@@ -29,7 +29,7 @@ export default function SpeakingWorkspaceView({profile,user,students=[],classes=
   },[api,staff])
   useEffect(()=>{let active=true;alive.current=true;const run=++generation.current;api('list',{staff}).then(next=>{if(active&&run===generation.current){setData(next);setLoading(false)}}).catch(e=>{if(active){setError(e.message);setLoading(false)}});return()=>{active=false;alive.current=false}},[api,staff])
   const action=async fn=>{if(busy)return;setBusy(true);setError('');try{await fn()}catch(e){setError(e.message)}finally{setBusy(false)}}
-  const openEditor=task=>{setEditor(task?{...task,assignedTo:[...task.assignedTo],expectedUpdatedAt:task.updatedAt}:{title:'',config:{...defaultSpeakingConfig(),enabled:true},assignedTo:[]});setError('')}
+  const openEditor=task=>{setEditor(task?{...task,assignedTo:[...task.assignedTo],expectedUpdatedAt:task.updatedAt}:{title:'',mode:'practice',config:{...defaultSpeakingConfig(),enabled:true},assignedTo:[]});setError('')}
   const save=()=>action(async()=>{const problem=validateSpeakingConfig(editor.config);if(problem)throw Error(problem);const saved=await api('saveTask',editor);setEditor(null);setShowArchived(false);setSearch('');setPartFilter('all');await fetchData();setData(old=>{const task=saved.task||old.tasks.find(t=>t.id===saved.id);return task?{...old,tasks:[task,...old.tasks.filter(t=>t.id!==saved.id)]}:old})})
   const setArchive=task=>action(async()=>{
     const message=task.archived?'Restore access to this Speaking set?':'Archive this set? Students lose access; saved recordings remain available to staff.'
@@ -55,7 +55,8 @@ export default function SpeakingWorkspaceView({profile,user,students=[],classes=
       {editor?<div className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-8">
         <h2 className="font-semibold text-lg">{editor.id?'Edit Speaking':'Create Speaking'}</h2>
         <label className="block text-sm mt-5">Title<input aria-label="Speaking title" maxLength={180} className="block border rounded-xl p-3 w-full mt-2" value={editor.title} onChange={e=>setEditor(v=>({...v,title:e.target.value}))}/></label>
-        <SpeakingEditor value={editor.config} onChange={config=>setEditor(v=>({...v,config}))}/>
+        <label className="block text-sm mt-5">Session type<select aria-label="Speaking session type" className="block border rounded-xl p-3 w-full mt-2" value={editor.mode||'practice'} onChange={e=>setEditor(v=>({...v,mode:e.target.value}))}><option value="practice">Practice · student controls recording</option><option value="mock">Full Speaking Mock · automatic progression</option></select></label>
+        <SpeakingEditor full={editor.mode==='mock'} value={editor.config} onChange={config=>setEditor(v=>({...v,config}))}/>
         <h3 className="font-semibold">Assign students (optional)</h3><p className="text-sm text-slate-500 mt-1">Save to your library first, or assign to your current students.</p>
         {hiddenAssignments>0&&<p className="text-sm text-amber-900 rounded-lg bg-amber-50 p-3 mt-3">{hiddenAssignments} previous assignment(s) are outside your current roster and will be preserved.</p>}
         <div className="flex flex-wrap gap-2 mt-4">{classes.map(c=>{

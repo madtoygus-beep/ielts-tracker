@@ -51,7 +51,7 @@ function createSpeakingService({db,bucket,requireStudent,requireAssignmentManage
   }
   const publicAttempt=a=>({id:a.id,title:a.title,mode:a.mode,timedPart2:a.timedPart2===true,questions:a.questions,status:a.status,nextIndex:a.nextIndex,
     current:a.current||null,answers:(a.answers||[]).map(({storagePath,sha256,...v})=>v),report:a.report||null,review:a.review||null,
-    mockId:a.mockId||'',taskId:a.taskId||'',studentName:a.studentName||'Student',startedAt:a.startedAt,serverNow:now(),submittedAt:a.submittedAt||null,aiStatus:a.aiStatus||'not_requested',aiRequestedAt:a.aiRequestedAt||null,aiRecoveryCount:(a.aiRecovery||[]).length,aiAvailable:aiEnabled()})
+    mockId:a.mockId||'',taskId:a.taskId||'',studentName:a.studentName||'Student',startedAt:a.startedAt,serverNow:now(),submittedAt:a.submittedAt||null,aiStatus:a.aiStatus||'not_requested',aiRequestedAt:a.aiRequestedAt||null,aiRecoveryCount:(a.aiRecovery||[]).length,aiAvailable:aiEnabled(a.studentId)})
   async function saveTask(request) {
     const staff=await requireAssignmentManager(request),data=request.data||{}
     if(!data.id&&staff.profile.role!=='teacher')fail('permission-denied','Speaking sets are created by teachers.')
@@ -59,7 +59,7 @@ function createSpeakingService({db,bucket,requireStudent,requireAssignmentManage
     if(!schoolId||schoolId.startsWith('__'))fail('failed-precondition','Select an institution account.')
     const title=String(data.title||'').trim()
     if(!title||title.length>180)fail('invalid-argument','Enter a title (up to 180 characters).')
-    let validated;try{validated=config({...data.config,enabled:true})}catch(e){fail('invalid-argument',e.message)}
+    let validated;try{validated=config({...data.config,enabled:true},data.mode==='mock')}catch(e){fail('invalid-argument',e.message)}
     let assignedTo=[...new Set(Array.isArray(data.assignedTo)?data.assignedTo:[])]
     const original=data.id?await read(`speakingTasks/${id(data.id)}`):null
     if(original)schoolId=original.schoolId
@@ -78,7 +78,7 @@ function createSpeakingService({db,bucket,requireStudent,requireAssignmentManage
       if(!user||user.status!=='approved'||user.deleted||user.archived||!['admin','teacher'].includes(user.role))fail('permission-denied','Staff access changed.')
       if(data.id&&(!latest||!staffAccess({uid:staff.uid,profile:user},latest)||latest.updatedAt!==original.updatedAt))fail('aborted','Task changed. Reload before saving.')
       for(const sid of assignedTo.filter(sid=>!protectedIds.includes(sid)))await requireCurrentTeacherAcademicStudent({db,HttpsError,manager:{uid:staff.uid,profile:user},studentId:sid,schoolId,tx})
-      tx.set(ref,{title,schoolId,teacherId:original?.teacherId||staff.uid,config:validated,assignedTo,updatedAt:now(),archived:false},{merge:true})
+      tx.set(ref,{title,schoolId,mode:data.mode==='mock'?'mock':'practice',teacherId:original?.teacherId||staff.uid,config:validated,assignedTo,updatedAt:now(),archived:false},{merge:true})
     })
     return {id:taskId,task:await read(ref.path)}
   }
@@ -87,7 +87,7 @@ function createSpeakingService({db,bucket,requireStudent,requireAssignmentManage
     const actor=staff?await requireAssignmentManager(request):await requireStudent(request)
     const admin=staff&&actor.profile.role==='admin',kind=request.data?.kind||'both'
     if(!['both','tasks','attempts'].includes(kind))fail('invalid-argument','Invalid list selection.')
-    const result={tasks:[],attempts:[],cursors:{tasks:null,attempts:null},aiAvailable:aiEnabled()}
+    const result={tasks:[],attempts:[],cursors:{tasks:null,attempts:null},aiAvailable:aiEnabled(actor.uid)}
     const names=new Map()
     const teacherName=async uid=>{
       if(!names.has(uid)){const snap=await db.doc(`users/${id(uid)}`).get();names.set(uid,snap.data()?.name||snap.data()?.displayName||'Teacher')}
@@ -176,7 +176,7 @@ function createSpeakingService({db,bucket,requireStudent,requireAssignmentManage
       attemptId=createHash('sha256').update(`${student.uid}\0${mockId}\0${mockAttempt}`).digest('hex')
     }else{
       source=await read(`speakingTasks/${id(data.taskId)}`);await studentAccess(student,source)
-      questions=config(source.config).questions;attemptId=randomUUID()
+      mode=source.mode==='mock'?'mock':'practice';questions=config(source.config,mode==='mock').questions;attemptId=randomUUID()
     }
     const ref=db.doc(`speakingAttempts/${attemptId}`)
     const output=await db.runTransaction(async tx=>{
@@ -298,7 +298,7 @@ function createSpeakingService({db,bucket,requireStudent,requireAssignmentManage
     if(attempt.status==='recording')fail('failed-precondition','Submit before requesting AI assessment.')
     if(attempt.report)return attempt.report
     if(request.data?.consent!==true)fail('failed-precondition','Confirm sending the recordings for AI assessment.')
-    if(!aiEnabled())fail('failed-precondition','AI Speaking assessment is not enabled yet. Your teacher can review the recordings.')
+    if(!aiEnabled(actor.uid))fail('failed-precondition','AI Speaking assessment is not enabled yet. Your teacher can review the recordings.')
     if(!attempt.answers.some(a=>a.audible))fail('failed-precondition','There is not enough audible speech for an AI band.')
     if(attempt.answers.reduce((n,a)=>n+Math.ceil(a.duration*32000),0)>40*1024*1024)fail('resource-exhausted','This recording set is too long for one AI assessment. Teacher review is available.')
     // Reserve a bounded school request before any paid call; failures remain reviewable and cannot auto-retry/spend twice.

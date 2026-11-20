@@ -152,3 +152,21 @@ test('Part 2-only practice has one minute preparation, a strict recording minimu
  await rejected(w.call('saveAnswer',{attemptId:a.id,index:0,audio:wav(60),finishEarly:true}),'failed-precondition')
  w.advance(120000);const saved=await w.call('saveAnswer',{attemptId:a.id,index:0,audio:wav(60),finishEarly:true});assert.equal(saved.answers[0].finishedEarly,true)
 })
+test('standalone full Speaking mock validates all three parts and uses automatic server timers without a parent mock',async()=>{
+ const w=world();await rejected(w.call('saveTask',{title:'Invalid full test',mode:'mock',config:{enabled:true,questions:[question]},assignedTo:['S1']},'T1'),'invalid-argument')
+ const task=await w.call('saveTask',{title:'Full Speaking test',mode:'mock',config:full,assignedTo:['S1']},'T1')
+ const a=await w.call('start',{taskId:task.id});assert.equal(a.mode,'mock');assert.equal(a.mockId,'');assert.deepEqual(a.questions.map(q=>q.part),[1,2,3])
+ const first=await w.call('beginQuestion',{attemptId:a.id});assert.equal(first.recordAt-first.startedAt,8000)
+ await rejected(w.call('saveAnswer',{attemptId:a.id,index:0,audio:wav()}),'failed-precondition')
+ w.advance(40000);await w.call('saveAnswer',{attemptId:a.id,index:0,audio:wav()})
+ const p2=await w.call('beginQuestion',{attemptId:a.id});assert.equal(p2.recordAt-p2.startedAt,68000);assert.equal(p2.deadline-p2.recordAt,120000)
+ w.advance(128000);const result=await w.call('saveAnswer',{attemptId:a.id,index:1,audio:wav(60),finishEarly:true});assert.equal(result.nextIndex,2)
+})
+test('Speaking AI is disabled by default and enabled only for the explicit pilot student',()=>{
+ const {speakingAiEnabledFor}=require('../../functions/lib/speaking/aiAccess')
+ const env={MAXIMA_SPEAKING_AI_ENABLED:'true',MAXIMA_SPEAKING_AUDIO_MODEL:'gpt-audio-1.5',MAXIMA_SPEAKING_AI_STUDENT_IDS:'S1'}
+ assert.equal(speakingAiEnabledFor('S1',env),true);assert.equal(speakingAiEnabledFor('S2',env),false);assert.equal(speakingAiEnabledFor(undefined,env),false)
+ assert.equal(speakingAiEnabledFor('S1',{...env,MAXIMA_SPEAKING_AI_STUDENT_IDS:''}),false)
+ assert.equal(speakingAiEnabledFor('S1',{...env,MAXIMA_SPEAKING_AI_ENABLED:'false'}),false)
+ assert.equal(speakingAiEnabledFor('S1',{...env,MAXIMA_SPEAKING_AUDIO_MODEL:''}),false)
+})

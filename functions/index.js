@@ -7741,7 +7741,7 @@ const speakingService = createSpeakingService({
   db, bucket:getStorage().bucket(STORAGE_BUCKET_NAME), HttpsError,
   requireStudent, requireAssignmentManager, requireAssignedMock,
   requireCurrentTeacherAcademicStudent, schoolIdOf,
-  aiEnabled:()=>process.env.MAXIMA_SPEAKING_AI_ENABLED === 'true' && Boolean(process.env.MAXIMA_SPEAKING_AUDIO_MODEL),
+  aiEnabled:studentId=>require('./lib/speaking/aiAccess').speakingAiEnabledFor(studentId),
   provider:recordings=>gradeSpeaking(recordings,{apiKey:maximaOpenAiKey.value(),model:process.env.MAXIMA_SPEAKING_AUDIO_MODEL})
 })
 exports.speakingWorkspace = onCall({secrets:[maximaOpenAiKey],timeoutSeconds:180,memory:'1GiB',maxInstances:3,concurrency:2},request=>speakingService.call(request))
