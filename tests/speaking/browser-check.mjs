@@ -19,9 +19,9 @@ await evaluate(`document.querySelector('input[type=checkbox]').click()`)
 await wait(`document.querySelectorAll('textarea').length===14`)
 await fs.mkdir('artifacts/speaking',{recursive:true})
 let png=await send('Page.captureScreenshot',{format:'png'});await fs.writeFile('artifacts/speaking/editor.png',Buffer.from(png.data,'base64'))
-await click('Öğrenci · pratik');await wait(has('Test microphone'));await click('Test microphone');await wait(`!!document.querySelector('audio')`);await click('Continue to questions');await wait(has('Ready to record'));await click('Sonraki kayıtta bağlantı hatası dene')
+await click('Öğrenci · pratik');await wait(has('Test microphone'));await click('Test microphone');await wait(`!!document.querySelector('audio')`);await click('Continue to questions');await wait(has('Ready to record'));await wait(`!document.querySelector('audio')`);await click('Sonraki kayıtta bağlantı hatası dene')
 for(let i=0;i<3;i++){
-  await click('● Start recording');await wait(has('Recording…'));await new Promise(r=>setTimeout(r,400));await click('■ Stop recording');await wait(has('Save answer & continue'));await click('Save answer & continue');if(i===0){await wait(has('Simulated connection failure'));await click('Retry saving / resume')}await wait(has(i===2?'Speaking submitted':'Ready to record'))
+  await click('Start recording');await wait(has('Recording…'));await new Promise(r=>setTimeout(r,400));await click('Stop recording');await wait(has('Save answer & continue'));await click('Save answer & continue');if(i===0){await wait(has('Simulated connection failure'));await click('Retry saving / resume')}await wait(has(i===2?'Speaking submitted':'Ready to record'))
 }
 console.log('PASS: manual practice recording, failed-save recovery, saving and submission (synthetic audio)')
 await click('Otomatik Mock');await wait(has('Test microphone'));await click('Son gönderimde bağlantı hatası dene');await click('Test microphone');await wait(`!!document.querySelector('audio')`);await click('Start / resume Mock Speaking');await wait(has('Preparation time'));await wait(has('Simulated final submission failure'));await click('Retry saving / resume');await wait(has('Speaking submitted'))
