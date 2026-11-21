@@ -208,6 +208,13 @@ test('submitted Speaking is locked until the owner teacher allows one retake, pr
  await rejected(w.call('allowRetake',{attemptId:a.id},'T1'),'failed-precondition')
  await w.call('beginQuestion',{attemptId:attempts[0].id});await w.call('saveAnswer',{attemptId:attempts[0].id,index:0,audio:wav()});await w.call('submit',{attemptId:attempts[0].id})
  await rejected(w.call('start',{taskId:'task1'}),'failed-precondition')
+ const usage=structuredClone(w.docs.get('speakingAiUsage/maxima_1970-01-01'))
+ const retake=await w.call('get',{attemptId:attempts[0].id})
+ assert.equal(retake.aiAvailable,false);assert.match(retake.aiAssessmentBlockedReason,/teacher review/)
+ await rejected(w.call('evaluate',{attemptId:retake.id,consent:true}),'failed-precondition')
+ assert.equal(w.calls(),1);assert.deepEqual(w.docs.get('speakingAiUsage/maxima_1970-01-01'),usage)
+ await w.call('get',{attemptId:a.id});await w.call('evaluate',{attemptId:a.id,consent:true})
+ assert.equal(w.calls(),1);assert.deepEqual(w.docs.get(`speakingAttempts/${a.id}`),original)
 })
 test('legacy submissions without attempt controls are also locked and can receive a teacher-approved retake',async()=>{
  const w=world(),a=await complete(w)
@@ -223,4 +230,19 @@ test('unsubmitted answers can resume but cannot receive a retake; parent Mock re
  await rejected(w.call('allowRetake',{attemptId:a.id},'T1'),'failed-precondition')
  const m=await w.call('start',{mockId:'mock1'});w.docs.get(`speakingAttempts/${m.id}`).status='submitted'
  await rejected(w.call('allowRetake',{attemptId:m.id},'T1'),'failed-precondition')
+})
+
+test('teacher may explicitly grant one paid AI assessment on a retake; the next retake defaults off',async()=>{
+ const w=world(),first=await complete(w);await w.call('evaluate',{attemptId:first.id,consent:true})
+ await rejected(w.call('allowRetake',{attemptId:first.id,allowAi:true}),'permission-denied')
+ await w.call('allowRetake',{attemptId:first.id,allowAi:true},'T1')
+ const second=await w.call('start',{taskId:'task1',retakeAiAllowed:true})
+ assert.equal(second.aiAvailable,true);assert.equal(second.aiAssessmentBlockedReason,'')
+ await w.call('beginQuestion',{attemptId:second.id});await w.call('saveAnswer',{attemptId:second.id,index:0,audio:wav()});await w.call('submit',{attemptId:second.id})
+ await rejected(w.call('evaluate',{attemptId:second.id,consent:false}),'failed-precondition')
+ await Promise.allSettled([w.call('evaluate',{attemptId:second.id,consent:true}),w.call('evaluate',{attemptId:second.id,consent:true})]);assert.equal(w.calls(),2)
+ await w.call('evaluate',{attemptId:second.id,consent:true});assert.equal(w.calls(),2)
+ await w.call('allowRetake',{attemptId:second.id},'T1')
+ const third=await w.call('start',{taskId:'task1',retakeAiAllowed:true});assert.equal(third.aiAvailable,false)
+ assert.equal(w.docs.get(`speakingAttempts/${third.id}`).retakeAiAllowed,false)
 })

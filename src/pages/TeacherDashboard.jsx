@@ -1,3 +1,5 @@
+import { useTeacherSpeakingHomework } from '../hooks/useTeacherSpeakingHomework'
+import { teacherSpeakingHomeworkForStudent } from '../services/teacherSpeakingHomework'
 import { dashboardMockOverall } from '../services/mockAiResultGatePolicy'
 import PartialWritingNotice from '../components/PartialWritingNotice'
 import { partialWritingSummary } from '../services/partialWritingPresentation'
@@ -716,6 +718,7 @@ export default function TeacherDashboard() {
   const manualScoreRequestRef = useRef(null)
 
   const [user, setUser] = useState(null)
+  const speakingHomework = useTeacherSpeakingHomework(user?.uid)
   const [profile, setProfile] = useState(null)
   const [showPasswordModal, setShowPasswordModal] = useState(false)
   const [newPassword, setNewPassword] = useState('')
@@ -6371,11 +6374,17 @@ export default function TeacherDashboard() {
 
   const homeworkProgressByStudent = useMemo(() => students.map(student => ({
     student,
-    progress: getStudentHomeworkProgress(student.id)
+    progress: (() => {
+      const progress = getStudentHomeworkProgress(student.id)
+      const speaking = teacherSpeakingHomeworkForStudent(speakingHomework, student.id)
+      const completed = speaking.filter(item => ['submitted', 'reviewed'].includes(item.attempt?.status)).length
+      const assigned = progress.assigned + speaking.length
+      return { ...progress, assigned, completed: progress.completed + completed, notCompleted: progress.notCompleted + speaking.length - completed, rate: assigned ? Math.round((progress.completed + completed) / assigned * 100) : 0 }
+    })()
   })), [
     students, readings, writings, listenings, vocabularyTests, mockTests,
     submissions, writingSubmissions, listeningSubmissions,
-    vocabularySubmissions, mockSubmissions, assignmentStudentIdsByContent
+    vocabularySubmissions, mockSubmissions, assignmentStudentIdsByContent, speakingHomework
   ])
   const homeworkProgressById = useMemo(() => new Map(
     homeworkProgressByStudent.map(({ student, progress }) => [student.id, progress])
@@ -8190,6 +8199,7 @@ export default function TeacherDashboard() {
             const studentWritings = writingOpen ? getStudentWritings(student.id) : []
             const studentListenings = homeworkOpen ? getStudentListenings(student.id) : []
             const studentVocabularyTests = homeworkOpen ? getStudentVocabularyTests(student.id) : []
+            const studentSpeakingTasks = homeworkOpen ? teacherSpeakingHomeworkForStudent(speakingHomework, student.id) : []
             const analytics = homeworkOpen ? getStudentAnalytics(student.id) : null
             const homeworkProgress = homeworkProgressById.get(student.id) || {
               assigned: 0, completed: 0, notCompleted: 0, overdue: 0, rate: 0, types: {}
@@ -8459,7 +8469,8 @@ export default function TeacherDashboard() {
                         ['reading', '📖 Reading', studentReadings.length],
                         ['writing', '✍️ Writing', studentWritings.length],
                         ['listening', '🎧 Listening', studentListenings.length],
-                        ['vocabulary', '📚 Vocabulary', studentVocabularyTests.length]
+                        ['vocabulary', '📚 Vocabulary', studentVocabularyTests.length],
+                        ['speaking', '🎙️ Speaking', studentSpeakingTasks.length]
                       ].map(([key, label, count]) => (
                         <button
                           key={key}
@@ -8476,6 +8487,20 @@ export default function TeacherDashboard() {
                         </button>
                       ))}
                     </div>
+                    {(studentHomeworkTypeView === 'all' || studentHomeworkTypeView === 'speaking') && (
+                      <details open={studentHomeworkTypeView === 'speaking'} className="group mb-4 rounded-2xl border border-slate-200 bg-white overflow-hidden">
+                        <summary className="flex cursor-pointer items-center justify-between p-4"><span className="font-semibold text-slate-800">🎙️ Speaking</span><span className="text-xs text-slate-500">{studentSpeakingTasks.length} assignments</span></summary>
+                        <div className="space-y-3 border-t border-slate-100 p-4">
+                          {speakingHomework.loading && <p role="status" className="text-sm text-slate-500">Loading Speaking homework…</p>}
+                          {speakingHomework.error && <p role="alert" className="text-sm text-amber-700">{speakingHomework.error}</p>}
+                          {!speakingHomework.loading && !speakingHomework.error && !studentSpeakingTasks.length && <p className="text-sm text-slate-500">No Speaking assignments.</p>}
+                          {studentSpeakingTasks.map(item => <div key={item.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-slate-50 p-4">
+                            <div><p className="text-sm font-semibold text-slate-800">{item.title}</p><p className="mt-1 text-xs text-slate-500">{item.attempt?.status || 'Not started'}{item.attempt?.report?.estimatedBand != null ? ` · AI estimate ${item.attempt.report.estimatedBand.toFixed(1)}` : ''}{item.attempt?.review?.band != null ? ` · Teacher ${item.attempt.review.band.toFixed(1)}` : ''}</p></div>
+                            <button type="button" onClick={() => navigate(item.attempt ? `/speaking?report=${encodeURIComponent(item.attempt.id)}` : '/speaking')} className="rounded-xl bg-purple-600 px-4 py-2 text-xs font-semibold text-white">{item.attempt ? 'View feedback' : 'Open Speaking'}</button>
+                          </div>)}
+                        </div>
+                      </details>
+                    )}
                     {(studentHomeworkTypeView === 'all' || studentHomeworkTypeView === 'reading') && (
                     <details open={studentHomeworkTypeView === 'reading'} className="group mb-4 rounded-2xl border border-slate-200 bg-white overflow-hidden">
                       <summary className="flex cursor-pointer select-none items-center justify-between gap-3 p-4 font-semibold text-slate-800 hover:bg-slate-50 [&::-webkit-details-marker]:hidden">

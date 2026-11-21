@@ -61,9 +61,10 @@ function createSpeakingService({db,bucket,requireStudent,requireAssignmentManage
       else if(teacher.role!=='admin')fail('permission-denied','Assignment teacher is unavailable.')
     }
   }
+  const retakeAiBlocked=a=>(a.attemptNumber||a.mockAttempt||1)>1&&a.retakeAiAllowed!==true
   const publicAttempt=a=>({id:a.id,title:a.title,mode:a.mode,attemptNumber:a.attemptNumber||a.mockAttempt||1,timedPart2:a.timedPart2===true,questions:a.questions,status:a.status,nextIndex:a.nextIndex,
     current:a.current||null,answers:(a.answers||[]).map(({storagePath,sha256,...v})=>v),report:a.report||null,review:a.review||null,
-    mockId:a.mockId||'',taskId:a.taskId||'',studentName:a.studentName||'Student',startedAt:a.startedAt,serverNow:now(),submittedAt:a.submittedAt||null,aiStatus:a.aiStatus||'not_requested',aiRequestedAt:a.aiRequestedAt||null,aiRecoveryCount:(a.aiRecovery||[]).length,aiAvailable:aiEnabled(a.studentId)})
+    mockId:a.mockId||'',taskId:a.taskId||'',studentName:a.studentName||'Student',startedAt:a.startedAt,serverNow:now(),submittedAt:a.submittedAt||null,aiStatus:a.aiStatus||'not_requested',aiRequestedAt:a.aiRequestedAt||null,aiRecoveryCount:(a.aiRecovery||[]).length,aiAssessmentBlockedReason:retakeAiBlocked(a)?'Retakes are available for teacher review without another paid AI assessment.':'',aiAvailable:!retakeAiBlocked(a)&&aiEnabled(a.studentId)})
   async function saveTask(request) {
     const staff=await requireAssignmentManager(request),data=request.data||{}
     if(!data.id&&staff.profile.role!=='teacher')fail('permission-denied','Speaking sets are created by teachers.')
@@ -129,7 +130,7 @@ function createSpeakingService({db,bucket,requireStudent,requireAssignmentManage
             const {attempt}=await attemptAccess(request,item.id,staff)
             result.attempts.push({id:attempt.id,title:attempt.title,mode:attempt.mode,status:attempt.status,
               taskId:attempt.taskId,mockId:attempt.mockId,studentName:attempt.studentName,
-              ...(staff?{teacherName:await teacherName(attempt.teacherId)}:{}),
+              ...(staff?{studentId:attempt.studentId,teacherName:await teacherName(attempt.teacherId)}:{}),
               startedAt:attempt.startedAt,aiStatus:attempt.aiStatus,
               review:attempt.review?{band:attempt.review.band}:null,
               report:attempt.report?{estimatedBand:attempt.report.estimatedBand}:null})
@@ -213,7 +214,7 @@ function createSpeakingService({db,bucket,requireStudent,requireAssignmentManage
       tx.set(quotaRef,{studentId:student.uid,schoolId:student.schoolId,attempts:count+1,day})
       const value={studentId:student.uid,teacherId:source.teacherId||source.createdBy,schoolId:student.schoolId,
         taskId:data.taskId||'',mockId,mockAttempt,title:source.title,studentName:student.profile.name||student.profile.displayName||'Student',mode,questions,
-        ...(standalone?{attemptNumber:(control.attemptNumber||0)+1,retakeApprovedBy:control.retakeOpen===true?control.openedBy||'':''}:{}),
+        ...(standalone?{attemptNumber:(control.attemptNumber||0)+1,retakeAiAllowed:control.retakeOpen===true&&control.retakeAiAllowed===true,retakeApprovedBy:control.retakeOpen===true?control.openedBy||'':''}:{}),
         timedPart2:mode==='practice'&&questions.every(q=>q.part===2),startedAt:now(),status:'recording',nextIndex:0,current:null,answers:[],aiStatus:'not_requested'}
       if(standalone)tx.set(standalone.ref,{studentId:student.uid,taskId:data.taskId,schoolId:student.schoolId,latestAttemptId:attemptId,attemptNumber:value.attemptNumber,status:'recording',retakeOpen:false,updatedAt:now()})
       tx.create(ref,value);return {id:attemptId,...value}
@@ -296,7 +297,7 @@ function createSpeakingService({db,bucket,requireStudent,requireAssignmentManage
       if(control.latestAttemptId!==attempt.id)fail('failed-precondition','Open the latest Speaking report to allow a retake.')
       if(live.data().status==='recording')fail('failed-precondition','The current attempt has not been submitted.')
       tx.set(fallback.ref,{studentId:attempt.studentId,taskId:attempt.taskId,schoolId:attempt.schoolId,latestAttemptId:attempt.id,
-        attemptNumber:control.attemptNumber||1,status:live.data().status,retakeOpen:true,openedBy:actor.uid,openedAt:now(),updatedAt:now()})
+        attemptNumber:control.attemptNumber||1,status:live.data().status,retakeOpen:true,retakeAiAllowed:request.data?.allowAi===true,openedBy:actor.uid,openedAt:now(),updatedAt:now()})
       return {retakeAvailable:true,nextAttemptNumber:(control.attemptNumber||1)+1}
     })
   }
@@ -342,6 +343,7 @@ function createSpeakingService({db,bucket,requireStudent,requireAssignmentManage
     const {actor,attempt}=await attemptAccess(request,request.data?.attemptId)
     if(attempt.status==='recording')fail('failed-precondition','Submit before requesting AI assessment.')
     if(attempt.report)return attempt.report
+    if(retakeAiBlocked(attempt))fail('failed-precondition','Retakes are available for teacher review without another paid AI assessment.')
     if(request.data?.consent!==true)fail('failed-precondition','Confirm sending the recordings for AI assessment.')
     if(!aiEnabled(actor.uid))fail('failed-precondition','AI Speaking assessment is not enabled yet. Your teacher can review the recordings.')
     if(!attempt.answers.some(a=>a.audible))fail('failed-precondition','There is not enough audible speech for an AI band.')
