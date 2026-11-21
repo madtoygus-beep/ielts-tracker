@@ -26,7 +26,7 @@ function validateWav(base64) {
   for(let i=44;i<b.length;i+=2) energy+=(b.readInt16LE(i)/32768)**2
   return { bytes:b, duration, audible:Math.sqrt(energy/((b.length-44)/2))>0.001 }
 }
-function report(raw, questionIds) {
+function report(raw, questionIds, recordedQuestionIds) {
   if (!raw || typeof raw!=='object' || !Array.isArray(raw.answers) || raw.answers.length!==questionIds.length) throw Error('Incomplete AI report.')
   const bounded=(s,max=3000)=>{if(typeof s!=='string'||s.length>max)throw Error('Invalid report text.');return s.trim()}
   const answers=raw.answers.map((a,i)=>{
@@ -42,7 +42,14 @@ function report(raw, questionIds) {
   const criteria=Object.fromEntries(CRITERIA.map(k=>{
     const c=raw.criteria?.[k]
     if(!c || !Number.isFinite(c.band)||c.band<1||c.band>9||c.band*2%1)throw Error('Invalid Speaking criterion band.')
-    return [k,{band:c.band,explanation:bounded(c.explanation)}]
+    const explanation = bounded(c.explanation)
+    const questionId = c.evidence?.questionId
+    const quote = bounded(c.evidence?.quote, 600)
+    const answer = answers.find(a => a.questionId === questionId)
+    if (!explanation || !quote || /\[inaudible\]/i.test(quote) || !recordedQuestionIds.includes(questionId) || !answer?.transcript.includes(quote)) {
+      throw Error('Missing or unverified Speaking criterion evidence.')
+    }
+    return [k, {band:c.band, explanation, evidence:{questionId, quote}}]
   }))
   return {criteria,estimatedBand:half(CRITERIA.reduce((s,k)=>s+criteria[k].band,0)/4),answers,
     summary:bounded(raw.summary),priorities:(Array.isArray(raw.priorities)?raw.priorities:[]).slice(0,4).map(s=>bounded(s)),isAiEstimate:true}

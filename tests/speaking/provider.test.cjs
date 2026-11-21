@@ -2,7 +2,7 @@
 const {test}=require('node:test'),assert=require('node:assert/strict')
 const {gradeSpeaking}=require('../../functions/lib/speaking/provider')
 const {CRITERIA}=require('../../functions/lib/speaking/policy')
-const raw={assessable:true,summary:'Illustrative evidence only',criteria:Object.fromEntries(CRITERIA.map((k,i)=>[k,{band:[4,5,4,6][i],explanation:'Evidence from the supplied recording'}])),answers:[{questionId:'q1',transcript:'I enjoy learning skills.',feedback:'Add a reason.',corrections:[]},{questionId:'q2',transcript:'',feedback:'No speech was submitted.',corrections:[]}],priorities:['Add an example.']}
+const raw={assessable:true,summary:'Illustrative evidence only',criteria:Object.fromEntries(CRITERIA.map((k,i)=>[k,{band:[4,5,4,6][i],explanation:'Evidence from the supplied recording',evidence:{questionId:'q1',quote:'I enjoy learning skills.'}}])),answers:[{questionId:'q1',transcript:'I enjoy learning skills.',feedback:'Add a reason.',corrections:[]},{questionId:'q2',transcript:'',feedback:'No speech was submitted.',corrections:[]}],priorities:['Add an example.']}
 const recordings=[{question:{id:'q1',part:1,text:'What do you enjoy learning?'},bytes:Buffer.from('synthetic fixture')},{question:{id:'q2',part:2,text:'Describe a skill.'},bytes:null}]
 const settings={apiKey:'sk-local-test-placeholder',model:'gpt-audio-1.5'}
 const response=(value,finish='stop')=>new Response(JSON.stringify({choices:[{finish_reason:finish,message:{content:typeof value==='string'?value:JSON.stringify(value)}}]}))
@@ -42,4 +42,13 @@ test('single-part practice presets support Parts 1, 2 and 3 without weakening fu
  const p2=speakingPracticePreset(speakingPracticePreset(original,'part1'),'part2');assert.equal(p2.questions[0].part,2)
  const mixed=speakingPracticePreset(p2,'mixed');assert.equal(speakingPracticeKind(mixed),'mixed');assert.equal(validateSpeakingConfig(mixed,true),'')
  assert.equal(original.questions.length,5)
+})
+
+test('criterion evidence must come from the identified recorded answer', async () => {
+  for (const evidence of [null, {questionId:'q1', quote:'unspoken words'}, {questionId:'q2', quote:'I enjoy learning skills.'}]) {
+    const value = structuredClone(raw)
+    value.criteria.pronunciation.evidence = evidence
+    value.answers[1].transcript = value.answers[0].transcript
+    await assert.rejects(gradeSpeaking(recordings, {...settings, fetchImpl:async () => response(value)}))
+  }
 })

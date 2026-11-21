@@ -57,7 +57,19 @@ export default function SpeakingReport({attemptId,staff=false,admin=false,aiAvai
     {error&&<p role="alert" className="bg-red-50 text-red-800 rounded-xl p-3">{error}</p>}
     {attempt.review?.feedback&&<p className="rounded-xl bg-emerald-50 p-4 whitespace-pre-wrap">{attempt.review.feedback}</p>}
     {report?<><div className="rounded-xl bg-indigo-50 p-5"><p className="text-xs font-semibold uppercase text-indigo-700">AI practice estimate · unofficial</p><p className="text-4xl font-bold text-indigo-900 my-3">{report.estimatedBand?.toFixed(1)||'Insufficient evidence'}</p><p className="text-sm leading-6">{report.summary}</p><p className="text-xs text-slate-500 mt-3">A limited practice sample is not an official full Speaking result. AI estimates do not replace the teacher's final band.</p></div>
-      {report.criteria&&<div className="space-y-3">{Object.entries(speakingLabels).map(([k,label])=><details key={k} className="border rounded-xl p-4"><summary className="cursor-pointer font-semibold">{label} <span className="float-right text-indigo-800">{report.criteria[k].band.toFixed(1)}</span></summary><p className="mt-3 text-sm leading-6">{report.criteria[k].explanation}</p></details>)}</div>}
+      {report.criteria && <div className="space-y-3">{Object.entries(speakingLabels).map(([key, label]) => {
+        const criterion = report.criteria[key]
+        const evidence = criterion.evidence
+        const index = evidence ? attempt.questions.findIndex(q => q.id === evidence.questionId) : -1
+        return <details key={key} className="border rounded-xl p-4">
+          <summary className="cursor-pointer font-semibold">{label} <span className="float-right text-indigo-800">{criterion.band.toFixed(1)}</span></summary>
+          {index >= 0 && <figure className="mt-3 border-l-2 border-indigo-300 pl-3">
+            <figcaption className="text-xs text-slate-600">From your answer · Part {attempt.questions[index].part} · Question {index + 1}</figcaption>
+            <blockquote className="mt-1 text-sm">“{evidence.quote}”</blockquote>
+          </figure>}
+          <p className="mt-3 text-sm leading-6">{criterion.explanation}</p>
+        </details>
+      })}</div>}
       {report.priorities?.length>0&&<div className="rounded-xl bg-amber-50 p-4"><h3 className="font-semibold mb-2">Next steps</h3><ul className="list-disc pl-5 text-sm space-y-2">{report.priorities.map((p,i)=><li key={i}>{p}</li>)}</ul></div>}
     </>:<div className="rounded-xl bg-slate-50 p-4"><p className="text-sm">{attempt.aiStatus==='processing'?'AI assessment is processing. Refresh this report shortly.':attempt.aiStatus==='failed'?'AI assessment needs administrator attention. The recordings remain available for teacher review.':'No AI report has been requested.'}</p>
       {attempt.aiAssessmentBlockedReason&&<p className="mt-3 text-sm text-slate-600">{attempt.aiAssessmentBlockedReason}</p>}
