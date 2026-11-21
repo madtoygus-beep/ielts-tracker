@@ -44,10 +44,12 @@ function validateCriterion(criterion, answers, recordedQuestionIds) {
   if (!answer || !recordedQuestionIds.includes(questionId)) {
     return unavailable('The excerpt could not be linked to a recorded answer.')
   }
-  if (!answer.transcript.includes(quote.trim())) {
+  const literal = quote.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const match = answer.transcript.match(new RegExp(literal, 'iu'))
+  if (!match) {
     return unavailable('The quoted words could not be matched to the transcript of the cited answer.')
   }
-  return {band:criterion.band, explanation:explanation.trim(), evidence:{questionId, quote:quote.trim()}}
+  return {band:criterion.band, explanation:explanation.trim(), evidence:{questionId, quote:match[0]}}
 }
 function report(raw, questionIds, recordedQuestionIds) {
   if (!raw || typeof raw!=='object' || !Array.isArray(raw.answers) || raw.answers.length!==questionIds.length) throw Error('Incomplete AI report.')

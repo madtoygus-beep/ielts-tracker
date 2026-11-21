@@ -59,3 +59,12 @@ test('criterion evidence must come from the identified recorded answer', async (
     }
   }
 })
+
+test('case differences preserve the original transcript spelling and punctuation stays literal', async () => {
+  const value = structuredClone(raw)
+  value.criteria.fluencyAndCoherence.evidence.quote = 'i enjoy learning skills.'
+  value.criteria.pronunciation.evidence.quote = 'I enjoy learning skill..'
+  const result = await gradeSpeaking(recordings, {...settings,fetchImpl:async () => response(value)})
+  assert.equal(result.criteria.fluencyAndCoherence.evidence.quote, 'I enjoy learning skills.')
+  assert.equal(result.criteria.pronunciation.status, 'unverified')
+})
