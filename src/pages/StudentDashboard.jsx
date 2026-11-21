@@ -1,3 +1,4 @@
+import StudentSpeakingAnalytics from '../components/speaking/StudentSpeakingAnalytics'
 import SpeakingHomeworkSection from '../components/speaking/SpeakingHomeworkSection'
 import { useSpeakingHomework } from '../hooks/useSpeakingHomework'
 import { openSpeakingHomework } from '../services/speakingHomework'
@@ -5599,6 +5600,7 @@ import { formatHomeworkScore, savedObjectiveBand } from '../services/ieltsObject
                 <>
                   <StudentSkillAnalytics user={user} profile={profile} resultsVisibility={resultsVisibility} />
                   <WritingProgressAnalytics user={user} profile={profile} resultsVisibility={resultsVisibility} />
+                  <StudentSpeakingAnalytics user={user} />
                 </>
               )}
             </main>

@@ -1,6 +1,6 @@
 // Staff data comes from the authenticated Speaking callable, including authorization on every attempt.
-export async function loadTeacherSpeakingHomework(api) {
-  const first = await api('list', { staff: true })
+export async function loadTeacherSpeakingHomework(api, staff = true) {
+  const first = await api('list', { staff })
   const result = { tasks: [...first.tasks], attempts: [...first.attempts] }
   await Promise.all(['tasks', 'attempts'].map(async kind => {
     let cursor = first.cursors?.[kind]
@@ -8,7 +8,7 @@ export async function loadTeacherSpeakingHomework(api) {
     while (cursor) {
       if (seen.has(cursor)) throw Error('Speaking pagination could not be completed.')
       seen.add(cursor)
-      const page = await api('list', { staff: true, kind, cursors: { [kind]: cursor } })
+      const page = await api('list', { staff, kind, cursors: { [kind]: cursor } })
       result[kind].push(...page[kind])
       cursor = page.cursors?.[kind]
     }

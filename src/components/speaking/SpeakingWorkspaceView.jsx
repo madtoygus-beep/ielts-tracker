@@ -6,7 +6,7 @@ import SpeakingReport from './SpeakingReport'
 
 const unique=items=>[...new Map(items.map(item=>[item.id,item])).values()]
 const emptyData=()=>({tasks:[],attempts:[],cursors:{tasks:null,attempts:null},aiAvailable:false})
-export default function SpeakingWorkspaceView({profile,user,students=[],classes=[],api,onBack,onMock,runtime,encode,initialTaskId='',initialReportId=''}) {
+export default function SpeakingWorkspaceView({profile,user,students=[],classes=[],api,onBack,onMock,runtime,encode,initialTaskId='',initialReportId='',embedded=false}) {
   const admin=profile.role==='admin',teacher=profile.role==='teacher',staff=admin||teacher
   const [data,setData]=useState(emptyData),[loading,setLoading]=useState(true),[error,setError]=useState('')
   const [tab,setTab]=useState('tasks'),[editor,setEditor]=useState(null),[session,setSession]=useState(()=>!staff&&/^[a-zA-Z0-9_-]{1,180}$/.test(initialTaskId)?{id:initialTaskId}:null),[report,setReport]=useState(()=>/^[a-zA-Z0-9_-]{1,180}$/.test(initialReportId)?initialReportId:null)
@@ -51,12 +51,13 @@ export default function SpeakingWorkspaceView({profile,user,students=[],classes=
   }
   const visible=data[tab==='tasks'?'tasks':'attempts'].filter(item=>(tab!=='tasks'||Boolean(item.archived)===showArchived)&&(tab!=='tasks'||partFilter==='all'||speakingPracticeKind(item.config)===partFilter)&&`${item.title} ${item.studentName||''} ${item.teacherName||''} ${item.status||''} ${item.aiStatus||''}`.toLowerCase().includes(search.toLowerCase()))
   const hiddenAssignments=editor?.assignedTo.filter(id=>!students.some(s=>s.id===id)).length||0
-  return <div className="min-h-screen bg-[#f6f7fb] text-slate-900">
-    <header className="border-b bg-white px-4 sm:px-7 py-4"><div className="max-w-6xl mx-auto flex flex-wrap justify-between items-center gap-4">
+  return <div className={embedded?"text-slate-900":"min-h-screen bg-[#f6f7fb] text-slate-900"}>
+    {!embedded&&<header className="border-b bg-white px-4 sm:px-7 py-4"><div className="max-w-6xl mx-auto flex flex-wrap justify-between items-center gap-4">
       <div className="flex items-center gap-4"><img src="/1.png" alt="MAXIMA" className="h-9 w-auto max-w-28 object-contain"/><div><h1 className="font-bold text-xl">Speaking</h1><p className="text-xs text-slate-500">{admin?'Institution monitoring':teacher?'Teacher workspace':'Student workspace'}</p></div><span className="rounded-md bg-indigo-50 px-2 py-1 text-[11px] font-semibold text-indigo-700">{profile.role.toUpperCase()}</span></div>
       <div className="flex flex-wrap gap-3"><button className="text-sm text-slate-600 px-3 py-2" onClick={onBack}>← Workspace</button>{teacher&&<button disabled={busy} className="bg-indigo-700 text-white rounded-xl px-4 py-2 text-sm disabled:opacity-50" onClick={()=>{openEditor(null);setReport(null);setSession(null)}}>+ Create Speaking</button>}</div>
-    </div></header>
-    <main className="max-w-6xl mx-auto p-4 sm:p-8">
+    </div></header>}
+    <main className={embedded?"rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-6":"max-w-6xl mx-auto p-4 sm:p-8"}>
+      {embedded&&teacher&&<div className="mb-5 flex items-center justify-between gap-3"><h2 className="text-lg font-semibold">Speaking Library</h2><button disabled={busy} type="button" className="rounded-xl bg-indigo-700 px-4 py-2 text-sm text-white disabled:opacity-50" onClick={()=>{openEditor(null);setReport(null);setSession(null)}}>+ Create Speaking</button></div>}
       {admin&&<p className="mb-5 rounded-xl bg-indigo-50 p-4 text-sm text-indigo-900">Teachers prepare and assign Speaking sets. You can monitor this institution’s sets, recordings and AI failures, and provide support.</p>}
       {error&&<p role="alert" className="mb-5 rounded-xl bg-red-50 border border-red-200 text-red-800 p-4">{error}</p>}
       {editor?<div className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-8">

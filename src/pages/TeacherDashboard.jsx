@@ -1,3 +1,6 @@
+import SpeakingWorkspaceView from '../components/speaking/SpeakingWorkspaceView'
+import SpeakingAnalytics from '../components/speaking/SpeakingAnalytics'
+import { speakingApi } from '../services/speakingApi'
 import { useTeacherSpeakingHomework } from '../hooks/useTeacherSpeakingHomework'
 import { teacherSpeakingHomeworkForStudent } from '../services/teacherSpeakingHomework'
 import { dashboardMockOverall } from '../services/mockAiResultGatePolicy'
@@ -387,6 +390,7 @@ const TEACHER_CONTENT_TABS = [
   { id: 'writing', label: 'Writing' },
   { id: 'vocabulary', label: 'Vocabulary' },
   { id: 'mock', label: 'Mock Tests' },
+  { id: 'speaking', label: 'Speaking' },
 ]
 
 const TEACHER_CREATION_ROUTES = [
@@ -734,6 +738,7 @@ export default function TeacherDashboard() {
         'vocabulary',
         'writing',
         'mock',
+        'speaking',
         'analytics',
         'communication',
         'reviews'
@@ -6379,7 +6384,7 @@ export default function TeacherDashboard() {
       const speaking = teacherSpeakingHomeworkForStudent(speakingHomework, student.id)
       const completed = speaking.filter(item => ['submitted', 'reviewed'].includes(item.attempt?.status)).length
       const assigned = progress.assigned + speaking.length
-      return { ...progress, assigned, completed: progress.completed + completed, notCompleted: progress.notCompleted + speaking.length - completed, rate: assigned ? Math.round((progress.completed + completed) / assigned * 100) : 0 }
+      return { ...progress, types: { ...progress.types, speaking: { label: 'Speaking', assigned: speaking.length, completed, overdue: 0, rate: speaking.length ? Math.round(completed / speaking.length * 100) : 0 } }, assigned, completed: progress.completed + completed, notCompleted: progress.notCompleted + speaking.length - completed, rate: assigned ? Math.round((progress.completed + completed) / assigned * 100) : 0 }
     })()
   })), [
     students, readings, writings, listenings, vocabularyTests, mockTests,
@@ -6571,7 +6576,6 @@ export default function TeacherDashboard() {
                 <span className="rounded-md bg-indigo-50 px-2 py-1 text-[11px] font-semibold text-indigo-700">TEACHER</span>
               </div>
               <div className="flex items-center gap-2 sm:gap-4 shrink-0">
-                <button type="button" onClick={()=>navigate('/speaking')} className="rounded-lg bg-indigo-50 px-3 py-2 text-sm text-indigo-800">Speaking</button>
                 <span className="hidden xl:block text-xs text-slate-500 max-w-[200px] truncate" title={user?.email}>{user?.email}</span>
                 <button type="button" onClick={() => setShowPasswordModal(true)} className="inline-flex items-center gap-2 text-xs sm:text-sm text-slate-600 hover:text-slate-900 rounded-lg px-2 py-1 focus-visible:ring-2 focus-visible:ring-indigo-500">
                   <TeacherIcon name="lock" className="h-4 w-4" /> <span className="hidden sm:inline">Password</span>
@@ -6645,18 +6649,18 @@ export default function TeacherDashboard() {
                       className={`whitespace-nowrap rounded-xl px-4 py-2.5 text-sm font-medium transition-colors ${activeTab === item.id ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-100'}`}>
                       {item.label}
                       <span className={`ml-2 text-[11px] ${activeTab === item.id ? 'text-indigo-100' : 'text-slate-400'}`}>
-                        {item.id === 'reading' ? activeReadings.length : item.id === 'listening' ? activeListenings.length : item.id === 'writing' ? activeWritings.length : item.id === 'vocabulary' ? activeVocabularyTests.length : activeMockTests.length}
+                        {item.id === 'reading' ? activeReadings.length : item.id === 'listening' ? activeListenings.length : item.id === 'writing' ? activeWritings.length : item.id === 'vocabulary' ? activeVocabularyTests.length : item.id === 'speaking' ? speakingHomework.tasks.filter(task => !task.archived).length : activeMockTests.length}
                       </span>
                     </button>
                   ))}
                 </nav>
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                   <p className="text-xs text-slate-500">Preview, Edit and Assign remain available. School Library content may require duplication before assigning.</p>
-                  <div className="relative w-full sm:w-72 shrink-0">
+                  {activeTab !== 'speaking' && <div className="relative w-full sm:w-72 shrink-0">
                     <TeacherIcon name="search" className="absolute h-4 w-4 left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                     <input aria-label="Search content by title" value={librarySearchTerm} onChange={event => setLibrarySearchTerm(event.target.value)}
                       placeholder="Search content by title..." className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-200 bg-white text-sm outline-none focus:ring-2 focus:ring-indigo-200" />
-                  </div>
+                  </div>}
                 </div>
               </div>
             )}
@@ -6833,7 +6837,7 @@ export default function TeacherDashboard() {
                   </h2>
 
                   <p className="text-xs text-gray-400 mt-1">
-                    Select one student to see Reading, Listening and Vocabulary analytics separately.
+                    Select one student to see Reading, Listening, Vocabulary and Speaking analytics separately.
                   </p>
                 </div>
 
@@ -6851,9 +6855,11 @@ export default function TeacherDashboard() {
                 </select>
               </div>
 
+              <SpeakingAnalytics data={speakingHomework} studentId={selectedAnalyticsStudent?.id || ''} allowedStudentIds={students.map(student=>student.id)} staff onOpen={attempt=>navigate(`/speaking?report=${encodeURIComponent(attempt.id)}`)}/>
+
               {!selectedAnalyticsStudent ? (
                 <div className="bg-gray-50 border border-gray-100 rounded-xl p-5 text-sm text-gray-400">
-                  Choose a student from the list to view individual Reading, Listening and Vocabulary analytics.
+                  Choose a student from the list to view individual Reading, Listening, Vocabulary and Speaking analytics.
                 </div>
               ) : (
                 <>
@@ -8157,6 +8163,8 @@ export default function TeacherDashboard() {
             </div>
           </>
         )}
+
+        {activeTab === 'speaking' && user && profile && <SpeakingWorkspaceView embedded profile={profile} user={user} students={students} classes={classes} api={speakingApi} onBack={()=>openTeacherSection('library')} onMock={id=>navigate(`/do-mock/${encodeURIComponent(id)}`)}/>}
 
         {activeTab === 'students' && (
           <>
