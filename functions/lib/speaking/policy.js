@@ -26,6 +26,29 @@ function validateWav(base64) {
   for(let i=44;i<b.length;i+=2) energy+=(b.readInt16LE(i)/32768)**2
   return { bytes:b, duration, audible:Math.sqrt(energy/((b.length-44)/2))>0.001 }
 }
+function validateCriterion(criterion, answers, recordedQuestionIds) {
+  const unavailable = reason => ({band:null, explanation:reason, status:'unverified'})
+  if (!criterion || !Number.isFinite(criterion.band) || criterion.band < 1 || criterion.band > 9 || !Number.isInteger(criterion.band * 2)) {
+    return unavailable('The assessment did not provide a valid band for this criterion.')
+  }
+  const explanation = criterion.explanation
+  if (typeof explanation !== 'string' || !explanation.trim() || explanation.length > 3000) {
+    return unavailable('The assessment did not provide a usable explanation for this band.')
+  }
+  const questionId = criterion.evidence?.questionId
+  const quote = criterion.evidence?.quote
+  if (typeof quote !== 'string' || !quote.trim() || quote.length > 600 || /\[inaudible\]/i.test(quote)) {
+    return unavailable('The assessment did not supply a usable excerpt for this criterion.')
+  }
+  const answer = answers.find(a => a.questionId === questionId)
+  if (!answer || !recordedQuestionIds.includes(questionId)) {
+    return unavailable('The excerpt could not be linked to a recorded answer.')
+  }
+  if (!answer.transcript.includes(quote.trim())) {
+    return unavailable('The quoted words could not be matched to the transcript of the cited answer.')
+  }
+  return {band:criterion.band, explanation:explanation.trim(), evidence:{questionId, quote:quote.trim()}}
+}
 function report(raw, questionIds, recordedQuestionIds) {
   if (!raw || typeof raw!=='object' || !Array.isArray(raw.answers) || raw.answers.length!==questionIds.length) throw Error('Incomplete AI report.')
   const bounded=(s,max=3000)=>{if(typeof s!=='string'||s.length>max)throw Error('Invalid report text.');return s.trim()}
@@ -39,19 +62,10 @@ function report(raw, questionIds, recordedQuestionIds) {
       })}
   })
   if(raw.assessable===false)return {criteria:null,estimatedBand:null,answers,summary:bounded(raw.summary),priorities:[],isAiEstimate:true,insufficientEvidence:true}
-  const criteria=Object.fromEntries(CRITERIA.map(k=>{
-    const c=raw.criteria?.[k]
-    if(!c || !Number.isFinite(c.band)||c.band<1||c.band>9||c.band*2%1)throw Error('Invalid Speaking criterion band.')
-    const explanation = bounded(c.explanation)
-    const questionId = c.evidence?.questionId
-    const quote = bounded(c.evidence?.quote, 600)
-    const answer = answers.find(a => a.questionId === questionId)
-    if (!explanation || !quote || /\[inaudible\]/i.test(quote) || !recordedQuestionIds.includes(questionId) || !answer?.transcript.includes(quote)) {
-      throw Error('Missing or unverified Speaking criterion evidence.')
-    }
-    return [k, {band:c.band, explanation, evidence:{questionId, quote}}]
-  }))
-  return {criteria,estimatedBand:half(CRITERIA.reduce((s,k)=>s+criteria[k].band,0)/4),answers,
+  const criteria = Object.fromEntries(CRITERIA.map(key => [key, validateCriterion(raw.criteria?.[key], answers, recordedQuestionIds)]))
+  const bands = Object.values(criteria).map(criterion => criterion.band)
+  const estimatedBand = bands.includes(null) ? null : half(bands.reduce((sum, band) => sum + band, 0) / bands.length)
+  return {criteria, estimatedBand, answers,
     summary:bounded(raw.summary),priorities:(Array.isArray(raw.priorities)?raw.priorities:[]).slice(0,4).map(s=>bounded(s)),isAiEstimate:true}
 }
 function mockOverall(result) {

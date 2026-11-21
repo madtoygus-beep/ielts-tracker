@@ -49,6 +49,13 @@ test('criterion evidence must come from the identified recorded answer', async (
     const value = structuredClone(raw)
     value.criteria.pronunciation.evidence = evidence
     value.answers[1].transcript = value.answers[0].transcript
-    await assert.rejects(gradeSpeaking(recordings, {...settings, fetchImpl:async () => response(value)}))
+    const result = await gradeSpeaking(recordings, {...settings, fetchImpl:async () => response(value)})
+    assert.equal(result.estimatedBand, null)
+    assert.equal(result.criteria.pronunciation.band, null)
+    assert.equal(result.criteria.pronunciation.status, 'unverified')
+    assert.ok(result.criteria.pronunciation.explanation)
+    for (const key of CRITERIA.filter(k => k !== 'pronunciation')) {
+      assert.deepEqual(result.criteria[key], raw.criteria[key])
+    }
   }
 })

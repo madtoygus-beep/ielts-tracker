@@ -56,13 +56,13 @@ export default function SpeakingReport({attemptId,staff=false,admin=false,aiAvai
     </div>}
     {error&&<p role="alert" className="bg-red-50 text-red-800 rounded-xl p-3">{error}</p>}
     {attempt.review?.feedback&&<p className="rounded-xl bg-emerald-50 p-4 whitespace-pre-wrap">{attempt.review.feedback}</p>}
-    {report?<><div className="rounded-xl bg-indigo-50 p-5"><p className="text-xs font-semibold uppercase text-indigo-700">AI practice estimate · unofficial</p><p className="text-4xl font-bold text-indigo-900 my-3">{report.estimatedBand?.toFixed(1)||'Insufficient evidence'}</p><p className="text-sm leading-6">{report.summary}</p><p className="text-xs text-slate-500 mt-3">A limited practice sample is not an official full Speaking result. AI estimates do not replace the teacher's final band.</p></div>
+    {report?<><div className="rounded-xl bg-indigo-50 p-5"><p className="text-xs font-semibold uppercase text-indigo-700">AI practice estimate · unofficial</p><p className="text-4xl font-bold text-indigo-900 my-3">{report.estimatedBand?.toFixed(1) || (report.criteria ? 'Overall band unavailable' : 'Insufficient evidence')}</p><p className="text-sm leading-6">{report.criteria && report.estimatedBand == null ? 'An overall estimate requires four verified criterion scores. See each criterion below.' : report.summary}</p><p className="text-xs text-slate-500 mt-3">A limited practice sample is not an official full Speaking result. AI estimates do not replace the teacher's final band.</p></div>
       {report.criteria && <div className="space-y-3">{Object.entries(speakingLabels).map(([key, label]) => {
         const criterion = report.criteria[key]
         const evidence = criterion.evidence
         const index = evidence ? attempt.questions.findIndex(q => q.id === evidence.questionId) : -1
-        return <details key={key} className="border rounded-xl p-4">
-          <summary className="cursor-pointer font-semibold">{label} <span className="float-right text-indigo-800">{criterion.band.toFixed(1)}</span></summary>
+        return <details key={key} open={criterion.status === 'unverified' || undefined} className="border rounded-xl p-4">
+          <summary className="cursor-pointer font-semibold">{label} <span className="float-right text-indigo-800">{criterion.band?.toFixed(1) ?? 'Unverified'}</span></summary>
           {index >= 0 && <figure className="mt-3 border-l-2 border-indigo-300 pl-3">
             <figcaption className="text-xs text-slate-600">From your answer · Part {attempt.questions[index].part} · Question {index + 1}</figcaption>
             <blockquote className="mt-1 text-sm">“{evidence.quote}”</blockquote>
