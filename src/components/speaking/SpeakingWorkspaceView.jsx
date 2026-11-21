@@ -12,7 +12,7 @@ export default function SpeakingWorkspaceView({profile,user,students=[],classes=
   const [tab,setTab]=useState('tasks'),[editor,setEditor]=useState(null),[session,setSession]=useState(()=>!staff&&/^[a-zA-Z0-9_-]{1,180}$/.test(initialTaskId)?{id:initialTaskId}:null),[report,setReport]=useState(()=>/^[a-zA-Z0-9_-]{1,180}$/.test(initialReportId)?initialReportId:null)
   const [busy,setBusy]=useState(false),[search,setSearch]=useState(''),[showArchived,setShowArchived]=useState(false),[partFilter,setPartFilter]=useState('all')
   const generation=useRef(0),alive=useRef(false)
-  const fetchData=useCallback(async(kind='both',cursor=null)=>{
+  const fetchData=useCallback(async(kind='tasks',cursor=null)=>{
     const run=++generation.current
     setLoading(true);setError('')
     try{
@@ -27,10 +27,18 @@ export default function SpeakingWorkspaceView({profile,user,students=[],classes=
     }catch(e){if(run===generation.current&&alive.current)setError(e.message||'Speaking could not be loaded.')}
     finally{if(run===generation.current&&alive.current)setLoading(false)}
   },[api,staff])
-  useEffect(()=>{let active=true;alive.current=true;const run=++generation.current;api('list',{staff}).then(next=>{if(active&&run===generation.current){setData(next);setLoading(false)}}).catch(e=>{if(active){setError(e.message);setLoading(false)}});return()=>{active=false;alive.current=false}},[api,staff])
+  const invalidate=useCallback(()=>{generation.current++},[])
+  useEffect(()=>{alive.current=true;return()=>{alive.current=false;invalidate()}},[invalidate])
+  // A direct report/session owns its own authenticated request. Library tabs load only their visible list.
+  useEffect(()=>{
+    if(report||session||editor)return
+    let active=true
+    Promise.resolve().then(()=>{if(active)fetchData(tab==='tasks'?'tasks':'attempts')})
+    return()=>{active=false;invalidate()}
+  },[tab,report,session,editor,fetchData,invalidate])
   const action=async fn=>{if(busy)return;setBusy(true);setError('');try{await fn()}catch(e){setError(e.message)}finally{setBusy(false)}}
   const openEditor=task=>{setEditor(task?{...task,assignedTo:[...task.assignedTo],expectedUpdatedAt:task.updatedAt}:{title:'',mode:'practice',config:{...defaultSpeakingConfig(),enabled:true},assignedTo:[]});setError('')}
-  const save=()=>action(async()=>{const problem=validateSpeakingConfig(editor.config);if(problem)throw Error(problem);const saved=await api('saveTask',editor);setEditor(null);setShowArchived(false);setSearch('');setPartFilter('all');await fetchData();setData(old=>{const task=saved.task||old.tasks.find(t=>t.id===saved.id);return task?{...old,tasks:[task,...old.tasks.filter(t=>t.id!==saved.id)]}:old})})
+  const save=()=>action(async()=>{const problem=validateSpeakingConfig(editor.config);if(problem)throw Error(problem);const saved=await api('saveTask',editor);setEditor(null);setShowArchived(false);setSearch('');setPartFilter('all');setData(old=>{const task=saved.task||old.tasks.find(t=>t.id===saved.id);return task?{...old,tasks:[task,...old.tasks.filter(t=>t.id!==saved.id)]}:old})})
   const setArchive=task=>action(async()=>{
     const message=task.archived?'Restore access to this Speaking set?':'Archive this set? Students lose access; saved recordings remain available to staff.'
     if(!window.confirm(message))return
@@ -74,10 +82,10 @@ export default function SpeakingWorkspaceView({profile,user,students=[],classes=
         <div className="grid sm:grid-cols-2 gap-2 max-h-64 overflow-auto mt-4">{students.map(s=><label key={s.id} className="flex items-center gap-2 rounded-lg border p-3 text-sm"><input type="checkbox" checked={editor.assignedTo.includes(s.id)} onChange={e=>setEditor(v=>({...v,assignedTo:e.target.checked?[...v.assignedTo,s.id]:v.assignedTo.filter(id=>id!==s.id)}))}/>{s.name||s.displayName||s.email}</label>)}</div>
         {!students.length&&<p className="text-sm text-slate-500 mt-3">No current students available. You can still save the set without assignments.</p>}
         <div className="flex gap-3 mt-6"><button disabled={busy||!editor.title.trim()} onClick={save} className="bg-indigo-700 text-white rounded-xl px-5 py-3 disabled:opacity-50">Save Speaking</button><button disabled={busy} onClick={()=>setEditor(null)} className="border rounded-xl px-5 py-3">Cancel</button></div>
-      </div>:session?<><button className="text-sm text-indigo-700 mb-4" onClick={()=>{if(window.confirm('Leave Speaking? Saved answers are retained; an active recording may be interrupted.')){setSession(null);fetchData()}}}>← Speaking library</button><SpeakingSession taskId={session.id} api={api} runtime={runtime} encode={encode} onComplete={a=>{setSession(null);setReport(a.id);fetchData()}}/></>
-      :report?<><button className="text-sm text-indigo-700 mb-4" onClick={()=>{setReport(null);fetchData()}}>← Speaking library</button><SpeakingReport key={report} attemptId={report} staff={staff} admin={admin} aiAvailable={data.aiAvailable} api={api} onRetake={a=>{sessionStorage.removeItem(`speaking-active-${user.uid}-${a.taskId}`);setReport(null);setSession({id:a.taskId})}}/></>
+      </div>:session?<><button className="text-sm text-indigo-700 mb-4" onClick={()=>{if(window.confirm('Leave Speaking? Saved answers are retained; an active recording may be interrupted.')){setSession(null)}}}>← Speaking library</button><SpeakingSession taskId={session.id} api={api} runtime={runtime} encode={encode} onComplete={a=>{setSession(null);setReport(a.id)}}/></>
+      :report?<><button className="text-sm text-indigo-700 mb-4" onClick={()=>{setReport(null)}}>← Speaking library</button><SpeakingReport key={report} attemptId={report} staff={staff} admin={admin} aiAvailable={data.aiAvailable} api={api} onRetake={a=>{sessionStorage.removeItem(`speaking-active-${user.uid}-${a.taskId}`);setReport(null);setSession({id:a.taskId})}}/></>
       :<>
-        <div className="flex flex-wrap gap-3 mb-5"><button className={`rounded-xl px-4 py-2 ${tab==='tasks'?'bg-indigo-700 text-white':'bg-white border'}`} onClick={()=>{setTab('tasks');setSearch('')}}>{admin?'Institution sets':teacher?'Question library':'My Speaking tasks'}</button><button className={`rounded-xl px-4 py-2 ${tab==='reports'?'bg-indigo-700 text-white':'bg-white border'}`} onClick={()=>{setTab('reports');setSearch('')}}>{staff?'Student recordings':'My reports'}</button><button disabled={loading} onClick={()=>fetchData()} className="ml-auto text-sm text-indigo-700 disabled:opacity-50">Refresh</button></div>
+        <div className="flex flex-wrap gap-3 mb-5"><button className={`rounded-xl px-4 py-2 ${tab==='tasks'?'bg-indigo-700 text-white':'bg-white border'}`} onClick={()=>{setTab('tasks');setSearch('')}}>{admin?'Institution sets':teacher?'Question library':'My Speaking tasks'}</button><button className={`rounded-xl px-4 py-2 ${tab==='reports'?'bg-indigo-700 text-white':'bg-white border'}`} onClick={()=>{setTab('reports');setSearch('')}}>{staff?'Student recordings':'My reports'}</button><button disabled={loading} onClick={()=>fetchData(tab==='tasks'?'tasks':'attempts')} className="ml-auto text-sm text-indigo-700 disabled:opacity-50">Refresh</button></div>
         {tab==='tasks'&&<div className="flex flex-wrap gap-2 mb-4" aria-label="Speaking part filter">{[['all','All parts'],['part1','Part 1 only'],['part2','Part 2 only'],['part3','Part 3 only'],['mixed','Mixed parts']].map(([value,label])=><button type="button" key={value} aria-pressed={partFilter===value} className={`rounded-lg px-4 py-2 text-sm ${partFilter===value?'bg-indigo-100 text-indigo-900 border border-indigo-200':'border border-slate-200 bg-white text-slate-600'}`} onClick={()=>setPartFilter(value)}>{label}</button>)}</div>}
         <div className="flex flex-wrap items-center gap-4 mb-6"><input aria-label="Search Speaking" placeholder="Search loaded sets / recordings" value={search} onChange={e=>setSearch(e.target.value)} className="bg-white border border-slate-200 rounded-xl p-3 text-sm flex-1 min-w-0"/>{staff&&tab==='tasks'&&<label className="text-sm flex gap-2"><input type="checkbox" checked={showArchived} onChange={e=>setShowArchived(e.target.checked)}/>Archived sets</label>}</div>
         {loading&&<p role="status" className="text-sm mb-4">Loading Speaking…</p>}

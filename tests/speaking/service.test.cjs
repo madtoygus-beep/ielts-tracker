@@ -246,3 +246,24 @@ test('teacher may explicitly grant one paid AI assessment on a retake; the next 
  const third=await w.call('start',{taskId:'task1',retakeAiAllowed:true});assert.equal(third.aiAvailable,false)
  assert.equal(w.docs.get(`speakingAttempts/${third.id}`).retakeAiAllowed,false)
 })
+
+test('list reads are bounded in parallel, preserve order and keep revoked students out',async()=>{
+ const w=world(),originalDoc=w.db.doc
+ for(let i=0;i<8;i++)w.docs.set(`speakingTasks/parallel${i}`,{...w.docs.get('speakingTasks/task1'),title:`Task ${i}`})
+ let active=0,peak=0
+ w.db.doc=path=>{const ref=originalDoc(path),get=ref.get;return {...ref,get:async()=>{active++;peak=Math.max(peak,active);await new Promise(resolve=>setTimeout(resolve,5));try{return await get()}finally{active--}}}}
+ const list=await w.call('list',{kind:'tasks'})
+ assert.equal(list.tasks.length,9);assert.equal(list.attempts.length,0)
+ assert.deepEqual(list.tasks.map(task=>task.id),['parallel0','parallel1','parallel2','parallel3','parallel4','parallel5','parallel6','parallel7','task1'])
+ assert.ok(peak>1,'authorization reads should overlap');assert.ok(peak<=4,'maximum four items per collection')
+ w.revoke();const denied=await w.call('list',{kind:'tasks'});assert.equal(denied.tasks.length,0)
+})
+test('selecting one list never scans the other collection and staff names are read once per request',async()=>{
+ const w=world(),collection=w.db.collection,originalDoc=w.db.doc,collections=[],reads=[]
+ for(let i=0;i<5;i++)w.docs.set(`speakingTasks/parallel${i}`,{...w.docs.get('speakingTasks/task1')})
+ w.db.collection=name=>{collections.push(name);return collection(name)}
+ w.db.doc=path=>{const ref=originalDoc(path),get=ref.get;return {...ref,get:async()=>{reads.push(path);return get()}}}
+ await w.call('list',{staff:true,kind:'tasks'},'T1')
+ assert.deepEqual(collections,['speakingTasks']);assert.equal(reads.filter(path=>path==='users/T1').length,1)
+ collections.length=0;await w.call('list',{staff:true,kind:'attempts'},'T1');assert.deepEqual(collections,['speakingAttempts'])
+})

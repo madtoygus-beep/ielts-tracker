@@ -103,11 +103,10 @@ function createSpeakingService({db,bucket,requireStudent,requireAssignmentManage
     const result={tasks:[],attempts:[],cursors:{tasks:null,attempts:null},aiAvailable:aiEnabled(actor.uid)}
     const names=new Map()
     const teacherName=async uid=>{
-      if(!names.has(uid)){const snap=await db.doc(`users/${id(uid)}`).get();names.set(uid,snap.data()?.name||snap.data()?.displayName||'Teacher')}
+      if(!names.has(uid))names.set(uid,db.doc(`users/${id(uid)}`).get().then(snap=>snap.data()?.name||snap.data()?.displayName||'Teacher'))
       return names.get(uid)
     }
-    for(const type of ['tasks','attempts']){
-      if(kind!=='both'&&kind!==type)continue
+    await Promise.all(['tasks','attempts'].filter(type=>kind==='both'||kind===type).map(async type=>{
       const collection=type==='tasks'?'speakingTasks':'speakingAttempts'
       let query=db.collection(collection)
       if(admin)query=query.where('schoolId','==',schoolIdOf(actor.profile))
@@ -118,26 +117,30 @@ function createSpeakingService({db,bucket,requireStudent,requireAssignmentManage
       if(cursor)query=query.startAfter(db.doc(`${collection}/${id(cursor)}`))
       const snap=await query.limit(26).get(),page=snap.docs.slice(0,25)
       if(snap.size>25)result.cursors[type]=page.at(-1).id
-      for(const item of page){
+      // Bound parallel authorization reads; preserve query order and the existing per-item access checks.
+      for(let offset=0;offset<page.length;offset+=4){
+        const rows=await Promise.all(page.slice(offset,offset+4).map(async item=>{
         try{
           const value={...item.data(),id:item.id}
-          if(value.schoolId!==schoolIdOf(actor.profile))continue
+          if(value.schoolId!==schoolIdOf(actor.profile))return null
           if(type==='tasks'){
-            if(!staff){await studentAccess(actor,value);const head=await standaloneState(actor.uid,value.id);result.tasks.push({id:value.id,title:value.title,config:value.config,
-              latestAttemptId:head.latestAttemptId,latestAttemptStatus:head.status,retakeAvailable:head.retakeOpen===true,nextAttemptNumber:(head.attemptNumber||0)+1})}
-            else result.tasks.push({...value,teacherName:await teacherName(value.teacherId)})
+            if(!staff){await studentAccess(actor,value);const head=await standaloneState(actor.uid,value.id);return {id:value.id,title:value.title,config:value.config,
+              latestAttemptId:head.latestAttemptId,latestAttemptStatus:head.status,retakeAvailable:head.retakeOpen===true,nextAttemptNumber:(head.attemptNumber||0)+1}}
+            else return {...value,teacherName:await teacherName(value.teacherId)}
           }else{
             const {attempt}=await attemptAccess(request,item.id,staff)
-            result.attempts.push({id:attempt.id,title:attempt.title,mode:attempt.mode,status:attempt.status,
+            return {id:attempt.id,title:attempt.title,mode:attempt.mode,status:attempt.status,
               taskId:attempt.taskId,mockId:attempt.mockId,studentName:attempt.studentName,
               ...(staff?{studentId:attempt.studentId,teacherName:await teacherName(attempt.teacherId)}:{}),
               startedAt:attempt.startedAt,aiStatus:attempt.aiStatus,
               review:attempt.review?{band:attempt.review.band}:null,
-              report:attempt.report?{estimatedBand:attempt.report.estimatedBand}:null})
+              report:attempt.report?{estimatedBand:attempt.report.estimatedBand}:null}
           }
-        }catch(e){if(!['permission-denied','not-found','failed-precondition'].includes(e.code))throw e}
+        }catch(e){if(!['permission-denied','not-found','failed-precondition'].includes(e.code))throw e;return null}
+        }))
+        result[type].push(...rows.filter(Boolean))
       }
-    }
+    }))
     result.hasMore=Boolean(result.cursors.tasks||result.cursors.attempts)
     return result
   }
