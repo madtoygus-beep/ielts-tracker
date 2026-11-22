@@ -4743,7 +4743,7 @@ function submissionAttemptSummary(config, data, extra = {}) {
   }
 }
 
-exports.getManagedSubmissionAttemptState = onCall(async request => {
+exports.getManagedSubmissionAttemptState = onCall({ maxInstances: 20 }, async request => {
   const manager = await requireAssignmentManager(request)
   const data = request.data || {}
   const config = submissionContentConfigFor(data.contentType)
@@ -5828,7 +5828,7 @@ const attemptRestarts = createAttemptRestartService({ db, FieldValue, HttpsError
   requireCurrentTeacherAcademicStudent, attemptControlId, attemptHistoryId,
   attemptHistoryPayload, schemaVersion: ATTEMPT_SCHEMA_VERSION })
 
-exports.setSubmissionAttemptControl = onCall(async request => {
+exports.setSubmissionAttemptControl = onCall({ maxInstances: 20 }, async request => {
   const manager = await requireAssignmentManager(request)
   const data = request.data || {}
   const config = submissionContentConfigFor(data.contentType)
@@ -6329,7 +6329,7 @@ function writingSubmissionBase(source, student) {
   }
 }
 
-exports.submitWritingSecure = onCall(async request => {
+exports.submitWritingSecure = onCall({ maxInstances: 20 }, async request => {
   const student = await requireStudent(request)
   const data = request.data || {}
   const writingId = assertDocumentId(data.writingId, 'Writing ID')
@@ -6493,7 +6493,7 @@ exports.submitWritingSecure = onCall(async request => {
   }
 })
 
-exports.submitReadingSecure = onCall(async request => {
+exports.submitReadingSecure = onCall({ maxInstances: 20 }, async request => {
   const student = await requireStudent(request)
   const data = request.data || {}
   const readingId = assertDocumentId(data.readingId, 'Reading ID')
@@ -6579,7 +6579,7 @@ exports.submitReadingSecure = onCall(async request => {
   return { alreadySubmitted: false, attemptNumber: 1, result, reviewSource: toPlain(source) }
 })
 
-exports.submitListeningSecure = onCall(async request => {
+exports.submitListeningSecure = onCall({ maxInstances: 20 }, async request => {
   const student = await requireStudent(request)
   const data = request.data || {}
   const listeningId = assertDocumentId(data.listeningId, 'Listening ID')
@@ -6674,7 +6674,7 @@ async function clearCurrentVocabularyDraft(student, contentId, generation) {
   }).catch(error => { if (error.code !== 'failed-precondition' && error.code !== 'permission-denied') throw error })
 }
 
-exports.submitVocabularySecure = onCall(async request => {
+exports.submitVocabularySecure = onCall({ maxInstances: 20 }, async request => {
   const student = await requireStudent(request)
   const data = request.data || {}
   const vocabularyTestId = assertDocumentId(data.vocabularyTestId, 'Vocabulary test ID')
