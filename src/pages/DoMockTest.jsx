@@ -1,5 +1,6 @@
 import SpeakingSession from '../components/speaking/SpeakingSession'
 import SpeakingReport from '../components/speaking/SpeakingReport'
+import { speakingExamMinutes } from '../services/speakingExam'
 import { mockAudioCheckpoint, savedMockAudioPosition, shouldUseProgressiveMockAudio } from '../services/mockAudioRecovery'
 import PartialWritingNotice from '../components/PartialWritingNotice'
 import { partialWritingSummary } from '../services/partialWritingPresentation'
@@ -6964,9 +6965,11 @@ ${previousLabel} will be permanently locked and you will not be able to return t
             </p>
 
             <div className={`grid grid-cols-1 ${
-              Object.values(enabledSections).filter(Boolean).length >= 3
+              Object.values(enabledSections).filter(Boolean).length + Number(mock?.speakingConfig?.enabled === true) >= 4
+                ? 'sm:grid-cols-2 lg:grid-cols-4'
+                : Object.values(enabledSections).filter(Boolean).length + Number(mock?.speakingConfig?.enabled === true) >= 3
                 ? 'sm:grid-cols-3'
-                : Object.values(enabledSections).filter(Boolean).length === 2
+                : Object.values(enabledSections).filter(Boolean).length + Number(mock?.speakingConfig?.enabled === true) === 2
                   ? 'sm:grid-cols-2'
                   : 'max-w-md mx-auto'
             } gap-3 mb-8 text-left`}>
@@ -6994,6 +6997,12 @@ ${previousLabel} will be permanently locked and you will not be able to return t
                   <p className="text-2xl font-bold text-amber-600">
                     {getMockSectionMinutes(mock, 'writing')} min
                   </p>
+                </div>
+              )}
+              {mock?.speakingConfig?.enabled && (
+                <div className="bg-emerald-50 rounded-xl p-4">
+                  <p className="text-xs text-gray-500 mb-1">Speaking · Parts 1–3</p>
+                  <p className="text-2xl font-bold text-emerald-700">~{speakingExamMinutes(mock.speakingConfig)} min</p>
                 </div>
               )}
             </div>
@@ -7027,7 +7036,7 @@ ${previousLabel} will be permanently locked and you will not be able to return t
 
         {activeSection.key === 'writing-task2' && renderWritingTask2()}
 
-        {activeSection.key === 'speaking' && <SpeakingSession mockId={mock.id} onComplete={value => {
+        {activeSection.key === 'speaking' && <SpeakingSession mockId={mock.id} title={mock.title} config={mock.speakingConfig} onComplete={value => {
           setSpeakingAttempt(value)
           lockListeningSection(); lockReadingSection(); setWritingLocked(true)
           const index = sections.findIndex(s => s.key === 'review')

@@ -1,5 +1,5 @@
 import MockSpeakingLibrarySelect from '../components/speaking/MockSpeakingLibrarySelect'
-import SpeakingEditor from '../components/speaking/SpeakingEditor'
+import { speakingExamMinutes } from '../services/speakingExam'
 import { defaultMockSpeakingConfig as defaultSpeakingConfig, validateSpeakingConfig } from '../services/speakingApi'
 import { useEffect, useMemo, useState } from 'react'
 import { auth, db, functions } from '../firebase'
@@ -724,7 +724,7 @@ export default function CreateMockTest() {
     (activeSections.listening ? Number(sectionTimeLimits.listening || 0) : 0) +
     (activeSections.reading ? Number(sectionTimeLimits.reading || 0) : 0) +
     (activeSections.writing ? Number(sectionTimeLimits.writing || 0) : 0) +
-    (speakingConfig.enabled ? Math.ceil(speakingConfig.questions.reduce((sum,q)=>sum+(q.part===2?188:Number(q.seconds||40)+8),0)/60) : 0)
+    speakingExamMinutes(speakingConfig)
 
   const enabledSectionLabels = [
     activeSections.listening ? 'Listening' : null,
@@ -1054,7 +1054,7 @@ export default function CreateMockTest() {
       (activeSections.listening ? cleanSectionTimeLimits.listening : 0) +
       (activeSections.reading ? cleanSectionTimeLimits.reading : 0) +
       (activeSections.writing ? cleanSectionTimeLimits.writing : 0) +
-      (speakingConfig.enabled ? Math.ceil(speakingConfig.questions.reduce((sum,q)=>sum+(q.part===2?188:Number(q.seconds||40)+8),0)/60) : 0)
+      speakingExamMinutes(speakingConfig)
 
     const payload = {
       title: cleanTitle,
@@ -1634,7 +1634,7 @@ export default function CreateMockTest() {
                 )}
 
                 {activeSections.writing && (
-                  <div>
+                  <div className="rounded-2xl border border-amber-100 bg-amber-50 p-4">
                   <label className="text-xs text-gray-400 mb-1 block">
                     Writing
                   </label>
@@ -1657,6 +1657,7 @@ export default function CreateMockTest() {
                   </p>
                   </div>
                 )}
+                <MockSpeakingLibrarySelect key={user?.uid} value={speakingConfig} onChange={setSpeakingConfig} />
               </div>
             </div>
 
@@ -1671,6 +1672,7 @@ export default function CreateMockTest() {
                   : fullMockListeningMode === 'single'
                     ? 'Students move through the selected full Listening resource, three Reading passages and Writing with controlled section transitions. If the Listening resource has Part 1–4, the audio continues across its parts.'
                     : 'Students move through the selected separate Listening resources, three Reading passages and Writing with controlled section transitions. Each separate Listening resource starts its own audio.'}
+                {speakingConfig.enabled && ' The selected Speaking test runs last, with automatically paced Parts 1–3.'}
               </p>
             </div>
           </div>
@@ -1847,9 +1849,6 @@ export default function CreateMockTest() {
               )}
             </div>
 
-            <SpeakingEditor optional full value={speakingConfig} onChange={setSpeakingConfig}>
-              <MockSpeakingLibrarySelect key={user?.uid} value={speakingConfig} onChange={setSpeakingConfig} />
-            </SpeakingEditor>
             {sponsoredSchool && (
               <AiWritingSponsoredAssignmentPanel
                 contentType="mock"

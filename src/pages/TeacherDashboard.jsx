@@ -1,3 +1,4 @@
+import { speakingExamMinutes } from '../services/speakingExam'
 import SpeakingWorkspaceView from '../components/speaking/SpeakingWorkspaceView'
 import SpeakingAnalytics from '../components/speaking/SpeakingAnalytics'
 import { speakingApi } from '../services/speakingApi'
@@ -6268,7 +6269,7 @@ export default function TeacherDashboard() {
   const getMockTotalTime = mockTest => {
     const times = getMockSectionTimes(mockTest)
 
-    return times.listening + times.reading + times.writing
+    return times.listening + times.reading + times.writing + speakingExamMinutes(mockTest?.speakingConfig)
   }
 
   const libraryCard = ({ item, index, archived, type, description, detail,

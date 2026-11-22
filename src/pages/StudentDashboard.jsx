@@ -1,3 +1,4 @@
+import { speakingExamMinutes } from '../services/speakingExam'
 import StudentSpeakingAnalytics from '../components/speaking/StudentSpeakingAnalytics'
 import SpeakingHomeworkSection from '../components/speaking/SpeakingHomeworkSection'
 import { useSpeakingHomework } from '../hooks/useSpeakingHomework'
@@ -2707,7 +2708,7 @@ import { formatHomeworkScore, savedObjectiveBand } from '../services/ieltsObject
     const getMockTotalTime = mock => {
       const times = getMockSectionTimes(mock)
 
-      return times.listening + times.reading + times.writing
+      return times.listening + times.reading + times.writing + speakingExamMinutes(mock?.speakingConfig)
     }
 
     const getMockFlowLabel = mock => {
@@ -2719,7 +2720,8 @@ import { formatHomeworkScore, savedObjectiveBand } from '../services/ieltsObject
             ? 'Reading'
             : '3 Reading passages'
           : null,
-        enabled.writing ? getMockWritingLabel(mock) : null
+        enabled.writing ? getMockWritingLabel(mock) : null,
+        mock?.speakingConfig?.enabled ? 'Speaking' : null
       ].filter(Boolean)
 
       return parts.join(' · ')

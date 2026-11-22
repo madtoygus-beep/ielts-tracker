@@ -4,6 +4,8 @@ import { doc, getDoc } from 'firebase/firestore'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { useNavigate, useParams } from 'react-router-dom'
 import { loadPrivateListeningMedia } from '../services/privateListeningMedia'
+import SpeakingTestPreview from '../components/speaking/SpeakingTestPreview'
+import { speakingExamMinutes } from '../services/speakingExam'
 
 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
@@ -100,13 +102,13 @@ function getMockSectionTimes(mock) {
         : Math.max(5, Math.min(180, Math.round(value)))
   }
 
-  return result
+  return { ...result, speaking: speakingExamMinutes(mock?.speakingConfig) }
 }
 
 function getMockTotalTime(mock) {
   const times = getMockSectionTimes(mock)
 
-  return times.listening + times.reading + times.writing
+  return times.listening + times.reading + times.writing + times.speaking
 }
 
 function getMockWritingMode(mock, writing) {
@@ -138,7 +140,8 @@ function getMockFlowLabel(mock, writing) {
   return [
     enabled.listening ? 'Listening' : null,
     enabled.reading ? 'Reading' : null,
-    enabled.writing ? getMockWritingLabel(mock, writing) : null
+    enabled.writing ? getMockWritingLabel(mock, writing) : null,
+    mock?.speakingConfig?.enabled ? 'Speaking' : null
   ]
     .filter(Boolean)
     .join(' · ')
@@ -2529,6 +2532,9 @@ export default function TeacherPreview() {
               item: mockResources.writing
             }
           ]
+        : []),
+      ...(content?.speakingConfig?.enabled
+        ? [{ key: 'speaking', label: 'Speaking', type: 'speaking' }]
         : [])
     ]
   }, [mockResources, type, content])
@@ -2661,6 +2667,7 @@ export default function TeacherPreview() {
                     </span>
                   )}
 
+                  {content.speakingConfig?.enabled && <span className="text-xs bg-emerald-50 text-emerald-700 px-3 py-1.5 rounded-full">Speaking · Parts 1–3</span>}
                   <span className="text-xs bg-gray-100 text-gray-600 px-3 py-1.5 rounded-full">
                     {getMockTotalTime(content)} minutes
                   </span>
@@ -2746,9 +2753,11 @@ export default function TeacherPreview() {
 
             {activeMockTab === 'overview' && (
               <div className={`grid grid-cols-1 ${
-                Object.values(getMockEnabledSections(content)).filter(Boolean).length >= 3
+                Object.values(getMockEnabledSections(content)).filter(Boolean).length + Number(content.speakingConfig?.enabled === true) >= 4
+                  ? 'md:grid-cols-2 xl:grid-cols-4'
+                  : Object.values(getMockEnabledSections(content)).filter(Boolean).length + Number(content.speakingConfig?.enabled === true) >= 3
                   ? 'md:grid-cols-3'
-                  : Object.values(getMockEnabledSections(content)).filter(Boolean).length === 2
+                  : Object.values(getMockEnabledSections(content)).filter(Boolean).length + Number(content.speakingConfig?.enabled === true) === 2
                     ? 'md:grid-cols-2'
                     : ''
               } gap-4`}>
@@ -2789,6 +2798,12 @@ export default function TeacherPreview() {
                     </p>
                   </div>
                 )}
+
+                {content.speakingConfig?.enabled && <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm">
+                  <p className="text-xs text-gray-400 mb-1">Speaking test</p>
+                  <p className="text-lg font-bold text-emerald-700">Parts 1–3 · {toArray(content.speakingConfig.questions).length} questions</p>
+                  <p className="text-xs text-gray-500 mt-2">Automatically paced · about {speakingExamMinutes(content.speakingConfig)} min</p>
+                </div>}
 
                 <div className="md:col-span-full bg-white border border-gray-100 rounded-2xl p-6 shadow-sm">
                   <h2 className="font-semibold text-gray-900 mb-3">
@@ -2853,6 +2868,9 @@ export default function TeacherPreview() {
                   activeMockItem.item
                 )}
               />
+            )}
+            {activeMockItem?.type === 'speaking' && (
+              <SpeakingTestPreview key={content.id} title={content.title} config={content.speakingConfig} />
             )}
           </div>
         )}

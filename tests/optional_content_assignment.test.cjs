@@ -12,11 +12,12 @@ function expression(type,name) {
 }
 async function fixture(type,extra={}) {
  const speakingPolicy=await import('../src/services/speakingPolicy.js')
+ const speakingExam=await import('../src/services/speakingExam.js')
  const delta=await import('../src/services/p8cAssignmentDelta.js')
  const policy=await import('../src/services/aiWritingSponsoredAssignmentPolicy.js')
  const calls={content:[],access:[],ai:[],alerts:[],saved:false}
  const question={id:'Q1',type:'mcq',question:'Pick the synonym.',options:['small','large'],answer:'A'}
- const c={...delta,...policy,...speakingPolicy,speakingConfig:{enabled:false,questions:[]},console:{error:(...x)=>calls.alerts.push(x.map(String).join(' '))},structuredClone,Date,Set,Array,Number,
+ const c={...delta,...policy,...speakingPolicy,...speakingExam,speakingConfig:{enabled:false,questions:[]},console:{error:(...x)=>calls.alerts.push(x.map(String).join(' '))},structuredClone,Date,Set,Array,Number,
  title:'Library content',safeTimeLimit:40,timeLimit:40,instructions:'Instructions',dueDate:'',contentType:type==='MockTest'?'mini_mock':'homework',visibility:'private',
  user:{uid:'Teacher001'},profile:{role:'teacher',schoolId:'maxima'},id:'',isEditMode:false,saving:false,loadingExisting:false,readingLoading:false,loadedReadingId:'',readingLoadError:'',selectedWritingMode:'task2',
  assignTo:[],assignmentBaseline:[],students:[],aiActiveClassStudentIds:new Set(),teacherAcademicMembershipReady:true,
@@ -73,4 +74,19 @@ test('Reading: optional assignment does not bypass current class authorization',
  const {calls,save}=await fixture('Reading',{assignTo:['ForeignStudent'],students:[]});await save()
  assert.equal(calls.content.length,0);assert.equal(calls.access.length,0)
  assert.ok(calls.alerts.some(x=>x.includes('outside your current active classes')))
+})
+
+test('Mock: a selected Speaking snapshot is saved without assigning a student',async()=>{
+ const speakingConfig={enabled:true,questions:[
+  ...Array.from({length:6},(_,i)=>({part:1,text:`Interview question ${i+1}`,seconds:45})),
+  {part:2,text:'Describe a quiet place.',seconds:120},
+  ...Array.from({length:4},(_,i)=>({part:3,text:`Discussion question ${i+1}`,seconds:70}))
+ ]}
+ const {calls,save}=await fixture('MockTest',{speakingConfig});await save()
+ assert.deepEqual(calls.alerts,[])
+ const saved=calls.content[0].payload
+ assert.deepEqual(saved.speakingConfig,speakingConfig)
+ assert.equal(saved.totalTimeMinutes,44)
+ assert.equal(saved.writingId,'Writing001')
+ assert.equal(calls.access.length,0)
 })
