@@ -3,11 +3,13 @@ import { useEffect, useEffectEvent, useRef, useState } from 'react'
 import { auth } from '../../firebase'
 import { speakingApi, speakingTime } from '../../services/speakingApi'
 import { browserSpeakingRuntime } from '../../services/speakingRecorderRuntime'
+import { createSpeakingNarrator } from '../../services/speakingNarrator'
 import { wavFromBlob, wavHasSignal, blobBase64, outbox } from '../../services/speakingAudio'
 import SpeakingTestLayout from './SpeakingTestLayout'
 
 export default function SpeakingSession({taskId,mockId,title,config,mode,onComplete,api=speakingApi,runtime=browserSpeakingRuntime,encode=wavFromBlob}) {
   const attemptGeneration = useAttemptGeneration()
+  const [narrator] = useState(createSpeakingNarrator)
   const [attempt,setAttempt]=useState(null),[phase,updatePhase]=useState('check'),[error,setError]=useState('')
   const [devices,setDevices]=useState([]),[deviceId,setDeviceId]=useState(''),[checked,setChecked]=useState(false)
   const [blob,setBlob]=useState(null),[url,setUrl]=useState(''),[seconds,setSeconds]=useState(0),[recordedSeconds,setRecordedSeconds]=useState(0)
@@ -20,8 +22,8 @@ export default function SpeakingSession({taskId,mockId,title,config,mode,onCompl
   const key=a=>`${auth.currentUser?.uid||'local-demo'}:${a.id}:${a.nextIndex}`
   const clock=()=>runtime.now()+offset.current
   useEffect(()=>{live.current=true;return()=>{
-    live.current=false;if(recorder.current?.state==='recording')recorder.current.stop();stream.current?.getTracks().forEach(t=>t.stop());window.speechSynthesis?.cancel()
-  }},[])
+    live.current=false;if(recorder.current?.state==='recording')recorder.current.stop();stream.current?.getTracks().forEach(t=>t.stop());narrator.stop()
+  }},[narrator])
   // Object URLs are external browser resources, created and revoked with the Blob lifecycle.
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(()=>{if(!blob){setUrl('');return}const value=URL.createObjectURL(blob);setUrl(value);return()=>URL.revokeObjectURL(value)},[blob])
@@ -40,7 +42,7 @@ export default function SpeakingSession({taskId,mockId,title,config,mode,onCompl
     // Preserve old outbox blobs under their old attempt ID; the next start
     // resolves the server's new head instead of retrying that closed session.
     if(recorder.current){recorder.current.onstop=null;stop()}
-    stream.current?.getTracks().forEach(track=>track.stop());window.speechSynthesis?.cancel()
+    stream.current?.getTracks().forEach(track=>track.stop());narrator.stop()
     if(!mockId)sessionStorage.removeItem(`speaking-active-${auth.currentUser?.uid}-${taskId}`)
     rawKey.current=null;attemptRef.current=null;currentRef.current=null
     setAttempt(null);setCurrent(null);setBlob(null);setChecked(false);setPhase('check')
@@ -105,10 +107,7 @@ export default function SpeakingSession({taskId,mockId,title,config,mode,onCompl
     if(!live.current)return
     if(value.serverNow)offset.current=value.serverNow-runtime.now()
     currentRef.current=value;setCurrent(value);setAttempt({...a,current:value});attemptRef.current={...a,current:value};setPhase(a.mode==='mock'?'prompt':a.timedPart2?'preparing':'ready')
-    if(a.mode==='mock'&&readQuestions&&window.speechSynthesis){
-      window.speechSynthesis.cancel();const utterance=new SpeechSynthesisUtterance(a.questions[a.nextIndex].text)
-      utterance.lang='en-GB';utterance.rate=1;window.speechSynthesis.speak(utterance)
-    }
+    if(a.mode==='mock'&&readQuestions)narrator.speak(a.questions[a.nextIndex].text)
   }
   const recover=async a=>{
     const saved=await outbox(key(a)).catch(()=>null)
@@ -152,13 +151,13 @@ export default function SpeakingSession({taskId,mockId,title,config,mode,onCompl
       const t=clock()
       if(p==='recording')setRecordedSeconds(Math.max(0,Math.floor((runtime.now()-recordingStarted.current)/1000)))
       if(t>=c.deadline){
-        window.speechSynthesis?.cancel()
+        narrator.stop()
         if(p==='recording'&&recorder.current?.state==='recording'){setPhase('processing');stop()}
         else if(p!=='recording')await upload(null,true)
       } else if(t>=c.recordAt&&p!=='recording'){
-        window.speechSynthesis?.cancel()
+        narrator.stop()
         busy.current=true;try{await record()}catch(e){setError(e.message);setPhase('recovery')}finally{busy.current=false}
-      } else if(t>=c.startedAt+8000&&p==='prompt'){window.speechSynthesis?.cancel();setPhase('preparing')}
+      } else if(t>=c.startedAt+8000&&p==='prompt'){setPhase('preparing')}
       setSeconds(Math.ceil(Math.max(0,(p==='prompt'?c.startedAt+8000:p==='preparing'?c.recordAt:c.deadline)-t)/1000))
     }else if(a.mode==='practice'&&p==='recording'){
       const elapsed=(runtime.now()-recordingStarted.current)/1000,limit=a.questions[a.nextIndex].seconds
