@@ -88,6 +88,52 @@ test('retake gets a different server-owned attempt and old audio cannot grade th
  w.docs.set(`submissionAttemptControls/${control}`,{status:'open'});const b=await w.call('start',{mockId:'mock1'});assert.notEqual(a.id,b.id)
  assert.equal(w.docs.get(`speakingAttempts/${b.id}`).mockAttempt,2)
 })
+
+test('teacher reset starts new Mock audio, fences old recording writes, and preserves saved audio',async()=>{
+ const w=world(),a=await w.call('start',{mockId:'mock1'})
+ await w.call('beginQuestion',{attemptId:a.id});w.advance(40000)
+ await w.call('saveAnswer',{attemptId:a.id,index:0,audio:wav()})
+ const saved=structuredClone(w.docs.get(`speakingAttempts/${a.id}`))
+ w.docs.get('studentAccess/S1_mock_mock1').attemptGeneration='teacher-reset'
+ await rejected(w.call('start',{mockId:'mock1'}),'failed-precondition')
+ await rejected(w.call('beginQuestion',{attemptId:a.id}),'failed-precondition')
+ await rejected(w.call('saveAnswer',{attemptId:a.id,index:1,audio:wav()}),'failed-precondition')
+ const fresh=await w.call('start',{mockId:'mock1',attemptGeneration:'teacher-reset'})
+ assert.notEqual(fresh.id,a.id);assert.equal(fresh.nextIndex,0);assert.deepEqual(fresh.answers,[])
+ assert.equal(fresh.aiAvailable,false)
+ assert.deepEqual(w.docs.get(`speakingAttempts/${a.id}`),saved);assert.equal(w.objects.size,1)
+ const linked=await mockSpeakingLink({db:w.db,mock:{speakingConfig:full},student:w.student,mockId:'mock1',autoSubmitted:true,HttpsError:Fault,generation:'teacher-reset'})
+ assert.equal(linked.attemptId,fresh.id);assert.equal(w.docs.get(`speakingAttempts/${a.id}`).status,'recording')
+})
+
+test('teacher can restart unfinished standalone Speaking once, preserving old audio and blocking its writes',async()=>{
+ const w=world(),a=await w.call('start',{taskId:'task1'})
+ await w.call('beginQuestion',{attemptId:a.id});await w.call('saveAnswer',{attemptId:a.id,index:0,audio:wav()})
+ const originalAnswers=structuredClone(w.docs.get(`speakingAttempts/${a.id}`).answers)
+ await rejected(w.call('restartAttempt',{attemptId:a.id}),'permission-denied')
+ await rejected(w.call('restartAttempt',{attemptId:a.id},'T2'),'permission-denied')
+ const responses=await Promise.allSettled([w.call('restartAttempt',{attemptId:a.id},'T1'),w.call('restartAttempt',{attemptId:a.id},'T1')])
+ assert.equal(responses.filter(r=>r.status==='fulfilled').length,1)
+ const fresh=responses.find(r=>r.status==='fulfilled').value
+ assert.equal(fresh.attemptNumber,2);assert.notEqual(fresh.attemptId,a.id)
+ const started=await w.call('start',{taskId:'task1'})
+ assert.equal(started.id,fresh.attemptId);assert.equal(started.nextIndex,0);assert.deepEqual(started.answers,[])
+ await rejected(w.call('beginQuestion',{attemptId:a.id}),'failed-precondition')
+ await rejected(w.call('submit',{attemptId:a.id}),'failed-precondition')
+ assert.deepEqual(w.docs.get(`speakingAttempts/${a.id}`).answers,originalAnswers);assert.equal(w.objects.size,1)
+ assert.equal((await w.call('get',{attemptId:a.id,staff:true},'T1')).isLatestAttempt,false)
+ assert.equal((await w.call('get',{attemptId:started.id})).aiAvailable,false)
+})
+
+test('standalone Speaking write rechecks its current head when reset races an upload',async()=>{
+ const w=world(),a=await w.call('start',{taskId:'task1'})
+ await w.call('beginQuestion',{attemptId:a.id})
+ const original=w.db.runTransaction,{createHash}=require('node:crypto')
+ const controlId=createHash('sha256').update('S1\0task1').digest('hex')
+ w.db.runTransaction=fn=>{w.docs.get(`speakingAttemptControls/${controlId}`).latestAttemptId='new-teacher-session';return original(fn)}
+ await rejected(w.call('saveAnswer',{attemptId:a.id,index:0,audio:wav()}),'failed-precondition')
+ assert.equal(w.docs.get(`speakingAttempts/${a.id}`).answers.length,0)
+})
 test('teacher owns set creation; admin monitors all teachers in its institution without creating sets',async()=>{
  const w=world();w.docs.set('speakingTasks/second',{...w.docs.get('speakingTasks/task1'),teacherId:'T2',title:'Other teacher set'});w.docs.set('speakingTasks/foreign',{...w.docs.get('speakingTasks/task1'),schoolId:'another',title:'Foreign'})
  const teacher=await w.call('list',{staff:true},'T1'),admin=await w.call('list',{staff:true},'A1')

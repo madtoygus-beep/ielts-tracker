@@ -1,4 +1,5 @@
 import { lazy, Suspense } from 'react'
+import StudentAttemptBoundary from './components/StudentAttemptBoundary'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 
 const Landing = lazy(() => import('./pages/Landing'))
@@ -12,6 +13,7 @@ const TeacherDashboard = lazy(() => import('./pages/TeacherDashboard'))
 const AdminDashboard = lazy(() => import('./pages/AdminDashboard'))
 
 const SpeakingPreview = import.meta.env.DEV ? lazy(() => import('./pages/SpeakingPreview')) : null
+const AttemptRestartPreview = import.meta.env.DEV ? lazy(() => import('./pages/AttemptRestartPreview')) : null
 const SpeakingWorkspace = lazy(() => import('./pages/SpeakingWorkspace'))
 
 const CreateReading = lazy(() => import('./pages/CreateReading'))
@@ -70,26 +72,27 @@ function App() {
           <Route path="/admin" element={<AdminDashboard />} />
 
           {import.meta.env.DEV && <Route path="/speaking-preview" element={<SpeakingPreview />} />}
+          {import.meta.env.DEV && <Route path="/attempt-restart-preview" element={<AttemptRestartPreview />} />}
           <Route path="/speaking" element={<SpeakingWorkspace />} />
           <Route path="/create-reading" element={<CreateReading />} />
           <Route path="/edit-reading/:id" element={<CreateReading />} />
-          <Route path="/do-reading/:id" element={<DoReading />} />
+          <Route path="/do-reading/:id" element={<StudentAttemptBoundary contentType="reading"><DoReading /></StudentAttemptBoundary>} />
 
           <Route path="/create-writing" element={<CreateWriting />} />
           <Route path="/edit-writing/:id" element={<CreateWriting />} />
-          <Route path="/do-writing/:id" element={<DoWriting />} />
+          <Route path="/do-writing/:id" element={<StudentAttemptBoundary contentType="writing"><DoWriting /></StudentAttemptBoundary>} />
 
           <Route path="/create-listening" element={<CreateListening />} />
           <Route path="/edit-listening/:id" element={<CreateListening />} />
-          <Route path="/do-listening/:id" element={<DoListening />} />
+          <Route path="/do-listening/:id" element={<StudentAttemptBoundary contentType="listening"><DoListening /></StudentAttemptBoundary>} />
 
           <Route path="/create-mock" element={<CreateMockTest />} />
           <Route path="/edit-mock/:id" element={<CreateMockTest />} />
-          <Route path="/do-mock/:id" element={<DoMockTest />} />
+          <Route path="/do-mock/:id" element={<StudentAttemptBoundary contentType="mock"><DoMockTest /></StudentAttemptBoundary>} />
 
           <Route path="/create-vocabulary" element={<CreateVocabulary />} />
           <Route path="/edit-vocabulary/:id" element={<CreateVocabulary />} />
-          <Route path="/do-vocabulary/:id" element={<DoVocabulary />} />
+          <Route path="/do-vocabulary/:id" element={<StudentAttemptBoundary contentType="vocabulary"><DoVocabulary /></StudentAttemptBoundary>} />
 
           <Route path="/teacher/classes" element={<ManageClasses />} />
           <Route path="/admin/classes" element={<ManageClasses />} />

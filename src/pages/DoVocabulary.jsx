@@ -1,3 +1,4 @@
+import { useAttemptGeneration, vocabularyDraftId } from '../hooks/useAttemptGeneration'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { auth, db, functions } from '../firebase'
 import { doc, getDoc, getDocFromServer, setDoc } from 'firebase/firestore'
@@ -198,6 +199,8 @@ function normalizeMultilineText(value) {
 }
 
 export default function DoVocabulary() {
+  const attemptGeneration = useAttemptGeneration()
+
   const { id } = useParams()
   const navigate = useNavigate()
 
@@ -389,12 +392,12 @@ export default function DoVocabulary() {
 
           try {
             const draftSnap = await getDocFromServer(
-              doc(db, 'vocabularyDrafts', `${currentUser.uid}_${id}`)
+              doc(db, 'vocabularyDrafts', vocabularyDraftId(currentUser.uid, id, attemptGeneration))
             )
 
             if (!isCurrent()) return
 
-            if (draftSnap.exists()) {
+            if (draftSnap.exists() && (draftSnap.data().attemptGeneration || '') === attemptGeneration) {
               const draft = draftSnap.data()
 
               if (
@@ -489,13 +492,13 @@ export default function DoVocabulary() {
               doc(
                 db,
                 'vocabularyDrafts',
-                `${currentUser.uid}_${id}`
+                vocabularyDraftId(currentUser.uid, id, attemptGeneration)
               )
             )
 
             if (!isCurrent()) return
 
-            if (draftSnap.exists()) {
+            if (draftSnap.exists() && (draftSnap.data().attemptGeneration || '') === attemptGeneration) {
               const draft = draftSnap.data()
 
               if (
@@ -543,7 +546,7 @@ export default function DoVocabulary() {
       clearInterval(timerRef.current)
       unsub()
     }
-  }, [id, navigate, reloadCount])
+  }, [id, navigate, reloadCount, attemptGeneration])
 
   const groupedQuestions = useMemo(() => {
     const questions = test?.questions || []
@@ -893,12 +896,13 @@ export default function DoVocabulary() {
         ? Number(attemptState.nextAttemptNumber) || 2
         : 1,
       reopenMode: attemptState?.open ? attemptState.mode || '' : '',
+      attemptGeneration,
       updatedAt: new Date().toISOString()
     }
 
     try {
       await setDoc(
-        doc(db, 'vocabularyDrafts', `${user.uid}_${id}`),
+        doc(db, 'vocabularyDrafts', vocabularyDraftId(user.uid, id, attemptGeneration)),
         payload,
         // Replace the entire answers map, including deleted/blank choices.
         // Preserve any other top-level metadata not owned by this screen.
@@ -947,6 +951,7 @@ export default function DoVocabulary() {
     try {
       // 8D-2: scoring and immutable submission creation happen on the server.
       const response = await submitVocabularySecure({
+        attemptGeneration,
         vocabularyTestId: id,
         answers,
         finishedLate: timeLeft <= 0,

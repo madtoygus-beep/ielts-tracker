@@ -754,6 +754,21 @@ service cloud.firestore {
         && data.get('homeworkId', data.vocabularyTestId) == data.vocabularyTestId;
     }
 
+    // A teacher-owned generation fences stale tabs, including old clients that
+    // omit this field. Empty remains compatible with assignments never reset.
+    function vocabularyDraftGenerationMatches(data) {
+      let generation = data.get('attemptGeneration', '');
+      let access = get(/databases/$(database)/documents/studentAccess/$(request.auth.uid + '_vocabulary_' + data.vocabularyTestId)).data;
+      return generation is string && generation.size() <= 80
+        && generation == access.get('attemptGeneration', '');
+    }
+
+    function vocabularyDraftIdMatches(draftId, data) {
+      let generation = data.get('attemptGeneration', '');
+      let suffix = generation == '' ? '' : '_restart_' + generation;
+      return draftId == request.auth.uid + '_' + data.vocabularyTestId + suffix;
+    }
+
     function teacherMessageIdentityUnchanged() {
       return !request.resource.data.diff(resource.data).affectedKeys().hasAny([
         'senderId', 'teacherId', 'teacherIds', 'schoolId', 'createdAt'
@@ -1497,7 +1512,7 @@ service cloud.firestore {
           isStudent()
           && resource.data.get('uid', '') == request.auth.uid
           && resource.data.get('studentId', '') == request.auth.uid
-          && draftId == request.auth.uid + '_' + resource.data.get('vocabularyTestId', '')
+          && vocabularyDraftIdMatches(draftId, resource.data)
         );
 
       // Package 49 uses setDoc(..., { merge: true }), so create and update
@@ -1511,17 +1526,13 @@ service cloud.firestore {
             /databases/$(database)/documents/vocabularyTests/$(request.resource.data.vocabularyTestId)
           ).data
         )
-        && draftId == request.auth.uid + '_' + request.resource.data.vocabularyTestId
+        && vocabularyDraftIdMatches(draftId, request.resource.data)
+        && vocabularyDraftGenerationMatches(request.resource.data)
         && validVocabularyDraftFields(request.resource.data);
 
-      // Final submission removes the student's draft.
-      allow delete: if isAdmin()
-        || (
-          isStudent()
-          && resource.data.get('uid', '') == request.auth.uid
-          && resource.data.get('studentId', '') == request.auth.uid
-          && draftId == request.auth.uid + '_' + resource.data.get('vocabularyTestId', '')
-        );
+      // The secure submit transaction owns cleanup. A bare client delete has
+      // no session generation and could otherwise erase a newer draft.
+      allow delete: if isAdmin();
     }
 
     // ============================================================

@@ -1,3 +1,4 @@
+import AttemptOptionsActions from '../components/AttemptOptionsActions'
 import { speakingExamMinutes } from '../services/speakingExam'
 import SpeakingWorkspaceView from '../components/speaking/SpeakingWorkspaceView'
 import SpeakingAnalytics from '../components/speaking/SpeakingAnalytics'
@@ -510,7 +511,7 @@ function ResultPermanentDeleteDialog({ loading, preview, saving, error, studentN
         ) : preview ? (
           <div className="mt-4 rounded-xl bg-red-50 border border-red-100 p-3 text-sm text-red-900">
             <p><strong>{preview.totalRecords}</strong> Firestore record(s) will be removed.</p>
-            <p className="mt-1 text-xs">Current/legacy submissions: {preview.counts?.submissions || 0} · Previous attempts: {preview.counts?.attemptHistory || 0} · Mock scores: {preview.counts?.mockScores || 0} · Attempt controls: {preview.counts?.attemptControls || 0} · Vocabulary drafts: {preview.counts?.vocabularyDrafts || 0}</p>
+            <p className="mt-1 text-xs">Current/legacy submissions: {preview.counts?.submissions || 0} · Previous attempts: {preview.counts?.attemptHistory || 0} · Mock scores: {preview.counts?.mockScores || 0} · Attempt controls: {preview.counts?.attemptControls || 0} · Restarts: {preview.counts?.attemptRestarts || 0} · Vocabulary drafts: {preview.counts?.vocabularyDrafts || 0}</p>
             <p className="mt-2 text-xs text-slate-600">A minimal, staff-only deletion audit is retained without student answers.</p>
           </div>
         ) : null}
@@ -3295,7 +3296,7 @@ export default function TeacherDashboard() {
       return
     }
 
-    if (!attemptManager.state?.hasSubmission) {
+    if (mode === 'reopen_answers' && !attemptManager.state?.hasSubmission) {
       setAttemptManagerError('This student has no submitted attempt to reopen.')
       return
     }
@@ -3304,11 +3305,11 @@ export default function TeacherDashboard() {
       attemptManager.student.name || attemptManager.student.email || 'this student'
     const nextAttempt =
       Number(attemptManager.state?.nextAttemptNumber) ||
-      (Number(attemptManager.state?.currentAttemptNumber) || 1) + 1
+      (Number(attemptManager.state?.currentAttemptNumber) || 0) + 1
     const modeLabel = mode === 'reopen_answers' ? 'Reopen Answers' : 'Start Fresh'
     const detail = mode === 'reopen_answers'
       ? "The new attempt will begin with the student's previous answers restored."
-      : 'The new attempt will begin blank. The previous submitted attempt will remain saved in history.'
+      : 'Answers and timers will start over for this student, including Mock Speaking. Their open exam will close. Submitted results and saved recordings are kept.'
 
     const confirmed = window.confirm(
       `${modeLabel} for ${studentName}?\n\nThis will open Attempt ${nextAttempt}. ${detail}\n\nThe previous submitted attempt, score/review and original submission data will not be deleted.`
@@ -3327,7 +3328,10 @@ export default function TeacherDashboard() {
         contentType: attemptManager.contentType,
         contentId: attemptManager.contentId,
         studentId,
-        mode
+        mode,
+        expectedAttemptGeneration: attemptManager.state?.attemptGeneration || '',
+        expectedCurrentSubmissionId: attemptManager.state?.currentSubmissionId || '',
+        expectedCurrentAttemptNumber: Number(attemptManager.state?.currentAttemptNumber) || 0
       })
 
       const [state, history] = await Promise.all([
@@ -8334,6 +8338,17 @@ export default function TeacherDashboard() {
                             </button>
                           </div>
 
+                          <div className="mb-4 space-y-2">
+                            {mockTests.filter(mock => !mock.archived && isHomeworkAssignedToStudent(mock, student, 'mock') &&
+                              !getStudentMockSubmissions(student.id).some(item => item.mockTestId === mock.id)).map(mock => (
+                              <div key={mock.id} className="flex items-center justify-between gap-3 rounded-xl border border-gray-100 bg-white p-4">
+                                <div><p className="text-sm font-semibold text-gray-800">{mock.title || 'Mock Test'}</p><p className="text-xs text-gray-400 mt-1">Assigned · Not submitted</p></div>
+                                <button type="button" onClick={() => openSubmissionAttemptManager({ contentType: 'mock', contentId: mock.id, title: mock.title, student })}
+                                  className="text-xs bg-blue-50 text-blue-700 px-3 py-2 rounded-xl hover:bg-blue-100">Attempt Options</button>
+                              </div>
+                            ))}
+                          </div>
+
                           {getStudentMockSubmissions(student.id).length === 0 ? (
                             <div className="bg-gray-50 border border-gray-100 rounded-xl p-5 text-sm text-gray-400">
                               No completed mock test yet.
@@ -8505,7 +8520,7 @@ export default function TeacherDashboard() {
                           {!speakingHomework.loading && !speakingHomework.error && !studentSpeakingTasks.length && <p className="text-sm text-slate-500">No Speaking assignments.</p>}
                           {studentSpeakingTasks.map(item => <div key={item.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-slate-50 p-4">
                             <div><p className="text-sm font-semibold text-slate-800">{item.title}</p><p className="mt-1 text-xs text-slate-500">{item.attempt?.status || 'Not started'}{item.attempt?.report?.estimatedBand != null ? ` · AI estimate ${item.attempt.report.estimatedBand.toFixed(1)}` : ''}{item.attempt?.review?.band != null ? ` · Teacher ${item.attempt.review.band.toFixed(1)}` : ''}</p></div>
-                            <button type="button" onClick={() => navigate(item.attempt ? `/speaking?report=${encodeURIComponent(item.attempt.id)}` : '/speaking')} className="rounded-xl bg-purple-600 px-4 py-2 text-xs font-semibold text-white">{item.attempt ? 'View feedback' : 'Open Speaking'}</button>
+                            <button type="button" onClick={() => navigate(item.attempt ? `/speaking?report=${encodeURIComponent(item.attempt.id)}` : '/speaking')} className="rounded-xl bg-purple-600 px-4 py-2 text-xs font-semibold text-white">{item.attempt?.status === 'recording' ? 'Attempt Options' : item.attempt ? 'View feedback' : 'Open Speaking'}</button>
                           </div>)}
                         </div>
                       </details>
@@ -8673,6 +8688,9 @@ export default function TeacherDashboard() {
                                       <span className="text-xs bg-amber-50 text-amber-600 px-3 py-1.5 rounded-full">
                                         Not done
                                       </span>
+
+                                      <button type="button" onClick={() => openSubmissionAttemptManager({ contentType: 'reading', contentId: reading.id, title: reading.title, student })}
+                                        className="text-xs bg-blue-50 text-blue-700 px-3 py-2 rounded-xl hover:bg-blue-100">Attempt Options</button>
 
                                       <button
                                         onClick={() => removeHomeworkFromStudent(reading, 'reading', student)}
@@ -8848,6 +8866,9 @@ export default function TeacherDashboard() {
                                         Not done
                                       </span>
 
+                                      <button type="button" onClick={() => openSubmissionAttemptManager({ contentType: 'listening', contentId: listening.id, title: listening.title, student })}
+                                        className="text-xs bg-blue-50 text-blue-700 px-3 py-2 rounded-xl hover:bg-blue-100">Attempt Options</button>
+
                                       <button
                                         onClick={() => removeHomeworkFromStudent(listening, 'listening', student)}
                                         className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
@@ -8984,6 +9005,9 @@ export default function TeacherDashboard() {
                                       <span className="text-xs bg-amber-50 text-amber-600 px-3 py-1.5 rounded-full">
                                         Not done
                                       </span>
+
+                                      <button type="button" onClick={() => openSubmissionAttemptManager({ contentType: 'vocabulary', contentId: vocabularyTest.id, title: vocabularyTest.title, student })}
+                                        className="text-xs bg-blue-50 text-blue-700 px-3 py-2 rounded-xl hover:bg-blue-100">Attempt Options</button>
 
                                       <button
                                         onClick={() => removeHomeworkFromStudent(vocabularyTest, 'vocabulary', student)}
@@ -9137,6 +9161,9 @@ export default function TeacherDashboard() {
                                         Not done
                                       </span>
 
+                                      <button type="button" onClick={() => openSubmissionAttemptManager({ contentType: 'writing', contentId: writing.id, title: writing.title, student })}
+                                        className="text-xs bg-blue-50 text-blue-700 px-3 py-2 rounded-xl hover:bg-blue-100">Attempt Options</button>
+
                                       <button
                                         onClick={() => removeHomeworkFromStudent(writing, 'writing', student)}
                                         className="text-xs bg-red-50 text-red-600 px-3 py-2 rounded-xl hover:bg-red-100"
@@ -9174,7 +9201,7 @@ export default function TeacherDashboard() {
             <div className="flex items-start justify-between gap-4 mb-5">
               <div>
                 <p className="text-xs font-semibold text-blue-600 uppercase tracking-wide">
-                  {getAttemptContentLabel(attemptManager.contentType)} Retake
+                  {getAttemptContentLabel(attemptManager.contentType)} · Attempt Options
                 </p>
                 <h2 className="text-xl font-bold text-gray-900 mt-1">
                   {attemptManager.title}
@@ -9245,35 +9272,9 @@ export default function TeacherDashboard() {
                   )}
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setManagedAttemptMode('reopen_answers')}
-                    disabled={attemptManagerSaving || !attemptManager.state?.hasSubmission}
-                    className="text-left border border-purple-200 bg-purple-50 hover:bg-purple-100 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl p-4"
-                  >
-                    <span className="block text-sm font-semibold text-purple-700">
-                      Reopen Answers
-                    </span>
-                    <span className="block text-xs text-purple-600/80 mt-1 leading-relaxed">
-                      {getAttemptReopenDescription(attemptManager.contentType)}
-                    </span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setManagedAttemptMode('start_fresh')}
-                    disabled={attemptManagerSaving || !attemptManager.state?.hasSubmission}
-                    className="text-left border border-blue-200 bg-blue-50 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl p-4"
-                  >
-                    <span className="block text-sm font-semibold text-blue-700">
-                      Start Fresh
-                    </span>
-                    <span className="block text-xs text-blue-600/80 mt-1 leading-relaxed">
-                      Start the new attempt blank while keeping the previous submission in history.
-                    </span>
-                  </button>
-                </div>
+                <AttemptOptionsActions state={attemptManager.state} saving={attemptManagerSaving}
+                  onSelect={setManagedAttemptMode}
+                  reopenDescription={getAttemptReopenDescription(attemptManager.contentType)} />
 
                 <p className="text-xs text-gray-400 mt-4 leading-relaxed">
                   Reopening never deletes the current submitted attempt. The previous answers, submission time and review are preserved for attempt history when the student resubmits.

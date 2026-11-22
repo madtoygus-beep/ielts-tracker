@@ -1,3 +1,4 @@
+import { useAttemptGeneration } from '../../hooks/useAttemptGeneration'
 import { useEffect, useEffectEvent, useRef, useState } from 'react'
 import { auth } from '../../firebase'
 import { speakingApi, speakingTime } from '../../services/speakingApi'
@@ -6,6 +7,7 @@ import { wavFromBlob, wavHasSignal, blobBase64, outbox } from '../../services/sp
 import SpeakingTestLayout from './SpeakingTestLayout'
 
 export default function SpeakingSession({taskId,mockId,title,config,mode,onComplete,api=speakingApi,runtime=browserSpeakingRuntime,encode=wavFromBlob}) {
+  const attemptGeneration = useAttemptGeneration()
   const [attempt,setAttempt]=useState(null),[phase,updatePhase]=useState('check'),[error,setError]=useState('')
   const [devices,setDevices]=useState([]),[deviceId,setDeviceId]=useState(''),[checked,setChecked]=useState(false)
   const [blob,setBlob]=useState(null),[url,setUrl]=useState(''),[seconds,setSeconds]=useState(0),[recordedSeconds,setRecordedSeconds]=useState(0)
@@ -33,6 +35,18 @@ export default function SpeakingSession({taskId,mockId,title,config,mode,onCompl
     return stream.current
   }
   const stop=()=>{if(recorder.current?.state==='recording')recorder.current.stop()}
+  const handleTeacherRestart=error=>{
+    if(!/teacher restarted|newer Speaking attempt/i.test(error?.message||''))return false
+    // Preserve old outbox blobs under their old attempt ID; the next start
+    // resolves the server's new head instead of retrying that closed session.
+    if(recorder.current){recorder.current.onstop=null;stop()}
+    stream.current?.getTracks().forEach(track=>track.stop());window.speechSynthesis?.cancel()
+    if(!mockId)sessionStorage.removeItem(`speaking-active-${auth.currentUser?.uid}-${taskId}`)
+    rawKey.current=null;attemptRef.current=null;currentRef.current=null
+    setAttempt(null);setCurrent(null);setBlob(null);setChecked(false);setPhase('check')
+    setError('Your teacher restarted this attempt. Check your microphone, then start the fresh attempt.')
+    return true
+  }
   const micStarting=useRef(false)
   const record=async(test=false)=>{
     if(micStarting.current||recorder.current?.state==='recording')return
@@ -84,7 +98,7 @@ export default function SpeakingSession({taskId,mockId,title,config,mode,onCompl
       const result=await api('saveAnswer',body)
       await outbox(key(a),null).catch(()=>{})
       busy.current=false;await next(result)
-    } catch(e){busy.current=false;if(live.current){setError(e.message||'Could not save. Your recording is retained on this device.');setPhase('recovery')}}
+    } catch(e){busy.current=false;if(live.current&&!handleTeacherRestart(e)){setError(e.message||'Could not save. Your recording is retained on this device.');setPhase('recovery')}}
   }
   const begin=async(a,restartPreparation=false)=>{
     const value=await api('beginQuestion',{attemptId:a.id,restartPreparation})
@@ -110,7 +124,7 @@ export default function SpeakingSession({taskId,mockId,title,config,mode,onCompl
     if(busy.current||micStarting.current)return;busy.current=true;setError('')
     try{
       await getMic()
-      const a=await api('start',mockId?{mockId}:{taskId,attemptId:sessionStorage.getItem(`speaking-active-${auth.currentUser?.uid}-${taskId}`)||null});setAttempt(a);attemptRef.current=a
+      const a=await api('start',mockId?{mockId,attemptGeneration}:{taskId,attemptId:sessionStorage.getItem(`speaking-active-${auth.currentUser?.uid}-${taskId}`)||null});setAttempt(a);attemptRef.current=a
       // Remove local copies already acknowledged by the server, including a lost save response.
       for(let index=0;index<a.nextIndex;index++)await outbox(`${auth.currentUser?.uid||'local-demo'}:${a.id}:${index}`,null).catch(()=>{})
       if(a.serverNow)offset.current=a.serverNow-runtime.now()
@@ -121,7 +135,7 @@ export default function SpeakingSession({taskId,mockId,title,config,mode,onCompl
       if(a.current){currentRef.current=a.current;setCurrent(a.current);setPhase(a.mode==='mock'?'prompt':a.timedPart2?'preparing':'ready')}
       else if(a.mode==='mock')await begin(a)
       else setPhase('ready')
-    }catch(e){setError(e.message||'Could not start Speaking.');setPhase('check')}
+    }catch(e){if(!handleTeacherRestart(e)){setError(e.message||'Could not start Speaking.');setPhase('check')}}
     finally{busy.current=false}
   }
   const retry=async()=>{setError('');try{if(attempt?.nextIndex>=attempt?.questions.length){if(busy.current)return;busy.current=true;setPhase('uploading');try{await finish(attempt)}finally{busy.current=false}return}if(blob)await upload(blob,true,finishedEarly.current);else if(attempt){if(!await recover(attempt))await upload(null,true)}}catch(e){setError(e.message);setPhase('recovery')}}

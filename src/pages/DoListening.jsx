@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef } from 'react'
+import { useAttemptGeneration, generationSuffix } from '../hooks/useAttemptGeneration'
+import { useCallback, useState, useEffect, useRef } from 'react'
 import { auth, db, functions } from '../firebase'
 import { doc, getDoc, getDocFromServer } from 'firebase/firestore'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
@@ -268,7 +269,7 @@ function getAttemptStorageSuffix(attemptNumber, mode = '') {
   return `:attempt-${number}${modeSuffix}`
 }
 
-function getListeningProgressStorageKey(userId, listeningId, attemptNumber = 1, mode = '') {
+function baseGetListeningProgressStorageKey(userId, listeningId, attemptNumber = 1, mode = '') {
   return `listening_progress_${listeningId}_${userId}${getAttemptStorageSuffix(attemptNumber, mode)}`
 }
 
@@ -420,6 +421,9 @@ function getMatchingQuestionNumber(parts, partId, questionId, itemId) {
 }
 
 export default function DoListening() {
+  const attemptGeneration = useAttemptGeneration()
+  const getListeningProgressStorageKey = useCallback((...args) => baseGetListeningProgressStorageKey(...args) + generationSuffix(attemptGeneration), [attemptGeneration])
+
   const { id } = useParams()
 
   const [user, setUser] = useState(null)
@@ -752,7 +756,7 @@ export default function DoListening() {
       clearInterval(timerRef.current)
       unsub()
     }
-  }, [id, navigate, reloadCount])
+  }, [id, navigate, reloadCount, getListeningProgressStorageKey])
 
   useEffect(() => {
     if (!storageKey || restoredRef.current || !listening) return
@@ -1347,6 +1351,7 @@ export default function DoListening() {
     try {
       // 8D-2: scoring and immutable submission creation happen on the server.
       const response = await submitListeningSecure({
+        attemptGeneration,
         listeningId: id,
         answers,
         flaggedQuestions,

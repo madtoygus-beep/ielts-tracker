@@ -94,6 +94,7 @@ const SCHOOL_CASCADE_COLLECTIONS = [
   'scores',
   'submissionAttemptControls',
   'submissionAttemptHistory',
+  'submissionAttemptRestarts',
   // P5A-1: AI pilot settings, access and adjustment audit cascade with school removal.
   'aiWritingSchoolSettings',
   'aiWritingStudentAccess',
@@ -2771,6 +2772,7 @@ const STUDENT_PERMANENT_DELETE_COLLECTIONS = [
   { name: 'scores', fields: ['uid', 'studentId'] },
   { name: 'submissionAttemptControls', fields: ['uid', 'studentId'] },
   { name: 'submissionAttemptHistory', fields: ['uid', 'studentId'] },
+  { name: 'submissionAttemptRestarts', fields: ['uid', 'studentId'] },
   // P5A-1: remove learner AI permissions and credit audit with permanent deletion.
   { name: 'aiWritingStudentAccess', fields: ['uid', 'studentId'] },
   { name: 'aiWritingCreditOperations', fields: ['studentId'] },
@@ -4761,9 +4763,10 @@ exports.getManagedSubmissionAttemptState = onCall(async request => {
     db, HttpsError, manager, studentId, schoolId: schoolIdOf(source)
   })
 
-  const [current, controlSnap] = await Promise.all([
+  const [current, controlSnap, accessSnap] = await Promise.all([
     findCurrentSubmissionRecord(config, studentId, contentId),
-    db.doc(`${ATTEMPT_CONTROL_COLLECTION}/${attemptControlId(studentId, config.contentType, contentId)}`).get()
+    db.doc(`${ATTEMPT_CONTROL_COLLECTION}/${attemptControlId(studentId, config.contentType, contentId)}`).get(),
+    db.doc(`studentAccess/${studentId}_${config.contentType}_${contentId}`).get()
   ])
 
   return {
@@ -4772,6 +4775,7 @@ exports.getManagedSubmissionAttemptState = onCall(async request => {
     contentId,
     studentId,
     hasSubmission: Boolean(current),
+    attemptGeneration: attemptGeneration(accessSnap.data()?.attemptGeneration),
     currentSubmissionId: current?.id || '',
     excludedFromStats: current?.data?.excludedFromStats === true,
     ...attemptControlClientState(controlSnap.exists ? (controlSnap.data() || {}) : null, current)
@@ -5070,7 +5074,7 @@ function resultDeleteFingerprint({ config, studentId, contentId, records }) {
 
 async function collectManagedResultDeletion({ config, studentId, contentId, schoolId }) {
   const refs = new Map()
-  const counts = { submissions: 0, attemptHistory: 0, attemptControls: 0, mockScores: 0, vocabularyDrafts: 0, aiEvaluations: 0 }
+  const counts = { submissions: 0, attemptHistory: 0, attemptControls: 0, attemptRestarts: 0, mockScores: 0, vocabularyDrafts: 0, aiEvaluations: 0 }
 
   const include = (snap, category) => {
     if (!snap?.exists || refs.has(snap.ref.path)) return
@@ -5109,7 +5113,7 @@ async function collectManagedResultDeletion({ config, studentId, contentId, scho
     ? db.doc(`scores/${studentId}_${contentId}`)
     : null
 
-  const [submissions, histories, currentSnap, controlSnap, draftSnap, scores, canonicalScoreSnap, aiEvaluations] = await Promise.all([
+  const [submissions, histories, currentSnap, controlSnap, draftSnap, scores, canonicalScoreSnap, aiEvaluations, restarts, drafts] = await Promise.all([
     getByStudent(config.submissionCollection),
     getByStudent(ATTEMPT_HISTORY_COLLECTION),
     canonicalSubmissionRef.get(),
@@ -5118,7 +5122,9 @@ async function collectManagedResultDeletion({ config, studentId, contentId, scho
     canonicalScoreRef ? getByStudent('scores') : Promise.resolve([]),
     canonicalScoreRef ? canonicalScoreRef.get() : Promise.resolve(null),
     ['writing', 'mock'].includes(config.contentType)
-      ? getByStudent('aiWritingEvaluations') : Promise.resolve([])
+      ? getByStudent('aiWritingEvaluations') : Promise.resolve([]),
+    getByStudent('submissionAttemptRestarts'),
+    config.contentType === 'vocabulary' ? getByStudent('vocabularyDrafts') : Promise.resolve([])
   ])
 
   const allSubmissions = new Map(submissions.map(snap => [snap.ref.path, snap]))
@@ -5149,6 +5155,16 @@ async function collectManagedResultDeletion({ config, studentId, contentId, scho
     include(snap, 'attemptHistory')
   }
 
+  for (const snap of restarts) {
+    const data = snap.data() || {}
+    if (data.contentId !== contentId || data.contentType !== config.contentType) continue
+    if (!belongs(data) || data.sourceCollection !== config.sourceCollection || data.submissionCollection !== config.submissionCollection) {
+      throw new HttpsError('failed-precondition', 'Restart history is inconsistent; deletion stopped for review.')
+    }
+    assertSameSchool(data)
+    include(snap, 'attemptRestarts')
+  }
+
   // P5A-2B: an audited permanent result deletion must also erase all AI
   // evaluations for every attempt of this precise student/content pair.
   for (const snap of aiEvaluations) {
@@ -5171,13 +5187,16 @@ async function collectManagedResultDeletion({ config, studentId, contentId, scho
     include(controlSnap, 'attemptControls')
   }
 
-  if (draftSnap?.exists) {
-    const data = draftSnap.data() || {}
-    if (data.uid !== studentId || data.studentId !== studentId || data.vocabularyTestId !== contentId) {
+  const allDrafts = new Map(drafts.map(snap => [snap.ref.path, snap]))
+  if (draftSnap?.exists) allDrafts.set(draftSnap.ref.path, draftSnap)
+  for (const snap of allDrafts.values()) {
+    const data = snap.data() || {}
+    if (data.vocabularyTestId !== contentId) continue
+    if (data.uid !== studentId || data.studentId !== studentId) {
       throw new HttpsError('failed-precondition', 'Vocabulary draft has inconsistent ownership. Deletion stopped.')
     }
     assertSameSchool(data)
-    include(draftSnap, 'vocabularyDrafts')
+    include(snap, 'vocabularyDrafts')
   }
 
   if (canonicalScoreRef) {
@@ -5450,7 +5469,7 @@ async function collectLegacyStudentResultPurge({ studentId, schoolId, scope }) {
       c.include(snap, 'submissions')
     }
   }
-  for (const collectionName of [ATTEMPT_HISTORY_COLLECTION, ATTEMPT_CONTROL_COLLECTION]) {
+  for (const collectionName of [ATTEMPT_HISTORY_COLLECTION, ATTEMPT_CONTROL_COLLECTION, 'submissionAttemptRestarts']) {
     for (const snap of await legacyCascadeFindMulti(collectionName, ['uid', 'studentId', 'userId'], studentId)) {
       const data = snap.data() || {}
       if (!types.includes(data.contentType)) continue
@@ -5461,7 +5480,7 @@ async function collectLegacyStudentResultPurge({ studentId, schoolId, scope }) {
       }
       legacyCascadeCheckRecordSchool(snap, schoolId, 'Attempt history/control')
       legacyCascadeCheckOwnership(data, studentId)
-      c.include(snap, collectionName === ATTEMPT_HISTORY_COLLECTION ? 'attemptHistory' : 'attemptControls')
+      c.include(snap, collectionName === ATTEMPT_HISTORY_COLLECTION ? 'attemptHistory' : collectionName === ATTEMPT_CONTROL_COLLECTION ? 'attemptControls' : 'attemptRestarts')
     }
   }
   if (scope === 'mock') {
@@ -5571,7 +5590,7 @@ async function collectLegacyContentPurge({ manager, config, contentId, sourceSna
     c.include(snap, 'submissions')
   }
 
-  for (const collectionName of [ATTEMPT_HISTORY_COLLECTION, ATTEMPT_CONTROL_COLLECTION]) {
+  for (const collectionName of [ATTEMPT_HISTORY_COLLECTION, ATTEMPT_CONTROL_COLLECTION, 'submissionAttemptRestarts']) {
     const docs = await legacyCascadeFind(collectionName, 'contentId', contentId)
     for (const snap of docs) {
       const data = snap.data() || {}
@@ -5582,7 +5601,7 @@ async function collectLegacyContentPurge({ manager, config, contentId, sourceSna
       }
       legacyCascadeCheckRecordSchool(snap, schoolId, 'Attempt history/control')
       legacyCascadeCheckOwnership(data)
-      c.include(snap, collectionName === ATTEMPT_HISTORY_COLLECTION ? 'attemptHistory' : 'attemptControls')
+      c.include(snap, collectionName === ATTEMPT_HISTORY_COLLECTION ? 'attemptHistory' : collectionName === ATTEMPT_CONTROL_COLLECTION ? 'attemptControls' : 'attemptRestarts')
     }
   }
 
@@ -5804,6 +5823,11 @@ exports.purgeLegacyContent = onCall(async request => {
 })
 
 
+const { createAttemptRestartService, attemptGeneration, vocabularyDraftId } = require('./lib/attemptRestart')
+const attemptRestarts = createAttemptRestartService({ db, FieldValue, HttpsError, schoolIdOf,
+  requireCurrentTeacherAcademicStudent, attemptControlId, attemptHistoryId,
+  attemptHistoryPayload, schemaVersion: ATTEMPT_SCHEMA_VERSION })
+
 exports.setSubmissionAttemptControl = onCall(async request => {
   const manager = await requireAssignmentManager(request)
   const data = request.data || {}
@@ -5824,6 +5848,16 @@ exports.setSubmissionAttemptControl = onCall(async request => {
   await requireCurrentTeacherAcademicStudent({ db, HttpsError, manager, studentId, schoolId })
 
   const current = await findCurrentSubmissionRecord(config, studentId, contentId)
+  if (mode === 'start_fresh') {
+    if (data.expectedCurrentSubmissionId !== undefined &&
+      (data.expectedCurrentSubmissionId !== (current?.id || '') ||
+       Number(data.expectedCurrentAttemptNumber) !== (current ? attemptNumberOf(current.data) : 0))) {
+      throw new HttpsError('aborted', 'The student submitted while these options were open. Refresh and try again.')
+    }
+    return attemptRestarts.startFresh({ manager, config, contentId, studentId, source, accessRef, current,
+      mockScore: config.contentType === 'mock' ? await findCurrentMockScoreRecord(studentId, contentId) : null,
+      expectedGeneration: data.expectedAttemptGeneration ?? '' })
+  }
   if (!current) {
     throw new HttpsError('failed-precondition', 'This student has no submitted attempt to reopen.')
   }
@@ -6038,6 +6072,8 @@ async function createImmutableSubmission(config, student, assignmentId, data) {
   const ref = db.doc(`${config.submissionCollection}/${student.uid}_${assignmentId}`)
 
   await db.runTransaction(async transaction => {
+    await attemptRestarts.assertCurrent({ transaction, uid: student.uid, config, contentId: assignmentId,
+      generation: data.attemptGeneration, schoolId: student.schoolId })
     const snap = await transaction.get(ref)
     if (snap.exists) {
       throw new HttpsError('already-exists', 'You already submitted this homework.')
@@ -6125,6 +6161,8 @@ async function replaceCurrentSubmissionForOpenAttempt({
   const controlRef = db.doc(`${ATTEMPT_CONTROL_COLLECTION}/${controlId}`)
 
   return db.runTransaction(async transaction => {
+    await attemptRestarts.assertCurrent({ transaction, uid: student.uid, config, contentId,
+      generation: submissionData.attemptGeneration, schoolId: student.schoolId })
     const [currentSnap, controlSnap] = await Promise.all([
       transaction.get(current.ref),
       transaction.get(controlRef)
@@ -6339,6 +6377,9 @@ exports.submitWritingSecure = onCall(async request => {
   const task1Answer = task1Enabled ? safeString(rawTask1Answer, 50000) : ''
   const task2Answer = task2Enabled ? safeString(rawTask2Answer, 80000) : ''
 
+  await attemptRestarts.assertCurrent({ uid: student.uid, config, contentId: writingId,
+    generation: data.attemptGeneration, schoolId: student.schoolId })
+
   const existing = await findCurrentSubmissionRecord(config, student.uid, writingId)
   if (existing) {
     const openControl = await getOpenSubmissionAttemptControl(
@@ -6362,6 +6403,7 @@ exports.submitWritingSecure = onCall(async request => {
 
   const submission = {
     ...writingSubmissionBase(source, student),
+    attemptGeneration: attemptGeneration(data.attemptGeneration),
     writingId,
     contentType: writingMode,
     writingMode,
@@ -6467,6 +6509,9 @@ exports.submitReadingSecure = onCall(async request => {
     sourceCollection: config.sourceCollection
   })
 
+  await attemptRestarts.assertCurrent({ uid: student.uid, config, contentId: readingId,
+    generation: data.attemptGeneration, schoolId: student.schoolId })
+
   const existing = await findExistingSubmission(config, student, readingId)
   if (existing) {
     const openControl = await getOpenSubmissionAttemptControl(
@@ -6483,6 +6528,7 @@ exports.submitReadingSecure = onCall(async request => {
   const result = gradeReading(source, answers, { institutionalScoring: true })
   const submission = {
     ...baseSubmission(source, student),
+    attemptGeneration: attemptGeneration(data.attemptGeneration),
     readingId,
     answers,
     flaggedQuestions: safeStringArray(flaggedQuestions),
@@ -6549,6 +6595,9 @@ exports.submitListeningSecure = onCall(async request => {
     sourceCollection: config.sourceCollection
   })
 
+  await attemptRestarts.assertCurrent({ uid: student.uid, config, contentId: listeningId,
+    generation: data.attemptGeneration, schoolId: student.schoolId })
+
   const existing = await findExistingSubmission(config, student, listeningId)
   if (existing) {
     const openControl = await getOpenSubmissionAttemptControl(
@@ -6565,6 +6614,7 @@ exports.submitListeningSecure = onCall(async request => {
   const result = gradeListening(source, answers, { institutionalScoring: true })
   const submission = {
     ...baseSubmission(source, student),
+    attemptGeneration: attemptGeneration(data.attemptGeneration),
     listeningId,
     answers,
     flaggedQuestions: safeStringArray(flaggedQuestions),
@@ -6612,6 +6662,16 @@ exports.submitListeningSecure = onCall(async request => {
   return { alreadySubmitted: false, attemptNumber: 1, result, reviewSource: toPlain(source) }
 })
 
+async function clearCurrentVocabularyDraft(student, contentId, generation) {
+  // A teacher may restart after submission but before cleanup. Never delete a
+  // draft saved by that newer session.
+  await db.runTransaction(async transaction => {
+    await attemptRestarts.assertCurrent({ transaction, uid: student.uid,
+      config: OBJECTIVE_CONFIG.vocabulary, contentId, generation, schoolId: student.schoolId })
+    transaction.delete(db.doc(`vocabularyDrafts/${vocabularyDraftId(student.uid, contentId, attemptGeneration(generation))}`))
+  }).catch(error => { if (error.code !== 'failed-precondition' && error.code !== 'permission-denied') throw error })
+}
+
 exports.submitVocabularySecure = onCall(async request => {
   const student = await requireStudent(request)
   const data = request.data || {}
@@ -6630,6 +6690,9 @@ exports.submitVocabularySecure = onCall(async request => {
     sourceCollection: config.sourceCollection
   })
 
+  await attemptRestarts.assertCurrent({ uid: student.uid, config, contentId: vocabularyTestId,
+    generation: data.attemptGeneration, schoolId: student.schoolId })
+
   const existing = await findExistingSubmission(config, student, vocabularyTestId)
   if (existing) {
     const openControl = await getOpenSubmissionAttemptControl(
@@ -6646,6 +6709,7 @@ exports.submitVocabularySecure = onCall(async request => {
   const result = gradeVocabulary(source, answers, { institutionalScoring: true })
   const submission = {
     ...baseSubmission(source, student),
+    attemptGeneration: attemptGeneration(data.attemptGeneration),
     vocabularyTestId,
     vocabularyId: vocabularyTestId,
     testId: vocabularyTestId,
@@ -6674,7 +6738,7 @@ exports.submitVocabularySecure = onCall(async request => {
       return { alreadySubmitted: true, result: raced?.result || existing.result || result, reviewSource: toPlain(source) }
     }
 
-    await db.doc(`vocabularyDrafts/${student.uid}_${vocabularyTestId}`).delete().catch(() => {})
+    await clearCurrentVocabularyDraft(student, vocabularyTestId, data.attemptGeneration)
     return {
       alreadySubmitted: false,
       reopenedAttempt: true,
@@ -6694,7 +6758,7 @@ exports.submitVocabularySecure = onCall(async request => {
     throw error
   }
 
-  await db.doc(`vocabularyDrafts/${student.uid}_${vocabularyTestId}`).delete().catch(() => {})
+  await clearCurrentVocabularyDraft(student, vocabularyTestId, data.attemptGeneration)
   return { alreadySubmitted: false, attemptNumber: 1, result, reviewSource: toPlain(source) }
 })
 
@@ -6779,6 +6843,8 @@ exports.submitMockSecure = onCall(async request => {
   }, 'Mock submission payload', 650000)
 
   const mock = await requireAssignedMock(mockTestId, student)
+  await attemptRestarts.assertCurrent({ uid: student.uid, config: submissionContentConfigFor('mock'),
+    contentId: mockTestId, generation: data.attemptGeneration, schoolId: student.schoolId })
   const existing = await findExistingMockSubmission(student, mockTestId)
   const sources = await getMockSources(mock)
 
@@ -6805,7 +6871,8 @@ exports.submitMockSecure = onCall(async request => {
   })
 
   const speakingLink = await require('./lib/speaking/mockLink').mockSpeakingLink({
-    db, mock, student, mockId:mockTestId, existing, autoSubmitted, HttpsError
+    db, mock, student, mockId:mockTestId, existing, autoSubmitted, HttpsError,
+    generation: attemptGeneration(data.attemptGeneration), assertCurrent: attemptRestarts.assertCurrent
   })
   if (speakingLink) {
     result.speaking = speakingLink.result
@@ -6820,6 +6887,7 @@ exports.submitMockSecure = onCall(async request => {
 
   const submissionData = {
     ...baseSubmission(mock, student),
+    attemptGeneration: attemptGeneration(data.attemptGeneration),
     submittedAt,
     mockTestId,
     title: mock.title || 'Untitled Mock Test',
@@ -6907,6 +6975,8 @@ exports.submitMockSecure = onCall(async request => {
 
   try {
     await db.runTransaction(async transaction => {
+      await attemptRestarts.assertCurrent({ transaction, uid: student.uid, config: submissionContentConfigFor('mock'),
+        contentId: mockTestId, generation: data.attemptGeneration, schoolId: student.schoolId })
       const snap = await transaction.get(submissionRef)
       if (snap.exists) {
         throw new HttpsError('already-exists', 'You already submitted this mock test.')

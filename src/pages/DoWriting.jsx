@@ -1,3 +1,4 @@
+import { useAttemptGeneration, generationSuffix } from '../hooks/useAttemptGeneration'
 import { useEscapeDismiss } from '../hooks/useEscapeDismiss'
 import { useEffect, useRef, useState } from 'react'
 import { auth, db, functions } from '../firebase'
@@ -153,6 +154,8 @@ function formatTime(seconds) {
 }
 
 export default function DoWriting() {
+  const attemptGeneration = useAttemptGeneration()
+
   const { id } = useParams()
   const navigate = useNavigate()
 
@@ -194,7 +197,7 @@ export default function DoWriting() {
   const [reloadCount, setReloadCount] = useState(0)
   const [attemptState, setAttemptState] = useState(null)
 
-  const draftKey = user ? `writingDraft_${id}_${user.uid}` : null
+  const draftKey = user ? `writingDraft_${id}_${user.uid}${generationSuffix(attemptGeneration)}` : null
 
   const writingMode = writing?.contentType || writing?.writingMode || 'full_writing'
   const hasTask1 = writingMode !== 'task2_only'
@@ -801,6 +804,7 @@ export default function DoWriting() {
 
     try {
       const response = await submitWritingSecureCall({
+        attemptGeneration,
         writingId: id,
         task1Answer,
         task2Answer,

@@ -1,5 +1,6 @@
+import { useAttemptGeneration, generationSuffix } from '../hooks/useAttemptGeneration'
 import { watchReadingHighlightSelection } from '../services/readingHighlightSelection'
-import { useState, useEffect, useRef, useLayoutEffect } from 'react'
+import { useCallback, useState, useEffect, useRef, useLayoutEffect } from 'react'
 import { auth, db, functions } from '../firebase'
 import { doc, getDoc, getDocFromServer } from 'firebase/firestore'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
@@ -52,11 +53,11 @@ function getAttemptStorageSuffix(attemptNumber, mode = '') {
   return `:attempt-${number}${modeSuffix}`
 }
 
-function getHighlightStorageKey(userId, readingId, attemptNumber = 1, mode = '') {
+function baseGetHighlightStorageKey(userId, readingId, attemptNumber = 1, mode = '') {
   return `reading-highlights:${userId}:${readingId}${getAttemptStorageSuffix(attemptNumber, mode)}`
 }
 
-function getReadingProgressStorageKey(userId, readingId, attemptNumber = 1, mode = '') {
+function baseGetReadingProgressStorageKey(userId, readingId, attemptNumber = 1, mode = '') {
   return `reading_progress_${readingId}_${userId}${getAttemptStorageSuffix(attemptNumber, mode)}`
 }
 
@@ -82,6 +83,10 @@ function getTextOffsetWithin(container, node, offset) {
 }
 
 export default function DoReading() {
+  const attemptGeneration = useAttemptGeneration()
+  const getReadingProgressStorageKey = useCallback((...args) => baseGetReadingProgressStorageKey(...args) + generationSuffix(attemptGeneration), [attemptGeneration])
+  const getHighlightStorageKey = useCallback((...args) => baseGetHighlightStorageKey(...args) + generationSuffix(attemptGeneration), [attemptGeneration])
+
   const { id } = useParams()
 
   const [user, setUser] = useState(null)
@@ -415,7 +420,7 @@ export default function DoReading() {
       active = false
       unsub()
     }
-  }, [id, navigate])
+  }, [id, navigate, getReadingProgressStorageKey, getHighlightStorageKey])
 
   useEffect(() => {
     if (!storageKey || restoredRef.current || !reading) return
@@ -1546,6 +1551,7 @@ export default function DoReading() {
     try {
       // 8D-2: scoring and immutable submission creation happen on the server.
       const response = await submitReadingSecure({
+        attemptGeneration,
         readingId: id,
         answers,
         flaggedQuestions,

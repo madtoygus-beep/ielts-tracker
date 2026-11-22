@@ -1,3 +1,4 @@
+import { useAttemptGeneration, generationSuffix } from '../hooks/useAttemptGeneration'
 import SpeakingSession from '../components/speaking/SpeakingSession'
 import SpeakingReport from '../components/speaking/SpeakingReport'
 import { speakingExamMinutes } from '../services/speakingExam'
@@ -902,7 +903,7 @@ function getAttemptStorageSuffix(attemptNumber, mode = '') {
   return `:attempt-${number}${modeSuffix}`
 }
 
-function getMockProgressStorageKey(userId, mockId, attemptNumber = 1, mode = '') {
+function baseGetMockProgressStorageKey(userId, mockId, attemptNumber = 1, mode = '') {
   return `mock_progress_${mockId}_${userId}${getAttemptStorageSuffix(attemptNumber, mode)}`
 }
 
@@ -916,6 +917,9 @@ function getSavedMockState(storageKey) {
 }
 
 export default function DoMockTest() {
+  const attemptGeneration = useAttemptGeneration()
+  const getMockProgressStorageKey = useCallback((...args) => baseGetMockProgressStorageKey(...args) + generationSuffix(attemptGeneration), [attemptGeneration])
+
   const { id } = useParams()
   const navigate = useNavigate()
 
@@ -1008,7 +1012,7 @@ export default function DoMockTest() {
           activeDraftMode
         )
       : null
-  }, [activeDraftAttemptNumber, activeDraftMode, id, user?.uid])
+  }, [activeDraftAttemptNumber, activeDraftMode, id, user?.uid, getMockProgressStorageKey])
 
   useEffect(() => {
     loadingRef.current = loading
@@ -1403,7 +1407,7 @@ export default function DoMockTest() {
       isActive = false
       unsub()
     }
-  }, [id, navigate, reloadCount])
+  }, [id, navigate, reloadCount, getMockProgressStorageKey])
 
   useEffect(() => {
     if (!storageKey || restoredRef.current || loading || !mock) return
@@ -3484,6 +3488,7 @@ export default function DoMockTest() {
       }
 
       const response = await submitMockSecureCall({
+        attemptGeneration,
         mockTestId: mock.id,
         speakingAttemptId: speakingAttempt?.id || null,
         listeningAnswers: listeningAnswers || {},
@@ -3633,6 +3638,7 @@ export default function DoMockTest() {
     }
   }, [
     alreadySubmitted,
+    attemptGeneration,
     attemptState,
     user,
     mock,
