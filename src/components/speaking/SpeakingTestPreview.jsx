@@ -16,7 +16,7 @@ export default function SpeakingTestPreview({ config, title }) {
   >
     <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 px-5 py-10 text-center">
       <p className="font-semibold text-gray-800">Your answer</p>
-      <p className="mt-3 text-sm leading-6 text-gray-500">In the student test, the microphone and recording controls appear here. Questions progress automatically.</p>
+      <p className="mt-3 text-sm leading-6 text-gray-500">In the student test, students can finish an answer and continue, or wait for the timer. Each saved answer is locked and cannot be recorded again.</p>
       <p className="mt-4 text-sm font-medium text-purple-700">{question.part === 2 ? '60 seconds preparation · 60–120 seconds recording' : `${question.seconds} seconds recording`}</p>
     </div>
     <div className="mt-5 flex flex-wrap justify-between gap-3">

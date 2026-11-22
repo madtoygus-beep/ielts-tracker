@@ -241,9 +241,15 @@ function createSpeakingService({db,bucket,requireStudent,requireAssignmentManage
   }
   const mockAnswerTiming=(attempt,question,data,audio)=>{
     if(attempt.mode!=='mock'&&attempt.timedPart2!==true)return false
-    // Audio encoders may round packet boundaries; the server's 60-second clock remains strict.
-    const early=data.finishEarly===true&&question.part===2&&audio?.duration>=59.75&&now()>=attempt.current.recordAt+60000
-    if(now()<attempt.current.deadline-500&&!early)fail('failed-precondition','Part 2 can finish after at least 60 seconds of recording; other questions must run to the time limit.')
+    // Finishing an answer commits it once. The server owns both the clock and the answer lock.
+    // Allow packet-boundary rounding while keeping Part 2's 60-second minimum strict.
+    const elapsed=(now()-attempt.current.recordAt)/1000
+    const minimum=question.part===2?60:1
+    const early=data.finishEarly===true&&audio?.duration>=minimum-0.25&&
+      elapsed>=minimum&&audio.duration<=elapsed+3
+    if(now()<attempt.current.deadline-500&&!early)fail('failed-precondition',question.part===2
+      ?'Part 2 can finish after at least 60 seconds of recording.'
+      :'Record your answer before finishing and continuing to the next question.')
     return Boolean(early&&audio.duration<question.seconds)
   }
   async function saveAnswer(request) {

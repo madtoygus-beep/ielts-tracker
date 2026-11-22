@@ -160,6 +160,11 @@ export default function SpeakingSession({taskId,mockId,title,config,mode,onCompl
   },[])
   const isMock=Boolean(mockId)||mode==='mock'||attempt?.mode==='mock'
   const q=attempt?.questions[attempt.nextIndex]
+  const minimumRecording=q?.part===2?60:1
+  const finishAnswer=()=>{
+    if(phaseRef.current!=='recording'||recorder.current?.state!=='recording'||runtime.now()-recordingStarted.current<minimumRecording*1000)return
+    finishedEarly.current=true;setPhase('processing');stop()
+  }
   const checking=['check','testing'].includes(phase)
   const status={check:'Microphone check',testing:'Recording microphone test…',ready:attempt?.timedPart2?'Ready to prepare':'Ready to record',prompt:'Listen / read the question',preparing:'Preparation time',recording:'Recording…',processing:'Preparing recording…',uploading:'Saving your answer…',preview:'Listen to your answer',recovery:'Recording needs attention',done:'Speaking submitted'}[phase]
   return <SpeakingTestLayout
@@ -177,7 +182,7 @@ export default function SpeakingSession({taskId,mockId,title,config,mode,onCompl
       <label className="block text-sm">Microphone<select aria-label="Microphone" className="block w-full border rounded-xl p-3 mt-2" value={deviceId} onChange={e=>{stream.current?.getTracks().forEach(t=>t.stop());stream.current=null;setDeviceId(e.target.value);setChecked(false)}}><option value="">Default microphone</option>{devices.map(d=><option key={d.deviceId} value={d.deviceId}>{d.label||'Microphone'}</option>)}</select></label>
       <button type="button" disabled={phase==='testing'} className="rounded-xl bg-purple-600 text-white px-5 py-3 disabled:opacity-50" onClick={()=>record(true).catch(e=>setError(e.message))}>{phase==='testing'?'Recording microphone test…':'Test microphone'}</button>
       {url&&<audio className="w-full" aria-label="Microphone test playback" controls src={url}/>}
-      {isMock&&<><p className="text-sm text-slate-600">Questions advance automatically. Answers cannot be replaced after saving. Part 2 includes one minute preparation and up to two minutes recording. After 60 seconds of recording you may finish your answer early. Your recordings are private to you and authorised staff.</p><label className="flex gap-2 text-sm"><input type="checkbox" checked={readQuestions} onChange={e=>setReadQuestions(e.target.checked)}/>Read questions aloud using the browser voice</label></>}
+      {isMock&&<><p className="text-sm text-slate-600">Finish your answer to save it and continue, or let the question timer move you on. Saved answers cannot be recorded again. Part 2 includes one minute preparation and up to two minutes recording; you can finish after 60 seconds of speaking. Your recordings are private to you and authorised staff.</p><label className="flex gap-2 text-sm"><input type="checkbox" checked={readQuestions} onChange={e=>setReadQuestions(e.target.checked)}/>Read questions aloud using the browser voice</label></>}
       <button type="button" disabled={!checked||phase==='testing'} onClick={start} className="block w-full bg-purple-600 text-white rounded-xl px-5 py-3 disabled:bg-slate-200 disabled:text-slate-500">{isMock?'Start / resume Mock Speaking':'Continue to questions'}</button>
     </div>:phase==='done'?<div className="mt-8 rounded-xl bg-emerald-50 p-6 text-emerald-900"><h3 className="font-semibold">Speaking submitted</h3><p className="mt-2 text-sm">Your recordings have been saved. Open the Speaking report to listen back or view teacher feedback.</p></div>:<>
       {attempt?.timedPart2&&<p className="mt-4 rounded-xl bg-purple-50 p-3 text-sm text-purple-900">Start when ready. You get one minute to prepare, then 60–120 seconds to record. You can listen back or start a fresh preparation before saving.</p>}
@@ -197,7 +202,12 @@ export default function SpeakingSession({taskId,mockId,title,config,mode,onCompl
         <p className="text-center text-sm text-slate-500">{attempt.timedPart2?'Recording starts automatically after your preparation minute.':'Start when you are ready. Stop recording when you finish your answer.'}</p>
       </div>}
       {!isMock&&!attempt?.timedPart2&&phase==='recording'&&<div className="flex justify-center py-4"><button type="button" onClick={()=>{setPhase('processing');stop()}} className="inline-flex min-h-14 items-center justify-center gap-3 rounded-xl bg-red-600 px-8 py-4 font-semibold text-white shadow-lg shadow-red-100 hover:bg-red-700 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-red-200 focus-visible:ring-offset-2"><svg aria-hidden="true" className="h-4 w-4" viewBox="0 0 16 16" fill="currentColor"><rect width="16" height="16" rx="3"/></svg>Stop recording</button></div>}
-      {(isMock||attempt?.timedPart2)&&q?.part===2&&phase==='recording'&&<div className="mt-4 text-center"><button type="button" disabled={recordedSeconds<60} className="rounded-xl bg-purple-600 text-white px-6 py-3 disabled:bg-slate-200 disabled:text-slate-500" onClick={()=>{if(runtime.now()-recordingStarted.current<60000||recorder.current?.state!=='recording')return;finishedEarly.current=true;setPhase('processing');stop()}}>Finish my answer</button><p className="mt-3 text-sm text-slate-500">{recordedSeconds<60?`You can finish your answer in ${speakingTime(60-recordedSeconds)}.`:'You may finish now, or continue until the two-minute limit.'}</p></div>}
+      {(isMock||attempt?.timedPart2)&&phase==='recording'&&<div className="mt-4 text-center">
+        <button type="button" disabled={recordedSeconds<minimumRecording} className="rounded-xl bg-purple-600 text-white px-6 py-3 disabled:bg-slate-200 disabled:text-slate-500" onClick={finishAnswer}>{isMock?'Finish answer & continue':'Finish my answer'}</button>
+        <p className="mt-3 text-sm text-slate-500">{q?.part===2&&recordedSeconds<60
+          ?`You can finish your answer in ${speakingTime(60-recordedSeconds)}.`
+          :isMock?'Your answer will be saved and locked. You cannot record it again.':'You may finish now, or continue until the two-minute limit.'}</p>
+      </div>}
       {!isMock&&phase==='preview'&&<div className="flex gap-3 mt-5"><button type="button" className="border rounded-xl px-5 py-3" onClick={startPractice}>Record again</button><button type="button" className="bg-purple-600 text-white rounded-xl px-5 py-3" onClick={()=>upload(blob,interrupted.current,finishedEarly.current)}>Save answer & continue</button></div>}
       {phase==='recovery'&&isMock&&current&&<p className="mt-3 text-sm text-amber-900">The question timer continues: {speakingTime(seconds)}. Retry saving the recovered recording, or continue without audio after the timer ends.</p>}
       {phase==='recovery'&&<button type="button" className="bg-purple-600 text-white rounded-xl px-5 py-3" onClick={retry}>Retry saving / resume</button>}

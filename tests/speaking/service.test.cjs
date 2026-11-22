@@ -131,9 +131,46 @@ test('Mock Part 2 early finish has a strict 60-second clock and rejects material
  const again=await w.call('saveAnswer',body);assert.equal(again.nextIndex,2);assert.equal(w.objects.size,2)
  await rejected(w.call('saveAnswer',{...body,audio:wav(61)}),'failed-precondition')
 })
-test('early-finish flag cannot skip Mock Part 1 or its question order',async()=>{
- const w=world(),a=await w.call('start',{mockId:'mock1'});await w.call('beginQuestion',{attemptId:a.id});w.advance(20000)
- await rejected(w.call('saveAnswer',{attemptId:a.id,index:0,audio:wav(),finishEarly:true}),'failed-precondition');assert.equal(w.objects.size,0)
+test('Mock answers can finish early once, stay locked after resume, and advance in order',async()=>{
+ const w=world(),a=await w.call('start',{mockId:'mock1'})
+ const first=await w.call('beginQuestion',{attemptId:a.id})
+ const body={attemptId:a.id,index:0,audio:wav(),finishEarly:true}
+ await rejected(w.call('saveAnswer',body),'failed-precondition')
+ w.advance(first.recordAt-first.startedAt+1000)
+ const saved=await w.call('saveAnswer',body)
+ assert.equal(saved.nextIndex,1);assert.equal(saved.answers[0].finishedEarly,true);assert.equal(saved.answers[0].interrupted,false)
+ const retry=await w.call('saveAnswer',body)
+ assert.equal(retry.nextIndex,1);assert.equal(retry.answers.length,1);assert.equal(w.objects.size,1)
+ await rejected(w.call('saveAnswer',{...body,audio:wav(2)}),'failed-precondition')
+ const resumed=await w.call('start',{mockId:'mock1'})
+ assert.equal(resumed.id,a.id);assert.equal(resumed.nextIndex,1)
+ await rejected(w.call('saveAnswer',{...body,index:2}),'failed-precondition')
+ const p2=await w.call('beginQuestion',{attemptId:a.id});w.advance(p2.recordAt-p2.startedAt+60000)
+ await w.call('saveAnswer',{attemptId:a.id,index:1,audio:wav(60),finishEarly:true})
+ const p3=await w.call('beginQuestion',{attemptId:a.id});w.advance(p3.recordAt-p3.startedAt+1000)
+ const last=await w.call('saveAnswer',{attemptId:a.id,index:2,audio:wav(),finishEarly:true})
+ assert.equal(last.nextIndex,3);assert.equal(last.answers[2].finishedEarly,true)
+ assert.equal((await w.call('submit',{attemptId:a.id})).status,'submitted')
+ await rejected(w.call('saveAnswer',{...body,audio:wav(2)}),'failed-precondition')
+ assert.equal(w.objects.size,3)
+})
+test('Mock early finish requires a recorded answer and cannot upload more audio than elapsed time',async()=>{
+ const w=world(),a=await w.call('start',{mockId:'mock1'})
+ const timing=await w.call('beginQuestion',{attemptId:a.id}),body={attemptId:a.id,index:0,audio:wav(),finishEarly:true}
+ w.advance(timing.recordAt-timing.startedAt+999)
+ await rejected(w.call('saveAnswer',body),'failed-precondition')
+ w.advance(1)
+ for(const patch of [{audio:''},{audio:wav(0.5)},{audio:wav(5)},{finishEarly:false}])await rejected(w.call('saveAnswer',{...body,...patch}),'failed-precondition')
+ assert.equal(w.objects.size,0)
+ assert.equal((await w.call('saveAnswer',body)).nextIndex,1)
+})
+test('simultaneous retries of an early-finished Mock answer commit only one answer',async()=>{
+ const w=world(),a=await w.call('start',{mockId:'mock1'})
+ const timing=await w.call('beginQuestion',{attemptId:a.id});w.advance(timing.recordAt-timing.startedAt+1000)
+ const body={attemptId:a.id,index:0,audio:wav(),finishEarly:true}
+ const results=await Promise.all([w.call('saveAnswer',body),w.call('saveAnswer',body)])
+ assert(results.every(result=>result.nextIndex===1&&result.answers.length===1))
+ assert.equal(w.objects.size,1)
 })
 test('teacher can assign and student can complete a standalone set for each individual Speaking part',async()=>{
  for(const part of [1,2,3]){

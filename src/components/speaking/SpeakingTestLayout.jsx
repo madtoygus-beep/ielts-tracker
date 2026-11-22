@@ -15,7 +15,7 @@ export default function SpeakingTestLayout({
           <h2 className="text-xl font-bold text-gray-900">{isMock ? 'Mock Speaking' : 'Speaking practice'}</h2>
           {title && <p className="mt-1 break-words text-sm text-gray-500">{title}</p>}
           <p className="mt-2 text-sm text-gray-500">{isMock
-            ? 'Complete Parts 1–3 in order. Questions and recording advance automatically.'
+            ? 'Complete Parts 1–3 in order. Finish each answer to continue, or let the question timer move you on.'
             : 'Read the question, record your answer, then listen back before continuing.'}</p>
         </div>
         <div className={`rounded-xl px-4 py-3 ${recording ? 'bg-red-50 text-red-700' : 'bg-purple-50 text-purple-700'}`}>
@@ -83,7 +83,7 @@ export default function SpeakingTestLayout({
 
     <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-gray-100 bg-white px-5 py-4 text-xs text-gray-500">
       <span>{onSelectQuestion ? 'Read-only question preview' : questions.length > 0 ? `${saved} of ${questions.length} answers saved` : 'Your microphone test stays on this device.'}</span>
-      <span>{footer || (complete ? 'Open your Speaking report to listen back and view feedback.' : isMock ? 'The next question opens automatically after your answer is saved.' : 'Save each answer to move to the next question.')}</span>
+      <span>{footer || (complete ? 'Open your Speaking report to listen back and view feedback.' : isMock ? 'Saved answers are locked. Finish your answer or wait for the timer to continue.' : 'Save each answer to move to the next question.')}</span>
     </div>
   </section>
 }
