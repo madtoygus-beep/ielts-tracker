@@ -5848,7 +5848,9 @@ exports.setSubmissionAttemptControl = onCall(async request => {
   await requireCurrentTeacherAcademicStudent({ db, HttpsError, manager, studentId, schoolId })
 
   const current = await findCurrentSubmissionRecord(config, studentId, contentId)
-  if (mode === 'start_fresh') {
+  // Legacy teacher pages keep their submitted-only retake contract during
+  // rollout. Only the new UI can acknowledge and advance a session generation.
+  if (mode === 'start_fresh' && data.expectedAttemptGeneration !== undefined) {
     if (data.expectedCurrentSubmissionId !== undefined &&
       (data.expectedCurrentSubmissionId !== (current?.id || '') ||
        Number(data.expectedCurrentAttemptNumber) !== (current ? attemptNumberOf(current.data) : 0))) {
