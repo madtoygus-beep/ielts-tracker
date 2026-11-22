@@ -1,3 +1,4 @@
+import MockSpeakingLibrarySelect from '../components/speaking/MockSpeakingLibrarySelect'
 import SpeakingEditor from '../components/speaking/SpeakingEditor'
 import { defaultMockSpeakingConfig as defaultSpeakingConfig, validateSpeakingConfig } from '../services/speakingApi'
 import { useEffect, useMemo, useState } from 'react'
@@ -1846,7 +1847,9 @@ export default function CreateMockTest() {
               )}
             </div>
 
-            <SpeakingEditor optional full value={speakingConfig} onChange={setSpeakingConfig} />
+            <SpeakingEditor optional full value={speakingConfig} onChange={setSpeakingConfig}>
+              <MockSpeakingLibrarySelect key={user?.uid} value={speakingConfig} onChange={setSpeakingConfig} />
+            </SpeakingEditor>
             {sponsoredSchool && (
               <AiWritingSponsoredAssignmentPanel
                 contentType="mock"
