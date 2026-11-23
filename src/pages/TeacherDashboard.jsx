@@ -756,6 +756,7 @@ export default function TeacherDashboard() {
   const [studentClassId, setStudentClassId] = useState('all')
   const [reviewView, setReviewView] = useState('pending')
   const [librarySearchTerm, setLibrarySearchTerm] = useState('')
+  const [speakingLibraryView, setSpeakingLibraryView] = useState({ tab: 'tasks', status: 'active', part: 'all', mode: 'all' })
   const [lastLibraryTab, setLastLibraryTab] = useState(() =>
     TEACHER_CONTENT_TABS.some(item => item.id === activeTab) ? activeTab : 'reading'
   )
@@ -6661,11 +6662,11 @@ export default function TeacherDashboard() {
                 </nav>
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                   <p className="text-xs text-slate-500">Preview, Edit and Assign remain available. School Library content may require duplication before assigning.</p>
-                  {activeTab !== 'speaking' && <div className="relative w-full sm:w-72 shrink-0">
+                  <div className="relative w-full sm:w-72 shrink-0">
                     <TeacherIcon name="search" className="absolute h-4 w-4 left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                    <input aria-label="Search content by title" value={librarySearchTerm} onChange={event => setLibrarySearchTerm(event.target.value)}
-                      placeholder="Search content by title..." className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-200 bg-white text-sm outline-none focus:ring-2 focus:ring-indigo-200" />
-                  </div>}
+                    <input aria-label={activeTab === 'speaking' ? 'Search all Speaking records' : 'Search content by title'} value={librarySearchTerm} onChange={event => setLibrarySearchTerm(event.target.value)}
+                      placeholder={activeTab === 'speaking' ? 'Search all Speaking records...' : 'Search content by title...'} className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-200 bg-white text-sm outline-none focus:ring-2 focus:ring-indigo-200" />
+                  </div>
                 </div>
               </div>
             )}
@@ -8169,7 +8170,7 @@ export default function TeacherDashboard() {
           </>
         )}
 
-        {activeTab === 'speaking' && user && profile && <SpeakingWorkspaceView embedded profile={profile} user={user} students={students} classes={classes} api={speakingApi} onBack={()=>openTeacherSection('library')} onMock={id=>navigate(`/do-mock/${encodeURIComponent(id)}`)}/>}
+        {activeTab === 'speaking' && user && profile && <SpeakingWorkspaceView embedded profile={profile} user={user} students={students} classes={classes} api={speakingApi} library={speakingHomework} viewState={speakingLibraryView} onViewChange={setSpeakingLibraryView} search={librarySearchTerm} onSearchChange={setLibrarySearchTerm} onBack={()=>openTeacherSection('library')} onMock={id=>navigate(`/do-mock/${encodeURIComponent(id)}`)}/>}
 
         {activeTab === 'students' && (
           <>

@@ -1,17 +1,12 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useSyncExternalStore } from 'react'
 import { speakingApi } from '../services/speakingApi'
-import { loadTeacherSpeakingHomework } from '../services/teacherSpeakingHomework'
-export function useTeacherSpeakingHomework(uid) {
-  const [state, setState] = useState({ tasks: [], attempts: [], loading: true, error: '' })
+import { createTeacherSpeakingLibrary } from '../services/teacherSpeakingLibrary'
+export function useTeacherSpeakingHomework(uid, api = speakingApi, enabled = true) {
+  // Changing accounts creates a fresh store before rendering any previous account's rows.
+  const resource = useMemo(() => createTeacherSpeakingLibrary(api, uid), [uid, api])
+  const state = useSyncExternalStore(resource.subscribe, resource.getSnapshot)
   useEffect(() => {
-    let active = true
-    if (!uid) return
-    loadTeacherSpeakingHomework(speakingApi).then(data => {
-      if (active) setState({ ...data, loading: false, error: '' })
-    }).catch(() => {
-      if (active) setState({ tasks: [], attempts: [], loading: false, error: 'Speaking homework could not be loaded. Refresh to retry.' })
-    })
-    return () => { active = false }
-  }, [uid])
-  return state
+    if (uid && enabled) void resource.ensure()
+  }, [uid, enabled, resource])
+  return { ...state, refresh: resource.refresh, upsertTask: resource.upsertTask }
 }

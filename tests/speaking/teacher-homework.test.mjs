@@ -13,9 +13,10 @@ test('teacher homework shows only assigned standalone sets and this student’s 
 })
 test('teacher homework loads every page and rejects incomplete results',async()=>{
   const calls=[]
-  const api=async(op,data)=>{calls.push(data);return data.kind==='tasks'?{tasks:[{id:'two'}],attempts:[],cursors:{tasks:null}}:data.kind==='attempts'?{tasks:[],attempts:[{id:'a'}],cursors:{attempts:null}}:{tasks:[{id:'one'}],attempts:[],cursors:{tasks:'next',attempts:'next'}}}
+  const api=async(op,data)=>{calls.push(data);return data.kind==='tasks'?{tasks:[{id:data.cursors.tasks?'two':'one'}],cursors:{tasks:data.cursors.tasks?null:'next'}}:{attempts:[{id:'a'}],cursors:{attempts:null}}}
   const result=await loadTeacherSpeakingHomework(api)
   assert.deepEqual(result.tasks.map(t=>t.id),['one','two']);assert.equal(result.attempts.length,1)
   assert.ok(calls.every(c=>c.staff===true))
-  await assert.rejects(loadTeacherSpeakingHomework(async(op,data)=>{if(data.kind)throw Error('offline');return {tasks:[],attempts:[],cursors:{tasks:'next'}}}),/offline/)
+  assert.ok(calls.every(c=>['tasks','attempts'].includes(c.kind)))
+  await assert.rejects(loadTeacherSpeakingHomework(async()=>{throw Error('offline')}),/offline/)
 })

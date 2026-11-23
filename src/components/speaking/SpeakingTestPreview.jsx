@@ -2,7 +2,7 @@ import { useState } from 'react'
 import SpeakingTestLayout from './SpeakingTestLayout'
 import { speakingTime } from '../../services/speakingApi'
 
-export default function SpeakingTestPreview({ config, title }) {
+export default function SpeakingTestPreview({ config, title, mode = 'mock' }) {
   const [index, setIndex] = useState(0)
   const questions = Array.isArray(config?.questions) ? config.questions : []
   const question = questions[index] || questions[0]
@@ -10,7 +10,7 @@ export default function SpeakingTestPreview({ config, title }) {
 
   return <SpeakingTestLayout
     title={title} questions={questions} question={question} questionIndex={index}
-    isMock status="Teacher preview" timer={speakingTime(question.seconds || 120)}
+    isMock={mode === 'mock'} timedPart2={mode !== 'mock' && questions.every(item => item.part === 2)} status="Teacher preview" timer={speakingTime(question.seconds || 120)}
     onSelectQuestion={setIndex} rightTitle="Recording area"
     footer="Preview only · no microphone, recordings or submissions."
   >

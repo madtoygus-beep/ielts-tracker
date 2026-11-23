@@ -3,10 +3,15 @@ import { defaultSpeakingConfig, validateSpeakingConfig, speakingPracticeKind, sp
 import SpeakingEditor from './SpeakingEditor'
 import SpeakingSession from './SpeakingSession'
 import SpeakingReport from './SpeakingReport'
+import TeacherSpeakingLibrary from './TeacherSpeakingLibrary'
 
 const unique=items=>[...new Map(items.map(item=>[item.id,item])).values()]
 const emptyData=()=>({tasks:[],attempts:[],cursors:{tasks:null,attempts:null},aiAvailable:false})
-export default function SpeakingWorkspaceView({profile,user,students=[],classes=[],api,onBack,onMock,runtime,encode,initialTaskId='',initialReportId='',embedded=false}) {
+export default function SpeakingWorkspaceView(props) {
+  if (props.profile.role === 'teacher') return <TeacherSpeakingLibrary {...props}/>
+  return <SpeakingStudentAdminWorkspace {...props}/>
+}
+function SpeakingStudentAdminWorkspace({profile,user,students=[],classes=[],api,onBack,onMock,runtime,encode,initialTaskId='',initialReportId='',embedded=false}) {
   const admin=profile.role==='admin',teacher=profile.role==='teacher',staff=admin||teacher
   const [data,setData]=useState(emptyData),[loading,setLoading]=useState(true),[error,setError]=useState('')
   const [tab,setTab]=useState('tasks'),[editor,setEditor]=useState(null),[session,setSession]=useState(()=>!staff&&/^[a-zA-Z0-9_-]{1,180}$/.test(initialTaskId)?{id:initialTaskId}:null),[report,setReport]=useState(()=>/^[a-zA-Z0-9_-]{1,180}$/.test(initialReportId)?initialReportId:null)

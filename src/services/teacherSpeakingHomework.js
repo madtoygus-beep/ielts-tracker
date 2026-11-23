@@ -1,19 +1,26 @@
-// Staff data comes from the authenticated Speaking callable, including authorization on every attempt.
+// Keep library reads authenticated. Question pages must not wait for recording authorization.
+export async function loadTeacherSpeakingList(api, kind, { staff = true, onPage } = {}) {
+  if (!['tasks', 'attempts'].includes(kind)) throw Error('Invalid Speaking list.')
+  const rows = new Map(), seen = new Set()
+  let cursor = null, aiAvailable
+  do {
+    const page = await api('list', { staff, kind, cursors: cursor ? { [kind]: cursor } : {} })
+    if (!Array.isArray(page[kind])) throw Error('Speaking returned an incomplete list.')
+    for (const row of page[kind]) rows.set(row.id, row)
+    aiAvailable = page.aiAvailable === true
+    cursor = page.cursors?.[kind] || null
+    if (cursor && seen.has(cursor)) throw Error('Speaking pagination could not be completed.')
+    if (cursor) seen.add(cursor)
+    onPage?.({ rows: [...rows.values()], aiAvailable })
+  } while (cursor)
+  return { rows: [...rows.values()], aiAvailable }
+}
 export async function loadTeacherSpeakingHomework(api, staff = true) {
-  const first = await api('list', { staff })
-  const result = { tasks: [...first.tasks], attempts: [...first.attempts] }
-  await Promise.all(['tasks', 'attempts'].map(async kind => {
-    let cursor = first.cursors?.[kind]
-    const seen = new Set()
-    while (cursor) {
-      if (seen.has(cursor)) throw Error('Speaking pagination could not be completed.')
-      seen.add(cursor)
-      const page = await api('list', { staff, kind, cursors: { [kind]: cursor } })
-      result[kind].push(...page[kind])
-      cursor = page.cursors?.[kind]
-    }
-  }))
-  return result
+  const [tasks, attempts] = await Promise.all([
+    loadTeacherSpeakingList(api, 'tasks', { staff }),
+    loadTeacherSpeakingList(api, 'attempts', { staff })
+  ])
+  return { tasks: tasks.rows, attempts: attempts.rows }
 }
 export function teacherSpeakingHomeworkForStudent(data, studentId) {
   const latest = new Map()
