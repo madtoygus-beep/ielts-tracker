@@ -16,6 +16,7 @@ const AdminDashboard = lazy(() => import('./pages/AdminDashboard'))
 const SpeakingPreview = import.meta.env.DEV ? lazy(() => import('./pages/SpeakingPreview')) : null
 const SpeakingLibraryPreview = import.meta.env.DEV ? lazy(() => import('./pages/SpeakingLibraryPreview')) : null
 const StudentSpeakingPreview = import.meta.env.DEV ? lazy(() => import('./pages/StudentSpeakingPreview')) : null
+const MockSpeakingPreview = import.meta.env.DEV ? lazy(() => import('./pages/MockSpeakingPreview')) : null
 const AttemptRestartPreview = import.meta.env.DEV ? lazy(() => import('./pages/AttemptRestartPreview')) : null
 const SpeakingWorkspace = lazy(() => import('./pages/SpeakingWorkspace'))
 
@@ -78,6 +79,7 @@ function App() {
           {import.meta.env.DEV && <Route path="/speaking-preview" element={<SpeakingPreview />} />}
           {import.meta.env.DEV && <Route path="/speaking-library-preview" element={<SpeakingLibraryPreview />} />}
           {import.meta.env.DEV && <Route path="/student-speaking-preview" element={<StudentSpeakingPreview />} />}
+          {import.meta.env.DEV && <Route path="/mock-speaking-preview" element={<MockSpeakingPreview />} />}
           {import.meta.env.DEV && <Route path="/attempt-restart-preview" element={<AttemptRestartPreview />} />}
           <Route path="/speaking" element={<SpeakingWorkspace />} />
           <Route path="/create-reading" element={<CreateReading />} />

@@ -1,6 +1,7 @@
 import { useAttemptGeneration, generationSuffix } from '../hooks/useAttemptGeneration'
-import SpeakingSession from '../components/speaking/SpeakingSession'
-import SpeakingReport from '../components/speaking/SpeakingReport'
+import MockSpeakingSection from '../components/speaking/MockSpeakingSection'
+import MockSpeakingFeedback from '../components/speaking/MockSpeakingFeedback'
+import MockSpeakingReviewCard from '../components/speaking/MockSpeakingReviewCard'
 import { speakingExamMinutes } from '../services/speakingExam'
 import { mockAudioCheckpoint, savedMockAudioPosition, shouldUseProgressiveMockAudio } from '../services/mockAudioRecovery'
 import PartialWritingNotice from '../components/PartialWritingNotice'
@@ -5761,6 +5762,7 @@ ${previousLabel} will be permanently locked and you will not be able to return t
     const t2Words = countWords(writingAnswers.task2)
     const listeningProgress = getListeningOverallProgress()
     const readingProgress = getReadingOverallProgress()
+    const includedCount = Object.values(enabledSections).filter(Boolean).length + Number(mock?.speakingConfig?.enabled === true)
 
     return (
       <div className="space-y-6">
@@ -5774,9 +5776,11 @@ ${previousLabel} will be permanently locked and you will not be able to return t
           </p>
 
           <div className={`grid grid-cols-1 ${
-            Object.values(enabledSections).filter(Boolean).length >= 3
+            includedCount >= 4
+              ? 'md:grid-cols-2 xl:grid-cols-4'
+              : includedCount >= 3
               ? 'md:grid-cols-3'
-              : Object.values(enabledSections).filter(Boolean).length === 2
+              : includedCount === 2
                 ? 'md:grid-cols-2'
                 : 'max-w-md mx-auto'
           } gap-4`}>
@@ -5823,6 +5827,7 @@ ${previousLabel} will be permanently locked and you will not be able to return t
                 </p>
               </div>
             )}
+            {mock?.speakingConfig?.enabled === true && <MockSpeakingReviewCard attempt={speakingAttempt} config={mock.speakingConfig}/>}
           </div>
         </div>
 
@@ -5833,6 +5838,7 @@ ${previousLabel} will be permanently locked and you will not be able to return t
 
           <p className="text-sm text-amber-700 leading-6">
             Once you submit, you cannot edit this mock again. Included objective sections will be scored immediately. Included Writing tasks will wait for teacher review.
+            {mock?.speakingConfig?.enabled === true && ' Speaking recordings stay locked and can be reviewed in your results.'}
           </p>
         </div>
 
@@ -6816,7 +6822,7 @@ ${previousLabel} will be permanently locked and you will not be able to return t
           )}
 
           {/* Teacher comments are distinct from AI feedback and sit beneath it. */}
-          {completedSubmission?.speakingAttemptId && <SpeakingReport key={completedSubmission.speakingAttemptId} attemptId={completedSubmission.speakingAttemptId} />}
+          {completedSubmission?.speakingAttemptId && <MockSpeakingFeedback key={completedSubmission.speakingAttemptId} user={user} attemptId={completedSubmission.speakingAttemptId} />}
           {enabledSections.writing && writingReviewed && (
             <section className="mt-5 bg-white border border-gray-200 rounded-2xl p-5 sm:p-6" aria-label="Teacher Writing feedback">
               <h3 className="text-base font-semibold text-gray-900 mb-3">Teacher feedback</h3>
@@ -7042,7 +7048,7 @@ ${previousLabel} will be permanently locked and you will not be able to return t
 
         {activeSection.key === 'writing-task2' && renderWritingTask2()}
 
-        {activeSection.key === 'speaking' && <SpeakingSession mockId={mock.id} title={mock.title} config={mock.speakingConfig} onComplete={value => {
+        {activeSection.key === 'speaking' && <MockSpeakingSection user={user} mockId={mock.id} title={mock.title} config={mock.speakingConfig} onComplete={value => {
           setSpeakingAttempt(value)
           lockListeningSection(); lockReadingSection(); setWritingLocked(true)
           const index = sections.findIndex(s => s.key === 'review')
