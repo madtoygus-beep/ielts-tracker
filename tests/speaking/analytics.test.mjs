@@ -28,3 +28,10 @@ test('student analytics pagination always uses student access',async()=>{
  const calls=[];await loadTeacherSpeakingHomework(async(op,data)=>{calls.push(data);return {tasks:[],attempts:[],cursors:data.kind?{}:{attempts:'next'}}},false)
  assert.equal(calls.length,2);assert.ok(calls.every(call=>call.staff===false))
 })
+test('student completion follows the current server head and excludes a teacher-opened retake without dropping earlier grades',()=>{
+ const tasks=[{id:'one',latestAttemptId:'fresh',latestAttemptStatus:'recording'}, {id:'two',latestAttemptId:'b',latestAttemptStatus:'submitted',retakeAvailable:true}, {id:'three',latestAttemptId:'c',latestAttemptStatus:'submitted'}]
+ const attempts=[attempt('a','one',1,{review:{band:6}}),attempt('b','two',2,{review:{band:7}})]
+ const result=speakingAnalytics({tasks,attempts})
+ assert.equal(result.assigned,3);assert.equal(result.completed,1)
+ assert.equal(result.teacherAverage,6.5);assert.equal(result.teacherCount,2)
+})

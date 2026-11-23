@@ -1,5 +1,6 @@
 import { lazy, Suspense } from 'react'
 import StudentAttemptBoundary from './components/StudentAttemptBoundary'
+import StudentSpeakingProvider from './components/speaking/StudentSpeakingProvider'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 
 const Landing = lazy(() => import('./pages/Landing'))
@@ -14,6 +15,7 @@ const AdminDashboard = lazy(() => import('./pages/AdminDashboard'))
 
 const SpeakingPreview = import.meta.env.DEV ? lazy(() => import('./pages/SpeakingPreview')) : null
 const SpeakingLibraryPreview = import.meta.env.DEV ? lazy(() => import('./pages/SpeakingLibraryPreview')) : null
+const StudentSpeakingPreview = import.meta.env.DEV ? lazy(() => import('./pages/StudentSpeakingPreview')) : null
 const AttemptRestartPreview = import.meta.env.DEV ? lazy(() => import('./pages/AttemptRestartPreview')) : null
 const SpeakingWorkspace = lazy(() => import('./pages/SpeakingWorkspace'))
 
@@ -57,6 +59,7 @@ function PageLoader() {
 function App() {
   return (
     <BrowserRouter>
+      <StudentSpeakingProvider>
       <Suspense fallback={<PageLoader />}>
         <Routes>
           <Route path="/" element={<Landing />} />
@@ -74,6 +77,7 @@ function App() {
 
           {import.meta.env.DEV && <Route path="/speaking-preview" element={<SpeakingPreview />} />}
           {import.meta.env.DEV && <Route path="/speaking-library-preview" element={<SpeakingLibraryPreview />} />}
+          {import.meta.env.DEV && <Route path="/student-speaking-preview" element={<StudentSpeakingPreview />} />}
           {import.meta.env.DEV && <Route path="/attempt-restart-preview" element={<AttemptRestartPreview />} />}
           <Route path="/speaking" element={<SpeakingWorkspace />} />
           <Route path="/create-reading" element={<CreateReading />} />
@@ -107,6 +111,7 @@ function App() {
           <Route path="*" element={<NotFound />} />
         </Routes>
       </Suspense>
+      </StudentSpeakingProvider>
     </BrowserRouter>
   )
 }

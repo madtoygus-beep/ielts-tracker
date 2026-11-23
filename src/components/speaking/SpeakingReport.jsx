@@ -16,7 +16,7 @@ export default function SpeakingReport({attemptId,staff=false,admin=false,aiAvai
     let stopped=false,timer
     const check=async()=>{
       try{
-        const latest=await api('get',{attemptId,staff})
+        const latest=await api('get',{attemptId,staff,forceRefresh:true})
         if(stopped)return
         setAttempt(latest);setError('')
         if(latest.aiStatus==='processing'&&!latest.report)timer=setTimeout(check,3000)
@@ -34,7 +34,7 @@ export default function SpeakingReport({attemptId,staff=false,admin=false,aiAvai
       if(alive.current)setAttempt(v=>({...v,report:result,aiStatus:'completed'}))
     }catch(e){
       if(alive.current)setError(e.message||'The assessment request could not be completed.')
-      try{const latest=await api('get',{attemptId,staff});if(alive.current)setAttempt(latest)}catch{/* Keep checking the saved server status without creating another AI request. */}
+      try{const latest=await api('get',{attemptId,staff,forceRefresh:true});if(alive.current)setAttempt(latest)}catch{/* Keep checking the saved server status without creating another AI request. */}
     }finally{evaluationInFlight.current=false;if(alive.current){setAssessmentPending(false);setBusy(false)}}
   }
   const loadAudio=q=>action(async()=>{const r=await api('audio',{attemptId,questionId:q.id,staff});const bytes=Uint8Array.from(atob(r.audio),c=>c.charCodeAt(0));const url=URL.createObjectURL(new Blob([bytes],{type:r.mimeType}));created.current.push(url);setUrls(v=>({...v,[q.id]:url}))})
@@ -49,7 +49,7 @@ export default function SpeakingReport({attemptId,staff=false,admin=false,aiAvai
   const report=attempt.report
   return <section className="rounded-2xl border bg-white p-5 sm:p-8 space-y-6">
     <div className="flex flex-wrap justify-between gap-3"><div><h2 className="text-xl font-bold">{attempt.title}</h2><p className="text-sm text-slate-500 mt-1">{attempt.mode==='mock'?'Mock Speaking':'Speaking practice'} · {attempt.status}</p></div><div className="text-right"><p className="text-xs text-slate-500">Teacher band</p><p className="text-3xl font-bold text-indigo-800">{attempt.review?.band?.toFixed(1)||'Pending'}</p></div></div>
-    <button type="button" disabled={busy} className="text-sm text-indigo-700 disabled:opacity-50" onClick={()=>action(async()=>{setAttempt(await api('get',{attemptId,staff}))})}>Refresh report</button>
+    <button type="button" disabled={busy} className="text-sm text-indigo-700 disabled:opacity-50" onClick={()=>action(async()=>{setAttempt(await api('get',{attemptId,staff,forceRefresh:true}))})}>Refresh report</button>
     {staff&&attempt.taskId&&!attempt.mockId&&attempt.status==='recording'&&<div className="rounded-xl border border-blue-200 bg-blue-50 p-4">
       <p className="text-sm text-blue-900">Restart this student's Speaking with blank answers and new question timers. Saved recordings from this attempt are kept.</p>
       <button type="button" disabled={busy||attempt.isLatestAttempt===false} className="mt-3 rounded-xl border border-blue-200 bg-white px-4 py-2 text-sm font-semibold text-blue-700 disabled:opacity-50" onClick={()=>{

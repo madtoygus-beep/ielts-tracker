@@ -16,10 +16,11 @@ export async function loadSpeakingHomework(api) {
   return speakingHomeworkSummary(data)
 }
 
-export function speakingHomeworkSummary({ tasks, attempts }) {
-  const latest = new Map()
+export function studentSpeakingAssignments({ tasks, attempts }) {
+  const latest = new Map(), byId = new Map()
   for (const attempt of attempts) {
     if (attempt.mockId || !attempt.taskId) continue
+    byId.set(attempt.id, attempt)
     const previous = latest.get(attempt.taskId)
     if (!previous || Number(attempt.startedAt) > Number(previous.startedAt) ||
         (attempt.startedAt === previous.startedAt && attempt.status !== 'recording')) {
@@ -27,15 +28,24 @@ export function speakingHomeworkSummary({ tasks, attempts }) {
     }
   }
   const assigned = [...new Map(tasks.filter(t => !t.archived).map(t => [t.id, t])).values()]
-  const pending = assigned.flatMap(task => {
-    const attempt = latest.get(task.id)
-    if (!task.retakeAvailable && (['submitted', 'reviewed'].includes(attempt?.status) || ['submitted', 'reviewed'].includes(task.latestAttemptStatus))) return []
-    return [{ ...task, type: 'Speaking', icon: '🎙️', color: 'indigo',
+  return assigned.map(task => {
+    // Prefer the current server head to an older cached attempt, including after teacher resets.
+    const canonical = Object.hasOwn(task, 'latestAttemptId') || Object.hasOwn(task, 'latestAttemptStatus')
+    const attempt = canonical ? byId.get(task.latestAttemptId) : latest.get(task.id)
+    const status = canonical ? task.latestAttemptStatus || '' : attempt?.status || ''
+    const reportId = canonical ? task.latestAttemptId || '' : attempt?.id || ''
+    return { ...task, type: 'Speaking', icon: '🎙️', color: 'indigo',
       path: `/speaking?task=${encodeURIComponent(task.id)}`,
       isRetake: task.retakeAvailable === true,
       retakeState: task.retakeAvailable ? { nextAttemptNumber: task.nextAttemptNumber || 2 } : null,
-      attemptId: !task.retakeAvailable && attempt?.status === 'recording' ? attempt.id : null }]
+      attemptId: !task.retakeAvailable && status === 'recording' ? reportId : null,
+      done: !task.retakeAvailable && ['submitted', 'reviewed'].includes(status), reportId, attempt, status }
   })
+}
+
+export function speakingHomeworkSummary(data) {
+  const assigned = studentSpeakingAssignments(data)
+  const pending = assigned.filter(task => !task.done)
   return { pending, total: assigned.length, completed: assigned.length - pending.length }
 }
 

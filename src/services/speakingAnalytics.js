@@ -1,8 +1,10 @@
+import { studentSpeakingAssignments } from './speakingHomework.js'
 const band = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 9 ? value : null
 const average = values => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null
 // Use the latest attempt per learner and assignment for averages; keep retakes in the history.
 export function speakingAnalytics(data, { staff = false, studentId = '', allowedStudentIds = [] } = {}) {
   const allowed = new Set(allowedStudentIds)
+  const studentCompleted = staff ? null : new Set(studentSpeakingAssignments(data).filter(task => task.done).map(task => task.id))
   const attempts = [...new Map(data.attempts.filter(attempt => !staff || (allowed.has(attempt.studentId) && (!studentId || attempt.studentId === studentId))).map(attempt => [attempt.id, attempt])).values()]
     .sort((a,b) => Number(b.startedAt) - Number(a.startedAt) || b.id.localeCompare(a.id))
   const latest = new Map()
@@ -24,7 +26,7 @@ export function speakingAnalytics(data, { staff = false, studentId = '', allowed
     for (const recipient of new Set(recipients)) {
       assigned++
       const attempt = latest.get(JSON.stringify([recipient, task.id, false]))
-      if (['submitted','reviewed'].includes(attempt?.status)) completed++
+      if (staff ? ['submitted','reviewed'].includes(attempt?.status) : studentCompleted.has(task.id)) completed++
     }
   }
   return { assigned, completed, teacherAverage: average(teacherBands), teacherCount: teacherBands.length,

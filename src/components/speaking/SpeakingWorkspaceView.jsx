@@ -4,11 +4,13 @@ import SpeakingEditor from './SpeakingEditor'
 import SpeakingSession from './SpeakingSession'
 import SpeakingReport from './SpeakingReport'
 import TeacherSpeakingLibrary from './TeacherSpeakingLibrary'
+import StudentSpeakingWorkspace from './StudentSpeakingWorkspace'
 
 const unique=items=>[...new Map(items.map(item=>[item.id,item])).values()]
 const emptyData=()=>({tasks:[],attempts:[],cursors:{tasks:null,attempts:null},aiAvailable:false})
 export default function SpeakingWorkspaceView(props) {
   if (props.profile.role === 'teacher') return <TeacherSpeakingLibrary {...props}/>
+  if (props.profile.role === 'student') return <StudentSpeakingWorkspace {...props}/>
   return <SpeakingStudentAdminWorkspace {...props}/>
 }
 function SpeakingStudentAdminWorkspace({profile,user,students=[],classes=[],api,onBack,onMock,runtime,encode,initialTaskId='',initialReportId='',embedded=false}) {
