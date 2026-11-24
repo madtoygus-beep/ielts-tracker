@@ -26,6 +26,25 @@ function validateWav(base64) {
   for(let i=44;i<b.length;i+=2) energy+=(b.readInt16LE(i)/32768)**2
   return { bytes:b, duration, audible:Math.sqrt(energy/((b.length-44)/2))>0.001 }
 }
+function transcriptExcerpt(transcript, quote) {
+  // Match whole words in the cited answer. Formatting may vary; spoken words may not.
+  const words = text => [...text.matchAll(/[\p{L}\p{M}\p{N}]+(?:['’‘ʼ][\p{L}\p{M}\p{N}]+)*/gu)].map(match => ({
+    value:match[0].normalize('NFC').replace(/[’‘ʼ]/g,"'").toLowerCase(),
+    start:match.index, end:match.index + match[0].length
+  }))
+  const source = words(transcript), requested = words(quote.trim())
+  if (!requested.length) return null
+  for (let i = 0; i <= source.length - requested.length; i++) {
+    if (!requested.every((word, j) => word.value === source[i + j].value)) continue
+    const start = source[i].start, end = source[i + requested.length - 1].end
+    const literal = transcript.slice(start, start + quote.trim().length)
+    return literal.toLowerCase() === quote.trim().toLowerCase() ? literal : transcript.slice(start, end)
+  }
+  return null
+}
+function hasUnverifiedCriteria(value) {
+  return Boolean(value?.criteria && CRITERIA.some(key => value.criteria[key]?.status === 'unverified'))
+}
 function validateCriterion(criterion, answers, recordedQuestionIds) {
   const unavailable = reason => ({band:null, explanation:reason, status:'unverified'})
   if (!criterion || !Number.isFinite(criterion.band) || criterion.band < 1 || criterion.band > 9 || !Number.isInteger(criterion.band * 2)) {
@@ -44,12 +63,11 @@ function validateCriterion(criterion, answers, recordedQuestionIds) {
   if (!answer || !recordedQuestionIds.includes(questionId)) {
     return unavailable('The excerpt could not be linked to a recorded answer.')
   }
-  const literal = quote.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const match = answer.transcript.match(new RegExp(literal, 'iu'))
+  const match = transcriptExcerpt(answer.transcript, quote)
   if (!match) {
     return unavailable('The quoted words could not be matched to the transcript of the cited answer.')
   }
-  return {band:criterion.band, explanation:explanation.trim(), evidence:{questionId, quote:match[0]}}
+  return {band:criterion.band, explanation:explanation.trim(), evidence:{questionId, quote:match}}
 }
 function report(raw, questionIds, recordedQuestionIds) {
   if (!raw || typeof raw!=='object' || !Array.isArray(raw.answers) || raw.answers.length!==questionIds.length) throw Error('Incomplete AI report.')
@@ -81,4 +99,4 @@ function mockOverall(result) {
   }
   return values.length?half(values.reduce((a,b)=>a+b,0)/values.length):null
 }
-module.exports={CRITERIA,MAX_AUDIO_BYTES,MAX_QUESTIONS,config,validateWav,report,mockOverall}
+module.exports={CRITERIA,MAX_AUDIO_BYTES,MAX_QUESTIONS,config,validateWav,report,mockOverall,hasUnverifiedCriteria}

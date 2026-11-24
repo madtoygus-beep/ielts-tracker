@@ -60,11 +60,67 @@ test('criterion evidence must come from the identified recorded answer', async (
   }
 })
 
-test('case differences preserve the original transcript spelling and punctuation stays literal', async () => {
+test('case differences preserve transcript spelling and different words remain unverified', async () => {
   const value = structuredClone(raw)
   value.criteria.fluencyAndCoherence.evidence.quote = 'i enjoy learning skills.'
   value.criteria.pronunciation.evidence.quote = 'I enjoy learning skill..'
   const result = await gradeSpeaking(recordings, {...settings,fetchImpl:async () => response(value)})
   assert.equal(result.criteria.fluencyAndCoherence.evidence.quote, 'I enjoy learning skills.')
   assert.equal(result.criteria.pronunciation.status, 'unverified')
+})
+
+test('criterion evidence tolerates punctuation, whitespace and typographic apostrophes without changing words', async () => {
+  for (const [transcript, quote, expected] of [
+    ['I enjoy learning, skills.', 'I enjoy learning skills', 'I enjoy learning, skills'],
+    ['I enjoy\n\tlearning skills.', 'I enjoy learning skills.', 'I enjoy\n\tlearning skills'],
+    ['They’re pretty loud, actually.', "they're pretty loud actually", 'They’re pretty loud, actually'],
+    ['I like the café.', 'I like the cafe\u0301', 'I like the café'],
+    ['I enjoy learning skills.', '“I enjoy learning skills.”', 'I enjoy learning skills']
+  ]) {
+    const value = structuredClone(raw)
+    value.answers[0].transcript = transcript
+    for (const key of CRITERIA) value.criteria[key].evidence.quote = quote
+    const result = await gradeSpeaking(recordings, {...settings,fetchImpl:async()=>response(value)})
+    assert.equal(result.estimatedBand, 5)
+    for (const key of CRITERIA) assert.equal(result.criteria[key].evidence.quote, expected)
+  }
+})
+
+test('criterion evidence rejects paraphrases, skipped words, partial words, altered contractions and empty excerpts', async () => {
+  for (const [transcript, quote] of [
+    ['I enjoy learning skills.', 'I like learning skills'],
+    ['I enjoy learning practical skills.', 'I enjoy learning ... skills'],
+    ['I enjoy learning skills.', 'skill'],
+    ['I enjoy learning skills.', 'earning skills'],
+    ["They're pretty loud actually.", 'They are pretty loud actually'],
+    ["Let's go home.", 'Lets go home'],
+    ['I enjoy [inaudible] learning skills.', 'I enjoy learning skills'],
+    ['I enjoy learning skills.', '...']
+  ]) {
+    const value = structuredClone(raw)
+    value.answers[0].transcript = transcript
+    value.criteria.pronunciation.evidence.quote = quote
+    const result = await gradeSpeaking(recordings, {...settings,fetchImpl:async()=>response(value)})
+    assert.equal(result.criteria.pronunciation.status, 'unverified')
+    assert.equal(result.criteria.pronunciation.band, null)
+    assert.equal(result.estimatedBand, null)
+  }
+})
+
+test('rejected criterion candidates are retained in bounded private diagnostics, never promoted to scores', async () => {
+  const value = structuredClone(raw)
+  value.criteria.pronunciation.evidence.quote = 'Not in this answer'
+  let validation, calls = 0
+  const result = await gradeSpeaking(recordings, {...settings,onValidation: v=>{validation=v},fetchImpl:async()=>{calls++;return response(value)}})
+  assert.equal(calls, 1)
+  assert.equal(result.criteria.pronunciation.band, null)
+  assert.equal(result.estimatedBand, null)
+  assert.equal(result.validation, undefined)
+  assert.deepEqual(validation.rejectedCriteria.map(v=>v.criterion), ['pronunciation'])
+  assert.deepEqual(validation.rejectedCriteria[0].candidate, value.criteria.pronunciation)
+  value.criteria.pronunciation.evidence.quote = 'x'.repeat(1000)
+  value.criteria.pronunciation.explanation = 'x'.repeat(4000)
+  await gradeSpeaking(recordings, {...settings,onValidation:v=>{validation=v},fetchImpl:async()=>response(value)})
+  assert.equal(validation.rejectedCriteria[0].candidate.evidence.quote.length, 600)
+  assert.equal(validation.rejectedCriteria[0].candidate.explanation.length, 3000)
 })

@@ -30,7 +30,7 @@ function world(options={}){
   }
   const bucket={file:path=>({save:async(bytes,opts)=>{assert.equal(opts.metadata.metadata.firebaseStorageDownloadTokens,undefined);objects.set(path,Buffer.from(bytes))},download:async()=>[objects.get(path)]})}
   const requireStudent=async req=>{if(!req.auth?.uid)throw new Fault('unauthenticated','Sign in');const profile=docs.get(`users/${req.auth.uid}`);if(profile?.role!=='student')throw new Fault('permission-denied','Student only');return {uid:req.auth.uid,schoolId:'maxima',profile}}
-  const service=createSpeakingService({db,bucket,HttpsError:Fault,requireStudent,requireAssignmentManager:async req=>{const profile=docs.get(`users/${req.auth?.uid}`);if(!['teacher','admin'].includes(profile?.role))throw new Fault('permission-denied','Staff only');return {uid:req.auth.uid,profile}},schoolIdOf:p=>p?.schoolId||'maxima',requireAssignedMock:async()=>({title:'Mock',teacherId:'T1',schoolId:'maxima',speakingConfig:full}),requireCurrentTeacherAcademicStudent:async({manager:m})=>{if(m.profile.role!=='admin'&&!allowed)throw new Fault('permission-denied','Revoked')},now:()=>time,aiEnabled:options.aiEnabled||(()=>true),provider:async()=>{providerCalls++;return {estimatedBand:5,summary:'Synthetic audio evaluation',criteria:{},answers:[]}}})
+  const service=createSpeakingService({db,bucket,HttpsError:Fault,requireStudent,requireAssignmentManager:async req=>{const profile=docs.get(`users/${req.auth?.uid}`);if(!['teacher','admin'].includes(profile?.role))throw new Fault('permission-denied','Staff only');return {uid:req.auth.uid,profile}},schoolIdOf:p=>p?.schoolId||'maxima',requireAssignedMock:async()=>({title:'Mock',teacherId:'T1',schoolId:'maxima',speakingConfig:full}),requireCurrentTeacherAcademicStudent:async({manager:m})=>{if(m.profile.role!=='admin'&&!allowed)throw new Fault('permission-denied','Revoked')},now:()=>time,aiEnabled:options.aiEnabled||(()=>true),provider:async(...args)=>{providerCalls++;if(options.provider)return options.provider(...args);return {estimatedBand:5,summary:'Synthetic audio evaluation',criteria:{},answers:[]}}})
   const call=(op,data={},uid='S1')=>service.call({auth:{uid},data:{op,...data}})
   return {docs,objects,db,service,call,advance:ms=>{time+=ms},revoke:()=>{allowed=false},calls:()=>providerCalls,student:{uid:'S1',profile:{name:'Synthetic learner'},schoolId:'maxima'}}
 }
@@ -163,6 +163,41 @@ test('admin recovery makes no paid call, preserves quota and requires student co
  assert.equal(w.calls(),0);assert.equal(w.docs.get('speakingAiUsage/maxima_1970-01-01').requests,7);assert.equal(w.docs.get(ref).aiRecovery[0].by,'A1')
  await rejected(w.call('allowAiRetry',data,'A1'),'failed-precondition');await rejected(w.call('evaluate',{attemptId:a.id,consent:false}),'failed-precondition')
  await w.call('evaluate',{attemptId:a.id,consent:true});assert.equal(w.calls(),1);assert.equal(w.docs.get('speakingAiUsage/maxima_1970-01-01').requests,8)
+})
+
+test('partial AI report recovery archives the old report and preserves teacher grades, recordings and quota',async()=>{
+ const validation={version:2,rejectedCriteria:[{criterion:'pronunciation',candidate:{band:6}}]}
+ const w=world({provider:async(_recordings,onValidation)=>{onValidation(validation);return {estimatedBand:5,criteria:{},answers:[]}}}),a=await complete(w),ref=`speakingAttempts/${a.id}`
+ const partial={estimatedBand:null,criteria:{pronunciation:{band:null,status:'unverified',explanation:'Excerpt mismatch'}}}
+ const review={band:7,criteria:{pronunciation:7},feedback:'Teacher review'}
+ w.docs.set(ref,{...w.docs.get(ref),aiStatus:'completed',aiRequestedAt:1700,report:partial,aiValidation:validation,review})
+ w.docs.set('speakingAiUsage/maxima_1970-01-01',{requests:7})
+ const recordings=structuredClone(w.docs.get(ref).answers),data={attemptId:a.id,expectedAiRequestedAt:1700,reason:'Reviewed excerpt mismatch'}
+ await rejected(w.call('allowAiRetry',data,'T1'),'permission-denied')
+ await rejected(w.call('allowAiRetry',{...data,expectedAiRequestedAt:1699},'A1'),'failed-precondition')
+ const attempts=await Promise.allSettled([w.call('allowAiRetry',data,'A1'),w.call('allowAiRetry',data,'A1')])
+ assert.equal(attempts.filter(r=>r.status==='fulfilled').length,1)
+ const archived=[...w.docs.entries()].filter(([path])=>path.startsWith(`${ref}/assessmentHistory/`))
+ assert.equal(archived.length,1);assert.deepEqual(archived[0][1].report,partial);assert.deepEqual(archived[0][1].validation,validation)
+ assert.deepEqual(w.docs.get(ref).review,review);assert.deepEqual(w.docs.get(ref).answers,recordings)
+ assert.equal(w.docs.get(ref).report,null);assert.equal(w.docs.get(ref).aiStatus,'not_requested')
+ assert.equal(w.docs.get('speakingAiUsage/maxima_1970-01-01').requests,7);assert.equal(w.calls(),0)
+ await rejected(w.call('evaluate',{attemptId:a.id,consent:false}),'failed-precondition')
+ await w.call('evaluate',{attemptId:a.id,consent:true});assert.equal(w.calls(),1)
+ assert.deepEqual(w.docs.get(ref).aiValidation,validation)
+ const publicResult=await w.call('get',{attemptId:a.id})
+ assert.equal(publicResult.aiValidation,undefined);assert.deepEqual(publicResult.review,review)
+ assert.equal((await w.call('get',{attemptId:a.id,staff:true},'A1')).aiValidation,undefined)
+})
+
+test('completed verified or insufficient-evidence reports cannot be released for another paid assessment',async()=>{
+ const w=world(),a=await complete(w),ref=`speakingAttempts/${a.id}`
+ for(const saved of [{estimatedBand:6,criteria:{pronunciation:{band:6}}},{estimatedBand:null,criteria:null,insufficientEvidence:true}]){
+  w.docs.set(ref,{...w.docs.get(ref),aiStatus:'completed',aiRequestedAt:1700,report:saved})
+  await rejected(w.call('allowAiRetry',{attemptId:a.id,expectedAiRequestedAt:1700,reason:'Must remain unchanged'},'A1'),'failed-precondition')
+  assert.deepEqual(w.docs.get(ref).report,saved)
+ }
+ assert.equal(w.calls(),0)
 })
 test('Mock Part 2 early finish has a strict 60-second clock and rejects materially short audio',async()=>{
  const w=world(),a=await w.call('start',{mockId:'mock1'})

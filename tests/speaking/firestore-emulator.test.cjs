@@ -36,6 +36,24 @@ test('real Firestore: document-name pagination works past 100 records and scopes
 test('real Firestore: a class revocation before commit blocks the write without uploading audio',async()=>{const s=service(),task=await create(s),a=await s.call('start',{taskId:task.id});await db.doc('schools/maxima/teacherAcademicIndex/T1').update({activeStudentIds:[]});await denied(s.call('beginQuestion',{attemptId:a.id}));assert.equal((await db.doc(`speakingAttempts/${a.id}`).get()).data().current,null);assert.equal(s.objects.size,0)})
 test('real Firestore: browser clients cannot directly read or write server-only Speaking records',async()=>{const s=service(),a=await finish(s);for(const uid of ['S1','T1','A1']){const client=env.authenticatedContext(uid).firestore();await assertFails(getDoc(doc(client,'speakingAttempts',a.id)));await assertFails(getDoc(doc(client,'speakingTasks',a.taskId)));await assertFails(setDoc(doc(client,'speakingAttempts',a.id),{review:{band:9}}))}})
 test('real Firestore: failed AI request can be released by admin without another paid request',async()=>{const s=service(),a=await finish(s);await denied(s.call('evaluate',{attemptId:a.id,consent:true}),'unavailable');assert.equal(s.paidCalls(),1);const failed=await s.call('get',{attemptId:a.id,staff:true},'A1');assert.equal(failed.aiStatus,'failed');await s.call('allowAiRetry',{attemptId:a.id,reason:'Reviewed synthetic error',expectedAiRequestedAt:failed.aiRequestedAt},'A1');assert.equal(s.paidCalls(),1);assert.equal((await s.call('get',{attemptId:a.id})).aiStatus,'not_requested')})
+test('real Firestore: incomplete report recovery archives privately without changing teacher scores or calling AI',async()=>{
+ const s=service(),a=await finish(s),ref=db.doc(`speakingAttempts/${a.id}`)
+ const report={estimatedBand:null,criteria:{pronunciation:{band:null,status:'unverified',explanation:'Excerpt mismatch'}}}
+ const validation={version:2,rejectedCriteria:[{criterion:'pronunciation',candidate:{band:6}}]}
+ const review={band:7,feedback:'Teacher score is preserved'}
+ await ref.update({aiStatus:'completed',aiRequestedAt:1700,report,aiValidation:validation,review})
+ await s.call('allowAiRetry',{attemptId:a.id,reason:'Reviewed excerpt validation issue',expectedAiRequestedAt:1700},'A1')
+ const history=await ref.collection('assessmentHistory').get()
+ assert.equal(history.size,1);assert.deepEqual(history.docs[0].data().report,report);assert.deepEqual(history.docs[0].data().validation,validation)
+ for(const uid of ['S1','T1','A1']){
+  const client=env.authenticatedContext(uid).firestore()
+  await assertFails(getDoc(doc(client,history.docs[0].ref.path)))
+  await assertFails(setDoc(doc(client,history.docs[0].ref.path),{report:{estimatedBand:9}}))
+ }
+ const publicResult=await s.call('get',{attemptId:a.id})
+ assert.equal(publicResult.report,null);assert.equal(publicResult.aiStatus,'not_requested');assert.deepEqual(publicResult.review,review)
+ assert.equal(publicResult.aiValidation,undefined);assert.equal(s.paidCalls(),0)
+})
 
 test('real Firestore: Part 2 advances early only after the recording minute, preserving next-question order',async()=>{
  let time=100000;const s=service(db,()=>time),full={enabled:true,questions:[configuration.questions[0],{part:2,text:'Describe a practical skill.',seconds:120},{part:3,text:'How should schools teach skills?',seconds:60}]}

@@ -1,7 +1,7 @@
 'use strict'
 // Server-only collections, IAM uploads and authenticated byte downloads. Never mint a download token.
 const {createHash,randomUUID}=require('node:crypto')
-const {config,validateWav,mockOverall,CRITERIA}=require('./policy')
+const {config,validateWav,mockOverall,CRITERIA,hasUnverifiedCriteria}=require('./policy')
 const {attemptGeneration,mockSpeakingAttemptId}=require('../attemptRestart')
 function createSpeakingService({db,bucket,requireStudent,requireAssignmentManager,requireAssignedMock,requireCurrentTeacherAcademicStudent,HttpsError,schoolIdOf,provider,aiEnabled=()=>false,now=()=>Date.now()}) {
   const fail=(code,message)=>{throw new HttpsError(code,message)}
@@ -173,17 +173,23 @@ function createSpeakingService({db,bucket,requireStudent,requireAssignmentManage
   }
   async function allowAiRetry(request){
     const {actor,attempt}=await attemptAccess(request,request.data?.attemptId,true)
-    if(actor.profile.role!=='admin')fail('permission-denied','Only an administrator may release a failed assessment.')
+    if(actor.profile.role!=='admin')fail('permission-denied','Only an administrator may release an incomplete assessment.')
     const reason=String(request.data?.reason||'').trim()
     if(reason.length<5||reason.length>1000)fail('invalid-argument','Enter a short recovery reason (5–1000 characters).')
     return db.runTransaction(async tx=>{
       const ref=db.doc(`speakingAttempts/${attempt.id}`),live=(await tx.get(ref)).data()
       await writeAccess(tx,actor,live,true)
       if((await tx.get(db.doc(`users/${actor.uid}`))).data()?.role!=='admin')fail('permission-denied','Administrator role changed.')
-      if(live.aiStatus!=='failed'||live.report||live.aiRequestedAt!==request.data.expectedAiRequestedAt)fail('failed-precondition','The failed assessment changed. Refresh the report.')
+      const recoverableFailure=live.aiStatus==='failed'&&!live.report
+      const recoverableReport=live.aiStatus==='completed'&&hasUnverifiedCriteria(live.report)
+      if((!recoverableFailure&&!recoverableReport)||live.aiRequestedAt!==request.data.expectedAiRequestedAt)fail('failed-precondition','The assessment changed or does not need recovery. Refresh the report.')
       const history=live.aiRecovery||[]
       if(history.length>=3)fail('resource-exhausted','Recovery limit reached; technical review is required.')
-      tx.update(ref,{aiStatus:'not_requested',aiRecovery:[...history,{at:now(),by:actor.uid,reason}]})
+      if(recoverableReport)tx.create(db.doc(`speakingAttempts/${attempt.id}/assessmentHistory/${randomUUID()}`),{
+        report:live.report,validation:live.aiValidation||null,aiRequestedAt:live.aiRequestedAt,
+        archivedAt:now(),archivedBy:actor.uid,reason
+      })
+      tx.update(ref,{aiStatus:'not_requested',report:null,aiValidation:null,aiRecovery:[...history,{at:now(),by:actor.uid,reason}]})
       return {aiStatus:'not_requested'} // No model call or quota reset; student must consent again.
     })
   }
@@ -412,8 +418,9 @@ function createSpeakingService({db,bucket,requireStudent,requireAssignmentManage
     try {
       const recordings=[]
       for(const question of attempt.questions){const entry=attempt.answers.find(a=>a.questionId===question.id);let bytes=null;if(entry?.storagePath)[bytes]=await bucket.file(entry.storagePath).download();recordings.push({question,bytes})}
-      const result=await provider(recordings)
-      await db.doc(`speakingAttempts/${attempt.id}`).update({report:result,aiStatus:'completed'})
+      let aiValidation=null
+      const result=await provider(recordings,validation=>{aiValidation=validation})
+      await db.doc(`speakingAttempts/${attempt.id}`).update({report:result,aiValidation,aiStatus:'completed'})
       return result
     }catch(_){await db.doc(`speakingAttempts/${attempt.id}`).update({aiStatus:'failed'});fail('unavailable','AI assessment failed. Recordings are saved for teacher review; no automatic retry was made.')}
   }

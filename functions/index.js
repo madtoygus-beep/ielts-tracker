@@ -7807,7 +7807,7 @@ exports.syncMockOverallAfterAiWriting = onDocumentWritten({
   document: 'aiWritingEvaluations/{id}'
 }, event => aiMockOverallSync.onAiReport(event))
 
-// Speaking local candidate: server-only documents and private audio. Not deployed.
+// Speaking: server-only documents and private audio.
 const { createSpeakingService } = require('./lib/speaking/service')
 const { gradeSpeaking } = require('./lib/speaking/provider')
 const speakingService = createSpeakingService({
@@ -7815,6 +7815,6 @@ const speakingService = createSpeakingService({
   requireStudent, requireAssignmentManager, requireAssignedMock,
   requireCurrentTeacherAcademicStudent, schoolIdOf,
   aiEnabled:studentId=>require('./lib/speaking/aiAccess').speakingAiEnabledFor(studentId),
-  provider:recordings=>gradeSpeaking(recordings,{apiKey:maximaOpenAiKey.value(),model:process.env.MAXIMA_SPEAKING_AUDIO_MODEL})
+  provider:(recordings,onValidation)=>gradeSpeaking(recordings,{apiKey:maximaOpenAiKey.value(),model:process.env.MAXIMA_SPEAKING_AUDIO_MODEL,onValidation})
 })
 exports.speakingWorkspace = onCall({secrets:[maximaOpenAiKey],timeoutSeconds:180,memory:'1GiB',maxInstances:3,concurrency:2},request=>speakingService.call(request))
